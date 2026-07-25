@@ -38,3 +38,14 @@ for fixture in "${fixtures[@]}"; do
   jq -e '.routes | length > 0' "$reroutes" >/dev/null
   cmp "$first" "$second"
 done
+
+placed="$output_directory/simple.placed.kicad_pcb"
+placement_json="$output_directory/simple.placement.json"
+"$pcbex_binary" place-kicad examples/simple.kicad_pcb \
+  --output "$placed" \
+  --json-output "$placement_json" \
+  --iterations 0
+jq -e '.components | length == 3' "$placement_json" >/dev/null
+"$pcbex_binary" route-kicad "$placed" \
+  --output "$output_directory/simple.placed.routed.kicad_pcb" \
+  --drc

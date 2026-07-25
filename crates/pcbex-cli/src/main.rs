@@ -78,6 +78,20 @@ enum Command {
         #[arg(long)]
         seed: Option<u64>,
     },
+    /// Optimize footprint placement directly in a KiCad board.
+    PlaceKicad {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 0.5)]
+        grid_mm: f64,
+        #[arg(long)]
+        iterations: Option<usize>,
+        #[arg(long)]
+        seed: Option<u64>,
+        #[arg(long)]
+        json_output: Option<PathBuf>,
+    },
     /// Run KiCad DRC and generate Gerber and Excellon manufacturing files.
     Fabricate {
         input: PathBuf,
@@ -238,6 +252,53 @@ fn main() -> Result<()> {
             let result = place(&problem, &options).map_err(anyhow::Error::msg)?;
             fs::write(&output, serde_json::to_string_pretty(&result)?)
                 .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "placement score: {:.3} -> {:.3}; accepted moves: {}",
+                result.initial_score.total, result.final_score.total, result.accepted_moves
+            );
+        }
+        Command::PlaceKicad {
+            input,
+            output,
+            grid_mm,
+            iterations,
+            seed,
+            json_output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let imported = import_kicad(
+                &source,
+                Rules {
+                    grid_nm: 250_000,
+                    track_width_nm: 250_000,
+                    clearance_nm: 200_000,
+                    via_diameter_nm: 600_000,
+                    via_drill_nm: 300_000,
+                    bend_cost: 5,
+                    via_cost: 20,
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            let problem = imported
+                .placement_problem(to_nm(grid_mm, "placement grid")?)
+                .map_err(anyhow::Error::msg)?;
+            let mut options = PlacementOptions::default();
+            if let Some(value) = iterations {
+                options.iterations = value;
+            }
+            if let Some(value) = seed {
+                options.seed = value;
+            }
+            let result = place(&problem, &options).map_err(anyhow::Error::msg)?;
+            let placed = imported
+                .write_placements(&result.components)
+                .map_err(anyhow::Error::msg)?;
+            fs::write(&output, placed).with_context(|| format!("writing {}", output.display()))?;
+            if let Some(path) = json_output {
+                fs::write(&path, serde_json::to_string_pretty(&result)?)
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
             eprintln!(
                 "placement score: {:.3} -> {:.3}; accepted moves: {}",
                 result.initial_score.total, result.final_score.total, result.accepted_moves
