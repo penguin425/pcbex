@@ -6,7 +6,8 @@
 current implementation routes placed two-layer boards from a small, stable JSON
 model. It uses integer nanometre coordinates and multi-layer A* with eight-way
 movement, bend/via/congestion/proximity costs, clearance-inflated obstacles,
-route simplification, and SVG inspection output.
+route simplification, Steiner-style multi-terminal branching, and SVG
+inspection output.
 
 The requirement-by-requirement evidence is recorded in
 [`docs/COMPLETION_AUDIT.md`](docs/COMPLETION_AUDIT.md).
@@ -30,6 +31,11 @@ comparisons without floating-point rounding.
 Routes already present in the JSON input are preserved and reserved while only
 missing nets are routed. Running the router again on its output is therefore
 idempotent.
+
+For nets with three or more terminals, the router chooses a central root and
+repeatedly connects the cheapest remaining terminal to any point in the routed
+tree. This avoids the input-order-dependent detours of terminal-to-terminal
+chain routing.
 
 ## JSON model
 
