@@ -21,6 +21,7 @@ fn board_with_nets(net_count: usize) -> Board {
         height_nm: 20_000_000,
         outline: vec![],
         cutouts: vec![],
+        copper_layers: vec![Layer::Front, Layer::Back],
         rules: rules(),
         obstacles: vec![],
         round_obstacles: vec![],

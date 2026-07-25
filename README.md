@@ -3,7 +3,7 @@
 [![CI](https://github.com/penguin425/pcbex/actions/workflows/ci.yml/badge.svg)](https://github.com/penguin425/pcbex/actions/workflows/ci.yml)
 
 `pcbex` is a deterministic PCB physical-design engine written in Rust. The
-current implementation routes placed two-layer boards from a small, stable JSON
+current implementation routes placed multilayer boards from a small, stable JSON
 model. It uses integer nanometre coordinates and multi-layer A* with eight-way
 movement, bend/via/congestion/proximity costs, clearance-inflated obstacles,
 route simplification, Steiner-style multi-terminal branching, and SVG
@@ -135,6 +135,14 @@ cargo run -p pcbex -- place-kicad input.kicad_pcb \
 Footprints marked `locked` remain fixed. Pad nets become weighted placement
 connections, and `Reference`, position, rotation, and the board origin survive
 the KiCad round trip.
+
+## Multilayer routing
+
+Boards may declare `F.Cu`, `In1.Cu` through `In30.Cu`, and `B.Cu` in
+`copper_layers`. The KiCad importer reads the board layer table, wildcard
+through-hole pads span every copper layer, and generated through vias connect
+the full stack. Net-class layer restrictions continue to constrain which
+layers the router may use.
 
 ## Planning and repair agent
 
