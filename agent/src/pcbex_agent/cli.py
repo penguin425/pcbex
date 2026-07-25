@@ -10,6 +10,7 @@ from .ipc import apply_routes_to_open_board
 from .models import PlanLimits
 from .planner import build_plan
 from .repair import propose_repairs
+from .repair_loop import repair_kicad_board, write_repair_report
 
 
 def main() -> None:
@@ -30,6 +31,16 @@ def main() -> None:
     ipc = sub.add_parser("apply-ipc", help="apply routed JSON to the open KiCad board")
     ipc.add_argument("routes", type=Path)
     ipc.add_argument("--max-items", type=int, default=10000)
+    repair = sub.add_parser(
+        "repair-kicad",
+        help="route and repeatedly validate a KiCad board until DRC is clean",
+    )
+    repair.add_argument("input", type=Path)
+    repair.add_argument("-o", "--output", type=Path, required=True)
+    repair.add_argument("--report", type=Path, required=True)
+    repair.add_argument("--pcbex", default="pcbex")
+    repair.add_argument("--kicad-cli", default="kicad-cli")
+    repair.add_argument("--max-iterations", type=int, default=4)
     args = parser.parse_args()
 
     if args.command == "plan":
@@ -63,12 +74,30 @@ def main() -> None:
             + "\n",
             encoding="utf-8",
         )
-    else:
+    elif args.command == "apply-ipc":
         document = json.loads(args.routes.read_text(encoding="utf-8"))
         result = apply_routes_to_open_board(document, max_items=args.max_items)
         print(
             f"created {result.tracks_created} tracks and "
             f"{result.vias_created} vias in KiCad"
+        )
+    else:
+        result = repair_kicad_board(
+            args.input,
+            args.output,
+            pcbex=args.pcbex,
+            kicad_cli=args.kicad_cli,
+            max_iterations=args.max_iterations,
+        )
+        write_repair_report(result, args.report)
+        if not result.success:
+            raise SystemExit(
+                f"repair stopped: {result.stop_reason}; "
+                f"best error count: {result.best_error_count}"
+            )
+        print(
+            f"DRC-clean board written to {result.output} "
+            f"after {len(result.iterations)} iteration(s)"
         )
 
 

@@ -118,6 +118,19 @@ also be applied to the open editor as one undoable transaction:
 pcbex-agent apply-ipc simple.ipc-routes.json
 ```
 
+For a headless repair run, the agent generates bounded routing candidates,
+executes KiCad DRC after each one, rejects repeated or unsupported repairs, and
+atomically publishes only a DRC-clean board:
+
+```sh
+pcbex-agent repair-kicad input.kicad_pcb \
+  --output repaired.kicad_pcb --report repair.json \
+  --pcbex target/release/pcbex --max-iterations 4
+```
+
+The JSON report records every iteration, remaining errors and warnings, repair
+actions, the stop reason, and the best observed error count.
+
 ## Scope
 
 This foundation covers the routing core and headless KiCad exchange planned for
