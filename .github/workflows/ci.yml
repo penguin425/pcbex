@@ -29,6 +29,8 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Build release binaries
         run: cargo build --workspace --release --locked
+      - name: Compile routing benchmarks
+        run: cargo bench -p pcbex-core --bench routing --no-run --locked
 
   python:
     name: Python
