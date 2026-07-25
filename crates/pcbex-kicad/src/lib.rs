@@ -1,6 +1,6 @@
 use pcbex_core::{
-    Board, Footprint, Keepout, Layer, Net, NetClassRules, Obstacle, Pad, Point, Route, Rules,
-    Segment, Terminal, Via, checking::check_board,
+    Board, Footprint, Keepout, Layer, Net, NetClassRules, Obstacle, Pad, PadShape, Point,
+    RoundObstacle, Route, Rules, Segment, Terminal, Via, checking::check_board,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -52,15 +52,21 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
 
     let net_classes = import_net_classes(top, &rules, &mut nets);
     let mut obstacles = Vec::new();
+    let mut round_obstacles = Vec::new();
     let mut keepouts = Vec::new();
     let mut footprints = Vec::new();
     let mut route_candidates = HashMap::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
         match atom(xs.first()) {
-            Some("footprint") => {
-                import_footprint(xs, min, &mut nets, &mut obstacles, &mut footprints)
-            }
+            Some("footprint") => import_footprint(
+                xs,
+                min,
+                &mut nets,
+                &mut obstacles,
+                &mut round_obstacles,
+                &mut footprints,
+            ),
             Some("segment") => {
                 import_segment(xs, min, &rules, &mut obstacles, &mut route_candidates)
             }
@@ -85,6 +91,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
             .collect(),
         rules,
         obstacles,
+        round_obstacles,
         keepouts,
         footprints,
         net_classes,
@@ -311,6 +318,7 @@ fn import_footprint(
     origin: Point,
     nets: &mut HashMap<u32, Net>,
     obstacles: &mut Vec<Obstacle>,
+    round_obstacles: &mut Vec<RoundObstacle>,
     footprints: &mut Vec<Footprint>,
 ) {
     let footprint_at = child_values(xs, "at");
@@ -338,6 +346,11 @@ fn import_footprint(
         let width = size.and_then(|v| number(v.get(1))).unwrap_or(1.0);
         let height = size.and_then(|v| number(v.get(2))).unwrap_or(width);
         let pad_angle = at.and_then(|v| number(v.get(3))).unwrap_or(0.0);
+        let shape = match atom(pad.get(3)) {
+            Some("circle") => PadShape::Circle,
+            Some("oval") => PadShape::Oval,
+            _ => PadShape::Rect,
+        };
         let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
         let net_id = child_values(pad, "net").and_then(|values| number_u32(values.get(1)));
         model.pads.push(Pad {
@@ -345,6 +358,7 @@ fn import_footprint(
             position,
             width_nm: nm(bbox_width),
             height_nm: nm(bbox_height),
+            shape,
             layers: layers.clone(),
             net_id,
         });
@@ -356,22 +370,28 @@ fn import_footprint(
                 position,
                 layers: layers.clone(),
             });
-            obstacles.push(rect_obstacle(
+            add_pad_obstacle(
+                shape,
                 position,
                 nm(bbox_width),
                 nm(bbox_height),
                 layers,
                 Some(id),
-            ));
+                obstacles,
+                round_obstacles,
+            );
             continue;
         }
-        obstacles.push(rect_obstacle(
+        add_pad_obstacle(
+            shape,
             position,
             nm(bbox_width),
             nm(bbox_height),
             layers,
             None,
-        ));
+            obstacles,
+            round_obstacles,
+        );
     }
     footprints.push(model);
 }
@@ -559,6 +579,30 @@ fn rect_obstacle(
         net_id,
     }
 }
+
+#[allow(clippy::too_many_arguments)]
+fn add_pad_obstacle(
+    shape: PadShape,
+    center: Point,
+    width: i64,
+    height: i64,
+    layers: Vec<Layer>,
+    net_id: Option<u32>,
+    obstacles: &mut Vec<Obstacle>,
+    round_obstacles: &mut Vec<RoundObstacle>,
+) {
+    if shape == PadShape::Circle {
+        round_obstacles.push(RoundObstacle {
+            center,
+            diameter_nm: width.max(height),
+            layers,
+            net_id,
+        });
+    } else {
+        obstacles.push(rect_obstacle(center, width, height, layers, net_id));
+    }
+}
+
 fn rotate(x: f64, y: f64, degrees: f64) -> (f64, f64) {
     let r = degrees.to_radians();
     (x * r.cos() - y * r.sin(), x * r.sin() + y * r.cos())
@@ -779,6 +823,25 @@ mod tests {
         let power = &b.board.net_classes["Power"];
         assert_eq!(power.track_width_nm, 800_000);
         assert_eq!(power.clearance_nm, 400_000);
+    }
+
+    #[test]
+    fn imports_circle_pads_as_exact_round_obstacles() {
+        let source = r#"(kicad_pcb
+          (net 0 "") (net 1 "SIGNAL")
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (footprint "A" (layer "F.Cu") (at 5 5)
+            (pad "1" smd circle (at 0 0) (size 2 2)
+              (layers "F.Cu") (net 1 "SIGNAL")))
+          (footprint "B" (layer "F.Cu") (at 15 15)
+            (pad "1" smd rect (at 0 0) (size 2 2)
+              (layers "F.Cu") (net 1 "SIGNAL"))))"#;
+
+        let imported = import(source, rules()).unwrap();
+        assert_eq!(imported.board.round_obstacles.len(), 1);
+        assert_eq!(imported.board.obstacles.len(), 1);
+        assert_eq!(imported.board.footprints[0].pads[0].shape, PadShape::Circle);
+        assert_eq!(imported.board.round_obstacles[0].diameter_nm, 2_000_000);
     }
     #[test]
     fn writes_generated_routes_at_board_level() {
