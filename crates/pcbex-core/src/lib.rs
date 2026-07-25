@@ -407,31 +407,94 @@ impl<'a> Router<'a> {
         };
         let rules = self.board.rules_for_net(net.id);
         let mut expanded = 0;
-        for (pair_index, pair) in net.terminals.windows(2).enumerate() {
-            let (nodes, count) = self.astar(net.id, &pair[0], &pair[1], &rules)?;
-            expanded += count;
-            if pair_index == 0 {
-                append_terminal_access(&mut route, pair[0].position, nodes[0], &rules, true);
+        let root_index = steiner_root_index(net, &rules);
+        let root = &net.terminals[root_index];
+        let mut tree: HashSet<(i32, i32, u8)> = self
+            .terminal_nodes(net.id, root, &rules)
+            .into_iter()
+            .map(|node| (node.x, node.y, node.layer))
+            .collect();
+        if tree.is_empty() {
+            return None;
+        }
+        let mut remaining: Vec<usize> = (0..net.terminals.len())
+            .filter(|index| *index != root_index)
+            .collect();
+        let mut root_access_added = false;
+        while !remaining.is_empty() {
+            let mut best: Option<(u64, Nm, Nm, usize, Vec<Node>)> = None;
+            for &terminal_index in &remaining {
+                let Some((path, count, cost)) =
+                    self.astar_to_tree(net.id, &net.terminals[terminal_index], &tree, &rules)
+                else {
+                    continue;
+                };
+                expanded += count;
+                let terminal = &net.terminals[terminal_index];
+                let candidate = (
+                    cost,
+                    terminal.position.x_nm,
+                    terminal.position.y_nm,
+                    terminal_index,
+                    path,
+                );
+                if best.as_ref().is_none_or(|current| {
+                    (candidate.0, candidate.1, candidate.2, candidate.3)
+                        < (current.0, current.1, current.2, current.3)
+                }) {
+                    best = Some(candidate);
+                }
             }
+            let (_, _, _, terminal_index, nodes) = best?;
+            let terminal = &net.terminals[terminal_index];
+            append_terminal_access(&mut route, terminal.position, nodes[0], &rules, true);
             append_path(&mut route, &nodes, &rules);
-            append_terminal_access(
-                &mut route,
-                pair[1].position,
-                *nodes.last().unwrap(),
-                &rules,
-                false,
+            if !root_access_added {
+                append_terminal_access(
+                    &mut route,
+                    root.position,
+                    *nodes.last().unwrap(),
+                    &rules,
+                    false,
+                );
+                root_access_added = true;
+            }
+            tree.extend(nodes.iter().map(|node| (node.x, node.y, node.layer)));
+            tree.extend(
+                self.terminal_nodes(net.id, terminal, &rules)
+                    .into_iter()
+                    .map(|node| (node.x, node.y, node.layer)),
             );
+            remaining.retain(|index| *index != terminal_index);
         }
         Some((route, expanded))
     }
 
-    fn astar(
+    fn terminal_nodes(&self, net_id: u32, terminal: &Terminal, rules: &Rules) -> Vec<Node> {
+        let allowed_layers = self.board.layers_for_net(net_id);
+        let x = nearest_grid(terminal.position.x_nm, rules.grid_nm) as i32;
+        let y = nearest_grid(terminal.position.y_nm, rules.grid_nm) as i32;
+        terminal
+            .layers
+            .iter()
+            .copied()
+            .filter(|layer| allowed_layers.is_none_or(|allowed| allowed.contains(layer)))
+            .map(|layer| Node {
+                x,
+                y,
+                layer: layer_index(layer),
+                dir: 8,
+            })
+            .collect()
+    }
+
+    fn astar_to_tree(
         &self,
         net_id: u32,
         start: &Terminal,
-        goal: &Terminal,
+        goals: &HashSet<(i32, i32, u8)>,
         rules: &Rules,
-    ) -> Option<(Vec<Node>, usize)> {
+    ) -> Option<(Vec<Node>, usize, u64)> {
         const DIRS: [(i32, i32); 8] = [
             (1, 0),
             (1, 1),
@@ -445,33 +508,16 @@ impl<'a> Router<'a> {
         let g = rules.grid_nm;
         let sx = nearest_grid(start.position.x_nm, g) as i32;
         let sy = nearest_grid(start.position.y_nm, g) as i32;
-        let gx = nearest_grid(goal.position.x_nm, g) as i32;
-        let gy = nearest_grid(goal.position.y_nm, g) as i32;
         let max_x = (self.board.width_nm / g) as i32;
         let max_y = (self.board.height_nm / g) as i32;
         let allowed_layers = self.board.layers_for_net(net_id);
-        let terminal_layers = |terminal: &Terminal| {
-            terminal
-                .layers
-                .iter()
-                .copied()
-                .filter(|layer| allowed_layers.is_none_or(|allowed| allowed.contains(layer)))
-                .collect::<Vec<_>>()
-        };
-        let goals: HashSet<u8> = terminal_layers(goal).into_iter().map(layer_index).collect();
         let mut open = BinaryHeap::new();
         let mut costs = HashMap::new();
         let mut prev = HashMap::new();
-        for layer in terminal_layers(start) {
-            let n = Node {
-                x: sx,
-                y: sy,
-                layer: layer_index(layer),
-                dir: 8,
-            };
+        for n in self.terminal_nodes(net_id, start, rules) {
             costs.insert(n, 0u64);
             open.push(QueueItem {
-                score: heuristic(sx, sy, gx, gy),
+                score: heuristic_to_tree(sx, sy, n.layer, goals),
                 cost: 0,
                 node: n,
             });
@@ -482,7 +528,7 @@ impl<'a> Router<'a> {
                 continue;
             }
             expanded += 1;
-            if item.node.x == gx && item.node.y == gy && goals.contains(&item.node.layer) {
+            if goals.contains(&(item.node.x, item.node.y, item.node.layer)) {
                 let mut path = vec![item.node];
                 let mut cur = item.node;
                 while let Some(p) = prev.get(&cur) {
@@ -490,7 +536,7 @@ impl<'a> Router<'a> {
                     path.push(cur);
                 }
                 path.reverse();
-                return Some((path, expanded));
+                return Some((path, expanded, item.cost));
             }
             for (dir, (dx, dy)) in DIRS.iter().enumerate() {
                 let nx = item.node.x + dx;
@@ -499,7 +545,7 @@ impl<'a> Router<'a> {
                     continue;
                 }
                 let cell = (nx, ny, item.node.layer);
-                let endpoint = (nx == gx && ny == gy) || (nx == sx && ny == sy);
+                let endpoint = goals.contains(&cell) || (nx == sx && ny == sy);
                 if !endpoint
                     && (self.blocked.contains(&cell)
                         || self.foreign_obstacle(cell, net_id)
@@ -534,8 +580,7 @@ impl<'a> Router<'a> {
                         dir: dir as u8,
                     },
                     item.cost + step + bend + proximity,
-                    gx,
-                    gy,
+                    goals,
                     &mut costs,
                     &mut prev,
                     &mut open,
@@ -558,8 +603,7 @@ impl<'a> Router<'a> {
                     item.node,
                     n,
                     item.cost + rules.via_cost as u64,
-                    gx,
-                    gy,
+                    goals,
                     &mut costs,
                     &mut prev,
                     &mut open,
@@ -579,8 +623,7 @@ impl<'a> Router<'a> {
         from: Node,
         to: Node,
         cost: u64,
-        gx: i32,
-        gy: i32,
+        goals: &HashSet<(i32, i32, u8)>,
         costs: &mut HashMap<Node, u64>,
         prev: &mut HashMap<Node, Node>,
         open: &mut BinaryHeap<QueueItem>,
@@ -589,7 +632,7 @@ impl<'a> Router<'a> {
             costs.insert(to, cost);
             prev.insert(to, from);
             open.push(QueueItem {
-                score: cost + heuristic(to.x, to.y, gx, gy),
+                score: cost + heuristic_to_tree(to.x, to.y, to.layer, goals),
                 cost,
                 node: to,
             });
@@ -671,6 +714,13 @@ fn heuristic(x: i32, y: i32, gx: i32, gy: i32) -> u64 {
     let dy = (y - gy).unsigned_abs() as u64;
     14 * dx.min(dy) + 10 * (dx.max(dy) - dx.min(dy))
 }
+fn heuristic_to_tree(x: i32, y: i32, _layer: u8, goals: &HashSet<(i32, i32, u8)>) -> u64 {
+    goals
+        .iter()
+        .map(|(goal_x, goal_y, _)| heuristic(x, y, *goal_x, *goal_y))
+        .min()
+        .unwrap_or(0)
+}
 fn layer_index(l: Layer) -> u8 {
     if l == Layer::Front { 0 } else { 1 }
 }
@@ -685,6 +735,34 @@ fn net_span(n: &Net) -> Nm {
                 + (p[0].position.y_nm - p[1].position.y_nm).abs()
         })
         .sum()
+}
+fn steiner_root_index(net: &Net, rules: &Rules) -> usize {
+    let grid_positions: Vec<(i32, i32)> = net
+        .terminals
+        .iter()
+        .map(|terminal| {
+            (
+                nearest_grid(terminal.position.x_nm, rules.grid_nm) as i32,
+                nearest_grid(terminal.position.y_nm, rules.grid_nm) as i32,
+            )
+        })
+        .collect();
+    grid_positions
+        .iter()
+        .enumerate()
+        .min_by_key(|(index, (x, y))| {
+            (
+                grid_positions
+                    .iter()
+                    .map(|(other_x, other_y)| heuristic(*x, *y, *other_x, *other_y))
+                    .sum::<u64>(),
+                net.terminals[*index].position.x_nm,
+                net.terminals[*index].position.y_nm,
+                *index,
+            )
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(0)
 }
 fn append_path(route: &mut Route, nodes: &[Node], rules: &Rules) {
     if nodes.len() < 2 {
@@ -1207,5 +1285,41 @@ mod tests {
             route_board(&b).unwrap_err(),
             "net 1 has more than one existing route"
         );
+    }
+
+    #[test]
+    fn multi_terminal_net_branches_into_the_existing_tree() {
+        let mut b = board();
+        b.obstacles.clear();
+        b.nets[0].terminals = [
+            (5_000_000, 5_000_000),
+            (1_000_000, 5_000_000),
+            (9_000_000, 5_000_000),
+            (5_000_000, 1_000_000),
+            (5_000_000, 9_000_000),
+        ]
+        .into_iter()
+        .map(|(x_nm, y_nm)| Terminal {
+            position: Point { x_nm, y_nm },
+            layers: vec![Layer::Front],
+        })
+        .collect();
+
+        let (routed, report) = route_board(&b).unwrap();
+        assert!(report.unrouted.is_empty());
+        assert!(crate::checking::check_board(&routed).is_clean());
+
+        let route_cost: u64 = routed.routes[0]
+            .segments
+            .iter()
+            .map(|segment| {
+                let dx = ((segment.end.x_nm - segment.start.x_nm).abs() / b.rules.grid_nm) as u64;
+                let dy = ((segment.end.y_nm - segment.start.y_nm).abs() / b.rules.grid_nm) as u64;
+                14 * dx.min(dy) + 10 * (dx.max(dy) - dx.min(dy))
+            })
+            .sum();
+        let input_order_chain_cost = 512;
+        assert_eq!(route_cost, 320);
+        assert!(route_cost < input_order_chain_cost);
     }
 }

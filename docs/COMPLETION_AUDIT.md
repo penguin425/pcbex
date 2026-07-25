@@ -20,6 +20,7 @@ zones.
 | Internal rule checking | Copper-graph connectivity, orphan copper, angle, dimensions, boundaries, obstacles, copper clearance | Connectivity regression tests and `detects_cross_net_short`; every CLI route invokes it |
 | Incremental routing | Preserve and reserve complete existing routes; route only missing nets | Idempotence, preservation, duplicate-route, and KiCad import regression tests |
 | Exact geometry predicates | Integer point/segment/rectangle distance comparisons and inclusive segment intersection | Collinear overlap, endpoint contact, half-unit, and exact-clearance tests |
+| Multi-terminal routing | Central-root selection and cheapest terminal-to-tree A* branching | Five-terminal cross costs 320 versus 512 for input-order chaining |
 | KiCad input/output | Rectangular outline, rotated pads, footprints, tracks, vias, keepouts; board-level track/via output | Four `pcbex-kicad` tests |
 | Headless KiCad validation | `route-kicad --drc` | KiCad 10.0.5: 0 violations, 0 unconnected pads |
 | Manufacturing output | `fabricate` DRC gate plus Gerber/Excellon export | F/B copper, mask, silkscreen, Edge.Cuts, drill, job file generated |
@@ -47,6 +48,6 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
   --output-dir /tmp/pcbex-complete-mfg
 ```
 
-At audit time all 28 Rust tests and all 9 Python tests passed, the release build
+At audit time all 29 Rust tests and all 9 Python tests passed, the release build
 completed, KiCad DRC reported zero violations and zero unconnected pads, and
 all expected manufacturing layers plus the drill file were generated.
