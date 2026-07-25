@@ -188,7 +188,7 @@ impl ImportedBoard {
 
     pub fn write_routes(&self, routes: &[Route]) -> Result<String, String> {
         let closing = self.source.rfind(')').ok_or("invalid KiCad document")?;
-        let mut generated = String::from("\n");
+        let mut generated = String::new();
         for route in routes {
             if self.existing_route_net_ids.contains(&route.net_id) {
                 continue;
@@ -211,6 +211,12 @@ impl ImportedBoard {
                     mm(at.x_nm), mm(at.y_nm), mm(via.diameter_nm), mm(via.drill_nm), route.net_id
                 ).map_err(|e| e.to_string())?;
             }
+        }
+        if generated.is_empty() {
+            return Ok(self.source.clone());
+        }
+        if !self.source[..closing].ends_with('\n') {
+            generated.insert(0, '\n');
         }
         let mut output = self.source.clone();
         output.insert_str(closing, &generated);
@@ -880,6 +886,7 @@ mod tests {
         assert_eq!(imported.board.routes.len(), 1);
 
         let output = imported.write_routes(&imported.board.routes).unwrap();
+        assert_eq!(output, pcb);
         let root = parse(&output).unwrap();
         let segment_count = root
             .as_list()

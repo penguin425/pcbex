@@ -1,0 +1,45 @@
+name: KiCad E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kicad-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kicad:
+    name: KiCad E2E
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install KiCad 10
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo add-apt-repository --yes ppa:kicad/kicad-10.0-releases
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends kicad
+          kicad-cli --version
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build pcbex
+        run: cargo build -p pcbex --release --locked
+      - name: Route, validate, and reroute fixtures
+        run: scripts/kicad-e2e.sh target/release/pcbex build/kicad-e2e
+      - name: Upload routed boards and DRC reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: kicad-e2e-results
+          path: build/kicad-e2e
+          if-no-files-found: error
+          retention-days: 14
