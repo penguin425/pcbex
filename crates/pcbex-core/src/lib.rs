@@ -173,14 +173,14 @@ pub struct Segment {
     pub width_nm: Nm,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Via {
     pub position: Point,
     pub diameter_nm: Nm,
     pub drill_nm: Nm,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Route {
     pub net_id: u32,
     pub segments: Vec<Segment>,
@@ -189,6 +189,7 @@ pub struct Route {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RouteReport {
+    pub preserved: Vec<String>,
     pub routed: Vec<String>,
     pub unrouted: Vec<String>,
     pub expanded_states: usize,
@@ -251,6 +252,15 @@ impl<'a> Router<'a> {
                 return Err(format!("net class {name} must allow at least one layer"));
             }
         }
+        let mut route_net_ids = HashSet::new();
+        for route in &board.routes {
+            if !route_net_ids.insert(route.net_id) {
+                return Err(format!(
+                    "net {} has more than one existing route",
+                    route.net_id
+                ));
+            }
+        }
         let mut router = Self {
             board,
             blocked: HashSet::new(),
@@ -294,7 +304,21 @@ impl<'a> Router<'a> {
     }
 
     pub fn route_all(mut self) -> (Vec<Route>, RouteReport) {
-        let mut nets: Vec<_> = self.board.nets.iter().collect();
+        let fixed_net_ids: HashSet<u32> =
+            self.board.routes.iter().map(|route| route.net_id).collect();
+        let preserved: Vec<String> = self
+            .board
+            .nets
+            .iter()
+            .filter(|net| fixed_net_ids.contains(&net.id))
+            .map(|net| net.name.clone())
+            .collect();
+        let mut nets: Vec<_> = self
+            .board
+            .nets
+            .iter()
+            .filter(|net| !fixed_net_ids.contains(&net.id))
+            .collect();
         nets.sort_by_key(|n| {
             (
                 std::cmp::Reverse(n.priority),
@@ -303,14 +327,18 @@ impl<'a> Router<'a> {
             )
         });
         let mut failed_ids = HashSet::new();
-        let mut best_routes = Vec::new();
+        let mut best_routes = self.board.routes.clone();
         let mut best_report = RouteReport {
-            unrouted: self.board.nets.iter().map(|n| n.name.clone()).collect(),
+            preserved: preserved.clone(),
+            unrouted: nets.iter().map(|n| n.name.clone()).collect(),
             ..RouteReport::default()
         };
         let mut total_expanded = 0;
         for attempt in 0..4 {
             self.occupied.clear();
+            for route in &self.board.routes {
+                self.commit(route);
+            }
             if !failed_ids.is_empty() {
                 nets.sort_by_key(|n| {
                     (
@@ -320,8 +348,11 @@ impl<'a> Router<'a> {
                     )
                 });
             }
-            let mut routes = Vec::new();
-            let mut report = RouteReport::default();
+            let mut routes = self.board.routes.clone();
+            let mut report = RouteReport {
+                preserved: preserved.clone(),
+                ..RouteReport::default()
+            };
             failed_ids.clear();
             for net in &nets {
                 match self.route_net(net) {
@@ -580,11 +611,12 @@ impl<'a> Router<'a> {
         for s in &route.segments {
             let clearance_radius =
                 (s.width_nm / 2 + maximum_width / 2 + maximum_clearance + g - 1) / g;
-            let (mut x, mut y) = (s.start.x_nm / g, s.start.y_nm / g);
-            let (ex, ey) = (s.end.x_nm / g, s.end.y_nm / g);
-            let dx = (ex - x).signum();
-            let dy = (ey - y).signum();
-            loop {
+            for (x, y) in raster_line_cells(
+                s.start.x_nm / g,
+                s.start.y_nm / g,
+                s.end.x_nm / g,
+                s.end.y_nm / g,
+            ) {
                 for oy in -clearance_radius..=clearance_radius {
                     for ox in -clearance_radius..=clearance_radius {
                         if ox * ox + oy * oy <= clearance_radius * clearance_radius {
@@ -596,11 +628,6 @@ impl<'a> Router<'a> {
                         }
                     }
                 }
-                if x == ex && y == ey {
-                    break;
-                }
-                x += dx;
-                y += dy;
             }
         }
         for &(x, y, l) in &self.occupied {
@@ -611,6 +638,31 @@ impl<'a> Router<'a> {
             }
         }
     }
+}
+
+fn raster_line_cells(mut x: Nm, mut y: Nm, end_x: Nm, end_y: Nm) -> Vec<(Nm, Nm)> {
+    let dx = (end_x - x).abs();
+    let step_x = (end_x - x).signum();
+    let dy = -(end_y - y).abs();
+    let step_y = (end_y - y).signum();
+    let mut error = dx + dy;
+    let mut cells = Vec::new();
+    loop {
+        cells.push((x, y));
+        if x == end_x && y == end_y {
+            break;
+        }
+        let twice_error = 2 * error;
+        if twice_error >= dy {
+            error += dy;
+            x += step_x;
+        }
+        if twice_error <= dx {
+            error += dx;
+            y += step_y;
+        }
+    }
+    cells
 }
 
 fn heuristic(x: i32, y: i32, gx: i32, gy: i32) -> u64 {
@@ -1072,5 +1124,87 @@ mod tests {
                 .all(|segment| segment.width_nm == 800_000 && segment.layer == Layer::Back)
         );
         assert!(crate::checking::check_board(&routed).is_clean());
+    }
+
+    #[test]
+    fn preserves_existing_routes_and_only_routes_missing_nets() {
+        let mut b = board();
+        b.obstacles.clear();
+        let existing = Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: b.nets[0].terminals[0].position,
+                end: b.nets[0].terminals[1].position,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            vias: vec![],
+        };
+        b.routes.push(existing.clone());
+        b.nets.push(Net {
+            id: 2,
+            name: "N2".into(),
+            class: None,
+            priority: 0,
+            terminals: vec![
+                Terminal {
+                    position: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 2_000_000,
+                    },
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: Point {
+                        x_nm: 9_000_000,
+                        y_nm: 2_000_000,
+                    },
+                    layers: vec![Layer::Front],
+                },
+            ],
+        });
+
+        let (routed, report) = route_board(&b).unwrap();
+        assert_eq!(routed.routes.len(), 2);
+        assert_eq!(routed.routes[0], existing);
+        assert_eq!(report.preserved, vec!["N1"]);
+        assert_eq!(report.routed, vec!["N2"]);
+        assert!(report.unrouted.is_empty());
+        assert!(crate::checking::check_board(&routed).is_clean());
+    }
+
+    #[test]
+    fn routing_an_already_routed_board_is_idempotent() {
+        let (routed, initial_report) = route_board(&board()).unwrap();
+        assert_eq!(initial_report.routed, vec!["N1"]);
+
+        let (rerouted, report) = route_board(&routed).unwrap();
+        assert_eq!(rerouted.routes, routed.routes);
+        assert_eq!(report.preserved, vec!["N1"]);
+        assert!(report.routed.is_empty());
+        assert!(report.unrouted.is_empty());
+        assert_eq!(report.expanded_states, 0);
+    }
+
+    #[test]
+    fn rejects_multiple_existing_routes_for_one_net() {
+        let mut b = board();
+        b.routes = vec![
+            Route {
+                net_id: 1,
+                segments: vec![],
+                vias: vec![],
+            },
+            Route {
+                net_id: 1,
+                segments: vec![],
+                vias: vec![],
+            },
+        ];
+
+        assert_eq!(
+            route_board(&b).unwrap_err(),
+            "net 1 has more than one existing route"
+        );
     }
 }
