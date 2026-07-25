@@ -3,6 +3,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 pub mod checking;
+mod geometry;
 pub mod placement;
 
 pub type Nm = i64;

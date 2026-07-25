@@ -21,7 +21,9 @@ By default `route` fails when any net cannot be routed, making it suitable for
 CI. Pass `--allow-unrouted` to retain a partial result. Every completed route is
 checked internally for full copper-graph connectivity, orphan copper, supported
 angles, track/via dimensions, board boundaries, obstacle clearance, and
-cross-net copper clearance.
+cross-net copper clearance. These checks use integer geometry predicates,
+including exact collinear overlap, endpoint contact, and clearance-boundary
+comparisons without floating-point rounding.
 
 Routes already present in the JSON input are preserved and reserved while only
 missing nets are routed. Running the router again on its output is therefore
