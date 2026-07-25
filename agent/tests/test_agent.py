@@ -1,13 +1,16 @@
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 
 from pcbex_agent.catalog import CatalogPart, search_parts
 from pcbex_agent.circuit import skidl_to_placement_problem
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
-from pcbex_agent.models import PlanLimits
+from pcbex_agent.models import DrcViolation, PlanLimits
 from pcbex_agent.planner import build_plan
 from pcbex_agent.repair import propose_repairs
+from pcbex_agent.repair_loop import run_repair_loop
 from pcbex_agent.llm import build_plan_with_llm
 from pcbex_agent.ipc import apply_routes_to_open_board
 
@@ -63,6 +66,62 @@ class RepairTests(unittest.TestCase):
         ]
         result = run_bounded(plan, lambda i: values[i])
         self.assertEqual(result.after, 80)
+
+    def test_repair_loop_atomically_accepts_first_clean_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.kicad_pcb"
+            output = root / "output.kicad_pcb"
+            source.write_text("source", encoding="utf-8")
+            output.write_text("original output", encoding="utf-8")
+
+            def generate(_source, candidate, iteration, _actions):
+                candidate.write_text(f"candidate {iteration}", encoding="utf-8")
+                self.assertEqual(output.read_text(encoding="utf-8"), "original output")
+
+            def inspect(candidate, _report):
+                iteration = int(candidate.read_text(encoding="utf-8").split()[-1])
+                if iteration < 2:
+                    return [
+                        DrcViolation("clearance", "error", f"remaining {2 - iteration}")
+                    ]
+                return []
+
+            result = run_repair_loop(
+                source,
+                output,
+                max_iterations=4,
+                generate_candidate=generate,
+                inspect_drc=inspect,
+            )
+            self.assertTrue(result.success)
+            self.assertEqual(len(result.iterations), 3)
+            self.assertEqual(output.read_text(encoding="utf-8"), "candidate 2")
+
+    def test_repair_loop_stops_on_repeated_candidate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.kicad_pcb"
+            output = root / "output.kicad_pcb"
+            source.write_text("source", encoding="utf-8")
+
+            def generate(_source, candidate, _iteration, _actions):
+                candidate.write_text("unchanged", encoding="utf-8")
+
+            def inspect(_candidate, _report):
+                return [DrcViolation("clearance", "error", "same violation")]
+
+            result = run_repair_loop(
+                source,
+                output,
+                max_iterations=4,
+                generate_candidate=generate,
+                inspect_drc=inspect,
+            )
+            self.assertFalse(result.success)
+            self.assertEqual(result.stop_reason, "repeated_candidate")
+            self.assertEqual(len(result.iterations), 2)
+            self.assertFalse(output.exists())
 
 
 class AdapterTests(unittest.TestCase):
