@@ -13,4 +13,5 @@
   (gr_line (start 40 0) (end 40 10) (stroke (width 0.05) (type default)) (layer "Edge.Cuts"))
   (gr_arc (start 40 10) (mid 20 20) (end 0 10) (stroke (width 0.05) (type default)) (layer "Edge.Cuts"))
   (gr_line (start 0 10) (end 0 0) (stroke (width 0.05) (type default)) (layer "Edge.Cuts"))
+  (gr_rect (start 18 3.4) (end 22 9) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts"))
 )

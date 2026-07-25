@@ -93,6 +93,8 @@ copper layers, net assignments, legacy board-embedded net classes, existing
 segments and vias.
 Line and three-point arc primitives on `Edge.Cuts` are joined into a polygonal
 outline; arcs use a maximum chord deviation of 0.01 mm.
+Additional closed contours inside the largest outline are imported as board
+cutouts and excluded from routing with the same copper-to-edge clearance.
 Fully connected existing nets are preserved as locked routes; incomplete copper
 remains an obstacle and is not mistaken for a completed route. Generated tracks
 and through vias are appended at board level without duplicating locked routes,

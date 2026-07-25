@@ -27,7 +27,6 @@ impl CheckReport {
 
 pub fn check_board(board: &Board) -> CheckReport {
     let mut report = CheckReport::default();
-    let outline = board.effective_outline();
     let routes: HashMap<u32, &Route> = board.routes.iter().map(|r| (r.net_id, r)).collect();
     for net in &board.nets {
         let Some(route) = routes.get(&net.id) else {
@@ -60,9 +59,7 @@ pub fn check_board(board: &Board) -> CheckReport {
                     vec![route.net_id],
                 );
             }
-            if !point_in_polygon(via.position, &outline)
-                || point_polygon_closer_than(via.position, &outline, via.diameter_nm)
-            {
+            if !board.point_inside_board(via.position, via.diameter_nm + 2 * rules.clearance_nm) {
                 report.push(
                     "board_edge",
                     "via crosses the board boundary".into(),
@@ -192,7 +189,22 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
     let outline = board.effective_outline();
     if !point_in_polygon(segment.start, &outline)
         || !point_in_polygon(segment.end, &outline)
-        || segment_polygon_closer_than(segment.start, segment.end, &outline, segment.width_nm)
+        || segment_polygon_closer_than(
+            segment.start,
+            segment.end,
+            &outline,
+            segment.width_nm + 2 * rules.clearance_nm,
+        )
+        || board.cutouts.iter().any(|cutout| {
+            point_in_polygon(segment.start, cutout)
+                || point_in_polygon(segment.end, cutout)
+                || segment_polygon_closer_than(
+                    segment.start,
+                    segment.end,
+                    cutout,
+                    segment.width_nm + 2 * rules.clearance_nm,
+                )
+        })
     {
         report.push(
             "board_edge",
@@ -524,6 +536,7 @@ mod tests {
             width_nm: 10_000_000,
             height_nm: 10_000_000,
             outline: vec![],
+            cutouts: vec![],
             rules: Rules {
                 grid_nm: 250_000,
                 track_width_nm: 250_000,
