@@ -77,6 +77,11 @@ cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
 
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.
+[`examples/keepout.kicad_pcb`](examples/keepout.kicad_pcb) exercises a
+polygonal copper keepout and an embedded net class. CI routes all three example
+boards twice with KiCad 10, requires zero DRC violations, checks that the second
+pass is byte-for-byte idempotent, and retains routed boards and DRC reports as
+workflow artifacts.
 
 The importer reads polygonal board outlines and copper keepouts without reducing
 them to bounding boxes, plus pad positions (including footprint rotation).
