@@ -84,6 +84,21 @@ pub fn check_board(board: &Board) -> CheckReport {
                     break;
                 }
             }
+            for obstacle in &board.round_obstacles {
+                if obstacle.net_id == Some(route.net_id) {
+                    continue;
+                }
+                let required_twice =
+                    via.diameter_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
+                if points_closer_than(via.position, obstacle.center, required_twice) {
+                    report.push(
+                        "clearance",
+                        "via is too close to a round obstacle".into(),
+                        vec![route.net_id],
+                    );
+                    break;
+                }
+            }
             for keepout in &board.keepouts {
                 if keepout.net_id == Some(route.net_id) {
                     continue;
@@ -167,6 +182,20 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
             report.push(
                 "clearance",
                 "track is too close to an obstacle".into(),
+                vec![net_id],
+            );
+            break;
+        }
+    }
+    for obstacle in &board.round_obstacles {
+        if obstacle.net_id == Some(net_id) || !obstacle.layers.contains(&segment.layer) {
+            continue;
+        }
+        let required_twice = segment.width_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
+        if point_segment_closer_than(obstacle.center, segment.start, segment.end, required_twice) {
+            report.push(
+                "clearance",
+                "track is too close to a round obstacle".into(),
                 vec![net_id],
             );
             break;
@@ -411,7 +440,7 @@ impl DisjointSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Layer, Point, Rules, Terminal, Via};
+    use crate::{Layer, Point, RoundObstacle, Rules, Terminal, Via};
     fn base() -> Board {
         Board {
             width_nm: 10_000_000,
@@ -427,6 +456,7 @@ mod tests {
                 via_cost: 20,
             },
             obstacles: vec![],
+            round_obstacles: vec![],
             keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),
@@ -493,6 +523,75 @@ mod tests {
                 .violations
                 .iter()
                 .any(|v| v.rule == "clearance")
+        );
+    }
+
+    #[test]
+    fn checks_round_obstacles_without_using_their_bounding_box() {
+        let mut board = base();
+        let start = Point {
+            x_nm: 2_000_000,
+            y_nm: 4_000_000,
+        };
+        let end = Point {
+            x_nm: 4_000_000,
+            y_nm: 2_000_000,
+        };
+        board.round_obstacles.push(RoundObstacle {
+            center: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            diameter_nm: 4_000_000,
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![
+                Terminal {
+                    position: start,
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: end,
+                    layers: vec![Layer::Front],
+                },
+            ],
+            class: None,
+            priority: 0,
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start,
+                end,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            vias: vec![],
+        });
+
+        assert!(check_board(&board).is_clean());
+
+        let closer_start = Point {
+            x_nm: 2_000_000,
+            y_nm: 5_000_000,
+        };
+        let closer_end = Point {
+            x_nm: 5_000_000,
+            y_nm: 2_000_000,
+        };
+        board.nets[0].terminals[0].position = closer_start;
+        board.nets[0].terminals[1].position = closer_end;
+        board.routes[0].segments[0].start = closer_start;
+        board.routes[0].segments[0].end = closer_end;
+        assert!(
+            check_board(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "clearance")
         );
     }
 

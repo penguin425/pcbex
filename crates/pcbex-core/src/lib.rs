@@ -54,6 +54,16 @@ pub struct Obstacle {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RoundObstacle {
+    pub center: Point,
+    pub diameter_nm: Nm,
+    #[serde(default = "both_layers")]
+    pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub net_id: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Keepout {
     pub polygon: Vec<Point>,
     #[serde(default = "both_layers")]
@@ -76,8 +86,19 @@ pub struct Pad {
     pub position: Point,
     pub width_nm: Nm,
     pub height_nm: Nm,
+    #[serde(default)]
+    pub shape: PadShape,
     pub layers: Vec<Layer>,
     pub net_id: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PadShape {
+    #[default]
+    Rect,
+    Circle,
+    Oval,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -132,6 +153,8 @@ pub struct Board {
     pub rules: Rules,
     #[serde(default)]
     pub obstacles: Vec<Obstacle>,
+    #[serde(default)]
+    pub round_obstacles: Vec<RoundObstacle>,
     #[serde(default)]
     pub keepouts: Vec<Keepout>,
     #[serde(default)]
@@ -311,6 +334,13 @@ impl<'a> Router<'a> {
         {
             return Err("keepout must be a simple polygon".into());
         }
+        if board
+            .round_obstacles
+            .iter()
+            .any(|obstacle| obstacle.diameter_nm <= 0)
+        {
+            return Err("round obstacle diameter must be positive".into());
+        }
         for (name, rules) in &board.net_classes {
             if rules.track_width_nm <= 0
                 || rules.clearance_nm < 0
@@ -378,6 +408,35 @@ impl<'a> Router<'a> {
                     for x in min_x..=max_x {
                         let cell = (x, y, l);
                         if let Some(net_id) = o.net_id {
+                            if self
+                                .owned
+                                .insert(cell, net_id)
+                                .is_some_and(|previous| previous != net_id)
+                            {
+                                self.blocked.insert(cell);
+                            }
+                        } else {
+                            self.blocked.insert(cell);
+                        }
+                    }
+                }
+            }
+        }
+        for obstacle in &self.board.round_obstacles {
+            let distance_twice = obstacle.diameter_nm + maximum_diameter + 2 * maximum_clearance;
+            for layer in &obstacle.layers {
+                let layer = layer_index(*layer);
+                for y in 0..=max_y {
+                    for x in 0..=max_x {
+                        let point = Point {
+                            x_nm: x * g,
+                            y_nm: y * g,
+                        };
+                        if !geometry::points_within(point, obstacle.center, distance_twice) {
+                            continue;
+                        }
+                        let cell = (x as i32, y as i32, layer);
+                        if let Some(net_id) = obstacle.net_id {
                             if self
                                 .owned
                                 .insert(cell, net_id)
@@ -1130,6 +1189,14 @@ pub fn render_svg(board: &Board) -> String {
             (o.max.y_nm - o.min.y_nm) as f64 / scale
         ));
     }
+    for obstacle in &board.round_obstacles {
+        s.push_str(&format!(
+            r##"<circle cx="{}" cy="{}" r="{}" fill="#555"/>"##,
+            obstacle.center.x_nm as f64 / scale,
+            obstacle.center.y_nm as f64 / scale,
+            obstacle.diameter_nm as f64 / scale / 2.0
+        ));
+    }
     for keepout in &board.keepouts {
         let points = keepout
             .polygon
@@ -1198,6 +1265,7 @@ mod tests {
                 layers: both_layers(),
                 net_id: None,
             }],
+            round_obstacles: vec![],
             keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),
@@ -1791,5 +1859,53 @@ mod tests {
                 segment.start.y_nm == 7_500_000 && segment.end.y_nm == 7_500_000
             })
         );
+    }
+
+    #[test]
+    fn round_obstacle_does_not_block_its_bounding_box_corner() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.round_obstacles.push(RoundObstacle {
+            center: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            diameter_nm: 4_000_000,
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
+        board.nets[0].class = Some("FrontOnly".into());
+        board.net_classes.insert(
+            "FrontOnly".into(),
+            NetClassRules {
+                track_width_nm: 250_000,
+                clearance_nm: 200_000,
+                via_diameter_nm: 600_000,
+                via_drill_nm: 300_000,
+                layers: Some(vec![Layer::Front]),
+            },
+        );
+        board.nets[0].terminals = vec![
+            Terminal {
+                position: Point {
+                    x_nm: 2_000_000,
+                    y_nm: 4_000_000,
+                },
+                layers: vec![Layer::Front],
+            },
+            Terminal {
+                position: Point {
+                    x_nm: 4_000_000,
+                    y_nm: 2_000_000,
+                },
+                layers: vec![Layer::Front],
+            },
+        ];
+
+        let (routed, report) = route_board(&board).unwrap();
+        assert!(report.unrouted.is_empty());
+        assert!(crate::checking::check_board(&routed).is_clean());
+        assert!(!routed.routes[0].segments.is_empty());
+        assert!(routed.routes[0].vias.is_empty());
     }
 }

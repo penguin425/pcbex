@@ -79,7 +79,9 @@ cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
 five-sided outline that routes and passes KiCad DRC.
 
 The importer reads polygonal board outlines and copper keepouts without reducing
-them to bounding boxes, plus pad positions (including footprint rotation),
+them to bounding boxes, plus pad positions (including footprint rotation).
+Circular pads retain their exact copper envelope instead of being expanded to
+their bounding rectangles. The importer also reads
 copper layers, net assignments, legacy board-embedded net classes, existing
 segments and vias.
 Fully connected existing nets are preserved as locked routes; incomplete copper
