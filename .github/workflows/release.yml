@@ -91,18 +91,28 @@ jobs:
           - runner: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             archive: tar
+            extension: tar.gz
           - runner: macos-15-intel
             target: x86_64-apple-darwin
             archive: tar
+            extension: tar.gz
           - runner: macos-latest
             target: aarch64-apple-darwin
             archive: tar
+            extension: tar.gz
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             archive: zip
+            extension: zip
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    env:
+      ASSET_NAME: pcbex-${{ github.ref_name }}-${{ matrix.target }}
+      ARCHIVE_NAME: pcbex-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.extension }}
     steps:
       - uses: actions/checkout@v7
       - name: Install Rust toolchain
@@ -115,39 +125,54 @@ jobs:
         run: cargo build -p pcbex --release --locked --target "${{ matrix.target }}"
       - name: Package Unix binary
         if: matrix.archive == 'tar'
+        shell: bash
+        run: |
+          mkdir -p "dist/$ASSET_NAME"
+          cp "target/${{ matrix.target }}/release/pcbex" "dist/$ASSET_NAME/"
+          cp README.md LICENSE Cargo.lock "dist/$ASSET_NAME/"
+          tar -C dist -czf "dist/$ARCHIVE_NAME" "$ASSET_NAME"
+          (
+            cd dist
+            shasum -a 256 "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+          )
+      - name: Package Windows binary
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path "dist/$env:ASSET_NAME" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/pcbex.exe" "dist/$env:ASSET_NAME/"
+          Copy-Item README.md, LICENSE, Cargo.lock "dist/$env:ASSET_NAME/"
+          Compress-Archive -Path "dist/$env:ASSET_NAME" -DestinationPath "dist/$env:ARCHIVE_NAME"
+          $hash = (Get-FileHash "dist/$env:ARCHIVE_NAME" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $env:ARCHIVE_NAME" |
+            Set-Content "dist/$env:ARCHIVE_NAME.sha256" -NoNewline
+      - name: Generate SPDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: dist/${{ env.ASSET_NAME }}
+          format: spdx-json
+          output-file: dist/${{ env.ASSET_NAME }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Attest build provenance
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ env.ARCHIVE_NAME }}
+      - name: Attest SBOM
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/${{ env.ARCHIVE_NAME }}
+          sbom-path: dist/${{ env.ASSET_NAME }}.spdx.json
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          asset="pcbex-${GITHUB_REF_NAME}-${{ matrix.target }}"
-          mkdir -p "dist/$asset"
-          cp "target/${{ matrix.target }}/release/pcbex" "dist/$asset/"
-          cp README.md LICENSE "dist/$asset/"
-          tar -C dist -czf "dist/$asset.tar.gz" "$asset"
-          (
-            cd dist
-            shasum -a 256 "$asset.tar.gz" > "$asset.tar.gz.sha256"
-          )
           gh release upload "$GITHUB_REF_NAME" \
-            "dist/$asset.tar.gz" "dist/$asset.tar.gz.sha256" \
+            "dist/$ARCHIVE_NAME" \
+            "dist/$ARCHIVE_NAME.sha256" \
+            "dist/$ASSET_NAME.spdx.json" \
             --repo "$GITHUB_REPOSITORY" \
-            --clobber
-      - name: Package Windows binary
-        if: matrix.archive == 'zip'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: pwsh
-        run: |
-          $asset = "pcbex-$env:GITHUB_REF_NAME-${{ matrix.target }}"
-          New-Item -ItemType Directory -Path "dist/$asset" | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/pcbex.exe" "dist/$asset/"
-          Copy-Item README.md, LICENSE "dist/$asset/"
-          Compress-Archive -Path "dist/$asset" -DestinationPath "dist/$asset.zip"
-          $hash = (Get-FileHash "dist/$asset.zip" -Algorithm SHA256).Hash.ToLower()
-          "$hash  $asset.zip" | Set-Content "dist/$asset.zip.sha256" -NoNewline
-          gh release upload $env:GITHUB_REF_NAME `
-            "dist/$asset.zip" "dist/$asset.zip.sha256" `
-            --repo $env:GITHUB_REPOSITORY `
             --clobber
 
   publish:
