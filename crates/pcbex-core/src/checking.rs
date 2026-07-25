@@ -32,12 +32,13 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
             continue;
         };
+        let rules = board.rules_for_net(net.id);
         for terminal in &net.terminals {
             if !route_touches(
                 route,
                 terminal.position,
                 &terminal.layers,
-                board.rules.track_width_nm,
+                rules.track_width_nm,
             ) {
                 report.push(
                     "unconnected",
@@ -55,10 +56,18 @@ pub fn check_board(board: &Board) -> CheckReport {
             check_segment(board, route.net_id, segment, &mut report);
         }
         for via in &route.vias {
+            let rules = board.rules_for_net(route.net_id);
             if via.diameter_nm <= via.drill_nm || via.drill_nm <= 0 {
                 report.push(
                     "via_size",
                     "via diameter must exceed its positive drill".into(),
+                    vec![route.net_id],
+                );
+            }
+            if via.diameter_nm < rules.via_diameter_nm || via.drill_nm < rules.via_drill_nm {
+                report.push(
+                    "via_size",
+                    "via is smaller than its net class minimum".into(),
                     vec![route.net_id],
                 );
             }
@@ -78,7 +87,7 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if obstacle.net_id == Some(route.net_id) {
                     continue;
                 }
-                let required = radius + board.rules.clearance_nm;
+                let required = radius + rules.clearance_nm;
                 if point_rect_distance(via.position, obstacle.min, obstacle.max) < required as f64 {
                     report.push(
                         "clearance",
@@ -109,6 +118,7 @@ impl CheckReport {
 }
 
 fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut CheckReport) {
+    let rules = board.rules_for_net(net_id);
     let dx = (segment.end.x_nm - segment.start.x_nm).abs();
     let dy = (segment.end.y_nm - segment.start.y_nm).abs();
     if dx != 0 && dy != 0 && dx != dy {
@@ -118,7 +128,7 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
             vec![net_id],
         );
     }
-    if segment.width_nm < board.rules.track_width_nm {
+    if segment.width_nm < rules.track_width_nm {
         report.push(
             "track_width",
             "track is narrower than the configured minimum".into(),
@@ -145,7 +155,7 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         if !obstacle.layers.contains(&segment.layer) {
             continue;
         }
-        let required = segment.width_nm / 2 + board.rules.clearance_nm;
+        let required = segment.width_nm / 2 + rules.clearance_nm;
         if segment_rect_distance(segment, obstacle.min, obstacle.max) < required as f64 {
             report.push(
                 "clearance",
@@ -158,13 +168,16 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
 }
 
 fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut CheckReport) {
+    let clearance = board
+        .rules_for_net(a.net_id)
+        .clearance_nm
+        .max(board.rules_for_net(b.net_id).clearance_nm) as f64;
     for sa in &a.segments {
         for sb in &b.segments {
             if sa.layer != sb.layer {
                 continue;
             }
-            let required =
-                (sa.width_nm + sb.width_nm) as f64 / 2.0 + board.rules.clearance_nm as f64;
+            let required = (sa.width_nm + sb.width_nm) as f64 / 2.0 + clearance;
             if segment_distance(sa.start, sa.end, sb.start, sb.end) < required {
                 report.push(
                     "clearance",
@@ -175,9 +188,7 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
             }
         }
         for via in &b.vias {
-            let required = sa.width_nm as f64 / 2.0
-                + via.diameter_nm as f64 / 2.0
-                + board.rules.clearance_nm as f64;
+            let required = sa.width_nm as f64 / 2.0 + via.diameter_nm as f64 / 2.0 + clearance;
             if point_segment_distance(via.position, sa.start, sa.end) < required {
                 report.push(
                     "clearance",
@@ -190,9 +201,7 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
     }
     for via in &a.vias {
         for sb in &b.segments {
-            let required = sb.width_nm as f64 / 2.0
-                + via.diameter_nm as f64 / 2.0
-                + board.rules.clearance_nm as f64;
+            let required = sb.width_nm as f64 / 2.0 + via.diameter_nm as f64 / 2.0 + clearance;
             if point_segment_distance(via.position, sb.start, sb.end) < required {
                 report.push(
                     "clearance",
@@ -203,8 +212,7 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
             }
         }
         for other in &b.vias {
-            let required = (via.diameter_nm + other.diameter_nm) as f64 / 2.0
-                + board.rules.clearance_nm as f64;
+            let required = (via.diameter_nm + other.diameter_nm) as f64 / 2.0 + clearance;
             if distance(via.position, other.position) < required {
                 report.push(
                     "clearance",
@@ -326,6 +334,7 @@ mod tests {
             },
             obstacles: vec![],
             footprints: vec![],
+            net_classes: HashMap::new(),
             nets: vec![],
             routes: vec![],
         }
@@ -370,6 +379,7 @@ mod tests {
                         layers: vec![Layer::Front],
                     },
                 ],
+                class: None,
                 priority: 0,
             });
             b.routes.push(Route {
