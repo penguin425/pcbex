@@ -170,6 +170,8 @@ pub struct Board {
     pub height_nm: Nm,
     #[serde(default)]
     pub outline: Vec<Point>,
+    #[serde(default)]
+    pub cutouts: Vec<Vec<Point>>,
     pub rules: Rules,
     #[serde(default)]
     pub obstacles: Vec<Obstacle>,
@@ -211,6 +213,16 @@ impl Board {
                 y_nm: self.height_nm,
             },
         ]
+    }
+
+    fn point_inside_board(&self, point: Point, diameter_nm: Nm) -> bool {
+        let outline = self.effective_outline();
+        geometry::point_in_polygon(point, &outline)
+            && !geometry::point_polygon_closer_than(point, &outline, diameter_nm)
+            && self.cutouts.iter().all(|cutout| {
+                !geometry::point_in_polygon(point, cutout)
+                    && !geometry::point_polygon_closer_than(point, cutout, diameter_nm)
+            })
     }
 
     pub fn rules_for_net(&self, net_id: u32) -> Rules {
@@ -351,6 +363,15 @@ impl<'a> Router<'a> {
         {
             return Err("board outline must be a simple polygon inside its bounds".into());
         }
+        let outline = board.effective_outline();
+        if board.cutouts.iter().any(|cutout| {
+            !geometry::polygon_is_simple(cutout)
+                || cutout
+                    .iter()
+                    .any(|point| !geometry::point_in_polygon(*point, &outline))
+        }) {
+            return Err("board cutouts must be simple polygons inside the outline".into());
+        }
         if board
             .keepouts
             .iter()
@@ -415,7 +436,7 @@ impl<'a> Router<'a> {
     fn rasterize_obstacles(&mut self) {
         let g = self.board.rules.grid_nm;
         let (maximum_diameter, maximum_clearance) = self.board.maximum_routing_envelope();
-        let outline = self.board.effective_outline();
+        let edge_envelope = maximum_diameter + 2 * maximum_clearance;
         let max_x = self.board.width_nm / g;
         let max_y = self.board.height_nm / g;
         for y in 0..=max_y {
@@ -424,9 +445,7 @@ impl<'a> Router<'a> {
                     x_nm: x * g,
                     y_nm: y * g,
                 };
-                if !geometry::point_in_polygon(point, &outline)
-                    || geometry::point_polygon_closer_than(point, &outline, maximum_diameter)
-                {
+                if !self.board.point_inside_board(point, edge_envelope) {
                     self.blocked.extend([
                         (x as i32, y as i32, layer_index(Layer::Front)),
                         (x as i32, y as i32, layer_index(Layer::Back)),
@@ -1285,6 +1304,22 @@ pub fn render_svg(board: &Board) -> String {
     let mut s = format!(
         r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}"><polygon points="{outline}" fill="#152019" stroke="#ccc" stroke-width=".2"/>"##
     );
+    for cutout in &board.cutouts {
+        let points = cutout
+            .iter()
+            .map(|point| {
+                format!(
+                    "{},{}",
+                    point.x_nm as f64 / scale,
+                    point.y_nm as f64 / scale
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        s.push_str(&format!(
+            r##"<polygon points="{points}" fill="white" stroke="#ccc" stroke-width=".2"/>"##
+        ));
+    }
     for o in &board.obstacles {
         s.push_str(&format!(
             r##"<rect x="{}" y="{}" width="{}" height="{}" fill="#555"/>"##,
@@ -1374,6 +1409,7 @@ mod tests {
             width_nm: 10_000_000,
             height_nm: 10_000_000,
             outline: vec![],
+            cutouts: vec![],
             rules: Rules {
                 grid_nm: 500_000,
                 track_width_nm: 250_000,
@@ -1931,6 +1967,43 @@ mod tests {
                 ],
             )
         }));
+    }
+
+    #[test]
+    fn routes_around_a_board_cutout() {
+        let mut b = board();
+        b.obstacles.clear();
+        b.cutouts = vec![vec![
+            Point {
+                x_nm: 4_000_000,
+                y_nm: 4_000_000,
+            },
+            Point {
+                x_nm: 6_000_000,
+                y_nm: 4_000_000,
+            },
+            Point {
+                x_nm: 6_000_000,
+                y_nm: 6_000_000,
+            },
+            Point {
+                x_nm: 4_000_000,
+                y_nm: 6_000_000,
+            },
+        ]];
+        b.nets[0].terminals[0].position = Point {
+            x_nm: 1_000_000,
+            y_nm: 5_000_000,
+        };
+        b.nets[0].terminals[1].position = Point {
+            x_nm: 9_000_000,
+            y_nm: 5_000_000,
+        };
+
+        let (routed, report) = route_board(&b).unwrap();
+        assert!(report.unrouted.is_empty());
+        assert!(checking::check_board(&routed).is_clean());
+        assert!(render_svg(&routed).contains(r#"fill="white""#));
     }
 
     #[test]

@@ -23,6 +23,13 @@ pub struct ImportedBoard {
     existing_route_net_ids: HashSet<u32>,
 }
 
+struct BoardGeometry {
+    min: Point,
+    max: Point,
+    outline: Vec<Point>,
+    cutouts: Vec<Vec<Point>>,
+}
+
 pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let root = parse(source)?;
     let top = root
@@ -32,7 +39,12 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         return Err("expected a kicad_pcb document".into());
     }
 
-    let (min, max, outline) = board_bounds(top)?;
+    let BoardGeometry {
+        min,
+        max,
+        outline,
+        cutouts,
+    } = board_bounds(top)?;
     let mut nets = HashMap::<u32, Net>::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
@@ -93,6 +105,15 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         outline: outline
             .into_iter()
             .map(|point| relative(point, min))
+            .collect(),
+        cutouts: cutouts
+            .into_iter()
+            .map(|cutout| {
+                cutout
+                    .into_iter()
+                    .map(|point| relative(point, min))
+                    .collect()
+            })
             .collect(),
         rules,
         obstacles,
@@ -238,7 +259,7 @@ impl ImportedBoard {
     }
 }
 
-fn board_bounds(top: &[Sexp]) -> Result<(Point, Point, Vec<Point>), String> {
+fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
     let mut lines = Vec::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
@@ -264,10 +285,29 @@ fn board_bounds(top: &[Sexp]) -> Result<(Point, Point, Vec<Point>), String> {
                     lines.push((pair[0], pair[1]));
                 }
             }
+            Some("gr_rect") => {
+                if let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
+                {
+                    let top_right = Point {
+                        x_nm: end.x_nm,
+                        y_nm: start.y_nm,
+                    };
+                    let bottom_left = Point {
+                        x_nm: start.x_nm,
+                        y_nm: end.y_nm,
+                    };
+                    lines.extend([
+                        (start, top_right),
+                        (top_right, end),
+                        (end, bottom_left),
+                        (bottom_left, start),
+                    ]);
+                }
+            }
             _ => {}
         }
     }
-    let outline = if lines.is_empty() {
+    let mut contours = if lines.is_empty() {
         let mut rectangles = Vec::new();
         for item in top {
             let Some(xs) = item.as_list() else { continue };
@@ -278,52 +318,63 @@ fn board_bounds(top: &[Sexp]) -> Result<(Point, Point, Vec<Point>), String> {
                 rectangles.push((start, end));
             }
         }
-        if rectangles.len() != 1 {
-            return Err("exactly one closed Edge.Cuts outline is required".into());
+        if rectangles.is_empty() {
+            return Err("at least one closed Edge.Cuts outline is required".into());
         }
-        let (start, end) = rectangles[0];
-        vec![
-            start,
-            Point {
-                x_nm: end.x_nm,
-                y_nm: start.y_nm,
-            },
-            end,
-            Point {
-                x_nm: start.x_nm,
-                y_nm: end.y_nm,
-            },
-        ]
+        rectangles
+            .into_iter()
+            .map(|(start, end)| {
+                vec![
+                    start,
+                    Point {
+                        x_nm: end.x_nm,
+                        y_nm: start.y_nm,
+                    },
+                    end,
+                    Point {
+                        x_nm: start.x_nm,
+                        y_nm: end.y_nm,
+                    },
+                ]
+            })
+            .collect()
     } else {
         let mut unused = lines;
-        let (start, mut current) = unused.remove(0);
-        let mut ordered = vec![start];
-        while current != start {
-            ordered.push(current);
-            let Some((index, next)) =
-                unused
-                    .iter()
-                    .enumerate()
-                    .find_map(|(index, (edge_start, edge_end))| {
-                        if *edge_start == current {
-                            Some((index, *edge_end))
-                        } else if *edge_end == current {
-                            Some((index, *edge_start))
-                        } else {
-                            None
-                        }
-                    })
-            else {
-                return Err("Edge.Cuts lines do not form a closed outline".into());
-            };
-            unused.remove(index);
-            current = next;
+        let mut contours = Vec::new();
+        while !unused.is_empty() {
+            let (start, mut current) = unused.remove(0);
+            let mut ordered = vec![start];
+            while current != start {
+                ordered.push(current);
+                let Some((index, next)) =
+                    unused
+                        .iter()
+                        .enumerate()
+                        .find_map(|(index, (edge_start, edge_end))| {
+                            if *edge_start == current {
+                                Some((index, *edge_end))
+                            } else if *edge_end == current {
+                                Some((index, *edge_start))
+                            } else {
+                                None
+                            }
+                        })
+                else {
+                    return Err("Edge.Cuts primitives do not form closed contours".into());
+                };
+                unused.remove(index);
+                current = next;
+            }
+            if ordered.len() < 3 {
+                return Err("Edge.Cuts contour requires at least three points".into());
+            }
+            contours.push(ordered);
         }
-        if !unused.is_empty() || ordered.len() < 3 {
-            return Err("Edge.Cuts must form one closed outline".into());
-        }
-        ordered
+        contours
     };
+    contours.sort_by_key(|contour| std::cmp::Reverse(polygon_twice_area(contour).abs()));
+    let outline = contours.remove(0);
+    let cutouts = contours;
     let min = Point {
         x_nm: outline.iter().map(|p| p.x_nm).min().unwrap(),
         y_nm: outline.iter().map(|p| p.y_nm).min().unwrap(),
@@ -332,16 +383,52 @@ fn board_bounds(top: &[Sexp]) -> Result<(Point, Point, Vec<Point>), String> {
         x_nm: outline.iter().map(|p| p.x_nm).max().unwrap(),
         y_nm: outline.iter().map(|p| p.y_nm).max().unwrap(),
     };
-    let twice_area: i128 = outline
-        .iter()
-        .zip(outline.iter().cycle().skip(1))
-        .take(outline.len())
-        .map(|(a, b)| a.x_nm as i128 * b.y_nm as i128 - b.x_nm as i128 * a.y_nm as i128)
-        .sum();
+    let twice_area = polygon_twice_area(&outline);
     if min == max || twice_area == 0 {
         return Err("Edge.Cuts outline has zero area".into());
     }
-    Ok((min, max, outline))
+    if cutouts.iter().any(|cutout| {
+        polygon_twice_area(cutout) == 0
+            || cutout
+                .iter()
+                .any(|point| !point_in_polygon(*point, &outline))
+    }) {
+        return Err("Edge.Cuts cutouts must be inside the outer outline".into());
+    }
+    Ok(BoardGeometry {
+        min,
+        max,
+        outline,
+        cutouts,
+    })
+}
+
+fn polygon_twice_area(polygon: &[Point]) -> i128 {
+    polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
+        .map(|(a, b)| a.x_nm as i128 * b.y_nm as i128 - b.x_nm as i128 * a.y_nm as i128)
+        .sum()
+}
+
+fn point_in_polygon(point: Point, polygon: &[Point]) -> bool {
+    let mut inside = false;
+    for (start, end) in polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
+    {
+        let crosses = (start.y_nm > point.y_nm) != (end.y_nm > point.y_nm)
+            && (point.x_nm as f64)
+                < (end.x_nm - start.x_nm) as f64 * (point.y_nm - start.y_nm) as f64
+                    / (end.y_nm - start.y_nm) as f64
+                    + start.x_nm as f64;
+        if crosses {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String> {
@@ -1093,6 +1180,24 @@ mod tests {
           (gr_arc (start 0 0) (mid 10 0) (end 20 0) (layer "Edge.Cuts"))
         )"#;
         assert!(import(pcb, rules()).unwrap_err().contains("collinear"));
+    }
+
+    #[test]
+    fn imports_inner_edge_cuts_as_board_cutouts() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (gr_rect (start 8 8) (end 12 12) (layer "Edge.Cuts"))
+        )"#;
+        let imported = import(pcb, rules()).unwrap();
+        assert_eq!(imported.board.outline.len(), 4);
+        assert_eq!(imported.board.cutouts.len(), 1);
+        assert_eq!(
+            imported.board.cutouts[0][0],
+            Point {
+                x_nm: 8_000_000,
+                y_nm: 8_000_000,
+            }
+        );
     }
 
     #[test]

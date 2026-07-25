@@ -38,6 +38,7 @@ zones.
 | Exact oval pad geometry | Rotation-aware capsule rasterization, checking, SVG, and KiCad import | Capsule bounding-box escape and collision regressions; rotated KiCad oval test |
 | Exact rotated rectangular pads | Four-corner polygon rasterization, checking, SVG, and KiCad import | 30-degree coordinate regression and 35-degree real-KiCad E2E fixture |
 | Curved board outlines | Three-point `gr_arc` sampling with a 0.01 mm maximum chord deviation | Semicircle import regression and curved-board real-KiCad E2E fixture |
+| Board cutouts and multiple contours | Largest Edge.Cuts contour is the outer outline; enclosed contours are clearance-aware holes | Core routing/checking regression, importer classification test, and holed curved-board E2E fixture |
 | KiCad end-to-end CI | KiCad 10 routing, DRC, second-pass idempotence, and retained diagnostics for three fixtures | Rectangular, non-rectangular, and polygon-keepout boards run on every PR |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
 
