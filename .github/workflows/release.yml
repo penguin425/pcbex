@@ -1,0 +1,168 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
+      - run: rustup default stable
+      - name: Verify tag and versions
+        shell: bash
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+          rust_version="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq -r '.packages[] | select(.name == "pcbex") | .version'
+          )"
+          python_version="$(
+            python -c 'import pathlib, tomllib; print(tomllib.loads(pathlib.Path("agent/pyproject.toml").read_text())["project"]["version"])'
+          )"
+
+          test "$rust_version" = "$python_version"
+          test "$GITHUB_REF_NAME" = "v$rust_version"
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run Rust tests
+        run: cargo test --workspace --locked
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Run agent tests
+        env:
+          PYTHONPATH: agent/src
+        run: python -m unittest discover -s agent/tests -v
+
+  prepare:
+    name: Prepare draft release
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create or reuse draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft="$(
+              gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+                --json isDraft --jq .isDraft
+            )"
+            test "$is_draft" = "true"
+          else
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --draft \
+              --generate-notes \
+              --title "pcbex $tag"
+          fi
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            archive: tar
+          - runner: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - name: Build
+        shell: bash
+        run: cargo build -p pcbex --release --locked --target "${{ matrix.target }}"
+      - name: Package Unix binary
+        if: matrix.archive == 'tar'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          asset="pcbex-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$asset"
+          cp "target/${{ matrix.target }}/release/pcbex" "dist/$asset/"
+          cp README.md LICENSE "dist/$asset/"
+          tar -C dist -czf "dist/$asset.tar.gz" "$asset"
+          (
+            cd dist
+            shasum -a 256 "$asset.tar.gz" > "$asset.tar.gz.sha256"
+          )
+          gh release upload "$GITHUB_REF_NAME" \
+            "dist/$asset.tar.gz" "dist/$asset.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+      - name: Package Windows binary
+        if: matrix.archive == 'zip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $asset = "pcbex-$env:GITHUB_REF_NAME-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path "dist/$asset" | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/pcbex.exe" "dist/$asset/"
+          Copy-Item README.md, LICENSE "dist/$asset/"
+          Compress-Archive -Path "dist/$asset" -DestinationPath "dist/$asset.zip"
+          $hash = (Get-FileHash "dist/$asset.zip" -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset.zip" | Set-Content "dist/$asset.zip.sha256" -NoNewline
+          gh release upload $env:GITHUB_REF_NAME `
+            "dist/$asset.zip" "dist/$asset.zip.sha256" `
+            --repo $env:GITHUB_REPOSITORY `
+            --clobber
+
+  publish:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release edit "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest

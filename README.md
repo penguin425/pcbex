@@ -139,6 +139,23 @@ pcbex-agent repair-kicad input.kicad_pcb \
 The JSON report records every iteration, remaining errors and warnings, repair
 actions, the stop reason, and the best observed error count.
 
+## Releases
+
+Pushing a semantic-version tag from `main` creates a GitHub Release:
+
+```sh
+git switch main
+git pull --ff-only
+git tag -a v0.1.0 -m "pcbex v0.1.0"
+git push origin v0.1.0
+```
+
+The tag must match both the workspace version in `Cargo.toml` and the agent
+version in `agent/pyproject.toml`. The release workflow runs all Rust and Python
+checks, then publishes CLI archives for Linux x64, macOS Intel and Apple
+Silicon, and Windows x64. Each archive includes a SHA-256 checksum. If a build
+fails, the release remains a draft and the workflow can be rerun safely.
+
 ## Scope
 
 This foundation covers the routing core and headless KiCad exchange planned for
