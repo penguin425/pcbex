@@ -29,6 +29,10 @@ All coordinates and dimensions use integer nanometres. Layers are `F.Cu` and
 half the track width plus clearance. Terminals declare the layers on which they
 may be reached. See [`examples/simple.json`](examples/simple.json).
 
+Optional `net_classes` define per-class track width, clearance, via dimensions,
+and allowed layers. Assign a class by setting a net's `class` field. Routing and
+internal rule checking both apply the class; unspecified nets use board defaults.
+
 ## KiCad boards
 
 Route a placed KiCad board with a rectangular `Edge.Cuts` outline:
@@ -40,7 +44,8 @@ cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
 ```
 
 The importer reads pad positions (including footprint rotation), copper layers,
-net assignments, existing segments and vias. Generated tracks and through vias
+net assignments, legacy board-embedded net classes, existing segments and vias.
+Generated tracks and through vias
 are appended at board level while preserving the source document.
 Use `--drc` to run `kicad-cli pcb drc` on the result when KiCad is installed.
 After DRC passes, generate Gerber and Excellon drill files with:

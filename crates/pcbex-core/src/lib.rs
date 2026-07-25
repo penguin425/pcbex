@@ -37,6 +37,8 @@ pub struct Net {
     pub name: String,
     pub terminals: Vec<Terminal>,
     #[serde(default)]
+    pub class: Option<String>,
+    #[serde(default)]
     pub priority: i32,
 }
 
@@ -80,6 +82,30 @@ pub struct Rules {
     #[serde(default = "via_cost")]
     pub via_cost: u32,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NetClassRules {
+    pub track_width_nm: Nm,
+    pub clearance_nm: Nm,
+    pub via_diameter_nm: Nm,
+    pub via_drill_nm: Nm,
+    #[serde(default)]
+    pub layers: Option<Vec<Layer>>,
+}
+
+impl NetClassRules {
+    fn merged_with(&self, defaults: &Rules) -> Rules {
+        Rules {
+            grid_nm: defaults.grid_nm,
+            track_width_nm: self.track_width_nm,
+            clearance_nm: self.clearance_nm,
+            via_diameter_nm: self.via_diameter_nm,
+            via_drill_nm: self.via_drill_nm,
+            bend_cost: defaults.bend_cost,
+            via_cost: defaults.via_cost,
+        }
+    }
+}
 fn bend_cost() -> u32 {
     5
 }
@@ -97,9 +123,46 @@ pub struct Board {
     #[serde(default)]
     pub footprints: Vec<Footprint>,
     #[serde(default)]
+    pub net_classes: HashMap<String, NetClassRules>,
+    #[serde(default)]
     pub nets: Vec<Net>,
     #[serde(default)]
     pub routes: Vec<Route>,
+}
+
+impl Board {
+    pub fn rules_for_net(&self, net_id: u32) -> Rules {
+        self.nets
+            .iter()
+            .find(|net| net.id == net_id)
+            .and_then(|net| net.class.as_ref())
+            .and_then(|class| self.net_classes.get(class))
+            .map_or_else(
+                || self.rules.clone(),
+                |rules| rules.merged_with(&self.rules),
+            )
+    }
+
+    pub fn layers_for_net(&self, net_id: u32) -> Option<&[Layer]> {
+        self.nets
+            .iter()
+            .find(|net| net.id == net_id)
+            .and_then(|net| net.class.as_ref())
+            .and_then(|class| self.net_classes.get(class))
+            .and_then(|rules| rules.layers.as_deref())
+    }
+
+    fn maximum_routing_envelope(&self) -> (Nm, Nm) {
+        self.net_classes.values().fold(
+            (self.rules.track_width_nm, self.rules.clearance_nm),
+            |(width, clearance), rules| {
+                (
+                    width.max(rules.track_width_nm),
+                    clearance.max(rules.clearance_nm),
+                )
+            },
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -176,6 +239,18 @@ impl<'a> Router<'a> {
         if board.width_nm <= 0 || board.height_nm <= 0 {
             return Err("board dimensions must be positive".into());
         }
+        for (name, rules) in &board.net_classes {
+            if rules.track_width_nm <= 0
+                || rules.clearance_nm < 0
+                || rules.via_drill_nm <= 0
+                || rules.via_diameter_nm <= rules.via_drill_nm
+            {
+                return Err(format!("net class {name} has invalid dimensions"));
+            }
+            if rules.layers.as_ref().is_some_and(Vec::is_empty) {
+                return Err(format!("net class {name} must allow at least one layer"));
+            }
+        }
         let mut router = Self {
             board,
             blocked: HashSet::new(),
@@ -189,7 +264,8 @@ impl<'a> Router<'a> {
 
     fn rasterize_obstacles(&mut self) {
         let g = self.board.rules.grid_nm;
-        let inflate = self.board.rules.track_width_nm / 2 + self.board.rules.clearance_nm;
+        let (maximum_width, maximum_clearance) = self.board.maximum_routing_envelope();
+        let inflate = maximum_width / 2 + maximum_clearance;
         for o in &self.board.obstacles {
             let min_x = ((o.min.x_nm - inflate).max(0) / g) as i32;
             let min_y = ((o.min.y_nm - inflate).max(0) / g) as i32;
@@ -297,32 +373,33 @@ impl<'a> Router<'a> {
             segments: vec![],
             vias: vec![],
         };
+        let rules = self.board.rules_for_net(net.id);
         let mut expanded = 0;
         for (pair_index, pair) in net.terminals.windows(2).enumerate() {
-            let (nodes, count) = self.astar(net.id, &pair[0], &pair[1])?;
+            let (nodes, count) = self.astar(net.id, &pair[0], &pair[1], &rules)?;
             expanded += count;
             if pair_index == 0 {
-                append_terminal_access(
-                    &mut route,
-                    pair[0].position,
-                    nodes[0],
-                    &self.board.rules,
-                    true,
-                );
+                append_terminal_access(&mut route, pair[0].position, nodes[0], &rules, true);
             }
-            append_path(&mut route, &nodes, &self.board.rules);
+            append_path(&mut route, &nodes, &rules);
             append_terminal_access(
                 &mut route,
                 pair[1].position,
                 *nodes.last().unwrap(),
-                &self.board.rules,
+                &rules,
                 false,
             );
         }
         Some((route, expanded))
     }
 
-    fn astar(&self, net_id: u32, start: &Terminal, goal: &Terminal) -> Option<(Vec<Node>, usize)> {
+    fn astar(
+        &self,
+        net_id: u32,
+        start: &Terminal,
+        goal: &Terminal,
+        rules: &Rules,
+    ) -> Option<(Vec<Node>, usize)> {
         const DIRS: [(i32, i32); 8] = [
             (1, 0),
             (1, 1),
@@ -333,22 +410,31 @@ impl<'a> Router<'a> {
             (0, -1),
             (1, -1),
         ];
-        let g = self.board.rules.grid_nm;
+        let g = rules.grid_nm;
         let sx = nearest_grid(start.position.x_nm, g) as i32;
         let sy = nearest_grid(start.position.y_nm, g) as i32;
         let gx = nearest_grid(goal.position.x_nm, g) as i32;
         let gy = nearest_grid(goal.position.y_nm, g) as i32;
         let max_x = (self.board.width_nm / g) as i32;
         let max_y = (self.board.height_nm / g) as i32;
-        let goals: HashSet<u8> = goal.layers.iter().map(|l| layer_index(*l)).collect();
+        let allowed_layers = self.board.layers_for_net(net_id);
+        let terminal_layers = |terminal: &Terminal| {
+            terminal
+                .layers
+                .iter()
+                .copied()
+                .filter(|layer| allowed_layers.is_none_or(|allowed| allowed.contains(layer)))
+                .collect::<Vec<_>>()
+        };
+        let goals: HashSet<u8> = terminal_layers(goal).into_iter().map(layer_index).collect();
         let mut open = BinaryHeap::new();
         let mut costs = HashMap::new();
         let mut prev = HashMap::new();
-        for layer in &start.layers {
+        for layer in terminal_layers(start) {
             let n = Node {
                 x: sx,
                 y: sy,
-                layer: layer_index(*layer),
+                layer: layer_index(layer),
                 dir: 8,
             };
             costs.insert(n, 0u64);
@@ -402,7 +488,7 @@ impl<'a> Router<'a> {
                 }
                 let step = if *dx != 0 && *dy != 0 { 14 } else { 10 };
                 let bend = if item.node.dir < 8 && item.node.dir != dir as u8 {
-                    self.board.rules.bend_cost as u64
+                    rules.bend_cost as u64
                 } else {
                     0
                 };
@@ -425,7 +511,8 @@ impl<'a> Router<'a> {
             }
             let other = 1 - item.node.layer;
             let cell = (item.node.x, item.node.y, other);
-            if !self.blocked.contains(&cell)
+            if allowed_layers.is_none_or(|allowed| allowed.contains(&index_layer(other)))
+                && !self.blocked.contains(&cell)
                 && !self.foreign_obstacle(cell, net_id)
                 && !self.occupied.contains(&cell)
             {
@@ -438,7 +525,7 @@ impl<'a> Router<'a> {
                 self.relax(
                     item.node,
                     n,
-                    item.cost + self.board.rules.via_cost as u64,
+                    item.cost + rules.via_cost as u64,
                     gx,
                     gy,
                     &mut costs,
@@ -489,9 +576,10 @@ impl<'a> Router<'a> {
     }
     fn commit(&mut self, route: &Route) {
         let g = self.board.rules.grid_nm;
-        let clearance_radius =
-            (self.board.rules.track_width_nm + self.board.rules.clearance_nm + g - 1) / g;
+        let (maximum_width, maximum_clearance) = self.board.maximum_routing_envelope();
         for s in &route.segments {
+            let clearance_radius =
+                (s.width_nm / 2 + maximum_width / 2 + maximum_clearance + g - 1) / g;
             let (mut x, mut y) = (s.start.x_nm / g, s.start.y_nm / g);
             let (ex, ey) = (s.end.x_nm / g, s.end.y_nm / g);
             let dx = (ex - x).signum();
@@ -715,9 +803,11 @@ mod tests {
                 net_id: None,
             }],
             footprints: vec![],
+            net_classes: HashMap::new(),
             nets: vec![Net {
                 id: 1,
                 name: "N1".into(),
+                class: None,
                 priority: 0,
                 terminals: vec![
                     Terminal {
@@ -759,6 +849,7 @@ mod tests {
             Net {
                 id: 1,
                 name: "A".into(),
+                class: None,
                 priority: 10,
                 terminals: vec![
                     Terminal {
@@ -780,6 +871,7 @@ mod tests {
             Net {
                 id: 2,
                 name: "B".into(),
+                class: None,
                 priority: 0,
                 terminals: vec![
                     Terminal {
@@ -819,6 +911,7 @@ mod tests {
                 Net {
                     id: i as u32 + 1,
                     name: format!("N{}", i + 1),
+                    class: None,
                     priority: 0,
                     terminals: vec![
                         Terminal {
@@ -953,5 +1046,31 @@ mod tests {
         assert!(routed.routes.is_empty());
         assert_eq!(report.unrouted, vec!["N1"]);
         assert_eq!(report.reroute_passes, 4);
+    }
+
+    #[test]
+    fn applies_net_class_dimensions_and_layer_constraint() {
+        let mut b = board();
+        b.obstacles.clear();
+        b.nets[0].class = Some("Power".into());
+        b.net_classes.insert(
+            "Power".into(),
+            NetClassRules {
+                track_width_nm: 800_000,
+                clearance_nm: 400_000,
+                via_diameter_nm: 1_000_000,
+                via_drill_nm: 500_000,
+                layers: Some(vec![Layer::Back]),
+            },
+        );
+        let (routed, report) = route_board(&b).unwrap();
+        assert!(report.unrouted.is_empty());
+        assert!(
+            routed.routes[0]
+                .segments
+                .iter()
+                .all(|segment| segment.width_nm == 800_000 && segment.layer == Layer::Back)
+        );
+        assert!(crate::checking::check_board(&routed).is_clean());
     }
 }

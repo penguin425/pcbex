@@ -1,4 +1,6 @@
-use pcbex_core::{Board, Footprint, Layer, Net, Obstacle, Pad, Point, Route, Rules, Terminal};
+use pcbex_core::{
+    Board, Footprint, Layer, Net, NetClassRules, Obstacle, Pad, Point, Route, Rules, Terminal,
+};
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -39,12 +41,14 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                     id,
                     name: name.to_string(),
                     terminals: Vec::new(),
+                    class: None,
                     priority: 0,
                 },
             );
         }
     }
 
+    let net_classes = import_net_classes(top, &rules, &mut nets);
     let mut obstacles = Vec::new();
     let mut footprints = Vec::new();
     for item in top {
@@ -71,12 +75,73 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
             rules,
             obstacles,
             footprints,
+            net_classes,
             nets,
             routes: Vec::new(),
         },
         source: source.to_string(),
         origin: min,
     })
+}
+
+fn import_net_classes(
+    top: &[Sexp],
+    defaults: &Rules,
+    nets: &mut HashMap<u32, Net>,
+) -> HashMap<String, NetClassRules> {
+    let mut classes = HashMap::new();
+    let net_ids_by_name: HashMap<_, _> = nets
+        .iter()
+        .map(|(id, net)| (net.name.clone(), *id))
+        .collect();
+    for item in top {
+        let Some(setup) = item.as_list() else {
+            continue;
+        };
+        if atom(setup.first()) != Some("setup") {
+            continue;
+        }
+        for item in setup {
+            let Some(values) = item.as_list() else {
+                continue;
+            };
+            if atom(values.first()) != Some("net_class") {
+                continue;
+            }
+            let Some(name) = atom(values.get(1)) else {
+                continue;
+            };
+            let dimension = |key: &str, fallback: i64| {
+                child_values(values, key)
+                    .and_then(|value| number(value.get(1)))
+                    .map(nm)
+                    .unwrap_or(fallback)
+            };
+            classes.insert(
+                name.to_string(),
+                NetClassRules {
+                    track_width_nm: dimension("trace_width", defaults.track_width_nm),
+                    clearance_nm: dimension("clearance", defaults.clearance_nm),
+                    via_diameter_nm: dimension("via_dia", defaults.via_diameter_nm),
+                    via_drill_nm: dimension("via_drill", defaults.via_drill_nm),
+                    layers: None,
+                },
+            );
+            for child in values {
+                let Some(assignment) = child.as_list() else {
+                    continue;
+                };
+                if atom(assignment.first()) == Some("add_net")
+                    && let Some(net_name) = atom(assignment.get(1))
+                    && let Some(net_id) = net_ids_by_name.get(net_name)
+                    && let Some(net) = nets.get_mut(net_id)
+                {
+                    net.class = Some(name.to_string());
+                }
+            }
+        }
+    }
+    classes
 }
 
 impl ImportedBoard {
@@ -590,6 +655,10 @@ mod tests {
     }
     const PCB: &str = r#"(kicad_pcb (version 20250114) (generator pcbnew)
       (net 0 "") (net 1 "VCC")
+      (setup
+        (net_class "Power" "power nets"
+          (clearance 0.4) (trace_width 0.8) (via_dia 1.0) (via_drill 0.5)
+          (add_net "VCC")))
       (gr_rect (start 10 20) (end 40 50) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts"))
       (footprint "A" (layer "F.Cu") (at 15 25 90)
         (pad "1" thru_hole oval (at 1 0) (size 2 1) (drill 0.5) (layers "*.Cu" "*.Mask") (net 1 "VCC")))
@@ -618,6 +687,10 @@ mod tests {
             .unwrap();
         assert_eq!(pad.max.x_nm - pad.min.x_nm, 1_000_000);
         assert_eq!(pad.max.y_nm - pad.min.y_nm, 2_000_000);
+        assert_eq!(b.board.nets[0].class.as_deref(), Some("Power"));
+        let power = &b.board.net_classes["Power"];
+        assert_eq!(power.track_width_nm, 800_000);
+        assert_eq!(power.clearance_nm, 400_000);
     }
     #[test]
     fn writes_generated_routes_at_board_level() {
