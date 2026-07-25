@@ -19,8 +19,9 @@ cargo run -p pcbex -- check simple.routed.json
 
 By default `route` fails when any net cannot be routed, making it suitable for
 CI. Pass `--allow-unrouted` to retain a partial result. Every completed route is
-checked internally for connectivity, supported angles, track/via dimensions,
-board boundaries, obstacle clearance, and cross-net copper clearance.
+checked internally for full copper-graph connectivity, orphan copper, supported
+angles, track/via dimensions, board boundaries, obstacle clearance, and
+cross-net copper clearance.
 
 ## JSON model
 

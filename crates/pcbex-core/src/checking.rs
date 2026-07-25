@@ -1,6 +1,6 @@
-use crate::{Board, Layer, Nm, Point, Route, Segment};
+use crate::{Board, Net, Point, Route, Segment};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Violation {
@@ -32,24 +32,7 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
             continue;
         };
-        let rules = board.rules_for_net(net.id);
-        for terminal in &net.terminals {
-            if !route_touches(
-                route,
-                terminal.position,
-                &terminal.layers,
-                rules.track_width_nm,
-            ) {
-                report.push(
-                    "unconnected",
-                    format!(
-                        "net {} does not reach terminal at {},{}",
-                        net.name, terminal.position.x_nm, terminal.position.y_nm
-                    ),
-                    vec![net.id],
-                );
-            }
-        }
+        check_route_connectivity(net, route, &mut report);
     }
     for route in &board.routes {
         for segment in &route.segments {
@@ -225,14 +208,144 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
     }
 }
 
-fn route_touches(route: &Route, point: Point, layers: &[Layer], width: Nm) -> bool {
-    route.segments.iter().any(|s| {
-        layers.contains(&s.layer)
-            && point_segment_distance(point, s.start, s.end) <= width as f64 / 2.0
-    }) || route
-        .vias
-        .iter()
-        .any(|v| distance(v.position, point) <= v.diameter_nm as f64 / 2.0)
+fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) {
+    let segment_count = route.segments.len();
+    let node_count = segment_count + route.vias.len();
+    let mut components = DisjointSet::new(node_count);
+
+    for (index, segment) in route.segments.iter().enumerate() {
+        for (other_index, other) in route.segments[..index].iter().enumerate() {
+            if segment.layer == other.layer
+                && segment_distance(segment.start, segment.end, other.start, other.end)
+                    <= (segment.width_nm + other.width_nm) as f64 / 2.0
+            {
+                components.union(index, other_index);
+            }
+        }
+        for (via_index, via) in route.vias.iter().enumerate() {
+            if point_segment_distance(via.position, segment.start, segment.end)
+                <= (segment.width_nm + via.diameter_nm) as f64 / 2.0
+            {
+                components.union(index, segment_count + via_index);
+            }
+        }
+    }
+    for (index, via) in route.vias.iter().enumerate() {
+        for (other_index, other) in route.vias[..index].iter().enumerate() {
+            if distance(via.position, other.position)
+                <= (via.diameter_nm + other.diameter_nm) as f64 / 2.0
+            {
+                components.union(segment_count + index, segment_count + other_index);
+            }
+        }
+    }
+
+    let mut terminal_nodes = Vec::with_capacity(net.terminals.len());
+    for terminal in &net.terminals {
+        let touched: Vec<usize> = route
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(_, segment)| {
+                terminal.layers.contains(&segment.layer)
+                    && point_segment_distance(terminal.position, segment.start, segment.end)
+                        <= segment.width_nm as f64 / 2.0
+            })
+            .map(|(index, _)| index)
+            .chain(
+                route
+                    .vias
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, via)| {
+                        distance(via.position, terminal.position) <= via.diameter_nm as f64 / 2.0
+                    })
+                    .map(|(index, _)| segment_count + index),
+            )
+            .collect();
+
+        if let Some((&first, rest)) = touched.split_first() {
+            for &node in rest {
+                components.union(first, node);
+            }
+            terminal_nodes.push(Some(first));
+        } else {
+            terminal_nodes.push(None);
+            report.push(
+                "unconnected",
+                format!(
+                    "net {} does not reach terminal at {},{}",
+                    net.name, terminal.position.x_nm, terminal.position.y_nm
+                ),
+                vec![net.id],
+            );
+        }
+    }
+
+    let terminal_roots: HashSet<usize> = terminal_nodes
+        .into_iter()
+        .flatten()
+        .map(|node| components.find(node))
+        .collect();
+    if terminal_roots.len() > 1 {
+        report.push(
+            "disconnected_route",
+            format!(
+                "net {} is split into disconnected copper components",
+                net.name
+            ),
+            vec![net.id],
+        );
+    }
+
+    let all_roots: HashSet<usize> = (0..node_count).map(|node| components.find(node)).collect();
+    for _ in all_roots.difference(&terminal_roots) {
+        report.push(
+            "orphan_copper",
+            format!(
+                "net {} contains copper not connected to a terminal",
+                net.name
+            ),
+            vec![net.id],
+        );
+    }
+}
+
+struct DisjointSet {
+    parent: Vec<usize>,
+    rank: Vec<u8>,
+}
+
+impl DisjointSet {
+    fn new(len: usize) -> Self {
+        Self {
+            parent: (0..len).collect(),
+            rank: vec![0; len],
+        }
+    }
+
+    fn find(&mut self, node: usize) -> usize {
+        if self.parent[node] != node {
+            self.parent[node] = self.find(self.parent[node]);
+        }
+        self.parent[node]
+    }
+
+    fn union(&mut self, left: usize, right: usize) {
+        let left_root = self.find(left);
+        let right_root = self.find(right);
+        if left_root == right_root {
+            return;
+        }
+        match self.rank[left_root].cmp(&self.rank[right_root]) {
+            std::cmp::Ordering::Less => self.parent[left_root] = right_root,
+            std::cmp::Ordering::Greater => self.parent[right_root] = left_root,
+            std::cmp::Ordering::Equal => {
+                self.parent[right_root] = left_root;
+                self.rank[left_root] += 1;
+            }
+        }
+    }
 }
 
 fn segment_rect_distance(segment: &Segment, min: Point, max: Point) -> f64 {
@@ -318,7 +431,7 @@ fn distance(a: Point, b: Point) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Net, Rules, Terminal};
+    use crate::{Layer, Rules, Terminal, Via};
     fn base() -> Board {
         Board {
             width_nm: 10_000_000,
@@ -399,5 +512,193 @@ mod tests {
                 .iter()
                 .any(|v| v.rule == "clearance")
         );
+    }
+
+    #[test]
+    fn detects_route_split_between_terminals() {
+        let mut board = base();
+        let start = Point {
+            x_nm: 1_000_000,
+            y_nm: 1_000_000,
+        };
+        let end = Point {
+            x_nm: 9_000_000,
+            y_nm: 1_000_000,
+        };
+        board.nets.push(Net {
+            id: 1,
+            name: "split".into(),
+            terminals: vec![
+                Terminal {
+                    position: start,
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: end,
+                    layers: vec![Layer::Front],
+                },
+            ],
+            class: None,
+            priority: 0,
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![
+                Segment {
+                    start,
+                    end: Point {
+                        x_nm: 3_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+                Segment {
+                    start: Point {
+                        x_nm: 7_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    end,
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+            ],
+            vias: vec![],
+        });
+
+        let report = check_board(&board);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "disconnected_route")
+        );
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "unconnected")
+        );
+    }
+
+    #[test]
+    fn detects_copper_without_a_terminal() {
+        let mut board = base();
+        let start = Point {
+            x_nm: 1_000_000,
+            y_nm: 1_000_000,
+        };
+        let end = Point {
+            x_nm: 9_000_000,
+            y_nm: 1_000_000,
+        };
+        board.nets.push(Net {
+            id: 1,
+            name: "orphan".into(),
+            terminals: vec![
+                Terminal {
+                    position: start,
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: end,
+                    layers: vec![Layer::Front],
+                },
+            ],
+            class: None,
+            priority: 0,
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![
+                Segment {
+                    start,
+                    end,
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+                Segment {
+                    start: Point {
+                        x_nm: 3_000_000,
+                        y_nm: 5_000_000,
+                    },
+                    end: Point {
+                        x_nm: 7_000_000,
+                        y_nm: 5_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+            ],
+            vias: vec![],
+        });
+
+        assert!(
+            check_board(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "orphan_copper")
+        );
+    }
+
+    #[test]
+    fn via_connects_segments_on_opposite_layers() {
+        let mut board = base();
+        let start = Point {
+            x_nm: 1_000_000,
+            y_nm: 1_000_000,
+        };
+        let middle = Point {
+            x_nm: 5_000_000,
+            y_nm: 1_000_000,
+        };
+        let end = Point {
+            x_nm: 9_000_000,
+            y_nm: 1_000_000,
+        };
+        board.nets.push(Net {
+            id: 1,
+            name: "through-via".into(),
+            terminals: vec![
+                Terminal {
+                    position: start,
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: end,
+                    layers: vec![Layer::Back],
+                },
+            ],
+            class: None,
+            priority: 0,
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![
+                Segment {
+                    start,
+                    end: middle,
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+                Segment {
+                    start: middle,
+                    end,
+                    layer: Layer::Back,
+                    width_nm: 250_000,
+                },
+            ],
+            vias: vec![Via {
+                position: middle,
+                diameter_nm: 600_000,
+                drill_nm: 300_000,
+            }],
+        });
+
+        let report = check_board(&board);
+        assert!(!report.violations.iter().any(|violation| matches!(
+            violation.rule.as_str(),
+            "unconnected" | "disconnected_route" | "orphan_copper"
+        )));
     }
 }
