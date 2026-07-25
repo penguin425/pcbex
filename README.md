@@ -46,9 +46,12 @@ unrouted nets and includes the number of rip-up events.
 ## JSON model
 
 All coordinates and dimensions use integer nanometres. Layers are `F.Cu` and
-`B.Cu`. Obstacles are axis-aligned rectangles and are expanded internally by
-half the track width plus clearance. Terminals declare the layers on which they
-may be reached. See [`examples/simple.json`](examples/simple.json).
+`B.Cu`. An optional ordered `outline` defines a simple, concave or convex board
+polygon; an empty outline uses the width/height rectangle. `keepouts` use exact
+polygons and layer sets, while legacy `obstacles` remain axis-aligned
+rectangles. Copper envelopes are expanded by width/via radius plus clearance.
+Terminals declare the layers on which they may be reached. See
+[`examples/simple.json`](examples/simple.json).
 
 Optional `net_classes` define per-class track width, clearance, via dimensions,
 and allowed layers. Assign a class by setting a net's `class` field. Routing and
@@ -56,7 +59,7 @@ internal rule checking both apply the class; unspecified nets use board defaults
 
 ## KiCad boards
 
-Route a placed KiCad board with a rectangular `Edge.Cuts` outline:
+Route a placed KiCad board with a closed, straight-segment `Edge.Cuts` outline:
 
 ```sh
 cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
@@ -64,8 +67,13 @@ cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
   --json-output simple.ipc-routes.json
 ```
 
-The importer reads pad positions (including footprint rotation), copper layers,
-net assignments, legacy board-embedded net classes, existing segments and vias.
+[`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
+five-sided outline that routes and passes KiCad DRC.
+
+The importer reads polygonal board outlines and copper keepouts without reducing
+them to bounding boxes, plus pad positions (including footprint rotation),
+copper layers, net assignments, legacy board-embedded net classes, existing
+segments and vias.
 Fully connected existing nets are preserved as locked routes; incomplete copper
 remains an obstacle and is not mistaken for a completed route. Generated tracks
 and through vias are appended at board level without duplicating locked routes,
@@ -135,7 +143,8 @@ actions, the stop reason, and the best observed error count.
 
 This foundation covers the routing core and headless KiCad exchange planned for
 the first four sprints:
-two copper layers, signal nets, rectangular outlines and obstacles, circular
+two copper layers, signal nets, polygonal straight-edge outlines and keepouts,
+rectangular component obstacles, circular
 through vias, horizontal/vertical/45-degree tracks, deterministic net ordering,
 an unrouted-net report, `.kicad_pcb` I/O, optional KiCad DRC, HPWL placement,
 overlap/boundary/congestion scoring, simulated annealing, and placement

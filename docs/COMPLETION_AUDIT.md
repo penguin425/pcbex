@@ -33,6 +33,7 @@ zones.
 | SKiDL and part search boundaries | Optional SKiDL graph converter and injected catalog search | Adapter tests |
 | DRC repair planning | KiCad 10 report normalization and rule-to-repair mapping | DRC normalization tests |
 | Automatic DRC repair loop | Bounded candidate generation, KiCad revalidation, convergence guard, atomic clean-output promotion | Injected three-iteration repair and repeated-candidate tests; real KiCad clean-board run |
+| Polygon board geometry | Concave/convex outlines, exact polygon keepouts, edge-aware routing/checking/SVG, KiCad line-outline import | L-board routing, triangular keepout bounding-box escape, concavity tests; five-sided example passes real KiCad DRC |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
 
 ## Final verification commands
@@ -50,6 +51,6 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
   --output-dir /tmp/pcbex-complete-mfg
 ```
 
-At audit time all 30 Rust tests and all 11 Python tests passed, the release build
+At audit time all 33 Rust tests and all 11 Python tests passed, the release build
 completed, KiCad DRC reported zero violations and zero unconnected pads, and
 all expected manufacturing layers plus the drill file were generated.
