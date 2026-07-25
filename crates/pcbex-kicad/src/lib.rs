@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 const NM_PER_MM: f64 = 1_000_000.0;
+const ARC_CHORD_TOLERANCE_NM: f64 = 10_000.0;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Sexp {
@@ -241,11 +242,29 @@ fn board_bounds(top: &[Sexp]) -> Result<(Point, Point, Vec<Point>), String> {
     let mut lines = Vec::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
-        if atom(xs.first()) != Some("gr_line") || child_atom(xs, "layer") != Some("Edge.Cuts") {
+        if child_atom(xs, "layer") != Some("Edge.Cuts") {
             continue;
         }
-        if let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end")) {
-            lines.push((start, end));
+        match atom(xs.first()) {
+            Some("gr_line") => {
+                if let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
+                {
+                    lines.push((start, end));
+                }
+            }
+            Some("gr_arc") => {
+                let (Some(start), Some(mid), Some(end)) = (
+                    child_point(xs, "start"),
+                    child_point(xs, "mid"),
+                    child_point(xs, "end"),
+                ) else {
+                    return Err("Edge.Cuts arc requires start, mid, and end points".into());
+                };
+                for pair in sample_arc(start, mid, end)?.windows(2) {
+                    lines.push((pair[0], pair[1]));
+                }
+            }
+            _ => {}
         }
     }
     let outline = if lines.is_empty() {
@@ -323,6 +342,45 @@ fn board_bounds(top: &[Sexp]) -> Result<(Point, Point, Vec<Point>), String> {
         return Err("Edge.Cuts outline has zero area".into());
     }
     Ok((min, max, outline))
+}
+
+fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String> {
+    let (x1, y1) = (start.x_nm as f64, start.y_nm as f64);
+    let (x2, y2) = (mid.x_nm as f64, mid.y_nm as f64);
+    let (x3, y3) = (end.x_nm as f64, end.y_nm as f64);
+    let determinant = 2.0 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
+    if determinant.abs() < 1.0 {
+        return Err("Edge.Cuts arc points must not be collinear".into());
+    }
+    let q1 = x1 * x1 + y1 * y1;
+    let q2 = x2 * x2 + y2 * y2;
+    let q3 = x3 * x3 + y3 * y3;
+    let center_x = (q1 * (y2 - y3) + q2 * (y3 - y1) + q3 * (y1 - y2)) / determinant;
+    let center_y = (q1 * (x3 - x2) + q2 * (x1 - x3) + q3 * (x2 - x1)) / determinant;
+    let radius = (x1 - center_x).hypot(y1 - center_y);
+    let start_angle = (y1 - center_y).atan2(x1 - center_x);
+    let mid_angle = (y2 - center_y).atan2(x2 - center_x);
+    let end_angle = (y3 - center_y).atan2(x3 - center_x);
+    let positive = |angle: f64| angle.rem_euclid(std::f64::consts::TAU);
+    let ccw_sweep = positive(end_angle - start_angle);
+    let sweep = if positive(mid_angle - start_angle) <= ccw_sweep {
+        ccw_sweep
+    } else {
+        ccw_sweep - std::f64::consts::TAU
+    };
+    let max_step = 2.0 * (1.0 - (ARC_CHORD_TOLERANCE_NM / radius).min(1.0)).acos();
+    let steps = (sweep.abs() / max_step.max(1e-6)).ceil().max(1.0) as usize;
+    let mut points = Vec::with_capacity(steps + 1);
+    for index in 0..=steps {
+        let angle = start_angle + sweep * index as f64 / steps as f64;
+        points.push(Point {
+            x_nm: (center_x + radius * angle.cos()).round() as i64,
+            y_nm: (center_y + radius * angle.sin()).round() as i64,
+        });
+    }
+    points[0] = start;
+    points[steps] = end;
+    Ok(points)
 }
 
 fn import_footprint(
@@ -1009,6 +1067,32 @@ mod tests {
         let (routed, report) = pcbex_core::route_board(&imported.board).unwrap();
         assert!(report.unrouted.is_empty());
         assert!(pcbex_core::checking::check_board(&routed).is_clean());
+    }
+
+    #[test]
+    fn imports_outline_with_three_point_arc() {
+        let pcb = r#"(kicad_pcb
+          (gr_line (start 0 0) (end 20 0) (layer "Edge.Cuts"))
+          (gr_line (start 20 0) (end 20 10) (layer "Edge.Cuts"))
+          (gr_arc (start 20 10) (mid 10 20) (end 0 10) (layer "Edge.Cuts"))
+          (gr_line (start 0 10) (end 0 0) (layer "Edge.Cuts"))
+        )"#;
+        let imported = import(pcb, rules()).unwrap();
+        assert!(imported.board.outline.len() > 30);
+        assert_eq!(imported.board.width_nm, 20_000_000);
+        assert_eq!(imported.board.height_nm, 20_000_000);
+        assert!(imported.board.outline.contains(&Point {
+            x_nm: 10_000_000,
+            y_nm: 20_000_000,
+        }));
+    }
+
+    #[test]
+    fn rejects_collinear_edge_cuts_arc() {
+        let pcb = r#"(kicad_pcb
+          (gr_arc (start 0 0) (mid 10 0) (end 20 0) (layer "Edge.Cuts"))
+        )"#;
+        assert!(import(pcb, rules()).unwrap_err().contains("collinear"));
     }
 
     #[test]

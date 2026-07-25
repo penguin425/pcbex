@@ -91,6 +91,8 @@ and use exact segment-to-capsule clearance. Rotated rectangular pads retain
 their four copper corners as polygons. The importer also reads
 copper layers, net assignments, legacy board-embedded net classes, existing
 segments and vias.
+Line and three-point arc primitives on `Edge.Cuts` are joined into a polygonal
+outline; arcs use a maximum chord deviation of 0.01 mm.
 Fully connected existing nets are preserved as locked routes; incomplete copper
 remains an obstacle and is not mistaken for a completed route. Generated tracks
 and through vias are appended at board level without duplicating locked routes,
