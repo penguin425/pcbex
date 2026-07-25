@@ -37,6 +37,12 @@ repeatedly connects the cheapest remaining terminal to any point in the routed
 tree. This avoids the input-order-dependent detours of terminal-to-terminal
 chain routing.
 
+When a net cannot be routed, the failed A* search records which committed nets
+blocked its frontier. Only those conflicting routes are ripped up and retried,
+with the failed net ordered first; unrelated and imported locked routes remain
+in place. The route report separates preserved, newly routed, rerouted, and
+unrouted nets and includes the number of rip-up events.
+
 ## JSON model
 
 All coordinates and dimensions use integer nanometres. Layers are `F.Cu` and

@@ -155,10 +155,15 @@ impl Board {
 
     fn maximum_routing_envelope(&self) -> (Nm, Nm) {
         self.net_classes.values().fold(
-            (self.rules.track_width_nm, self.rules.clearance_nm),
-            |(width, clearance), rules| {
+            (
+                self.rules.track_width_nm.max(self.rules.via_diameter_nm),
+                self.rules.clearance_nm,
+            ),
+            |(diameter, clearance), rules| {
                 (
-                    width.max(rules.track_width_nm),
+                    diameter
+                        .max(rules.track_width_nm)
+                        .max(rules.via_diameter_nm),
                     clearance.max(rules.clearance_nm),
                 )
             },
@@ -192,9 +197,11 @@ pub struct Route {
 pub struct RouteReport {
     pub preserved: Vec<String>,
     pub routed: Vec<String>,
+    pub rerouted: Vec<String>,
     pub unrouted: Vec<String>,
     pub expanded_states: usize,
     pub reroute_passes: usize,
+    pub ripup_events: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -230,7 +237,18 @@ pub struct Router<'a> {
     blocked: HashSet<(i32, i32, u8)>,
     owned: HashMap<(i32, i32, u8), u32>,
     occupied: HashSet<(i32, i32, u8)>,
+    occupied_by: HashMap<(i32, i32, u8), u32>,
     congestion: HashMap<(i32, i32, u8), u16>,
+}
+
+struct RouteFailure {
+    expanded: usize,
+    blockers: HashSet<u32>,
+}
+
+struct SearchFailure {
+    expanded: usize,
+    blockers: HashSet<u32>,
 }
 
 impl<'a> Router<'a> {
@@ -267,6 +285,7 @@ impl<'a> Router<'a> {
             blocked: HashSet::new(),
             owned: HashMap::new(),
             occupied: HashSet::new(),
+            occupied_by: HashMap::new(),
             congestion: HashMap::new(),
         };
         router.rasterize_obstacles();
@@ -275,8 +294,8 @@ impl<'a> Router<'a> {
 
     fn rasterize_obstacles(&mut self) {
         let g = self.board.rules.grid_nm;
-        let (maximum_width, maximum_clearance) = self.board.maximum_routing_envelope();
-        let inflate = maximum_width / 2 + maximum_clearance;
+        let (maximum_diameter, maximum_clearance) = self.board.maximum_routing_envelope();
+        let inflate = maximum_diameter / 2 + maximum_clearance;
         for o in &self.board.obstacles {
             let min_x = ((o.min.x_nm - inflate).max(0) / g) as i32;
             let min_y = ((o.min.y_nm - inflate).max(0) / g) as i32;
@@ -327,7 +346,11 @@ impl<'a> Router<'a> {
                 std::cmp::Reverse(net_span(n)),
             )
         });
-        let mut failed_ids = HashSet::new();
+        let mut pending: HashSet<u32> = nets.iter().map(|net| net.id).collect();
+        let mut previously_failed = HashSet::new();
+        let mut accepted = Vec::<Route>::new();
+        let mut ripped_ids = HashSet::<u32>::new();
+        let mut ripup_events = 0;
         let mut best_routes = self.board.routes.clone();
         let mut best_report = RouteReport {
             preserved: preserved.clone(),
@@ -337,38 +360,64 @@ impl<'a> Router<'a> {
         let mut total_expanded = 0;
         for attempt in 0..4 {
             self.occupied.clear();
+            self.occupied_by.clear();
             for route in &self.board.routes {
                 self.commit(route);
             }
-            if !failed_ids.is_empty() {
-                nets.sort_by_key(|n| {
-                    (
-                        !failed_ids.contains(&n.id),
-                        std::cmp::Reverse(n.priority),
-                        std::cmp::Reverse(net_span(n)),
-                    )
-                });
+            for route in &accepted {
+                self.commit(route);
             }
-            let mut routes = self.board.routes.clone();
-            let mut report = RouteReport {
-                preserved: preserved.clone(),
-                ..RouteReport::default()
-            };
-            failed_ids.clear();
-            for net in &nets {
+            let mut attempt_nets: Vec<_> = nets
+                .iter()
+                .copied()
+                .filter(|net| pending.contains(&net.id))
+                .collect();
+            attempt_nets.sort_by_key(|net| {
+                (
+                    !previously_failed.contains(&net.id),
+                    std::cmp::Reverse(net.priority),
+                    std::cmp::Reverse(net.terminals.len()),
+                    std::cmp::Reverse(net_span(net)),
+                )
+            });
+            let mut blockers = HashSet::new();
+            let mut failed_ids = HashSet::new();
+            for net in attempt_nets {
                 match self.route_net(net) {
-                    Some((route, expanded)) => {
+                    Ok((route, expanded)) => {
                         total_expanded += expanded;
                         self.commit(&route);
-                        report.routed.push(net.name.clone());
-                        routes.push(route);
+                        accepted.push(route);
                     }
-                    None => {
-                        report.unrouted.push(net.name.clone());
+                    Err(failure) => {
+                        total_expanded += failure.expanded;
+                        blockers.extend(failure.blockers);
                         failed_ids.insert(net.id);
                     }
                 }
             }
+            let mut routes = self.board.routes.clone();
+            routes.extend(accepted.iter().cloned());
+            let mut report = RouteReport {
+                preserved: preserved.clone(),
+                routed: nets
+                    .iter()
+                    .filter(|net| accepted.iter().any(|route| route.net_id == net.id))
+                    .map(|net| net.name.clone())
+                    .collect(),
+                rerouted: nets
+                    .iter()
+                    .filter(|net| ripped_ids.contains(&net.id))
+                    .map(|net| net.name.clone())
+                    .collect(),
+                unrouted: nets
+                    .iter()
+                    .filter(|net| !accepted.iter().any(|route| route.net_id == net.id))
+                    .map(|net| net.name.clone())
+                    .collect(),
+                ripup_events,
+                ..RouteReport::default()
+            };
             if report.unrouted.len() < best_report.unrouted.len() {
                 best_routes = routes.clone();
                 best_report = report.clone();
@@ -378,20 +427,49 @@ impl<'a> Router<'a> {
                 report.reroute_passes = attempt + 1;
                 return (routes, report);
             }
-            // History cost makes the next full rip-up pass avoid the same channels.
-            for &cell in &self.occupied {
+            let rip_ids: HashSet<u32> = blockers
+                .into_iter()
+                .filter(|id| accepted.iter().any(|route| route.net_id == *id))
+                .collect();
+            if rip_ids.is_empty() {
+                best_report.expanded_states = total_expanded;
+                best_report.reroute_passes = attempt + 1;
+                best_report.rerouted = nets
+                    .iter()
+                    .filter(|net| ripped_ids.contains(&net.id))
+                    .map(|net| net.name.clone())
+                    .collect();
+                best_report.ripup_events = ripup_events;
+                return (best_routes, best_report);
+            }
+            for (&cell, owner) in &self.occupied_by {
+                if !rip_ids.contains(owner) {
+                    continue;
+                }
                 let value = self.congestion.entry(cell).or_default();
                 *value = value.saturating_add(8);
             }
+            accepted.retain(|route| !rip_ids.contains(&route.net_id));
+            ripup_events += rip_ids.len();
+            ripped_ids.extend(rip_ids.iter().copied());
+            previously_failed = failed_ids.clone();
+            pending = failed_ids;
+            pending.extend(rip_ids);
         }
         best_report.expanded_states = total_expanded;
         best_report.reroute_passes = 4;
+        best_report.rerouted = nets
+            .iter()
+            .filter(|net| ripped_ids.contains(&net.id))
+            .map(|net| net.name.clone())
+            .collect();
+        best_report.ripup_events = ripup_events;
         (best_routes, best_report)
     }
 
-    fn route_net(&self, net: &Net) -> Option<(Route, usize)> {
+    fn route_net(&self, net: &Net) -> Result<(Route, usize), RouteFailure> {
         if net.terminals.len() < 2 {
-            return Some((
+            return Ok((
                 Route {
                     net_id: net.id,
                     segments: vec![],
@@ -415,7 +493,10 @@ impl<'a> Router<'a> {
             .map(|node| (node.x, node.y, node.layer))
             .collect();
         if tree.is_empty() {
-            return None;
+            return Err(RouteFailure {
+                expanded: 0,
+                blockers: HashSet::new(),
+            });
         }
         let mut remaining: Vec<usize> = (0..net.terminals.len())
             .filter(|index| *index != root_index)
@@ -423,12 +504,18 @@ impl<'a> Router<'a> {
         let mut root_access_added = false;
         while !remaining.is_empty() {
             let mut best: Option<(u64, Nm, Nm, usize, Vec<Node>)> = None;
+            let mut search_blockers = HashSet::new();
             for &terminal_index in &remaining {
-                let Some((path, count, cost)) =
-                    self.astar_to_tree(net.id, &net.terminals[terminal_index], &tree, &rules)
-                else {
-                    continue;
-                };
+                let (path, count, cost) =
+                    match self.astar_to_tree(net.id, &net.terminals[terminal_index], &tree, &rules)
+                    {
+                        Ok(result) => result,
+                        Err(failure) => {
+                            expanded += failure.expanded;
+                            search_blockers.extend(failure.blockers);
+                            continue;
+                        }
+                    };
                 expanded += count;
                 let terminal = &net.terminals[terminal_index];
                 let candidate = (
@@ -445,7 +532,12 @@ impl<'a> Router<'a> {
                     best = Some(candidate);
                 }
             }
-            let (_, _, _, terminal_index, nodes) = best?;
+            let Some((_, _, _, terminal_index, nodes)) = best else {
+                return Err(RouteFailure {
+                    expanded,
+                    blockers: search_blockers,
+                });
+            };
             let terminal = &net.terminals[terminal_index];
             append_terminal_access(&mut route, terminal.position, nodes[0], &rules, true);
             append_path(&mut route, &nodes, &rules);
@@ -467,7 +559,7 @@ impl<'a> Router<'a> {
             );
             remaining.retain(|index| *index != terminal_index);
         }
-        Some((route, expanded))
+        Ok((route, expanded))
     }
 
     fn terminal_nodes(&self, net_id: u32, terminal: &Terminal, rules: &Rules) -> Vec<Node> {
@@ -494,7 +586,7 @@ impl<'a> Router<'a> {
         start: &Terminal,
         goals: &HashSet<(i32, i32, u8)>,
         rules: &Rules,
-    ) -> Option<(Vec<Node>, usize, u64)> {
+    ) -> Result<(Vec<Node>, usize, u64), SearchFailure> {
         const DIRS: [(i32, i32); 8] = [
             (1, 0),
             (1, 1),
@@ -508,12 +600,15 @@ impl<'a> Router<'a> {
         let g = rules.grid_nm;
         let sx = nearest_grid(start.position.x_nm, g) as i32;
         let sy = nearest_grid(start.position.y_nm, g) as i32;
-        let max_x = (self.board.width_nm / g) as i32;
-        let max_y = (self.board.height_nm / g) as i32;
+        let track_radius = rules.track_width_nm / 2;
+        let min_track_cell = ((track_radius + g - 1) / g) as i32;
+        let max_x = ((self.board.width_nm - track_radius) / g) as i32;
+        let max_y = ((self.board.height_nm - track_radius) / g) as i32;
         let allowed_layers = self.board.layers_for_net(net_id);
         let mut open = BinaryHeap::new();
         let mut costs = HashMap::new();
         let mut prev = HashMap::new();
+        let mut blockers = HashSet::new();
         for n in self.terminal_nodes(net_id, start, rules) {
             costs.insert(n, 0u64);
             open.push(QueueItem {
@@ -536,21 +631,25 @@ impl<'a> Router<'a> {
                     path.push(cur);
                 }
                 path.reverse();
-                return Some((path, expanded, item.cost));
+                return Ok((path, expanded, item.cost));
             }
             for (dir, (dx, dy)) in DIRS.iter().enumerate() {
                 let nx = item.node.x + dx;
                 let ny = item.node.y + dy;
-                if nx < 0 || ny < 0 || nx > max_x || ny > max_y {
+                if nx < min_track_cell || ny < min_track_cell || nx > max_x || ny > max_y {
                     continue;
                 }
                 let cell = (nx, ny, item.node.layer);
                 let endpoint = goals.contains(&cell) || (nx == sx && ny == sy);
                 if !endpoint
-                    && (self.blocked.contains(&cell)
-                        || self.foreign_obstacle(cell, net_id)
-                        || self.occupied.contains(&cell))
+                    && (self.blocked.contains(&cell) || self.foreign_obstacle(cell, net_id))
                 {
+                    continue;
+                }
+                if !endpoint && self.occupied.contains(&cell) {
+                    if let Some(owner) = self.occupied_by.get(&cell) {
+                        blockers.insert(*owner);
+                    }
                     continue;
                 }
                 if *dx != 0
@@ -588,29 +687,38 @@ impl<'a> Router<'a> {
             }
             let other = 1 - item.node.layer;
             let cell = (item.node.x, item.node.y, other);
-            if allowed_layers.is_none_or(|allowed| allowed.contains(&index_layer(other)))
+            let via_radius = rules.via_diameter_nm / 2;
+            let via_inside_board = item.node.x as Nm * g >= via_radius
+                && item.node.y as Nm * g >= via_radius
+                && item.node.x as Nm * g + via_radius <= self.board.width_nm
+                && item.node.y as Nm * g + via_radius <= self.board.height_nm;
+            if via_inside_board
+                && allowed_layers.is_none_or(|allowed| allowed.contains(&index_layer(other)))
                 && !self.blocked.contains(&cell)
                 && !self.foreign_obstacle(cell, net_id)
-                && !self.occupied.contains(&cell)
             {
-                let n = Node {
-                    x: item.node.x,
-                    y: item.node.y,
-                    layer: other,
-                    dir: item.node.dir,
-                };
-                self.relax(
-                    item.node,
-                    n,
-                    item.cost + rules.via_cost as u64,
-                    goals,
-                    &mut costs,
-                    &mut prev,
-                    &mut open,
-                );
+                if let Some(owner) = self.occupied_by.get(&cell) {
+                    blockers.insert(*owner);
+                } else {
+                    let n = Node {
+                        x: item.node.x,
+                        y: item.node.y,
+                        layer: other,
+                        dir: item.node.dir,
+                    };
+                    self.relax(
+                        item.node,
+                        n,
+                        item.cost + rules.via_cost as u64,
+                        goals,
+                        &mut costs,
+                        &mut prev,
+                        &mut open,
+                    );
+                }
             }
         }
-        None
+        Err(SearchFailure { expanded, blockers })
     }
 
     fn foreign_obstacle(&self, cell: (i32, i32, u8), net_id: u32) -> bool {
@@ -651,10 +759,10 @@ impl<'a> Router<'a> {
     }
     fn commit(&mut self, route: &Route) {
         let g = self.board.rules.grid_nm;
-        let (maximum_width, maximum_clearance) = self.board.maximum_routing_envelope();
+        let (maximum_diameter, maximum_clearance) = self.board.maximum_routing_envelope();
         for s in &route.segments {
             let clearance_radius =
-                (s.width_nm / 2 + maximum_width / 2 + maximum_clearance + g - 1) / g;
+                (s.width_nm / 2 + maximum_diameter / 2 + maximum_clearance + g - 1) / g;
             for (x, y) in raster_line_cells(
                 s.start.x_nm / g,
                 s.start.y_nm / g,
@@ -664,12 +772,34 @@ impl<'a> Router<'a> {
                 for oy in -clearance_radius..=clearance_radius {
                     for ox in -clearance_radius..=clearance_radius {
                         if ox * ox + oy * oy <= clearance_radius * clearance_radius {
-                            self.occupied.insert((
-                                (x + ox) as i32,
-                                (y + oy) as i32,
-                                layer_index(s.layer),
-                            ));
+                            let cell = ((x + ox) as i32, (y + oy) as i32, layer_index(s.layer));
+                            self.occupied.insert(cell);
+                            self.occupied_by.insert(cell, route.net_id);
                         }
+                    }
+                }
+            }
+        }
+        for via in &route.vias {
+            let clearance_radius =
+                (via.diameter_nm / 2 + maximum_diameter / 2 + maximum_clearance + g - 1) / g;
+            let center_x = via.position.x_nm / g;
+            let center_y = via.position.y_nm / g;
+            for layer in [Layer::Front, Layer::Back] {
+                for offset_y in -clearance_radius..=clearance_radius {
+                    for offset_x in -clearance_radius..=clearance_radius {
+                        if offset_x * offset_x + offset_y * offset_y
+                            > clearance_radius * clearance_radius
+                        {
+                            continue;
+                        }
+                        let cell = (
+                            (center_x + offset_x) as i32,
+                            (center_y + offset_y) as i32,
+                            layer_index(layer),
+                        );
+                        self.occupied.insert(cell);
+                        self.occupied_by.insert(cell, route.net_id);
                     }
                 }
             }
@@ -1066,7 +1196,8 @@ mod tests {
         let (routed, report) = route_board(&b).unwrap();
         assert!(report.unrouted.is_empty(), "{:?}", report.unrouted);
         assert_eq!(routed.routes.len(), 10);
-        assert!(crate::checking::check_board(&routed).is_clean());
+        let check = crate::checking::check_board(&routed);
+        assert!(check.is_clean(), "{:?}", check.violations);
     }
 
     #[test]
@@ -1159,7 +1290,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_unrouted_after_bounded_reroute_passes() {
+    fn stops_without_futile_reroutes_when_no_route_is_blocking() {
         let mut b = board();
         b.obstacles = vec![Obstacle {
             min: Point {
@@ -1176,7 +1307,8 @@ mod tests {
         let (routed, report) = route_board(&b).unwrap();
         assert!(routed.routes.is_empty());
         assert_eq!(report.unrouted, vec!["N1"]);
-        assert_eq!(report.reroute_passes, 4);
+        assert_eq!(report.reroute_passes, 1);
+        assert_eq!(report.ripup_events, 0);
     }
 
     #[test]
@@ -1321,5 +1453,75 @@ mod tests {
         let input_order_chain_cost = 512;
         assert_eq!(route_cost, 320);
         assert!(route_cost < input_order_chain_cost);
+    }
+
+    #[test]
+    fn selectively_rips_only_routes_that_block_a_failed_net() {
+        let mut b = board();
+        b.obstacles.clear();
+        b.net_classes.insert(
+            "FrontOnly".into(),
+            NetClassRules {
+                track_width_nm: 250_000,
+                clearance_nm: 200_000,
+                via_diameter_nm: 600_000,
+                via_drill_nm: 300_000,
+                layers: Some(vec![Layer::Front]),
+            },
+        );
+        b.nets = vec![
+            Net {
+                id: 1,
+                name: "horizontal".into(),
+                class: Some("FrontOnly".into()),
+                priority: 0,
+                terminals: vec![
+                    Terminal {
+                        position: Point {
+                            x_nm: 500_000,
+                            y_nm: 5_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                    Terminal {
+                        position: Point {
+                            x_nm: 9_500_000,
+                            y_nm: 5_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                ],
+            },
+            Net {
+                id: 2,
+                name: "vertical".into(),
+                class: Some("FrontOnly".into()),
+                priority: 0,
+                terminals: vec![
+                    Terminal {
+                        position: Point {
+                            x_nm: 5_000_000,
+                            y_nm: 2_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                    Terminal {
+                        position: Point {
+                            x_nm: 5_000_000,
+                            y_nm: 8_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                ],
+            },
+        ];
+
+        let (routed, report) = route_board(&b).unwrap();
+        assert!(report.reroute_passes > 1);
+        assert!(report.ripup_events > 0);
+        assert_eq!(report.rerouted, vec!["horizontal".to_string()]);
+        assert!(report.unrouted.is_empty());
+        let check = crate::checking::check_board(&routed);
+        assert!(check.is_clean(), "{:?}", check.violations);
     }
 }
