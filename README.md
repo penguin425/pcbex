@@ -1,5 +1,7 @@
 # pcbex
 
+[![CI](https://github.com/penguin425/pcbex/actions/workflows/ci.yml/badge.svg)](https://github.com/penguin425/pcbex/actions/workflows/ci.yml)
+
 `pcbex` is a deterministic PCB physical-design engine written in Rust. The
 current implementation routes placed two-layer boards from a small, stable JSON
 model. It uses integer nanometre coordinates and multi-layer A* with eight-way
