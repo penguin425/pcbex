@@ -1,6 +1,6 @@
 use pcbex_core::{
-    Board, Footprint, Layer, Net, NetClassRules, Obstacle, Pad, Point, Route, Rules, Segment,
-    Terminal, Via, checking::check_board,
+    Board, Footprint, Keepout, Layer, Net, NetClassRules, Obstacle, Pad, Point, Route, Rules,
+    Segment, Terminal, Via, checking::check_board,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -30,7 +30,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         return Err("expected a kicad_pcb document".into());
     }
 
-    let (min, max) = board_bounds(top)?;
+    let (min, max, outline) = board_bounds(top)?;
     let mut nets = HashMap::<u32, Net>::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
@@ -52,6 +52,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
 
     let net_classes = import_net_classes(top, &rules, &mut nets);
     let mut obstacles = Vec::new();
+    let mut keepouts = Vec::new();
     let mut footprints = Vec::new();
     let mut route_candidates = HashMap::new();
     for item in top {
@@ -64,7 +65,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                 import_segment(xs, min, &rules, &mut obstacles, &mut route_candidates)
             }
             Some("via") => import_via(xs, min, &rules, &mut obstacles, &mut route_candidates),
-            Some("zone") => import_keepout(xs, min, &mut obstacles),
+            Some("zone") => import_keepout(xs, min, &mut keepouts),
             _ => {}
         }
     }
@@ -78,8 +79,13 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let mut board = Board {
         width_nm: max.x_nm - min.x_nm,
         height_nm: max.y_nm - min.y_nm,
+        outline: outline
+            .into_iter()
+            .map(|point| relative(point, min))
+            .collect(),
         rules,
         obstacles,
+        keepouts,
         footprints,
         net_classes,
         nets,
@@ -212,8 +218,7 @@ impl ImportedBoard {
     }
 }
 
-fn board_bounds(top: &[Sexp]) -> Result<(Point, Point), String> {
-    let mut points = Vec::new();
+fn board_bounds(top: &[Sexp]) -> Result<(Point, Point, Vec<Point>), String> {
     let mut lines = Vec::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
@@ -221,79 +226,84 @@ fn board_bounds(top: &[Sexp]) -> Result<(Point, Point), String> {
             continue;
         }
         if let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end")) {
-            points.extend([start, end]);
             lines.push((start, end));
         }
     }
-    if points.is_empty() {
-        let mut rectangle_count = 0;
+    let outline = if lines.is_empty() {
+        let mut rectangles = Vec::new();
         for item in top {
             let Some(xs) = item.as_list() else { continue };
-            if atom(xs.first()) == Some("gr_rect") && child_atom(xs, "layer") == Some("Edge.Cuts") {
-                rectangle_count += 1;
-                if let Some(p) = child_point(xs, "start") {
-                    points.push(p);
-                }
-                if let Some(p) = child_point(xs, "end") {
-                    points.push(p);
-                }
+            if atom(xs.first()) == Some("gr_rect")
+                && child_atom(xs, "layer") == Some("Edge.Cuts")
+                && let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
+            {
+                rectangles.push((start, end));
             }
         }
-        if rectangle_count != 1 {
-            return Err("exactly one rectangular Edge.Cuts outline is required".into());
+        if rectangles.len() != 1 {
+            return Err("exactly one closed Edge.Cuts outline is required".into());
         }
-    }
-    if points.len() < 2 {
-        return Err("a rectangular Edge.Cuts outline is required".into());
-    }
+        let (start, end) = rectangles[0];
+        vec![
+            start,
+            Point {
+                x_nm: end.x_nm,
+                y_nm: start.y_nm,
+            },
+            end,
+            Point {
+                x_nm: start.x_nm,
+                y_nm: end.y_nm,
+            },
+        ]
+    } else {
+        let mut unused = lines;
+        let (start, mut current) = unused.remove(0);
+        let mut ordered = vec![start];
+        while current != start {
+            ordered.push(current);
+            let Some((index, next)) =
+                unused
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, (edge_start, edge_end))| {
+                        if *edge_start == current {
+                            Some((index, *edge_end))
+                        } else if *edge_end == current {
+                            Some((index, *edge_start))
+                        } else {
+                            None
+                        }
+                    })
+            else {
+                return Err("Edge.Cuts lines do not form a closed outline".into());
+            };
+            unused.remove(index);
+            current = next;
+        }
+        if !unused.is_empty() || ordered.len() < 3 {
+            return Err("Edge.Cuts must form one closed outline".into());
+        }
+        ordered
+    };
     let min = Point {
-        x_nm: points.iter().map(|p| p.x_nm).min().unwrap(),
-        y_nm: points.iter().map(|p| p.y_nm).min().unwrap(),
+        x_nm: outline.iter().map(|p| p.x_nm).min().unwrap(),
+        y_nm: outline.iter().map(|p| p.y_nm).min().unwrap(),
     };
     let max = Point {
-        x_nm: points.iter().map(|p| p.x_nm).max().unwrap(),
-        y_nm: points.iter().map(|p| p.y_nm).max().unwrap(),
+        x_nm: outline.iter().map(|p| p.x_nm).max().unwrap(),
+        y_nm: outline.iter().map(|p| p.y_nm).max().unwrap(),
     };
-    if min == max {
+    let twice_area: i128 = outline
+        .iter()
+        .zip(outline.iter().cycle().skip(1))
+        .take(outline.len())
+        .map(|(a, b)| a.x_nm as i128 * b.y_nm as i128 - b.x_nm as i128 * a.y_nm as i128)
+        .sum();
+    if min == max || twice_area == 0 {
         return Err("Edge.Cuts outline has zero area".into());
     }
-    if !lines.is_empty() {
-        if lines.len() != 4
-            || lines
-                .iter()
-                .any(|(a, b)| a.x_nm != b.x_nm && a.y_nm != b.y_nm)
-        {
-            return Err(
-                "Edge.Cuts gr_line outline must contain exactly four axis-aligned sides".into(),
-            );
-        }
-        let corners = [
-            Point {
-                x_nm: min.x_nm,
-                y_nm: min.y_nm,
-            },
-            Point {
-                x_nm: max.x_nm,
-                y_nm: min.y_nm,
-            },
-            Point {
-                x_nm: max.x_nm,
-                y_nm: max.y_nm,
-            },
-            Point {
-                x_nm: min.x_nm,
-                y_nm: max.y_nm,
-            },
-        ];
-        if lines
-            .iter()
-            .flat_map(|(a, b)| [*a, *b])
-            .any(|point| !corners.contains(&point))
-        {
-            return Err("Edge.Cuts gr_line outline is not rectangular".into());
-        }
-    }
-    Ok((min, max))
+    Ok((min, max, outline))
 }
 
 fn import_footprint(
@@ -476,18 +486,26 @@ fn import_via(
     }
 }
 
-fn import_keepout(xs: &[Sexp], origin: Point, obstacles: &mut Vec<Obstacle>) {
+fn import_keepout(xs: &[Sexp], origin: Point, keepouts: &mut Vec<Keepout>) {
     if child_values(xs, "keepout").is_none() {
         return;
     }
     let layers = if let Some(layer) = child_atom(xs, "layer").and_then(parse_layer) {
         vec![layer]
+    } else if matches!(child_atom(xs, "layer"), Some("*.Cu") | Some("F&B.Cu")) {
+        vec![Layer::Front, Layer::Back]
     } else if let Some(values) = child_values(xs, "layers") {
-        values
-            .iter()
-            .skip(1)
-            .filter_map(|value| atom(Some(value)).and_then(parse_layer))
-            .collect()
+        let mut layers = Vec::new();
+        for value in values.iter().skip(1).filter_map(|value| atom(Some(value))) {
+            if matches!(value, "*.Cu" | "F&B.Cu") {
+                layers.extend([Layer::Front, Layer::Back]);
+            } else if let Some(layer) = parse_layer(value) {
+                layers.push(layer);
+            }
+        }
+        layers.sort_by_key(|layer| if *layer == Layer::Front { 0 } else { 1 });
+        layers.dedup();
+        layers
     } else {
         vec![Layer::Front, Layer::Back]
     };
@@ -514,15 +532,8 @@ fn import_keepout(xs: &[Sexp], origin: Point, obstacles: &mut Vec<Obstacle>) {
     if points.len() < 3 || layers.is_empty() {
         return;
     }
-    obstacles.push(Obstacle {
-        min: Point {
-            x_nm: points.iter().map(|p| p.x_nm).min().unwrap(),
-            y_nm: points.iter().map(|p| p.y_nm).min().unwrap(),
-        },
-        max: Point {
-            x_nm: points.iter().map(|p| p.x_nm).max().unwrap(),
-            y_nm: points.iter().map(|p| p.y_nm).max().unwrap(),
-        },
+    keepouts.push(Keepout {
+        polygon: points,
         layers,
         net_id: None,
     });
@@ -748,6 +759,7 @@ mod tests {
             (b.board.width_nm, b.board.height_nm),
             (30_000_000, 30_000_000)
         );
+        assert_eq!(b.board.outline.len(), 4);
         assert_eq!(
             b.board.nets[0].terminals[0].position,
             Point {
@@ -835,14 +847,26 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_rectangular_outline() {
+    fn imports_non_rectangular_outline() {
         let pcb = r#"(kicad_pcb
-          (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts"))
-          (gr_line (start 10 0) (end 5 5) (layer "Edge.Cuts"))
-          (gr_line (start 5 5) (end 0 10) (layer "Edge.Cuts"))
+          (net 1 "SIGNAL")
+          (gr_line (start 0 0) (end 20 0) (layer "Edge.Cuts"))
+          (gr_line (start 20 0) (end 20 20) (layer "Edge.Cuts"))
+          (gr_line (start 20 20) (end 10 20) (layer "Edge.Cuts"))
+          (gr_line (start 10 20) (end 0 10) (layer "Edge.Cuts"))
           (gr_line (start 0 10) (end 0 0) (layer "Edge.Cuts"))
+          (footprint "A" (layer "F.Cu") (at 2 2)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "SIGNAL")))
+          (footprint "B" (layer "F.Cu") (at 18 18)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "SIGNAL")))
         )"#;
-        assert!(import(pcb, rules()).is_err());
+        let imported = import(pcb, rules()).unwrap();
+        assert_eq!(imported.board.outline.len(), 5);
+        assert_eq!(imported.board.width_nm, 20_000_000);
+        assert_eq!(imported.board.height_nm, 20_000_000);
+        let (routed, report) = pcbex_core::route_board(&imported.board).unwrap();
+        assert!(report.unrouted.is_empty());
+        assert!(pcbex_core::checking::check_board(&routed).is_clean());
     }
 
     #[test]
@@ -854,10 +878,10 @@ mod tests {
             (polygon (pts (xy 4 5) (xy 9 5) (xy 9 11) (xy 4 11))))
         )"#;
         let imported = import(pcb, rules()).unwrap();
-        assert_eq!(imported.board.obstacles.len(), 1);
-        assert_eq!(imported.board.obstacles[0].layers, vec![Layer::Front]);
+        assert_eq!(imported.board.keepouts.len(), 1);
+        assert_eq!(imported.board.keepouts[0].layers, vec![Layer::Front]);
         assert_eq!(
-            imported.board.obstacles[0].min,
+            imported.board.keepouts[0].polygon[0],
             Point {
                 x_nm: 4_000_000,
                 y_nm: 5_000_000

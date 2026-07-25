@@ -107,6 +107,91 @@ pub(crate) fn segment_rect_closer_than(
     })
 }
 
+pub(crate) fn point_in_polygon(point: Point, polygon: &[Point]) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+    let mut winding = 0i32;
+    for index in 0..polygon.len() {
+        let start = polygon[index];
+        let end = polygon[(index + 1) % polygon.len()];
+        if orientation(start, end, point) == 0 && point_on_segment(point, start, end) {
+            return true;
+        }
+        if start.y_nm <= point.y_nm {
+            if end.y_nm > point.y_nm && orientation(start, end, point) > 0 {
+                winding += 1;
+            }
+        } else if end.y_nm <= point.y_nm && orientation(start, end, point) < 0 {
+            winding -= 1;
+        }
+    }
+    winding != 0
+}
+
+pub(crate) fn polygon_is_simple(polygon: &[Point]) -> bool {
+    if polygon.len() < 3
+        || polygon
+            .iter()
+            .zip(polygon.iter().cycle().skip(1))
+            .take(polygon.len())
+            .any(|(start, end)| start == end)
+    {
+        return false;
+    }
+    for left in 0..polygon.len() {
+        for right in left + 1..polygon.len() {
+            let adjacent = right == left + 1 || (left == 0 && right == polygon.len() - 1);
+            if adjacent {
+                continue;
+            }
+            if segments_intersect(
+                polygon[left],
+                polygon[(left + 1) % polygon.len()],
+                polygon[right],
+                polygon[(right + 1) % polygon.len()],
+            ) {
+                return false;
+            }
+        }
+    }
+    polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
+        .map(|(a, b)| a.x_nm as i128 * b.y_nm as i128 - b.x_nm as i128 * a.y_nm as i128)
+        .sum::<i128>()
+        != 0
+}
+
+pub(crate) fn point_polygon_closer_than(
+    point: Point,
+    polygon: &[Point],
+    distance_twice: i64,
+) -> bool {
+    polygon_edges(polygon)
+        .any(|(start, end)| point_segment_closer_than(point, start, end, distance_twice))
+}
+
+pub(crate) fn segment_polygon_closer_than(
+    start: Point,
+    end: Point,
+    polygon: &[Point],
+    distance_twice: i64,
+) -> bool {
+    polygon_edges(polygon).any(|(edge_start, edge_end)| {
+        segments_closer_than(start, end, edge_start, edge_end, distance_twice)
+    })
+}
+
+fn polygon_edges(polygon: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
+    polygon
+        .iter()
+        .copied()
+        .zip(polygon.iter().copied().cycle().skip(1))
+        .take(polygon.len())
+}
+
 fn point_segment_compare(
     point: Point,
     start: Point,
@@ -257,5 +342,27 @@ mod tests {
         assert!(points_within(point(0, 0), point(3, 4), 10));
         assert!(!points_closer_than(point(0, 0), point(3, 4), 10));
         assert!(points_closer_than(point(0, 0), point(3, 4), 11));
+    }
+
+    #[test]
+    fn classifies_concave_polygon_and_boundary_exactly() {
+        let polygon = [
+            point(0, 0),
+            point(10, 0),
+            point(10, 4),
+            point(4, 4),
+            point(4, 10),
+            point(0, 10),
+        ];
+        assert!(point_in_polygon(point(2, 8), &polygon));
+        assert!(point_in_polygon(point(4, 7), &polygon));
+        assert!(!point_in_polygon(point(8, 8), &polygon));
+        assert!(polygon_is_simple(&polygon));
+        assert!(!polygon_is_simple(&[
+            point(0, 0),
+            point(10, 10),
+            point(0, 10),
+            point(10, 0),
+        ]));
     }
 }

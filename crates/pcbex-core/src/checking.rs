@@ -1,6 +1,7 @@
 use crate::geometry::{
-    point_rect_closer_than, point_segment_closer_than, point_segment_within, points_closer_than,
-    points_within, segment_rect_closer_than, segments_closer_than, segments_within,
+    point_in_polygon, point_polygon_closer_than, point_rect_closer_than, point_segment_closer_than,
+    point_segment_within, points_closer_than, points_within, segment_polygon_closer_than,
+    segment_rect_closer_than, segments_closer_than, segments_within,
 };
 use crate::{Board, Net, Route, Segment};
 use serde::{Deserialize, Serialize};
@@ -26,6 +27,7 @@ impl CheckReport {
 
 pub fn check_board(board: &Board) -> CheckReport {
     let mut report = CheckReport::default();
+    let outline = board.effective_outline();
     let routes: HashMap<u32, &Route> = board.routes.iter().map(|r| (r.net_id, r)).collect();
     for net in &board.nets {
         let Some(route) = routes.get(&net.id) else {
@@ -58,11 +60,8 @@ pub fn check_board(board: &Board) -> CheckReport {
                     vec![route.net_id],
                 );
             }
-            let radius = via.diameter_nm / 2;
-            if via.position.x_nm - radius < 0
-                || via.position.y_nm - radius < 0
-                || via.position.x_nm + radius > board.width_nm
-                || via.position.y_nm + radius > board.height_nm
+            if !point_in_polygon(via.position, &outline)
+                || point_polygon_closer_than(via.position, &outline, via.diameter_nm)
             {
                 report.push(
                     "board_edge",
@@ -80,6 +79,22 @@ pub fn check_board(board: &Board) -> CheckReport {
                     report.push(
                         "clearance",
                         "via is too close to an obstacle".into(),
+                        vec![route.net_id],
+                    );
+                    break;
+                }
+            }
+            for keepout in &board.keepouts {
+                if keepout.net_id == Some(route.net_id) {
+                    continue;
+                }
+                let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
+                if point_in_polygon(via.position, &keepout.polygon)
+                    || point_polygon_closer_than(via.position, &keepout.polygon, required_twice)
+                {
+                    report.push(
+                        "clearance",
+                        "via is too close to a polygon keepout".into(),
                         vec![route.net_id],
                     );
                     break;
@@ -123,13 +138,11 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
             vec![net_id],
         );
     }
-    let radius = segment.width_nm / 2;
-    if [segment.start, segment.end].iter().any(|p| {
-        p.x_nm - radius < 0
-            || p.y_nm - radius < 0
-            || p.x_nm + radius > board.width_nm
-            || p.y_nm + radius > board.height_nm
-    }) {
+    let outline = board.effective_outline();
+    if !point_in_polygon(segment.start, &outline)
+        || !point_in_polygon(segment.end, &outline)
+        || segment_polygon_closer_than(segment.start, segment.end, &outline, segment.width_nm)
+    {
         report.push(
             "board_edge",
             "track crosses the board boundary".into(),
@@ -154,6 +167,28 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
             report.push(
                 "clearance",
                 "track is too close to an obstacle".into(),
+                vec![net_id],
+            );
+            break;
+        }
+    }
+    for keepout in &board.keepouts {
+        if keepout.net_id == Some(net_id) || !keepout.layers.contains(&segment.layer) {
+            continue;
+        }
+        let required_twice = segment.width_nm + 2 * rules.clearance_nm;
+        if point_in_polygon(segment.start, &keepout.polygon)
+            || point_in_polygon(segment.end, &keepout.polygon)
+            || segment_polygon_closer_than(
+                segment.start,
+                segment.end,
+                &keepout.polygon,
+                required_twice,
+            )
+        {
+            report.push(
+                "clearance",
+                "track is too close to a polygon keepout".into(),
                 vec![net_id],
             );
             break;
@@ -381,6 +416,7 @@ mod tests {
         Board {
             width_nm: 10_000_000,
             height_nm: 10_000_000,
+            outline: vec![],
             rules: Rules {
                 grid_nm: 250_000,
                 track_width_nm: 250_000,
@@ -391,6 +427,7 @@ mod tests {
                 via_cost: 20,
             },
             obstacles: vec![],
+            keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),
             nets: vec![],
