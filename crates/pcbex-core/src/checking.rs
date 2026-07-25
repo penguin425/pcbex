@@ -99,6 +99,26 @@ pub fn check_board(board: &Board) -> CheckReport {
                     break;
                 }
             }
+            for obstacle in &board.capsule_obstacles {
+                if obstacle.net_id == Some(route.net_id) {
+                    continue;
+                }
+                let required_twice =
+                    via.diameter_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
+                if point_segment_closer_than(
+                    via.position,
+                    obstacle.start,
+                    obstacle.end,
+                    required_twice,
+                ) {
+                    report.push(
+                        "clearance",
+                        "via is too close to a capsule obstacle".into(),
+                        vec![route.net_id],
+                    );
+                    break;
+                }
+            }
             for keepout in &board.keepouts {
                 if keepout.net_id == Some(route.net_id) {
                     continue;
@@ -196,6 +216,26 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
             report.push(
                 "clearance",
                 "track is too close to a round obstacle".into(),
+                vec![net_id],
+            );
+            break;
+        }
+    }
+    for obstacle in &board.capsule_obstacles {
+        if obstacle.net_id == Some(net_id) || !obstacle.layers.contains(&segment.layer) {
+            continue;
+        }
+        let required_twice = segment.width_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
+        if segments_closer_than(
+            segment.start,
+            segment.end,
+            obstacle.start,
+            obstacle.end,
+            required_twice,
+        ) {
+            report.push(
+                "clearance",
+                "track is too close to a capsule obstacle".into(),
                 vec![net_id],
             );
             break;
@@ -440,7 +480,7 @@ impl DisjointSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Layer, Point, RoundObstacle, Rules, Terminal, Via};
+    use crate::{CapsuleObstacle, Layer, Point, RoundObstacle, Rules, Terminal, Via};
     fn base() -> Board {
         Board {
             width_nm: 10_000_000,
@@ -457,6 +497,7 @@ mod tests {
             },
             obstacles: vec![],
             round_obstacles: vec![],
+            capsule_obstacles: vec![],
             keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),
@@ -582,6 +623,79 @@ mod tests {
         let closer_end = Point {
             x_nm: 5_000_000,
             y_nm: 2_000_000,
+        };
+        board.nets[0].terminals[0].position = closer_start;
+        board.nets[0].terminals[1].position = closer_end;
+        board.routes[0].segments[0].start = closer_start;
+        board.routes[0].segments[0].end = closer_end;
+        assert!(
+            check_board(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "clearance")
+        );
+    }
+
+    #[test]
+    fn checks_capsules_without_using_their_bounding_box() {
+        let mut board = base();
+        let start = Point {
+            x_nm: 2_000_000,
+            y_nm: 5_000_000,
+        };
+        let end = Point {
+            x_nm: 4_000_000,
+            y_nm: 3_000_000,
+        };
+        board.capsule_obstacles.push(CapsuleObstacle {
+            start: Point {
+                x_nm: 4_000_000,
+                y_nm: 5_000_000,
+            },
+            end: Point {
+                x_nm: 6_000_000,
+                y_nm: 5_000_000,
+            },
+            diameter_nm: 2_000_000,
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![
+                Terminal {
+                    position: start,
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: end,
+                    layers: vec![Layer::Front],
+                },
+            ],
+            class: None,
+            priority: 0,
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start,
+                end,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            vias: vec![],
+        });
+
+        assert!(check_board(&board).is_clean());
+
+        let closer_start = Point {
+            x_nm: 2_000_000,
+            y_nm: 6_000_000,
+        };
+        let closer_end = Point {
+            x_nm: 5_000_000,
+            y_nm: 3_000_000,
         };
         board.nets[0].terminals[0].position = closer_start;
         board.nets[0].terminals[1].position = closer_end;

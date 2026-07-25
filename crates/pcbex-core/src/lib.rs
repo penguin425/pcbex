@@ -64,6 +64,17 @@ pub struct RoundObstacle {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CapsuleObstacle {
+    pub start: Point,
+    pub end: Point,
+    pub diameter_nm: Nm,
+    #[serde(default = "both_layers")]
+    pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub net_id: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Keepout {
     pub polygon: Vec<Point>,
     #[serde(default = "both_layers")]
@@ -155,6 +166,8 @@ pub struct Board {
     pub obstacles: Vec<Obstacle>,
     #[serde(default)]
     pub round_obstacles: Vec<RoundObstacle>,
+    #[serde(default)]
+    pub capsule_obstacles: Vec<CapsuleObstacle>,
     #[serde(default)]
     pub keepouts: Vec<Keepout>,
     #[serde(default)]
@@ -341,6 +354,13 @@ impl<'a> Router<'a> {
         {
             return Err("round obstacle diameter must be positive".into());
         }
+        if board
+            .capsule_obstacles
+            .iter()
+            .any(|obstacle| obstacle.diameter_nm <= 0)
+        {
+            return Err("capsule obstacle diameter must be positive".into());
+        }
         for (name, rules) in &board.net_classes {
             if rules.track_width_nm <= 0
                 || rules.clearance_nm < 0
@@ -433,6 +453,40 @@ impl<'a> Router<'a> {
                             y_nm: y * g,
                         };
                         if !geometry::points_within(point, obstacle.center, distance_twice) {
+                            continue;
+                        }
+                        let cell = (x as i32, y as i32, layer);
+                        if let Some(net_id) = obstacle.net_id {
+                            if self
+                                .owned
+                                .insert(cell, net_id)
+                                .is_some_and(|previous| previous != net_id)
+                            {
+                                self.blocked.insert(cell);
+                            }
+                        } else {
+                            self.blocked.insert(cell);
+                        }
+                    }
+                }
+            }
+        }
+        for obstacle in &self.board.capsule_obstacles {
+            let distance_twice = obstacle.diameter_nm + maximum_diameter + 2 * maximum_clearance;
+            for layer in &obstacle.layers {
+                let layer = layer_index(*layer);
+                for y in 0..=max_y {
+                    for x in 0..=max_x {
+                        let point = Point {
+                            x_nm: x * g,
+                            y_nm: y * g,
+                        };
+                        if !geometry::point_segment_within(
+                            point,
+                            obstacle.start,
+                            obstacle.end,
+                            distance_twice,
+                        ) {
                             continue;
                         }
                         let cell = (x as i32, y as i32, layer);
@@ -1197,6 +1251,16 @@ pub fn render_svg(board: &Board) -> String {
             obstacle.diameter_nm as f64 / scale / 2.0
         ));
     }
+    for obstacle in &board.capsule_obstacles {
+        s.push_str(&format!(
+            r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="#555" stroke-width="{}" stroke-linecap="round"/>"##,
+            obstacle.start.x_nm as f64 / scale,
+            obstacle.start.y_nm as f64 / scale,
+            obstacle.end.x_nm as f64 / scale,
+            obstacle.end.y_nm as f64 / scale,
+            obstacle.diameter_nm as f64 / scale
+        ));
+    }
     for keepout in &board.keepouts {
         let points = keepout
             .polygon
@@ -1266,6 +1330,7 @@ mod tests {
                 net_id: None,
             }],
             round_obstacles: vec![],
+            capsule_obstacles: vec![],
             keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),
