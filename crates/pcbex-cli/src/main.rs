@@ -1,10 +1,11 @@
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{Shell, generate};
 use pcbex_core::checking::check_board;
 use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{Board, Rules, render_svg, route_board};
 use pcbex_kicad::import as import_kicad;
-use std::{fs, path::PathBuf, process::Command as ProcessCommand};
+use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
 
 #[derive(Parser)]
 #[command(version, about = "Deterministic PCB physical-design engine")]
@@ -15,6 +16,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Generate shell completion definitions on standard output.
+    Completion {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
     Route {
         input: PathBuf,
         #[arg(short, long)]
@@ -89,6 +95,11 @@ fn read(path: &PathBuf) -> Result<Board> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Completion { shell } => {
+            let mut command = Cli::command();
+            let name = command.get_name().to_string();
+            generate(shell, &mut command, name, &mut io::stdout());
+        }
         Command::Route {
             input,
             output,
@@ -318,4 +329,28 @@ fn ensure_clean(board: &Board) -> Result<()> {
         report.violations.len(),
         summary
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generates_completions_for_every_supported_shell() {
+        for shell in [
+            Shell::Bash,
+            Shell::Elvish,
+            Shell::Fish,
+            Shell::PowerShell,
+            Shell::Zsh,
+        ] {
+            let mut command = Cli::command();
+            let name = command.get_name().to_string();
+            let mut output = Vec::new();
+            generate(shell, &mut command, name, &mut output);
+            let output = String::from_utf8(output).expect("completion output must be UTF-8");
+            assert!(output.contains("pcbex"));
+            assert!(output.contains("completion"));
+        }
+    }
 }
