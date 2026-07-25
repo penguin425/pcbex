@@ -124,6 +124,17 @@ cargo run -p pcbex -- place examples/placement.json \
 
 Components may be fixed, moved on the placement grid, swapped, or rotated by 90
 degrees. Supported constraints are `near`, `board_edge`, and `keep_together`.
+KiCad footprints can be optimized and written back without reformatting the
+rest of the board:
+
+```sh
+cargo run -p pcbex -- place-kicad input.kicad_pcb \
+  --output placed.kicad_pcb --json-output placement.result.json
+```
+
+Footprints marked `locked` remain fixed. Pad nets become weighted placement
+connections, and `Reference`, position, rotation, and the board origin survive
+the KiCad round trip.
 
 ## Planning and repair agent
 

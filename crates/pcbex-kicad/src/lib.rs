@@ -2,6 +2,7 @@ use pcbex_core::{
     Board, CapsuleObstacle, Footprint, Keepout, Layer, Net, NetClassRules, Obstacle, Pad, PadShape,
     Point, PolygonObstacle, RoundObstacle, Route, Rules, Segment, Terminal, Via,
     checking::check_board,
+    placement::{Component, Connection, PinRef, PlacementProblem},
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -214,6 +215,129 @@ impl ImportedBoard {
         self.origin
     }
 
+    pub fn placement_problem(&self, grid_nm: i64) -> Result<PlacementProblem, String> {
+        if grid_nm <= 0 {
+            return Err("placement grid must be positive".into());
+        }
+        let root = parse(&self.source)?;
+        let top = root.as_list().ok_or("invalid KiCad document")?;
+        let fixed: HashSet<String> = top
+            .iter()
+            .filter_map(|item| {
+                let values = item.as_list()?;
+                (atom(values.first()) == Some("footprint") && footprint_is_locked(values))
+                    .then(|| footprint_reference(values))
+            })
+            .collect();
+        let mut components = Vec::with_capacity(self.board.footprints.len());
+        let mut net_pins = HashMap::<u32, Vec<PinRef>>::new();
+        for footprint in &self.board.footprints {
+            if footprint.reference.is_empty() {
+                return Err("every footprint requires a Reference property for placement".into());
+            }
+            let mut min_x = 0;
+            let mut min_y = 0;
+            let mut max_x = 0;
+            let mut max_y = 0;
+            for pad in &footprint.pads {
+                let dx = mm(pad.position.x_nm - footprint.position.x_nm);
+                let dy = mm(pad.position.y_nm - footprint.position.y_nm);
+                let (local_x, local_y) = rotate(dx, dy, -footprint.rotation_deg);
+                let local = point_mm(local_x, local_y);
+                min_x = min_x.min(local.x_nm - pad.width_nm / 2);
+                min_y = min_y.min(local.y_nm - pad.height_nm / 2);
+                max_x = max_x.max(local.x_nm + pad.width_nm / 2);
+                max_y = max_y.max(local.y_nm + pad.height_nm / 2);
+                if let Some(net_id) = pad.net_id {
+                    net_pins.entry(net_id).or_default().push(PinRef {
+                        component: footprint.reference.clone(),
+                        offset: local,
+                    });
+                }
+            }
+            components.push(Component {
+                reference: footprint.reference.clone(),
+                width_nm: (max_x - min_x).max(1_000_000),
+                height_nm: (max_y - min_y).max(1_000_000),
+                position: Some(footprint.position),
+                rotation_deg: footprint.rotation_deg.round().rem_euclid(360.0) as u16,
+                fixed: fixed.contains(&footprint.reference),
+                anchors: HashMap::new(),
+            });
+        }
+        let mut connections = Vec::new();
+        for pins in net_pins.into_values() {
+            if let Some(first) = pins.first() {
+                connections.extend(pins.iter().skip(1).map(|pin| Connection {
+                    from: first.clone(),
+                    to: pin.clone(),
+                    weight: 1.0,
+                }));
+            }
+        }
+        Ok(PlacementProblem {
+            width_nm: self.board.width_nm,
+            height_nm: self.board.height_nm,
+            grid_nm,
+            components,
+            connections,
+            constraints: vec![],
+        })
+    }
+
+    pub fn write_placements(&self, components: &[Component]) -> Result<String, String> {
+        let by_reference: HashMap<_, _> = components
+            .iter()
+            .map(|component| (component.reference.as_str(), component))
+            .collect();
+        if by_reference.len() != components.len() {
+            return Err("placement component references must be unique".into());
+        }
+        let mut replacements = Vec::new();
+        let mut replaced = HashSet::new();
+        for (start, end) in top_level_list_spans(&self.source, "footprint")? {
+            let footprint = parse(&self.source[start..end])?;
+            let values = footprint.as_list().ok_or("invalid footprint")?;
+            let reference = footprint_reference(values);
+            let Some(component) = by_reference.get(reference.as_str()) else {
+                continue;
+            };
+            if !replaced.insert(reference.clone()) {
+                return Err(format!("duplicate footprint reference: {reference}"));
+            }
+            let position = component
+                .position
+                .ok_or_else(|| format!("component {reference} has no position"))?;
+            let absolute = self.absolute(position);
+            let (at_start, at_end) = direct_child_list_span(&self.source[start..end], "at")?
+                .ok_or_else(|| format!("footprint {reference} has no at field"))?;
+            replacements.push((
+                start + at_start,
+                start + at_end,
+                format!(
+                    "(at {:.6} {:.6} {})",
+                    mm(absolute.x_nm),
+                    mm(absolute.y_nm),
+                    component.rotation_deg
+                ),
+            ));
+        }
+        if replaced.len() != components.len() {
+            let missing = by_reference
+                .keys()
+                .find(|reference| !replaced.contains(**reference))
+                .copied()
+                .unwrap_or("");
+            return Err(format!("placement references unknown footprint: {missing}"));
+        }
+        let mut output = self.source.clone();
+        replacements.sort_by_key(|replacement| std::cmp::Reverse(replacement.0));
+        for (start, end, replacement) in replacements {
+            output.replace_range(start..end, &replacement);
+        }
+        Ok(output)
+    }
+
     pub fn write_routes(&self, routes: &[Route]) -> Result<String, String> {
         let closing = self.source.rfind(')').ok_or("invalid KiCad document")?;
         let mut generated = String::new();
@@ -257,6 +381,77 @@ impl ImportedBoard {
             y_nm: point.y_nm + self.origin.y_nm,
         }
     }
+}
+
+fn footprint_is_locked(values: &[Sexp]) -> bool {
+    values.iter().any(|item| match item {
+        Sexp::Atom(value) => value == "locked",
+        Sexp::List(child) => {
+            atom(child.first()) == Some("locked")
+                && !matches!(atom(child.get(1)), Some("no") | Some("false"))
+        }
+    })
+}
+
+fn top_level_list_spans(source: &str, name: &str) -> Result<Vec<(usize, usize)>, String> {
+    list_spans(source, name, 2)
+}
+
+fn direct_child_list_span(source: &str, name: &str) -> Result<Option<(usize, usize)>, String> {
+    Ok(list_spans(source, name, 2)?.into_iter().next())
+}
+
+fn list_spans(
+    source: &str,
+    name: &str,
+    target_depth: usize,
+) -> Result<Vec<(usize, usize)>, String> {
+    let bytes = source.as_bytes();
+    let mut depth = 0usize;
+    let mut stack = Vec::new();
+    let mut spans = Vec::new();
+    let mut index = 0usize;
+    let mut quoted = false;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' if quoted => index += 1,
+            b'"' => quoted = !quoted,
+            b'(' if !quoted => {
+                depth += 1;
+                let mut atom_start = index + 1;
+                while atom_start < bytes.len() && bytes[atom_start].is_ascii_whitespace() {
+                    atom_start += 1;
+                }
+                let mut atom_end = atom_start;
+                while atom_end < bytes.len()
+                    && !bytes[atom_end].is_ascii_whitespace()
+                    && !matches!(bytes[atom_end], b'(' | b')')
+                {
+                    atom_end += 1;
+                }
+                stack.push((
+                    index,
+                    depth,
+                    source.get(atom_start..atom_end).unwrap_or_default() == name,
+                ));
+            }
+            b')' if !quoted => {
+                let Some((start, list_depth, matches)) = stack.pop() else {
+                    return Err("unbalanced KiCad document".into());
+                };
+                if matches && list_depth == target_depth {
+                    spans.push((start, index + 1));
+                }
+                depth = depth.checked_sub(1).ok_or("unbalanced KiCad document")?;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    if quoted || depth != 0 {
+        return Err("unterminated KiCad document".into());
+    }
+    Ok(spans)
 }
 
 fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
@@ -1198,6 +1393,40 @@ mod tests {
                 y_nm: 8_000_000,
             }
         );
+    }
+
+    #[test]
+    fn round_trips_kicad_footprint_placements() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIGNAL")
+          (gr_rect (start 10 20) (end 50 40) (layer "Edge.Cuts"))
+          (footprint "A" (layer "F.Cu") (at 15 25 90) (locked yes)
+            (property "Reference" "U1")
+            (pad "1" smd rect (at 1 0) (size 2 1) (layers "F.Cu") (net 1 "SIGNAL")))
+          (footprint "B" (layer "F.Cu") (at 45 35)
+            (property "Reference" "U2")
+            (pad "1" smd rect (at -1 0) (size 2 1) (layers "F.Cu") (net 1 "SIGNAL")))
+        )"#;
+        let imported = import(pcb, rules()).unwrap();
+        let problem = imported.placement_problem(500_000).unwrap();
+        assert_eq!(problem.components.len(), 2);
+        assert!(problem.components[0].fixed);
+        assert_eq!(problem.components[0].position, Some(point_mm(5.0, 5.0)));
+        assert_eq!(problem.components[0].rotation_deg, 90);
+        assert_eq!(problem.connections.len(), 1);
+
+        let mut placed = problem.components;
+        placed[1].position = Some(point_mm(20.0, 10.0));
+        placed[1].rotation_deg = 180;
+        let output = imported.write_placements(&placed).unwrap();
+        assert!(output.contains("(at 30.000000 30.000000 180)"));
+        assert!(output.contains("(at 15.000000 25.000000 90)"));
+        let round_trip = import(&output, rules()).unwrap();
+        assert_eq!(
+            round_trip.board.footprints[1].position,
+            point_mm(20.0, 10.0)
+        );
+        assert_eq!(round_trip.board.footprints[1].rotation_deg, 180.0);
     }
 
     #[test]
