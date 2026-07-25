@@ -1,0 +1,8 @@
+[package]
+name = "pcbex-kicad"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+pcbex-core = { path = "../pcbex-core" }

@@ -1,0 +1,3 @@
+Place C10 near U1 within 3 mm.
+J1を基板の左端から5mm以内。
+keep U1, C10, C11 together within 10 mm

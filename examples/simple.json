@@ -1,0 +1,22 @@
+{
+  "width_nm": 30000000,
+  "height_nm": 20000000,
+  "rules": {
+    "grid_nm": 250000,
+    "track_width_nm": 250000,
+    "clearance_nm": 200000,
+    "via_diameter_nm": 600000,
+    "via_drill_nm": 300000,
+    "bend_cost": 5,
+    "via_cost": 20
+  },
+  "obstacles": [
+    {"min":{"x_nm":12000000,"y_nm":0},"max":{"x_nm":18000000,"y_nm":15000000},"layers":["F.Cu","B.Cu"]}
+  ],
+  "nets": [
+    {"id":1,"name":"SIGNAL","priority":10,"terminals":[
+      {"position":{"x_nm":3000000,"y_nm":3000000},"layers":["F.Cu"]},
+      {"position":{"x_nm":27000000,"y_nm":3000000},"layers":["F.Cu"]}
+    ]}
+  ]
+}

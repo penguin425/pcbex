@@ -1,0 +1,21 @@
+{
+  "width_nm": 40000000,
+  "height_nm": 30000000,
+  "grid_nm": 500000,
+  "components": [
+    {"reference":"J1","width_nm":8000000,"height_nm":6000000,"position":{"x_nm":4000000,"y_nm":15000000},"rotation_deg":0,"fixed":true},
+    {"reference":"U1","width_nm":10000000,"height_nm":10000000},
+    {"reference":"C10","width_nm":2000000,"height_nm":1000000},
+    {"reference":"C11","width_nm":2000000,"height_nm":1000000}
+  ],
+  "connections": [
+    {"from":{"component":"J1"},"to":{"component":"U1"},"weight":2.0},
+    {"from":{"component":"U1","offset":{"x_nm":-3000000,"y_nm":0}},"to":{"component":"C10"},"weight":3.0},
+    {"from":{"component":"U1","offset":{"x_nm":3000000,"y_nm":0}},"to":{"component":"C11"},"weight":3.0}
+  ],
+  "constraints": [
+    {"type":"board_edge","subject":"J1","edge":"left","max_distance_nm":5000000},
+    {"type":"near","subject":"C10","target":"U1","max_distance_nm":3000000},
+    {"type":"keep_together","components":["U1","C10","C11"],"max_span_nm":10000000}
+  ]
+}

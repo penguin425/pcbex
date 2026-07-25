@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pcbex-agent"
+version = "0.1.0"
+description = "Bounded planning and repair agent for pcbex"
+requires-python = ">=3.11"
+
+[project.scripts]
+pcbex-agent = "pcbex_agent.cli:main"
+
+[project.optional-dependencies]
+kicad = ["kicad-python>=0.6,<0.8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
