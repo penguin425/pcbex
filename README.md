@@ -87,7 +87,8 @@ The importer reads polygonal board outlines and copper keepouts without reducing
 them to bounding boxes, plus pad positions (including footprint rotation).
 Circular pads retain their exact copper envelope instead of being expanded to
 their bounding rectangles. Oval pads are represented as rotated capsule shapes
-and use exact segment-to-capsule clearance. The importer also reads
+and use exact segment-to-capsule clearance. Rotated rectangular pads retain
+their four copper corners as polygons. The importer also reads
 copper layers, net assignments, legacy board-embedded net classes, existing
 segments and vias.
 Fully connected existing nets are preserved as locked routes; incomplete copper

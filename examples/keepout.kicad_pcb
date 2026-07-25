@@ -15,6 +15,8 @@
     (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "SIGNAL")))
   (footprint "terminal" (layer "F.Cu") (at 35 10)
     (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "SIGNAL")))
+  (footprint "rotated-obstacle" (layer "F.Cu") (at 20 4)
+    (pad "" np_thru_hole rect (at 0 0 35) (size 6 2) (drill 1) (layers "*.Cu" "*.Mask")))
   (zone (net 0) (net_name "") (layer "F.Cu")
     (keepout (tracks not_allowed) (vias not_allowed) (copperpour not_allowed))
     (polygon (pts (xy 15 4) (xy 25 10) (xy 15 16))))

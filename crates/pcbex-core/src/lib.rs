@@ -75,6 +75,15 @@ pub struct CapsuleObstacle {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PolygonObstacle {
+    pub polygon: Vec<Point>,
+    #[serde(default = "both_layers")]
+    pub layers: Vec<Layer>,
+    #[serde(default)]
+    pub net_id: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Keepout {
     pub polygon: Vec<Point>,
     #[serde(default = "both_layers")]
@@ -168,6 +177,8 @@ pub struct Board {
     pub round_obstacles: Vec<RoundObstacle>,
     #[serde(default)]
     pub capsule_obstacles: Vec<CapsuleObstacle>,
+    #[serde(default)]
+    pub polygon_obstacles: Vec<PolygonObstacle>,
     #[serde(default)]
     pub keepouts: Vec<Keepout>,
     #[serde(default)]
@@ -348,6 +359,13 @@ impl<'a> Router<'a> {
             return Err("keepout must be a simple polygon".into());
         }
         if board
+            .polygon_obstacles
+            .iter()
+            .any(|obstacle| !geometry::polygon_is_simple(&obstacle.polygon))
+        {
+            return Err("polygon obstacle must be a simple polygon".into());
+        }
+        if board
             .round_obstacles
             .iter()
             .any(|obstacle| obstacle.diameter_nm <= 0)
@@ -506,6 +524,39 @@ impl<'a> Router<'a> {
             }
         }
         let keepout_distance_twice = maximum_diameter + 2 * maximum_clearance;
+        for obstacle in &self.board.polygon_obstacles {
+            for layer in &obstacle.layers {
+                let layer = layer_index(*layer);
+                for y in 0..=max_y {
+                    for x in 0..=max_x {
+                        let point = Point {
+                            x_nm: x * g,
+                            y_nm: y * g,
+                        };
+                        if geometry::point_in_polygon(point, &obstacle.polygon)
+                            || geometry::point_polygon_closer_than(
+                                point,
+                                &obstacle.polygon,
+                                keepout_distance_twice,
+                            )
+                        {
+                            let cell = (x as i32, y as i32, layer);
+                            if let Some(net_id) = obstacle.net_id {
+                                if self
+                                    .owned
+                                    .insert(cell, net_id)
+                                    .is_some_and(|previous| previous != net_id)
+                                {
+                                    self.blocked.insert(cell);
+                                }
+                            } else {
+                                self.blocked.insert(cell);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         for keepout in &self.board.keepouts {
             for layer in &keepout.layers {
                 let layer = layer_index(*layer);
@@ -1261,6 +1312,21 @@ pub fn render_svg(board: &Board) -> String {
             obstacle.diameter_nm as f64 / scale
         ));
     }
+    for obstacle in &board.polygon_obstacles {
+        let points = obstacle
+            .polygon
+            .iter()
+            .map(|point| {
+                format!(
+                    "{},{}",
+                    point.x_nm as f64 / scale,
+                    point.y_nm as f64 / scale
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        s.push_str(&format!(r##"<polygon points="{points}" fill="#555"/>"##));
+    }
     for keepout in &board.keepouts {
         let points = keepout
             .polygon
@@ -1331,6 +1397,7 @@ mod tests {
             }],
             round_obstacles: vec![],
             capsule_obstacles: vec![],
+            polygon_obstacles: vec![],
             keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),
