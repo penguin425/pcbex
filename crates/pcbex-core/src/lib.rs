@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
@@ -14,12 +14,61 @@ pub struct Point {
     pub y_nm: Nm,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Layer {
-    #[serde(rename = "F.Cu")]
     Front,
-    #[serde(rename = "B.Cu")]
+    Inner(u8),
     Back,
+}
+
+impl Layer {
+    pub fn index(self) -> u8 {
+        match self {
+            Self::Front => 0,
+            Self::Inner(index) => index,
+            Self::Back => 31,
+        }
+    }
+
+    pub fn from_index(index: u8) -> Option<Self> {
+        match index {
+            0 => Some(Self::Front),
+            1..=30 => Some(Self::Inner(index)),
+            31 => Some(Self::Back),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> String {
+        match self {
+            Self::Front => "F.Cu".into(),
+            Self::Inner(index) => format!("In{index}.Cu"),
+            Self::Back => "B.Cu".into(),
+        }
+    }
+}
+
+impl Serialize for Layer {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Layer {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "F.Cu" => Ok(Self::Front),
+            "B.Cu" => Ok(Self::Back),
+            _ if value.starts_with("In") && value.ends_with(".Cu") => value[2..value.len() - 3]
+                .parse::<u8>()
+                .ok()
+                .and_then(Self::from_index)
+                .filter(|layer| matches!(layer, Self::Inner(_)))
+                .ok_or_else(|| de::Error::custom(format!("invalid copper layer: {value}"))),
+            _ => Err(de::Error::custom(format!("invalid copper layer: {value}"))),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -172,6 +221,8 @@ pub struct Board {
     pub outline: Vec<Point>,
     #[serde(default)]
     pub cutouts: Vec<Vec<Point>>,
+    #[serde(default = "both_layers")]
+    pub copper_layers: Vec<Layer>,
     pub rules: Rules,
     #[serde(default)]
     pub obstacles: Vec<Obstacle>,
@@ -352,6 +403,60 @@ impl<'a> Router<'a> {
         if board.width_nm <= 0 || board.height_nm <= 0 {
             return Err("board dimensions must be positive".into());
         }
+        if board.copper_layers.is_empty()
+            || board
+                .copper_layers
+                .iter()
+                .any(|layer| !matches!(layer, Layer::Front | Layer::Back | Layer::Inner(1..=30)))
+            || board
+                .copper_layers
+                .iter()
+                .copied()
+                .collect::<HashSet<_>>()
+                .len()
+                != board.copper_layers.len()
+        {
+            return Err("board copper layers must be unique supported layers".into());
+        }
+        let known_layers = |layers: &[Layer]| {
+            !layers.is_empty()
+                && layers
+                    .iter()
+                    .all(|layer| board.copper_layers.contains(layer))
+        };
+        if board
+            .nets
+            .iter()
+            .flat_map(|net| &net.terminals)
+            .any(|terminal| !known_layers(&terminal.layers))
+            || board
+                .obstacles
+                .iter()
+                .any(|obstacle| !known_layers(&obstacle.layers))
+            || board
+                .round_obstacles
+                .iter()
+                .any(|obstacle| !known_layers(&obstacle.layers))
+            || board
+                .capsule_obstacles
+                .iter()
+                .any(|obstacle| !known_layers(&obstacle.layers))
+            || board
+                .polygon_obstacles
+                .iter()
+                .any(|obstacle| !known_layers(&obstacle.layers))
+            || board
+                .keepouts
+                .iter()
+                .any(|keepout| !known_layers(&keepout.layers))
+            || board
+                .routes
+                .iter()
+                .flat_map(|route| &route.segments)
+                .any(|segment| !board.copper_layers.contains(&segment.layer))
+        {
+            return Err("board items reference undeclared copper layers".into());
+        }
         if !board.outline.is_empty()
             && (!geometry::polygon_is_simple(&board.outline)
                 || board.outline.iter().any(|point| {
@@ -411,6 +516,13 @@ impl<'a> Router<'a> {
             if rules.layers.as_ref().is_some_and(Vec::is_empty) {
                 return Err(format!("net class {name} must allow at least one layer"));
             }
+            if rules
+                .layers
+                .as_ref()
+                .is_some_and(|layers| !known_layers(layers))
+            {
+                return Err(format!("net class {name} references undeclared layers"));
+            }
         }
         let mut route_net_ids = HashSet::new();
         for route in &board.routes {
@@ -446,10 +558,12 @@ impl<'a> Router<'a> {
                     y_nm: y * g,
                 };
                 if !self.board.point_inside_board(point, edge_envelope) {
-                    self.blocked.extend([
-                        (x as i32, y as i32, layer_index(Layer::Front)),
-                        (x as i32, y as i32, layer_index(Layer::Back)),
-                    ]);
+                    self.blocked.extend(
+                        self.board
+                            .copper_layers
+                            .iter()
+                            .map(|layer| (x as i32, y as i32, layer_index(*layer))),
+                    );
                 }
             }
         }
@@ -973,36 +1087,42 @@ impl<'a> Router<'a> {
                     &mut open,
                 );
             }
-            let other = 1 - item.node.layer;
-            let cell = (item.node.x, item.node.y, other);
             let via_radius = rules.via_diameter_nm / 2;
             let via_inside_board = item.node.x as Nm * g >= via_radius
                 && item.node.y as Nm * g >= via_radius
                 && item.node.x as Nm * g + via_radius <= self.board.width_nm
                 && item.node.y as Nm * g + via_radius <= self.board.height_nm;
-            if via_inside_board
-                && allowed_layers.is_none_or(|allowed| allowed.contains(&index_layer(other)))
-                && !self.blocked.contains(&cell)
-                && !self.foreign_obstacle(cell, net_id)
-            {
-                if let Some(owner) = self.occupied_by.get(&cell) {
-                    blockers.insert(*owner);
-                } else {
-                    let n = Node {
-                        x: item.node.x,
-                        y: item.node.y,
-                        layer: other,
-                        dir: item.node.dir,
-                    };
-                    self.relax(
-                        item.node,
-                        n,
-                        item.cost + rules.via_cost as u64,
-                        goals,
-                        &mut costs,
-                        &mut prev,
-                        &mut open,
-                    );
+            if via_inside_board {
+                for other_layer in &self.board.copper_layers {
+                    let other = layer_index(*other_layer);
+                    if other == item.node.layer
+                        || allowed_layers.is_some_and(|allowed| !allowed.contains(other_layer))
+                    {
+                        continue;
+                    }
+                    let cell = (item.node.x, item.node.y, other);
+                    if self.blocked.contains(&cell) || self.foreign_obstacle(cell, net_id) {
+                        continue;
+                    }
+                    if let Some(owner) = self.occupied_by.get(&cell) {
+                        blockers.insert(*owner);
+                    } else {
+                        let n = Node {
+                            x: item.node.x,
+                            y: item.node.y,
+                            layer: other,
+                            dir: item.node.dir,
+                        };
+                        self.relax(
+                            item.node,
+                            n,
+                            item.cost + rules.via_cost as u64,
+                            goals,
+                            &mut costs,
+                            &mut prev,
+                            &mut open,
+                        );
+                    }
                 }
             }
         }
@@ -1073,7 +1193,7 @@ impl<'a> Router<'a> {
                 (via.diameter_nm / 2 + maximum_diameter / 2 + maximum_clearance + g - 1) / g;
             let center_x = via.position.x_nm / g;
             let center_y = via.position.y_nm / g;
-            for layer in [Layer::Front, Layer::Back] {
+            for layer in &self.board.copper_layers {
                 for offset_y in -clearance_radius..=clearance_radius {
                     for offset_x in -clearance_radius..=clearance_radius {
                         if offset_x * offset_x + offset_y * offset_y
@@ -1084,7 +1204,7 @@ impl<'a> Router<'a> {
                         let cell = (
                             (center_x + offset_x) as i32,
                             (center_y + offset_y) as i32,
-                            layer_index(layer),
+                            layer_index(*layer),
                         );
                         self.occupied.insert(cell);
                         self.occupied_by.insert(cell, route.net_id);
@@ -1140,10 +1260,10 @@ fn heuristic_to_tree(x: i32, y: i32, _layer: u8, goals: &HashSet<(i32, i32, u8)>
         .unwrap_or(0)
 }
 fn layer_index(l: Layer) -> u8 {
-    if l == Layer::Front { 0 } else { 1 }
+    l.index()
 }
 fn index_layer(l: u8) -> Layer {
-    if l == 0 { Layer::Front } else { Layer::Back }
+    Layer::from_index(l).expect("router only stores supported copper layers")
 }
 fn net_span(n: &Net) -> Nm {
     n.terminals
@@ -1410,6 +1530,7 @@ mod tests {
             height_nm: 10_000_000,
             outline: vec![],
             cutouts: vec![],
+            copper_layers: both_layers(),
             rules: Rules {
                 grid_nm: 500_000,
                 track_width_nm: 250_000,
@@ -1461,6 +1582,19 @@ mod tests {
             }],
             routes: vec![],
         }
+    }
+
+    #[test]
+    fn inner_copper_layer_json_is_kicad_compatible() {
+        assert_eq!(
+            serde_json::to_string(&Layer::Inner(30)).unwrap(),
+            r#""In30.Cu""#
+        );
+        assert_eq!(
+            serde_json::from_str::<Layer>(r#""In1.Cu""#).unwrap(),
+            Layer::Inner(1)
+        );
+        assert!(serde_json::from_str::<Layer>(r#""In31.Cu""#).is_err());
     }
     #[test]
     fn routes_around_obstacle() {
@@ -1664,6 +1798,37 @@ mod tests {
                 .any(|segment| segment.layer == Layer::Back)
         );
         assert!(crate::checking::check_board(&routed).is_clean());
+    }
+
+    #[test]
+    fn routes_through_an_inner_copper_layer() {
+        let mut b = board();
+        b.copper_layers = vec![Layer::Front, Layer::Inner(1), Layer::Back];
+        b.obstacles = vec![Obstacle {
+            min: Point {
+                x_nm: 4_000_000,
+                y_nm: 0,
+            },
+            max: Point {
+                x_nm: 6_000_000,
+                y_nm: 10_000_000,
+            },
+            layers: vec![Layer::Front, Layer::Back],
+            net_id: None,
+        }];
+        b.nets[0].terminals[0].layers = vec![Layer::Front];
+        b.nets[0].terminals[1].layers = vec![Layer::Front];
+
+        let (routed, report) = route_board(&b).unwrap();
+        assert!(report.unrouted.is_empty());
+        assert!(
+            routed.routes[0]
+                .segments
+                .iter()
+                .any(|segment| segment.layer == Layer::Inner(1))
+        );
+        assert!(routed.routes[0].vias.len() >= 2);
+        assert!(checking::check_board(&routed).is_clean());
     }
 
     #[test]

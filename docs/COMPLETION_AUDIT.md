@@ -1,9 +1,10 @@
 # Design completion audit
 
-This audit maps the supplied `pcbex` design to executable evidence. The target
-is the deliberately bounded MVP in that design: rectangular, placed, two-layer
-signal boards with no differential-pair routing, length matching, or copper
-zones.
+This audit maps the supplied `pcbex` design and subsequent extensions to
+executable evidence. The project began with the deliberately bounded,
+rectangular two-layer MVP and now supports polygonal multilayer signal boards.
+Differential-pair routing, length matching, and copper-zone generation remain
+out of scope.
 
 | Requirement | Implementation | Evidence |
 | --- | --- | --- |
@@ -42,6 +43,7 @@ zones.
 | Property and fuzz testing | Geometry symmetry/translation properties plus KiCad parser and board-model libFuzzer targets | Property tests run on every PR; scheduled/manual fuzz workflow runs both targets |
 | Routing performance suite | Criterion scenarios for obstacle, 5/10-net, and board-cutout routing | Benchmark targets compile on every PR and retain local Criterion baselines |
 | KiCad placement I/O | Footprints, pad-net connections, locked state, origin-aware position/rotation write-back, and `place-kicad` CLI | Locked/rotated/non-zero-origin round-trip regression and CLI integration test |
+| Multilayer routing | `In1.Cu`–`In30.Cu` model/serde, KiCad layer-table and item I/O, all-layer through vias, and per-net layer constraints | Forced inner-layer core regression, four-layer importer test, and real-KiCad four-layer DRC/idempotence fixture |
 | KiCad end-to-end CI | KiCad 10 routing, DRC, second-pass idempotence, and retained diagnostics for three fixtures | Rectangular, non-rectangular, and polygon-keepout boards run on every PR |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
 

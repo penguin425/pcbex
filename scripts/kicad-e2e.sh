@@ -13,6 +13,7 @@ fixtures=(
   examples/nonrect.kicad_pcb
   examples/keepout.kicad_pcb
   examples/curved.kicad_pcb
+  examples/multilayer.kicad_pcb
 )
 
 mkdir -p "$output_directory"

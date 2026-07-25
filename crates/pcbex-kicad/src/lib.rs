@@ -31,6 +31,14 @@ struct BoardGeometry {
     cutouts: Vec<Vec<Point>>,
 }
 
+#[derive(Default)]
+struct FootprintGeometry {
+    round_obstacles: Vec<RoundObstacle>,
+    capsule_obstacles: Vec<CapsuleObstacle>,
+    polygon_obstacles: Vec<PolygonObstacle>,
+    footprints: Vec<Footprint>,
+}
+
 pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let root = parse(source)?;
     let top = root
@@ -39,6 +47,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     if atom(top.first()) != Some("kicad_pcb") {
         return Err("expected a kicad_pcb document".into());
     }
+    let copper_layers = board_copper_layers(top)?;
 
     let BoardGeometry {
         min,
@@ -67,29 +76,27 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
 
     let net_classes = import_net_classes(top, &rules, &mut nets);
     let mut obstacles = Vec::new();
-    let mut round_obstacles = Vec::new();
-    let mut capsule_obstacles = Vec::new();
-    let mut polygon_obstacles = Vec::new();
+    let mut footprint_geometry = FootprintGeometry::default();
     let mut keepouts = Vec::new();
-    let mut footprints = Vec::new();
     let mut route_candidates = HashMap::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
         match atom(xs.first()) {
-            Some("footprint") => import_footprint(
-                xs,
-                min,
-                &mut nets,
-                &mut round_obstacles,
-                &mut capsule_obstacles,
-                &mut polygon_obstacles,
-                &mut footprints,
-            ),
+            Some("footprint") => {
+                import_footprint(xs, min, &mut nets, &mut footprint_geometry, &copper_layers)
+            }
             Some("segment") => {
                 import_segment(xs, min, &rules, &mut obstacles, &mut route_candidates)
             }
-            Some("via") => import_via(xs, min, &rules, &mut obstacles, &mut route_candidates),
-            Some("zone") => import_keepout(xs, min, &mut keepouts),
+            Some("via") => import_via(
+                xs,
+                min,
+                &rules,
+                &mut obstacles,
+                &mut route_candidates,
+                &copper_layers,
+            ),
+            Some("zone") => import_keepout(xs, min, &mut keepouts, &copper_layers),
             _ => {}
         }
     }
@@ -116,13 +123,14 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                     .collect()
             })
             .collect(),
+        copper_layers,
         rules,
         obstacles,
-        round_obstacles,
-        capsule_obstacles,
-        polygon_obstacles,
+        round_obstacles: footprint_geometry.round_obstacles,
+        capsule_obstacles: footprint_geometry.capsule_obstacles,
+        polygon_obstacles: footprint_geometry.polygon_obstacles,
         keepouts,
-        footprints,
+        footprints: footprint_geometry.footprints,
         net_classes,
         nets,
         routes,
@@ -669,10 +677,8 @@ fn import_footprint(
     xs: &[Sexp],
     origin: Point,
     nets: &mut HashMap<u32, Net>,
-    round_obstacles: &mut Vec<RoundObstacle>,
-    capsule_obstacles: &mut Vec<CapsuleObstacle>,
-    polygon_obstacles: &mut Vec<PolygonObstacle>,
-    footprints: &mut Vec<Footprint>,
+    geometry: &mut FootprintGeometry,
+    copper_layers: &[Layer],
 ) {
     let footprint_at = child_values(xs, "at");
     let fx = footprint_at.and_then(|v| number(v.get(1))).unwrap_or(0.0);
@@ -694,7 +700,7 @@ fn import_footprint(
         let py = at.and_then(|v| number(v.get(2))).unwrap_or(0.0);
         let (rx, ry) = rotate(px, py, angle);
         let position = relative(point_mm(fx + rx, fy + ry), origin);
-        let layers = pad_layers(pad);
+        let layers = pad_layers(pad, copper_layers);
         let size = child_values(pad, "size");
         let width = size.and_then(|v| number(v.get(1))).unwrap_or(1.0);
         let height = size.and_then(|v| number(v.get(2))).unwrap_or(width);
@@ -731,9 +737,9 @@ fn import_footprint(
                 angle + pad_angle,
                 layers,
                 Some(id),
-                round_obstacles,
-                capsule_obstacles,
-                polygon_obstacles,
+                &mut geometry.round_obstacles,
+                &mut geometry.capsule_obstacles,
+                &mut geometry.polygon_obstacles,
             );
             continue;
         }
@@ -745,12 +751,12 @@ fn import_footprint(
             angle + pad_angle,
             layers,
             None,
-            round_obstacles,
-            capsule_obstacles,
-            polygon_obstacles,
+            &mut geometry.round_obstacles,
+            &mut geometry.capsule_obstacles,
+            &mut geometry.polygon_obstacles,
         );
     }
-    footprints.push(model);
+    geometry.footprints.push(model);
 }
 
 fn footprint_reference(xs: &[Sexp]) -> String {
@@ -825,6 +831,7 @@ fn import_via(
     rules: &Rules,
     obstacles: &mut Vec<Obstacle>,
     routes: &mut HashMap<u32, Route>,
+    copper_layers: &[Layer],
 ) {
     let Some(at) = child_point(xs, "at") else {
         return;
@@ -843,7 +850,7 @@ fn import_via(
         at,
         size,
         size,
-        vec![Layer::Front, Layer::Back],
+        copper_layers.to_vec(),
         net_id,
     ));
     if let Some(net_id) = net_id.filter(|id| *id != 0) {
@@ -863,28 +870,33 @@ fn import_via(
     }
 }
 
-fn import_keepout(xs: &[Sexp], origin: Point, keepouts: &mut Vec<Keepout>) {
+fn import_keepout(
+    xs: &[Sexp],
+    origin: Point,
+    keepouts: &mut Vec<Keepout>,
+    copper_layers: &[Layer],
+) {
     if child_values(xs, "keepout").is_none() {
         return;
     }
     let layers = if let Some(layer) = child_atom(xs, "layer").and_then(parse_layer) {
         vec![layer]
     } else if matches!(child_atom(xs, "layer"), Some("*.Cu") | Some("F&B.Cu")) {
-        vec![Layer::Front, Layer::Back]
+        copper_layers.to_vec()
     } else if let Some(values) = child_values(xs, "layers") {
         let mut layers = Vec::new();
         for value in values.iter().skip(1).filter_map(|value| atom(Some(value))) {
             if matches!(value, "*.Cu" | "F&B.Cu") {
-                layers.extend([Layer::Front, Layer::Back]);
+                layers.extend_from_slice(copper_layers);
             } else if let Some(layer) = parse_layer(value) {
                 layers.push(layer);
             }
         }
-        layers.sort_by_key(|layer| if *layer == Layer::Front { 0 } else { 1 });
+        layers.sort_by_key(|layer| layer.index());
         layers.dedup();
         layers
     } else {
-        vec![Layer::Front, Layer::Back]
+        copper_layers.to_vec()
     };
     let Some(polygon) = child_values(xs, "polygon") else {
         return;
@@ -1017,25 +1029,20 @@ fn rotated_size(width: f64, height: f64, degrees: f64) -> (f64, f64) {
         width * r.sin().abs() + height * r.cos().abs(),
     )
 }
-fn pad_layers(pad: &[Sexp]) -> Vec<Layer> {
+fn pad_layers(pad: &[Sexp], copper_layers: &[Layer]) -> Vec<Layer> {
     let Some(v) = child_values(pad, "layers") else {
-        return vec![Layer::Front, Layer::Back];
+        return copper_layers.to_vec();
     };
-    let front = v
-        .iter()
-        .skip(1)
-        .any(|x| matches!(atom(Some(x)), Some("F.Cu") | Some("*.Cu")));
-    let back = v
-        .iter()
-        .skip(1)
-        .any(|x| matches!(atom(Some(x)), Some("B.Cu") | Some("*.Cu")));
     let mut layers = Vec::new();
-    if front {
-        layers.push(Layer::Front);
+    for value in v.iter().skip(1).filter_map(|value| atom(Some(value))) {
+        if value == "*.Cu" {
+            layers.extend_from_slice(copper_layers);
+        } else if let Some(layer) = parse_layer(value) {
+            layers.push(layer);
+        }
     }
-    if back {
-        layers.push(Layer::Back);
-    }
+    layers.sort_by_key(|layer| layer.index());
+    layers.dedup();
     if layers.is_empty() {
         layers.push(Layer::Front);
     }
@@ -1045,14 +1052,36 @@ fn parse_layer(value: &str) -> Option<Layer> {
     match value {
         "F.Cu" => Some(Layer::Front),
         "B.Cu" => Some(Layer::Back),
+        _ if value.starts_with("In") && value.ends_with(".Cu") => value[2..value.len() - 3]
+            .parse::<u8>()
+            .ok()
+            .and_then(Layer::from_index)
+            .filter(|layer| matches!(layer, Layer::Inner(_))),
         _ => None,
     }
 }
-fn layer_name(layer: Layer) -> &'static str {
-    match layer {
-        Layer::Front => "F.Cu",
-        Layer::Back => "B.Cu",
+fn layer_name(layer: Layer) -> String {
+    layer.name()
+}
+
+fn board_copper_layers(top: &[Sexp]) -> Result<Vec<Layer>, String> {
+    let Some(values) = child_values(top, "layers") else {
+        return Ok(vec![Layer::Front, Layer::Back]);
+    };
+    let mut layers: Vec<_> = values
+        .iter()
+        .skip(1)
+        .filter_map(|item| {
+            let values = item.as_list()?;
+            parse_layer(atom(values.get(1))?)
+        })
+        .collect();
+    layers.sort_by_key(|layer| layer.index());
+    layers.dedup();
+    if layers.is_empty() {
+        return Err("KiCad board has no copper layers".into());
     }
+    Ok(layers)
 }
 fn point_mm(x: f64, y: f64) -> Point {
     Point {
@@ -1427,6 +1456,31 @@ mod tests {
             point_mm(20.0, 10.0)
         );
         assert_eq!(round_trip.board.footprints[1].rotation_deg, 180.0);
+    }
+
+    #[test]
+    fn imports_inner_copper_layers_and_tracks() {
+        let pcb = r#"(kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (2 "In1.Cu" signal)
+            (4 "In2.Cu" signal)
+            (31 "B.Cu" signal)
+            (44 "Edge.Cuts" user))
+          (net 1 "SIGNAL")
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (segment (start 2 2) (end 10 2) (width 0.25) (layer "In1.Cu") (net 1))
+        )"#;
+        let imported = import(pcb, rules()).unwrap();
+        assert_eq!(
+            imported.board.copper_layers,
+            vec![Layer::Front, Layer::Inner(1), Layer::Inner(2), Layer::Back]
+        );
+        assert!(
+            imported.board.obstacles[0]
+                .layers
+                .contains(&Layer::Inner(1))
+        );
     }
 
     #[test]

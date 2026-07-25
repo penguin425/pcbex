@@ -30,7 +30,7 @@ enum Command {
         #[arg(long)]
         allow_unrouted: bool,
     },
-    /// Route a placed, rectangular two-layer KiCad board.
+    /// Route a placed KiCad board across its declared copper layers.
     RouteKicad {
         input: PathBuf,
         #[arg(short, long)]

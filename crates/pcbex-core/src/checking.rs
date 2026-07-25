@@ -537,6 +537,7 @@ mod tests {
             height_nm: 10_000_000,
             outline: vec![],
             cutouts: vec![],
+            copper_layers: vec![Layer::Front, Layer::Back],
             rules: Rules {
                 grid_nm: 250_000,
                 track_width_nm: 250_000,
