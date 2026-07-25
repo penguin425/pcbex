@@ -119,6 +119,22 @@ pub fn check_board(board: &Board) -> CheckReport {
                     break;
                 }
             }
+            for obstacle in &board.polygon_obstacles {
+                if obstacle.net_id == Some(route.net_id) {
+                    continue;
+                }
+                let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
+                if point_in_polygon(via.position, &obstacle.polygon)
+                    || point_polygon_closer_than(via.position, &obstacle.polygon, required_twice)
+                {
+                    report.push(
+                        "clearance",
+                        "via is too close to a polygon obstacle".into(),
+                        vec![route.net_id],
+                    );
+                    break;
+                }
+            }
             for keepout in &board.keepouts {
                 if keepout.net_id == Some(route.net_id) {
                     continue;
@@ -236,6 +252,28 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
             report.push(
                 "clearance",
                 "track is too close to a capsule obstacle".into(),
+                vec![net_id],
+            );
+            break;
+        }
+    }
+    for obstacle in &board.polygon_obstacles {
+        if obstacle.net_id == Some(net_id) || !obstacle.layers.contains(&segment.layer) {
+            continue;
+        }
+        let required_twice = segment.width_nm + 2 * rules.clearance_nm;
+        if point_in_polygon(segment.start, &obstacle.polygon)
+            || point_in_polygon(segment.end, &obstacle.polygon)
+            || segment_polygon_closer_than(
+                segment.start,
+                segment.end,
+                &obstacle.polygon,
+                required_twice,
+            )
+        {
+            report.push(
+                "clearance",
+                "track is too close to a polygon obstacle".into(),
                 vec![net_id],
             );
             break;
@@ -498,6 +536,7 @@ mod tests {
             obstacles: vec![],
             round_obstacles: vec![],
             capsule_obstacles: vec![],
+            polygon_obstacles: vec![],
             keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),

@@ -1,6 +1,7 @@
 use pcbex_core::{
     Board, CapsuleObstacle, Footprint, Keepout, Layer, Net, NetClassRules, Obstacle, Pad, PadShape,
-    Point, RoundObstacle, Route, Rules, Segment, Terminal, Via, checking::check_board,
+    Point, PolygonObstacle, RoundObstacle, Route, Rules, Segment, Terminal, Via,
+    checking::check_board,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -54,6 +55,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let mut obstacles = Vec::new();
     let mut round_obstacles = Vec::new();
     let mut capsule_obstacles = Vec::new();
+    let mut polygon_obstacles = Vec::new();
     let mut keepouts = Vec::new();
     let mut footprints = Vec::new();
     let mut route_candidates = HashMap::new();
@@ -64,9 +66,9 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                 xs,
                 min,
                 &mut nets,
-                &mut obstacles,
                 &mut round_obstacles,
                 &mut capsule_obstacles,
+                &mut polygon_obstacles,
                 &mut footprints,
             ),
             Some("segment") => {
@@ -95,6 +97,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         obstacles,
         round_obstacles,
         capsule_obstacles,
+        polygon_obstacles,
         keepouts,
         footprints,
         net_classes,
@@ -326,9 +329,9 @@ fn import_footprint(
     xs: &[Sexp],
     origin: Point,
     nets: &mut HashMap<u32, Net>,
-    obstacles: &mut Vec<Obstacle>,
     round_obstacles: &mut Vec<RoundObstacle>,
     capsule_obstacles: &mut Vec<CapsuleObstacle>,
+    polygon_obstacles: &mut Vec<PolygonObstacle>,
     footprints: &mut Vec<Footprint>,
 ) {
     let footprint_at = child_values(xs, "at");
@@ -388,9 +391,9 @@ fn import_footprint(
                 angle + pad_angle,
                 layers,
                 Some(id),
-                obstacles,
                 round_obstacles,
                 capsule_obstacles,
+                polygon_obstacles,
             );
             continue;
         }
@@ -402,9 +405,9 @@ fn import_footprint(
             angle + pad_angle,
             layers,
             None,
-            obstacles,
             round_obstacles,
             capsule_obstacles,
+            polygon_obstacles,
         );
     }
     footprints.push(model);
@@ -603,9 +606,9 @@ fn add_pad_obstacle(
     rotation_deg: f64,
     layers: Vec<Layer>,
     net_id: Option<u32>,
-    obstacles: &mut Vec<Obstacle>,
     round_obstacles: &mut Vec<RoundObstacle>,
     capsule_obstacles: &mut Vec<CapsuleObstacle>,
+    polygon_obstacles: &mut Vec<PolygonObstacle>,
 ) {
     match shape {
         PadShape::Circle => round_obstacles.push(RoundObstacle {
@@ -637,8 +640,28 @@ fn add_pad_obstacle(
             });
         }
         PadShape::Rect => {
-            let (width, height) = rotated_size(width_mm, height_mm, rotation_deg);
-            obstacles.push(rect_obstacle(center, nm(width), nm(height), layers, net_id));
+            let half_width = width_mm / 2.0;
+            let half_height = height_mm / 2.0;
+            let polygon = [
+                (-half_width, -half_height),
+                (half_width, -half_height),
+                (half_width, half_height),
+                (-half_width, half_height),
+            ]
+            .into_iter()
+            .map(|(x, y)| {
+                let (x, y) = rotate(x, y, rotation_deg);
+                Point {
+                    x_nm: center.x_nm + nm(x),
+                    y_nm: center.y_nm + nm(y),
+                }
+            })
+            .collect();
+            polygon_obstacles.push(PolygonObstacle {
+                polygon,
+                layers,
+                net_id,
+            });
         }
     }
 }
@@ -834,7 +857,7 @@ mod tests {
       (footprint "A" (layer "F.Cu") (at 15 25 90)
         (pad "1" thru_hole oval (at 1 0) (size 2 1) (drill 0.5) (layers "*.Cu" "*.Mask") (net 1 "VCC")))
       (footprint "B" (layer "F.Cu") (at 35 45)
-        (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VCC")))
+        (pad "1" smd rect (at 0 0 30) (size 1 1) (layers "F.Cu") (net 1 "VCC")))
     )"#;
     #[test]
     fn imports_outline_and_rotated_pads() {
@@ -867,6 +890,13 @@ mod tests {
             }
         );
         assert_eq!(pad.diameter_nm, 1_000_000);
+        assert_eq!(
+            b.board.polygon_obstacles[0].polygon[0],
+            Point {
+                x_nm: 24_816_987,
+                y_nm: 24_316_987
+            }
+        );
         assert_eq!(b.board.nets[0].class.as_deref(), Some("Power"));
         let power = &b.board.net_classes["Power"];
         assert_eq!(power.track_width_nm, 800_000);
@@ -887,7 +917,7 @@ mod tests {
 
         let imported = import(source, rules()).unwrap();
         assert_eq!(imported.board.round_obstacles.len(), 1);
-        assert_eq!(imported.board.obstacles.len(), 1);
+        assert_eq!(imported.board.polygon_obstacles.len(), 1);
         assert_eq!(imported.board.footprints[0].pads[0].shape, PadShape::Circle);
         assert_eq!(imported.board.round_obstacles[0].diameter_nm, 2_000_000);
     }
