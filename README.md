@@ -97,6 +97,8 @@ Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated
 libFuzzer targets exercise arbitrary KiCad input and serialized board models.
+Criterion benchmarks cover obstacle, multi-net, and board-cutout routing
+scenarios; see `docs/BENCHMARKS.md`.
 Fully connected existing nets are preserved as locked routes; incomplete copper
 remains an obstacle and is not mistaken for a completed route. Generated tracks
 and through vias are appended at board level without duplicating locked routes,

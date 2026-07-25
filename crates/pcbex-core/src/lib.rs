@@ -1567,6 +1567,11 @@ mod tests {
             .collect();
         let (routed, report) = route_board(&b).unwrap();
         assert!(report.unrouted.is_empty(), "{:?}", report.unrouted);
+        assert!(
+            report.expanded_states < 100_000,
+            "parallel-net search budget regressed: {} states",
+            report.expanded_states
+        );
         assert_eq!(routed.routes.len(), 10);
         let check = crate::checking::check_board(&routed);
         assert!(check.is_clean(), "{:?}", check.violations);
@@ -2002,6 +2007,11 @@ mod tests {
 
         let (routed, report) = route_board(&b).unwrap();
         assert!(report.unrouted.is_empty());
+        assert!(
+            report.expanded_states < 50_000,
+            "cutout search budget regressed: {} states",
+            report.expanded_states
+        );
         assert!(checking::check_board(&routed).is_clean());
         assert!(render_svg(&routed).contains(r#"fill="white""#));
     }
