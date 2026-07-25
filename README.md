@@ -153,8 +153,17 @@ git push origin v0.1.0
 The tag must match both the workspace version in `Cargo.toml` and the agent
 version in `agent/pyproject.toml`. The release workflow runs all Rust and Python
 checks, then publishes CLI archives for Linux x64, macOS Intel and Apple
-Silicon, and Windows x64. Each archive includes a SHA-256 checksum. If a build
-fails, the release remains a draft and the workflow can be rerun safely.
+Silicon, and Windows x64. Each archive includes a SHA-256 checksum and an SPDX
+SBOM, and has signed GitHub build-provenance and SBOM attestations. Verify a
+downloaded archive with:
+
+```sh
+gh attestation verify pcbex-v0.1.2-x86_64-unknown-linux-gnu.tar.gz \
+  --repo penguin425/pcbex
+```
+
+If a build fails, the release remains a draft and the workflow can be rerun
+safely.
 
 ## Scope
 
