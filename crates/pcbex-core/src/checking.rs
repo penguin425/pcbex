@@ -1,4 +1,8 @@
-use crate::{Board, Net, Point, Route, Segment};
+use crate::geometry::{
+    point_rect_closer_than, point_segment_closer_than, point_segment_within, points_closer_than,
+    points_within, segment_rect_closer_than, segments_closer_than, segments_within,
+};
+use crate::{Board, Net, Route, Segment};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -70,8 +74,9 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if obstacle.net_id == Some(route.net_id) {
                     continue;
                 }
-                let required = radius + rules.clearance_nm;
-                if point_rect_distance(via.position, obstacle.min, obstacle.max) < required as f64 {
+                let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
+                if point_rect_closer_than(via.position, obstacle.min, obstacle.max, required_twice)
+                {
                     report.push(
                         "clearance",
                         "via is too close to an obstacle".into(),
@@ -138,8 +143,14 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         if !obstacle.layers.contains(&segment.layer) {
             continue;
         }
-        let required = segment.width_nm / 2 + rules.clearance_nm;
-        if segment_rect_distance(segment, obstacle.min, obstacle.max) < required as f64 {
+        let required_twice = segment.width_nm + 2 * rules.clearance_nm;
+        if segment_rect_closer_than(
+            segment.start,
+            segment.end,
+            obstacle.min,
+            obstacle.max,
+            required_twice,
+        ) {
             report.push(
                 "clearance",
                 "track is too close to an obstacle".into(),
@@ -154,14 +165,14 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
     let clearance = board
         .rules_for_net(a.net_id)
         .clearance_nm
-        .max(board.rules_for_net(b.net_id).clearance_nm) as f64;
+        .max(board.rules_for_net(b.net_id).clearance_nm);
     for sa in &a.segments {
         for sb in &b.segments {
             if sa.layer != sb.layer {
                 continue;
             }
-            let required = (sa.width_nm + sb.width_nm) as f64 / 2.0 + clearance;
-            if segment_distance(sa.start, sa.end, sb.start, sb.end) < required {
+            let required_twice = sa.width_nm + sb.width_nm + 2 * clearance;
+            if segments_closer_than(sa.start, sa.end, sb.start, sb.end, required_twice) {
                 report.push(
                     "clearance",
                     "tracks from different nets violate clearance".into(),
@@ -171,8 +182,8 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
             }
         }
         for via in &b.vias {
-            let required = sa.width_nm as f64 / 2.0 + via.diameter_nm as f64 / 2.0 + clearance;
-            if point_segment_distance(via.position, sa.start, sa.end) < required {
+            let required_twice = sa.width_nm + via.diameter_nm + 2 * clearance;
+            if point_segment_closer_than(via.position, sa.start, sa.end, required_twice) {
                 report.push(
                     "clearance",
                     "track and via from different nets violate clearance".into(),
@@ -184,8 +195,8 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
     }
     for via in &a.vias {
         for sb in &b.segments {
-            let required = sb.width_nm as f64 / 2.0 + via.diameter_nm as f64 / 2.0 + clearance;
-            if point_segment_distance(via.position, sb.start, sb.end) < required {
+            let required_twice = sb.width_nm + via.diameter_nm + 2 * clearance;
+            if point_segment_closer_than(via.position, sb.start, sb.end, required_twice) {
                 report.push(
                     "clearance",
                     "via and track from different nets violate clearance".into(),
@@ -195,8 +206,8 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
             }
         }
         for other in &b.vias {
-            let required = (via.diameter_nm + other.diameter_nm) as f64 / 2.0 + clearance;
-            if distance(via.position, other.position) < required {
+            let required_twice = via.diameter_nm + other.diameter_nm + 2 * clearance;
+            if points_closer_than(via.position, other.position, required_twice) {
                 report.push(
                     "clearance",
                     "vias from different nets violate clearance".into(),
@@ -216,25 +227,35 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
     for (index, segment) in route.segments.iter().enumerate() {
         for (other_index, other) in route.segments[..index].iter().enumerate() {
             if segment.layer == other.layer
-                && segment_distance(segment.start, segment.end, other.start, other.end)
-                    <= (segment.width_nm + other.width_nm) as f64 / 2.0
+                && segments_within(
+                    segment.start,
+                    segment.end,
+                    other.start,
+                    other.end,
+                    segment.width_nm + other.width_nm,
+                )
             {
                 components.union(index, other_index);
             }
         }
         for (via_index, via) in route.vias.iter().enumerate() {
-            if point_segment_distance(via.position, segment.start, segment.end)
-                <= (segment.width_nm + via.diameter_nm) as f64 / 2.0
-            {
+            if point_segment_within(
+                via.position,
+                segment.start,
+                segment.end,
+                segment.width_nm + via.diameter_nm,
+            ) {
                 components.union(index, segment_count + via_index);
             }
         }
     }
     for (index, via) in route.vias.iter().enumerate() {
         for (other_index, other) in route.vias[..index].iter().enumerate() {
-            if distance(via.position, other.position)
-                <= (via.diameter_nm + other.diameter_nm) as f64 / 2.0
-            {
+            if points_within(
+                via.position,
+                other.position,
+                via.diameter_nm + other.diameter_nm,
+            ) {
                 components.union(segment_count + index, segment_count + other_index);
             }
         }
@@ -248,8 +269,12 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
             .enumerate()
             .filter(|(_, segment)| {
                 terminal.layers.contains(&segment.layer)
-                    && point_segment_distance(terminal.position, segment.start, segment.end)
-                        <= segment.width_nm as f64 / 2.0
+                    && point_segment_within(
+                        terminal.position,
+                        segment.start,
+                        segment.end,
+                        segment.width_nm,
+                    )
             })
             .map(|(index, _)| index)
             .chain(
@@ -258,7 +283,7 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
                     .iter()
                     .enumerate()
                     .filter(|(_, via)| {
-                        distance(via.position, terminal.position) <= via.diameter_nm as f64 / 2.0
+                        points_within(via.position, terminal.position, via.diameter_nm)
                     })
                     .map(|(index, _)| segment_count + index),
             )
@@ -348,90 +373,10 @@ impl DisjointSet {
     }
 }
 
-fn segment_rect_distance(segment: &Segment, min: Point, max: Point) -> f64 {
-    if point_in_rect(segment.start, min, max) || point_in_rect(segment.end, min, max) {
-        return 0.0;
-    }
-    let corners = [
-        min,
-        Point {
-            x_nm: max.x_nm,
-            y_nm: min.y_nm,
-        },
-        max,
-        Point {
-            x_nm: min.x_nm,
-            y_nm: max.y_nm,
-        },
-    ];
-    (0..4)
-        .map(|i| segment_distance(segment.start, segment.end, corners[i], corners[(i + 1) % 4]))
-        .fold(f64::INFINITY, f64::min)
-}
-fn point_in_rect(p: Point, min: Point, max: Point) -> bool {
-    p.x_nm >= min.x_nm && p.x_nm <= max.x_nm && p.y_nm >= min.y_nm && p.y_nm <= max.y_nm
-}
-fn point_rect_distance(p: Point, min: Point, max: Point) -> f64 {
-    let dx = if p.x_nm < min.x_nm {
-        min.x_nm - p.x_nm
-    } else if p.x_nm > max.x_nm {
-        p.x_nm - max.x_nm
-    } else {
-        0
-    };
-    let dy = if p.y_nm < min.y_nm {
-        min.y_nm - p.y_nm
-    } else if p.y_nm > max.y_nm {
-        p.y_nm - max.y_nm
-    } else {
-        0
-    };
-    (dx as f64).hypot(dy as f64)
-}
-fn segment_distance(a: Point, b: Point, c: Point, d: Point) -> f64 {
-    if intersects(a, b, c, d) {
-        return 0.0;
-    }
-    [
-        point_segment_distance(a, c, d),
-        point_segment_distance(b, c, d),
-        point_segment_distance(c, a, b),
-        point_segment_distance(d, a, b),
-    ]
-    .into_iter()
-    .fold(f64::INFINITY, f64::min)
-}
-fn intersects(a: Point, b: Point, c: Point, d: Point) -> bool {
-    let o1 = orientation(a, b, c);
-    let o2 = orientation(a, b, d);
-    let o3 = orientation(c, d, a);
-    let o4 = orientation(c, d, b);
-    o1.signum() != o2.signum() && o3.signum() != o4.signum()
-}
-fn orientation(a: Point, b: Point, c: Point) -> i128 {
-    (b.x_nm - a.x_nm) as i128 * (c.y_nm - a.y_nm) as i128
-        - (b.y_nm - a.y_nm) as i128 * (c.x_nm - a.x_nm) as i128
-}
-fn point_segment_distance(p: Point, a: Point, b: Point) -> f64 {
-    let dx = (b.x_nm - a.x_nm) as f64;
-    let dy = (b.y_nm - a.y_nm) as f64;
-    if dx == 0.0 && dy == 0.0 {
-        return distance(p, a);
-    }
-    let t = (((p.x_nm - a.x_nm) as f64 * dx + (p.y_nm - a.y_nm) as f64 * dy) / (dx * dx + dy * dy))
-        .clamp(0.0, 1.0);
-    let x = a.x_nm as f64 + t * dx;
-    let y = a.y_nm as f64 + t * dy;
-    ((p.x_nm as f64 - x).powi(2) + (p.y_nm as f64 - y).powi(2)).sqrt()
-}
-fn distance(a: Point, b: Point) -> f64 {
-    ((a.x_nm - b.x_nm) as f64).hypot((a.y_nm - b.y_nm) as f64)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Layer, Rules, Terminal, Via};
+    use crate::{Layer, Point, Rules, Terminal, Via};
     fn base() -> Board {
         Board {
             width_nm: 10_000_000,
