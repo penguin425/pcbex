@@ -20,6 +20,14 @@ cargo run -p pcbex -- route examples/simple.json \
 cargo run -p pcbex -- check simple.routed.json
 ```
 
+Generate completion definitions for Bash, Zsh, Fish, Elvish, or PowerShell:
+
+```sh
+pcbex completion bash > ~/.local/share/bash-completion/completions/pcbex
+pcbex completion zsh > "${fpath[1]}/_pcbex"
+pcbex completion fish > ~/.config/fish/completions/pcbex.fish
+```
+
 By default `route` fails when any net cannot be routed, making it suitable for
 CI. Pass `--allow-unrouted` to retain a partial result. Every completed route is
 checked internally for full copper-graph connectivity, orphan copper, supported
