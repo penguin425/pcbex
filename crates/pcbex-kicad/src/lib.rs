@@ -1,6 +1,6 @@
 use pcbex_core::{
-    Board, Footprint, Keepout, Layer, Net, NetClassRules, Obstacle, Pad, PadShape, Point,
-    RoundObstacle, Route, Rules, Segment, Terminal, Via, checking::check_board,
+    Board, CapsuleObstacle, Footprint, Keepout, Layer, Net, NetClassRules, Obstacle, Pad, PadShape,
+    Point, RoundObstacle, Route, Rules, Segment, Terminal, Via, checking::check_board,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -53,6 +53,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let net_classes = import_net_classes(top, &rules, &mut nets);
     let mut obstacles = Vec::new();
     let mut round_obstacles = Vec::new();
+    let mut capsule_obstacles = Vec::new();
     let mut keepouts = Vec::new();
     let mut footprints = Vec::new();
     let mut route_candidates = HashMap::new();
@@ -65,6 +66,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                 &mut nets,
                 &mut obstacles,
                 &mut round_obstacles,
+                &mut capsule_obstacles,
                 &mut footprints,
             ),
             Some("segment") => {
@@ -92,6 +94,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         rules,
         obstacles,
         round_obstacles,
+        capsule_obstacles,
         keepouts,
         footprints,
         net_classes,
@@ -325,6 +328,7 @@ fn import_footprint(
     nets: &mut HashMap<u32, Net>,
     obstacles: &mut Vec<Obstacle>,
     round_obstacles: &mut Vec<RoundObstacle>,
+    capsule_obstacles: &mut Vec<CapsuleObstacle>,
     footprints: &mut Vec<Footprint>,
 ) {
     let footprint_at = child_values(xs, "at");
@@ -379,24 +383,28 @@ fn import_footprint(
             add_pad_obstacle(
                 shape,
                 position,
-                nm(bbox_width),
-                nm(bbox_height),
+                width,
+                height,
+                angle + pad_angle,
                 layers,
                 Some(id),
                 obstacles,
                 round_obstacles,
+                capsule_obstacles,
             );
             continue;
         }
         add_pad_obstacle(
             shape,
             position,
-            nm(bbox_width),
-            nm(bbox_height),
+            width,
+            height,
+            angle + pad_angle,
             layers,
             None,
             obstacles,
             round_obstacles,
+            capsule_obstacles,
         );
     }
     footprints.push(model);
@@ -590,22 +598,48 @@ fn rect_obstacle(
 fn add_pad_obstacle(
     shape: PadShape,
     center: Point,
-    width: i64,
-    height: i64,
+    width_mm: f64,
+    height_mm: f64,
+    rotation_deg: f64,
     layers: Vec<Layer>,
     net_id: Option<u32>,
     obstacles: &mut Vec<Obstacle>,
     round_obstacles: &mut Vec<RoundObstacle>,
+    capsule_obstacles: &mut Vec<CapsuleObstacle>,
 ) {
-    if shape == PadShape::Circle {
-        round_obstacles.push(RoundObstacle {
+    match shape {
+        PadShape::Circle => round_obstacles.push(RoundObstacle {
             center,
-            diameter_nm: width.max(height),
+            diameter_nm: nm(width_mm.max(height_mm)),
             layers,
             net_id,
-        });
-    } else {
-        obstacles.push(rect_obstacle(center, width, height, layers, net_id));
+        }),
+        PadShape::Oval => {
+            let (major, minor, angle) = if width_mm >= height_mm {
+                (width_mm, height_mm, rotation_deg)
+            } else {
+                (height_mm, width_mm, rotation_deg + 90.0)
+            };
+            let half_line = (major - minor) / 2.0;
+            let (dx, dy) = rotate(half_line, 0.0, angle);
+            capsule_obstacles.push(CapsuleObstacle {
+                start: Point {
+                    x_nm: center.x_nm - nm(dx),
+                    y_nm: center.y_nm - nm(dy),
+                },
+                end: Point {
+                    x_nm: center.x_nm + nm(dx),
+                    y_nm: center.y_nm + nm(dy),
+                },
+                diameter_nm: nm(minor),
+                layers,
+                net_id,
+            });
+        }
+        PadShape::Rect => {
+            let (width, height) = rotated_size(width_mm, height_mm, rotation_deg);
+            obstacles.push(rect_obstacle(center, nm(width), nm(height), layers, net_id));
+        }
     }
 }
 
@@ -817,14 +851,22 @@ mod tests {
                 y_nm: 6_000_000
             }
         );
-        let pad = b
-            .board
-            .obstacles
-            .iter()
-            .find(|o| o.net_id == Some(1) && o.min.x_nm < 5_000_000)
-            .unwrap();
-        assert_eq!(pad.max.x_nm - pad.min.x_nm, 1_000_000);
-        assert_eq!(pad.max.y_nm - pad.min.y_nm, 2_000_000);
+        let pad = &b.board.capsule_obstacles[0];
+        assert_eq!(
+            pad.start,
+            Point {
+                x_nm: 5_000_000,
+                y_nm: 5_500_000
+            }
+        );
+        assert_eq!(
+            pad.end,
+            Point {
+                x_nm: 5_000_000,
+                y_nm: 6_500_000
+            }
+        );
+        assert_eq!(pad.diameter_nm, 1_000_000);
         assert_eq!(b.board.nets[0].class.as_deref(), Some("Power"));
         let power = &b.board.net_classes["Power"];
         assert_eq!(power.track_width_nm, 800_000);
