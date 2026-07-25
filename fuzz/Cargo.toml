@@ -1,0 +1,30 @@
+[package]
+name = "pcbex-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+pcbex-core = { path = "../crates/pcbex-core" }
+pcbex-kicad = { path = "../crates/pcbex-kicad" }
+serde_json = "1"
+
+[workspace]
+
+[[bin]]
+name = "kicad_import"
+path = "fuzz_targets/kicad_import.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "board_json"
+path = "fuzz_targets/board_json.rs"
+test = false
+doc = false
+bench = false

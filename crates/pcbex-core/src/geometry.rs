@@ -296,6 +296,7 @@ fn squared_difference(left: i64, right: i64) -> i128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     fn point(x: i64, y: i64) -> Point {
         Point { x_nm: x, y_nm: y }
@@ -364,5 +365,62 @@ mod tests {
             point(0, 10),
             point(10, 0),
         ]));
+    }
+
+    proptest! {
+        #[test]
+        fn point_distance_is_symmetric(
+            ax in -1_000_000i64..1_000_000,
+            ay in -1_000_000i64..1_000_000,
+            bx in -1_000_000i64..1_000_000,
+            by in -1_000_000i64..1_000_000,
+            threshold in 0i64..2_000_000,
+        ) {
+            let a = point(ax, ay);
+            let b = point(bx, by);
+            prop_assert_eq!(
+                points_closer_than(a, b, threshold),
+                points_closer_than(b, a, threshold)
+            );
+            prop_assert_eq!(
+                points_within(a, b, threshold),
+                points_within(b, a, threshold)
+            );
+        }
+
+        #[test]
+        fn segment_clearance_is_endpoint_and_pair_order_invariant(
+            coordinates in prop::array::uniform8(-100_000i64..100_000),
+            threshold in 0i64..200_000,
+        ) {
+            let [ax, ay, bx, by, cx, cy, dx, dy] = coordinates;
+            let (a, b, c, d) = (
+                point(ax, ay),
+                point(bx, by),
+                point(cx, cy),
+                point(dx, dy),
+            );
+            let expected = segments_closer_than(a, b, c, d, threshold);
+            prop_assert_eq!(expected, segments_closer_than(b, a, c, d, threshold));
+            prop_assert_eq!(expected, segments_closer_than(a, b, d, c, threshold));
+            prop_assert_eq!(expected, segments_closer_than(c, d, a, b, threshold));
+        }
+
+        #[test]
+        fn polygon_membership_is_translation_invariant(
+            width in 1i64..100_000,
+            height in 1i64..100_000,
+            x in -100_000i64..200_000,
+            y in -100_000i64..200_000,
+            dx in -1_000_000i64..1_000_000,
+            dy in -1_000_000i64..1_000_000,
+        ) {
+            let polygon = [point(0, 0), point(width, 0), point(width, height), point(0, height)];
+            let translated = polygon.map(|p| point(p.x_nm + dx, p.y_nm + dy));
+            prop_assert_eq!(
+                point_in_polygon(point(x, y), &polygon),
+                point_in_polygon(point(x + dx, y + dy), &translated)
+            );
+        }
     }
 }
