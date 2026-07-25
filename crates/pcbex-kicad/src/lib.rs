@@ -1,7 +1,8 @@
 use pcbex_core::{
-    Board, Footprint, Layer, Net, NetClassRules, Obstacle, Pad, Point, Route, Rules, Terminal,
+    Board, Footprint, Layer, Net, NetClassRules, Obstacle, Pad, Point, Route, Rules, Segment,
+    Terminal, Via, checking::check_board,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
 const NM_PER_MM: f64 = 1_000_000.0;
@@ -17,6 +18,7 @@ pub struct ImportedBoard {
     pub board: Board,
     source: String,
     origin: Point,
+    existing_route_net_ids: HashSet<u32>,
 }
 
 pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
@@ -51,14 +53,17 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let net_classes = import_net_classes(top, &rules, &mut nets);
     let mut obstacles = Vec::new();
     let mut footprints = Vec::new();
+    let mut route_candidates = HashMap::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
         match atom(xs.first()) {
             Some("footprint") => {
                 import_footprint(xs, min, &mut nets, &mut obstacles, &mut footprints)
             }
-            Some("segment") => import_segment(xs, min, &rules, &mut obstacles),
-            Some("via") => import_via(xs, min, &rules, &mut obstacles),
+            Some("segment") => {
+                import_segment(xs, min, &rules, &mut obstacles, &mut route_candidates)
+            }
+            Some("via") => import_via(xs, min, &rules, &mut obstacles, &mut route_candidates),
             Some("zone") => import_keepout(xs, min, &mut obstacles),
             _ => {}
         }
@@ -68,19 +73,38 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         .filter(|n| !n.terminals.is_empty())
         .collect();
     nets.sort_by_key(|n| n.id);
+    let mut routes: Vec<_> = route_candidates.into_values().collect();
+    routes.sort_by_key(|route| route.net_id);
+    let mut board = Board {
+        width_nm: max.x_nm - min.x_nm,
+        height_nm: max.y_nm - min.y_nm,
+        rules,
+        obstacles,
+        footprints,
+        net_classes,
+        nets,
+        routes,
+    };
+    let incomplete: HashSet<u32> = check_board(&board)
+        .violations
+        .iter()
+        .filter(|violation| {
+            matches!(
+                violation.rule.as_str(),
+                "unconnected" | "disconnected_route" | "orphan_copper"
+            )
+        })
+        .flat_map(|violation| violation.net_ids.iter().copied())
+        .collect();
+    board
+        .routes
+        .retain(|route| !incomplete.contains(&route.net_id));
+    let existing_route_net_ids = board.routes.iter().map(|route| route.net_id).collect();
     Ok(ImportedBoard {
-        board: Board {
-            width_nm: max.x_nm - min.x_nm,
-            height_nm: max.y_nm - min.y_nm,
-            rules,
-            obstacles,
-            footprints,
-            net_classes,
-            nets,
-            routes: Vec::new(),
-        },
+        board,
         source: source.to_string(),
         origin: min,
+        existing_route_net_ids,
     })
 }
 
@@ -153,6 +177,9 @@ impl ImportedBoard {
         let closing = self.source.rfind(')').ok_or("invalid KiCad document")?;
         let mut generated = String::from("\n");
         for route in routes {
+            if self.existing_route_net_ids.contains(&route.net_id) {
+                continue;
+            }
             for segment in &route.segments {
                 let start = self.absolute(segment.start);
                 let end = self.absolute(segment.end);
@@ -354,7 +381,13 @@ fn footprint_reference(xs: &[Sexp]) -> String {
     String::new()
 }
 
-fn import_segment(xs: &[Sexp], origin: Point, rules: &Rules, obstacles: &mut Vec<Obstacle>) {
+fn import_segment(
+    xs: &[Sexp],
+    origin: Point,
+    rules: &Rules,
+    obstacles: &mut Vec<Obstacle>,
+    routes: &mut HashMap<u32, Route>,
+) {
     let (Some(start), Some(end), Some(layer)) = (
         child_point(xs, "start"),
         child_point(xs, "end"),
@@ -368,6 +401,7 @@ fn import_segment(xs: &[Sexp], origin: Point, rules: &Rules, obstacles: &mut Vec
         .and_then(|v| number(v.get(1)))
         .map(nm)
         .unwrap_or(rules.track_width_nm);
+    let net_id = child_values(xs, "net").and_then(|v| number_u32(v.get(1)));
     obstacles.push(Obstacle {
         min: Point {
             x_nm: a.x_nm.min(b.x_nm) - width / 2,
@@ -378,11 +412,33 @@ fn import_segment(xs: &[Sexp], origin: Point, rules: &Rules, obstacles: &mut Vec
             y_nm: a.y_nm.max(b.y_nm) + width / 2,
         },
         layers: vec![layer],
-        net_id: child_values(xs, "net").and_then(|v| number_u32(v.get(1))),
+        net_id,
     });
+    if let Some(net_id) = net_id.filter(|id| *id != 0) {
+        routes
+            .entry(net_id)
+            .or_insert_with(|| Route {
+                net_id,
+                segments: Vec::new(),
+                vias: Vec::new(),
+            })
+            .segments
+            .push(Segment {
+                start: a,
+                end: b,
+                layer,
+                width_nm: width,
+            });
+    }
 }
 
-fn import_via(xs: &[Sexp], origin: Point, rules: &Rules, obstacles: &mut Vec<Obstacle>) {
+fn import_via(
+    xs: &[Sexp],
+    origin: Point,
+    rules: &Rules,
+    obstacles: &mut Vec<Obstacle>,
+    routes: &mut HashMap<u32, Route>,
+) {
     let Some(at) = child_point(xs, "at") else {
         return;
     };
@@ -391,13 +447,33 @@ fn import_via(xs: &[Sexp], origin: Point, rules: &Rules, obstacles: &mut Vec<Obs
         .and_then(|v| number(v.get(1)))
         .map(nm)
         .unwrap_or(rules.via_diameter_nm);
+    let drill = child_values(xs, "drill")
+        .and_then(|v| number(v.get(1)))
+        .map(nm)
+        .unwrap_or(rules.via_drill_nm);
+    let net_id = child_values(xs, "net").and_then(|v| number_u32(v.get(1)));
     obstacles.push(rect_obstacle(
         at,
         size,
         size,
         vec![Layer::Front, Layer::Back],
-        child_values(xs, "net").and_then(|v| number_u32(v.get(1))),
+        net_id,
     ));
+    if let Some(net_id) = net_id.filter(|id| *id != 0) {
+        routes
+            .entry(net_id)
+            .or_insert_with(|| Route {
+                net_id,
+                segments: Vec::new(),
+                vias: Vec::new(),
+            })
+            .vias
+            .push(Via {
+                position: at,
+                diameter_nm: size,
+                drill_nm: drill,
+            });
+    }
 }
 
 fn import_keepout(xs: &[Sexp], origin: Point, obstacles: &mut Vec<Obstacle>) {
@@ -717,6 +793,45 @@ mod tests {
                 .is_some_and(|xs| atom(xs.first()) == Some("segment"))
         }));
         assert!(parse(&output).is_ok());
+    }
+
+    #[test]
+    fn imports_complete_existing_route_without_writing_it_twice() {
+        let pcb = PCB.replace(
+            "\n    )",
+            "\n      (segment (start 15 26) (end 35 45) (width 0.8) (layer \"F.Cu\") (net 1))\n    )",
+        );
+        let imported = import(&pcb, rules()).unwrap();
+        assert_eq!(imported.board.routes.len(), 1);
+
+        let output = imported.write_routes(&imported.board.routes).unwrap();
+        let root = parse(&output).unwrap();
+        let segment_count = root
+            .as_list()
+            .unwrap()
+            .iter()
+            .filter(|item| {
+                item.as_list()
+                    .is_some_and(|xs| atom(xs.first()) == Some("segment"))
+            })
+            .count();
+        assert_eq!(segment_count, 1);
+    }
+
+    #[test]
+    fn leaves_incomplete_existing_copper_as_an_obstacle() {
+        let pcb = PCB.replace(
+            "\n    )",
+            "\n      (segment (start 15 26) (end 20 26) (width 0.8) (layer \"F.Cu\") (net 1))\n    )",
+        );
+        let imported = import(&pcb, rules()).unwrap();
+        assert!(imported.board.routes.is_empty());
+        assert!(imported
+            .board
+            .obstacles
+            .iter()
+            .any(|obstacle| obstacle.net_id == Some(1)
+                && obstacle.layers == vec![Layer::Front]));
     }
 
     #[test]

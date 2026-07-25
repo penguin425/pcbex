@@ -101,7 +101,8 @@ fn main() -> Result<()> {
                 fs::write(path, render_svg(&board))?;
             }
             eprintln!(
-                "routed: {}; unrouted: {}; expanded states: {}; passes: {}",
+                "preserved: {}; routed: {}; unrouted: {}; expanded states: {}; passes: {}",
+                report.preserved.len(),
                 report.routed.len(),
                 report.unrouted.len(),
                 report.expanded_states,
@@ -167,7 +168,8 @@ fn main() -> Result<()> {
                 )?;
             }
             eprintln!(
-                "routed: {}; unrouted: {}; expanded states: {}; passes: {}",
+                "preserved: {}; routed: {}; unrouted: {}; expanded states: {}; passes: {}",
+                report.preserved.len(),
                 report.routed.len(),
                 report.unrouted.len(),
                 report.expanded_states,

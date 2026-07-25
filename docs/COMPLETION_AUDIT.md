@@ -18,6 +18,7 @@ zones.
 | Rip-up/reroute and failure report | Four bounded full rip-up passes with history cost | `reports_unrouted_after_bounded_reroute_passes` |
 | Pad ownership and off-grid access | Net-owned obstacles and exact orthogonal access tracks | `foreign_net_pad_blocks_but_own_pad_is_enterable`, `connects_off_grid_terminals_exactly` |
 | Internal rule checking | Copper-graph connectivity, orphan copper, angle, dimensions, boundaries, obstacles, copper clearance | Connectivity regression tests and `detects_cross_net_short`; every CLI route invokes it |
+| Incremental routing | Preserve and reserve complete existing routes; route only missing nets | Idempotence, preservation, duplicate-route, and KiCad import regression tests |
 | KiCad input/output | Rectangular outline, rotated pads, footprints, tracks, vias, keepouts; board-level track/via output | Four `pcbex-kicad` tests |
 | Headless KiCad validation | `route-kicad --drc` | KiCad 10.0.5: 0 violations, 0 unconnected pads |
 | Manufacturing output | `fabricate` DRC gate plus Gerber/Excellon export | F/B copper, mask, silkscreen, Edge.Cuts, drill, job file generated |
@@ -45,6 +46,6 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
   --output-dir /tmp/pcbex-complete-mfg
 ```
 
-At audit time all 20 Rust tests and all 9 Python tests passed, the release build
+At audit time all 25 Rust tests and all 9 Python tests passed, the release build
 completed, KiCad DRC reported zero violations and zero unconnected pads, and
 all expected manufacturing layers plus the drill file were generated.

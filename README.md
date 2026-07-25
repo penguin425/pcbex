@@ -23,6 +23,10 @@ checked internally for full copper-graph connectivity, orphan copper, supported
 angles, track/via dimensions, board boundaries, obstacle clearance, and
 cross-net copper clearance.
 
+Routes already present in the JSON input are preserved and reserved while only
+missing nets are routed. Running the router again on its output is therefore
+idempotent.
+
 ## JSON model
 
 All coordinates and dimensions use integer nanometres. Layers are `F.Cu` and
@@ -46,8 +50,10 @@ cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
 
 The importer reads pad positions (including footprint rotation), copper layers,
 net assignments, legacy board-embedded net classes, existing segments and vias.
-Generated tracks and through vias
-are appended at board level while preserving the source document.
+Fully connected existing nets are preserved as locked routes; incomplete copper
+remains an obstacle and is not mistaken for a completed route. Generated tracks
+and through vias are appended at board level without duplicating locked routes,
+while preserving the source document.
 Use `--drc` to run `kicad-cli pcb drc` on the result when KiCad is installed.
 After DRC passes, generate Gerber and Excellon drill files with:
 
