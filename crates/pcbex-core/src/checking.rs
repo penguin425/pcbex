@@ -160,6 +160,13 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    if !board.outline.is_empty() && !custom_pad_polygon_is_valid(&board.outline) {
+        report.push(
+            "board_outline",
+            "explicit board outline must be a simple non-degenerate polygon".into(),
+            vec![],
+        );
+    }
     let known_net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
     let mut seen_net_ids = HashSet::new();
     let mut seen_net_names = HashSet::new();
@@ -4272,5 +4279,51 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "copper_layers")
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_explicit_board_outlines() {
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let valid_outline = vec![
+            point(0, 0),
+            point(10_000_000, 0),
+            point(10_000_000, 10_000_000),
+            point(0, 10_000_000),
+        ];
+        let outlines = vec![
+            valid_outline[..2].to_vec(),
+            vec![valid_outline[0], valid_outline[0], valid_outline[2]],
+            vec![point(0, 0), point(1_000_000, 0), point(2_000_000, 0)],
+            vec![
+                point(0, 0),
+                point(10_000_000, 10_000_000),
+                point(0, 10_000_000),
+                point(10_000_000, 0),
+            ],
+        ];
+
+        for outline in outlines {
+            let mut board = base();
+            board.outline = outline;
+            let report = check_board(&board);
+            assert_eq!(
+                report
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "board_outline")
+                    .count(),
+                1
+            );
+        }
+        let mut explicit = base();
+        explicit.outline = valid_outline;
+        for board in [base(), explicit] {
+            assert!(
+                !check_board(&board)
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == "board_outline")
+            );
+        }
     }
 }

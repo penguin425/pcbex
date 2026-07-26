@@ -17,6 +17,8 @@ Normal DRC requires positive board width and height even when invoked directly,
 matching the router's geometry precondition.
 The copper-layer table must also be non-empty, duplicate-free, and limited to
 the supported front, back, and first 30 internal copper layers.
+When an explicit board outline is supplied, it must be a simple,
+non-degenerate polygon; an empty outline retains the rectangular fallback.
 
 The requirement-by-requirement evidence is recorded in
 [`docs/COMPLETION_AUDIT.md`](docs/COMPLETION_AUDIT.md).
