@@ -15,6 +15,8 @@ preserve the public API while keeping format contracts and reporting logic out
 of the routing engine.
 Normal DRC requires positive board width and height even when invoked directly,
 matching the router's geometry precondition.
+The configured routing grid must also be positive so direct DRC callers receive
+the same early diagnostic as the router.
 The copper-layer table must also be non-empty, duplicate-free, and limited to
 the supported front, back, and first 30 internal copper layers.
 When an explicit board outline is supplied, it must be a simple,
