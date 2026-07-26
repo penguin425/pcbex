@@ -460,6 +460,8 @@ Route arcs similarly require positive width, a declared copper layer, and three
 points defining a curve; malformed arcs are rejected before DRC linearization.
 Vias require a positive drill diameter and a larger outer diameter before
 layer-range, board-edge, minimum-size, or copper-clearance evaluation.
+Via endpoints must also belong to distinct declared copper layers, and
+microvias may span only adjacent layers, before further physical checks.
 
 ## Planning and repair agent
 

@@ -102,6 +102,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Track segment geometry validation | Normal DRC requires distinct endpoints, positive width, and a declared copper layer before angle, boundary, or clearance evaluation | Zero-length, zero-width, unknown-layer, and valid segment regressions |
 | Route arc geometry validation | Normal DRC requires positive width, a declared copper layer, and three points defining a curve; invalid arcs are excluded from DRC linearization | Zero-width, unknown-layer, repeated-point, collinear, and valid arc regressions |
 | Via geometry validation | Normal DRC requires a positive drill diameter and a strictly larger outer diameter before layer, edge, minimum-size, or clearance checks consume the via | Zero-diameter, zero-drill, equal-diameter, oversized-drill, and valid-via regressions |
+| Via layer-range validation | Normal DRC requires distinct declared endpoint layers and restricts microvias to adjacent copper layers before edge, size, or clearance checks consume the via | Unknown-layer, same-layer, non-adjacent microvia, adjacent microvia, and through-via regressions |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -125,7 +126,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.73.0 exposes 119 Rust tests and 11 Python tests. The release workflow
+Version 1.74.0 exposes 120 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
