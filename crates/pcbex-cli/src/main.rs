@@ -6,7 +6,7 @@ use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{
     Board, Rules, board_json_schema, migrate_board_json, parse_board_json, render_svg, route_board,
 };
-use pcbex_kicad::import as import_kicad;
+use pcbex_kicad::{apply_project_net_settings, import as import_kicad};
 use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
 
 #[derive(Parser)]
@@ -52,6 +52,9 @@ enum Command {
     /// Route a placed KiCad board across its declared copper layers.
     RouteKicad {
         input: PathBuf,
+        /// KiCad project settings. Defaults to the input's sibling `.kicad_pro` when present.
+        #[arg(long)]
+        project: Option<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long, default_value_t = 0.25)]
@@ -185,6 +188,7 @@ fn main() -> Result<()> {
         }
         Command::RouteKicad {
             input,
+            project,
             output,
             grid_mm,
             width_mm,
@@ -212,7 +216,18 @@ fn main() -> Result<()> {
             if rules.via_drill_nm >= rules.via_diameter_nm {
                 bail!("via drill must be smaller than via diameter");
             }
-            let imported = import_kicad(&source, rules).map_err(anyhow::Error::msg)?;
+            let mut imported = import_kicad(&source, rules).map_err(anyhow::Error::msg)?;
+            let project = project.or_else(|| {
+                let candidate = input.with_extension("kicad_pro");
+                candidate.exists().then_some(candidate)
+            });
+            if let Some(path) = project {
+                let project_source = fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                apply_project_net_settings(&mut imported.board, &project_source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("importing rules from {}", path.display()))?;
+            }
             let (board, report) = route_board(&imported.board).map_err(anyhow::Error::msg)?;
             fs::write(
                 &output,

@@ -173,6 +173,87 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     })
 }
 
+/// Apply net-class definitions and assignments from a modern `.kicad_pro`
+/// project document. Values in KiCad project files are expressed in mm.
+pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(), String> {
+    let project: serde_json::Value = serde_json::from_str(source)
+        .map_err(|error| format!("invalid KiCad project JSON: {error}"))?;
+    let settings = project
+        .get("net_settings")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "KiCad project does not contain net_settings".to_string())?;
+    let classes = settings
+        .get("classes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "KiCad project net_settings.classes is not an array".to_string())?;
+
+    for class in classes {
+        let Some(class) = class.as_object() else {
+            return Err("KiCad project contains a non-object net class".into());
+        };
+        let Some(name) = class.get("name").and_then(serde_json::Value::as_str) else {
+            return Err("KiCad project net class is missing its name".into());
+        };
+        let dimension = |key: &str, fallback: i64| -> Result<i64, String> {
+            match class.get(key) {
+                None | Some(serde_json::Value::Null) => Ok(fallback),
+                Some(value) => value
+                    .as_f64()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .map(nm)
+                    .ok_or_else(|| format!("net class {name} has invalid {key}")),
+            }
+        };
+        let optional_dimension = |key: &str| -> Result<Option<i64>, String> {
+            match class.get(key) {
+                None | Some(serde_json::Value::Null) => Ok(None),
+                Some(value) => value
+                    .as_f64()
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .map(|value| Some(nm(value)))
+                    .ok_or_else(|| format!("net class {name} has invalid {key}")),
+            }
+        };
+        board.net_classes.insert(
+            name.to_string(),
+            NetClassRules {
+                track_width_nm: dimension("track_width", board.rules.track_width_nm)?,
+                clearance_nm: dimension("clearance", board.rules.clearance_nm)?,
+                via_diameter_nm: dimension("via_diameter", board.rules.via_diameter_nm)?,
+                via_drill_nm: dimension("via_drill", board.rules.via_drill_nm)?,
+                layers: None,
+                differential_width_nm: optional_dimension("diff_pair_width")?,
+                differential_gap_nm: optional_dimension("diff_pair_gap")?,
+                minimum_length_nm: optional_dimension("min_track_length")?,
+                maximum_length_nm: optional_dimension("max_track_length")?,
+            },
+        );
+    }
+
+    if let Some(assignments) = settings.get("netclass_assignments") {
+        let assignments = assignments
+            .as_object()
+            .ok_or_else(|| "KiCad project netclass_assignments is not an object".to_string())?;
+        for (net_name, class) in assignments {
+            let Some(class) = class.as_str() else {
+                return Err(format!(
+                    "net-class assignment for {net_name} is not a string"
+                ));
+            };
+            if !board.net_classes.contains_key(class) {
+                return Err(format!(
+                    "net-class assignment for {net_name} references unknown class {class}"
+                ));
+            }
+            if let Some(net) = board.nets.iter_mut().find(|net| net.name == *net_name) {
+                net.class = Some(class.to_string());
+            }
+        }
+    }
+    board.differential_pairs = infer_differential_pairs(&board.nets, &board.net_classes);
+    Ok(())
+}
+
 fn import_net_classes(
     top: &[Sexp],
     defaults: &Rules,
@@ -2270,6 +2351,70 @@ mod tests {
         assert_eq!(pair.name, "USB");
         assert_eq!(pair.gap_nm, 220_000);
         assert_eq!(imported.board.rules_for_net(1).track_width_nm, 180_000);
+    }
+
+    #[test]
+    fn imports_modern_project_net_classes_and_assignments() {
+        let pcb = r#"(kicad_pcb
+          (version 20250114)
+          (general (thickness 1.6))
+          (paper "A4")
+          (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+          (net 1 "USB_P") (net 2 "USB_N")
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "1" thru_hole circle (at 0 0) (size 1 1) (drill 0.5) (layers "*.Cu") (net 1 "USB_P")))
+          (footprint "N" (layer "F.Cu") (at 2 4)
+            (pad "1" thru_hole circle (at 0 0) (size 1 1) (drill 0.5) (layers "*.Cu") (net 2 "USB_N")))
+          (gr_rect (start 0 0) (end 10 10) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts"))
+        )"#;
+        let mut imported = import(pcb, rules()).unwrap();
+        let project = r#"{
+          "net_settings": {
+            "classes": [{
+              "name": "USB", "clearance": 0.18, "track_width": 0.16,
+              "via_diameter": 0.5, "via_drill": 0.25,
+              "diff_pair_width": 0.16, "diff_pair_gap": 0.20
+            }],
+            "netclass_assignments": {"USB_P": "USB", "USB_N": "USB"}
+          }
+        }"#;
+        apply_project_net_settings(&mut imported.board, project).unwrap();
+
+        let class = &imported.board.net_classes["USB"];
+        assert_eq!(class.track_width_nm, 160_000);
+        assert_eq!(class.clearance_nm, 180_000);
+        assert_eq!(class.via_diameter_nm, 500_000);
+        assert_eq!(class.via_drill_nm, 250_000);
+        assert!(
+            imported
+                .board
+                .nets
+                .iter()
+                .all(|net| net.class.as_deref() == Some("USB"))
+        );
+        assert_eq!(imported.board.differential_pairs.len(), 1);
+        assert_eq!(imported.board.differential_pairs[0].gap_nm, 200_000);
+    }
+
+    #[test]
+    fn rejects_unknown_project_net_class_assignment() {
+        let pcb = r#"(kicad_pcb
+          (version 20250114)
+          (general (thickness 1.6))
+          (paper "A4")
+          (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+          (net 1 "SIG")
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "1" thru_hole circle (at 0 0) (size 1 1) (drill 0.5) (layers "*.Cu") (net 1 "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts"))
+        )"#;
+        let mut imported = import(pcb, rules()).unwrap();
+        let error = apply_project_net_settings(
+            &mut imported.board,
+            r#"{"net_settings":{"classes":[],"netclass_assignments":{"SIG":"Missing"}}}"#,
+        )
+        .unwrap_err();
+        assert!(error.contains("unknown class Missing"));
     }
 
     #[test]

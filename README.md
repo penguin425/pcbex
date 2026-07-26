@@ -85,6 +85,10 @@ cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
   --json-output simple.ipc-routes.json
 ```
 
+When a sibling `.kicad_pro` file exists, `route-kicad` imports its modern
+net-class dimensions and exact net assignments automatically. Use
+`--project path/to/board.kicad_pro` when the project has a different basename.
+
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.
 [`examples/keepout.kicad_pcb`](examples/keepout.kicad_pcb) exercises a
@@ -314,12 +318,9 @@ safely.
 
 ## Scope
 
-This foundation covers the routing core and headless KiCad exchange planned for
-the first four sprints:
-two copper layers, signal nets, polygonal straight-edge outlines and keepouts,
-rectangular component obstacles, circular
-through vias, horizontal/vertical/45-degree tracks, deterministic net ordering,
-an unrouted-net report, `.kicad_pcb` I/O, optional KiCad DRC, HPWL placement,
-overlap/boundary/congestion scoring, simulated annealing, and placement
-constraints. Differential pairs, length matching, copper zones, and the AI
-planner's external services remain outside the deterministic engine by design.
+pcbex is a deterministic physical-design engine for placed signal boards. It
+supports polygonal multilayer boards, differential pairs, length tuning, copper
+zones, partial-span vias, exact KiCad pad geometry, placement optimization, DFM
+reporting, and headless or IPC-assisted KiCad workflows. It does not synthesize
+schematics, select electrical components, perform analog or signal-integrity
+simulation, or replace final KiCad DRC and fabrication review.
