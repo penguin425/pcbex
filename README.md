@@ -429,6 +429,9 @@ hole-spacing DFM, and plated-hole validation includes the offset displacement.
 For circular and oval pads, plated-hole containment follows the actual curved
 boundary rather than its bounding box, catching diagonal offset holes that
 leave insufficient copper while retaining valid offset slots.
+KiCad roundrect corner ratios are retained as physical radii. Plated-hole
+containment erodes the rounded rectangle by the drill radius, so holes entering
+a curved corner are rejected even when their bounding boxes still fit.
 
 ## Planning and repair agent
 

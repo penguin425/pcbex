@@ -892,10 +892,46 @@ fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
                 distance + radius < pad_radius
             })
         }
+        PadShape::RoundRect => {
+            let corner_radius = pad.roundrect_radius_nm as f64;
+            let half_width = pad_width_nm / 2.0 - radius;
+            let half_height = pad_height_nm / 2.0 - radius;
+            if corner_radius < 0.0
+                || corner_radius > pad_width_nm.min(pad_height_nm) / 2.0
+                || half_width <= 0.0
+                || half_height <= 0.0
+            {
+                return false;
+            }
+            let eroded_corner = (corner_radius - radius).max(0.0);
+            endpoints.iter().all(|(x, y)| {
+                point_inside_roundrect(*x, *y, half_width, half_height, eroded_corner)
+            })
+        }
         _ => endpoints.iter().all(|(x, y)| {
             x.abs() + radius < pad_width_nm / 2.0 && y.abs() + radius < pad_height_nm / 2.0
         }),
     }
+}
+
+fn point_inside_roundrect(
+    x: f64,
+    y: f64,
+    half_width: f64,
+    half_height: f64,
+    corner_radius: f64,
+) -> bool {
+    let x = x.abs();
+    let y = y.abs();
+    if x >= half_width || y >= half_height {
+        return false;
+    }
+    let inner_x = half_width - corner_radius;
+    let inner_y = half_height - corner_radius;
+    if x <= inner_x || y <= inner_y {
+        return true;
+    }
+    (x - inner_x).hypot(y - inner_y) < corner_radius
 }
 
 fn drilled_pad_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> DrilledHole {
@@ -2616,6 +2652,7 @@ mod tests {
                 rotation_deg: 0.0,
                 shape: PadShape::Circle,
                 custom_polygon: vec![],
+                roundrect_radius_nm: 0,
                 drill_width_nm: Some(200_000),
                 drill_height_nm: Some(200_000),
                 drill_offset_x_nm: 0,
@@ -2751,6 +2788,7 @@ mod tests {
                     rotation_deg: 0.0,
                     shape: PadShape::Circle,
                     custom_polygon: vec![],
+                    roundrect_radius_nm: 0,
                     drill_width_nm: Some(300_000),
                     drill_height_nm: Some(300_000),
                     drill_offset_x_nm: 0,
@@ -2772,6 +2810,7 @@ mod tests {
                     rotation_deg: 0.0,
                     shape: PadShape::Oval,
                     custom_polygon: vec![],
+                    roundrect_radius_nm: 0,
                     drill_width_nm: Some(700_000),
                     drill_height_nm: Some(300_000),
                     drill_offset_x_nm: 0,
@@ -2834,6 +2873,7 @@ mod tests {
                     rotation_deg: 0.0,
                     shape: PadShape::Circle,
                     custom_polygon: vec![],
+                    roundrect_radius_nm: 0,
                     drill_width_nm: Some(600_000),
                     drill_height_nm: Some(300_000),
                     drill_offset_x_nm: 0,
@@ -2855,6 +2895,7 @@ mod tests {
                     rotation_deg: 0.0,
                     shape: PadShape::Circle,
                     custom_polygon: vec![],
+                    roundrect_radius_nm: 0,
                     drill_width_nm: Some(300_000),
                     drill_height_nm: None,
                     drill_offset_x_nm: 0,
@@ -2892,6 +2933,7 @@ mod tests {
             rotation_deg: 90.0,
             shape: PadShape::Oval,
             custom_polygon: vec![],
+            roundrect_radius_nm: 0,
             drill_width_nm: Some(800_000),
             drill_height_nm: Some(400_000),
             drill_offset_x_nm: 300_000,
@@ -2943,6 +2985,7 @@ mod tests {
                 rotation_deg: 0.0,
                 shape: PadShape::Circle,
                 custom_polygon: vec![],
+                roundrect_radius_nm: 0,
                 drill_width_nm: Some(200_000),
                 drill_height_nm: Some(200_000),
                 drill_offset_x_nm: 350_000,
@@ -2958,5 +3001,33 @@ mod tests {
             violation.rule == "component_hole"
                 && violation.message.contains("plated drill must fit")
         }));
+    }
+
+    #[test]
+    fn roundrect_hole_containment_respects_curved_corners() {
+        let pad = Pad {
+            number: "1".into(),
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            width_nm: 2_000_000,
+            height_nm: 1_000_000,
+            source_width_nm: 2_000_000,
+            source_height_nm: 1_000_000,
+            rotation_deg: 0.0,
+            shape: PadShape::RoundRect,
+            custom_polygon: vec![],
+            roundrect_radius_nm: 250_000,
+            drill_width_nm: Some(200_000),
+            drill_height_nm: Some(200_000),
+            drill_offset_x_nm: 875_000,
+            drill_offset_y_nm: 375_000,
+            plated: true,
+            layers: vec![Layer::Front, Layer::Back],
+            net_id: Some(1),
+        };
+
+        assert!(!drill_fits_pad(&pad, 200_000, 200_000));
     }
 }
