@@ -1,5 +1,5 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use pcbex_core::{Board, Layer, Net, Obstacle, Point, Rules, Terminal, route_board};
+use pcbex_core::{Board, Layer, Net, Obstacle, Point, RoundObstacle, Rules, Terminal, route_board};
 use std::collections::HashMap;
 use std::hint::black_box;
 
@@ -114,6 +114,25 @@ fn routing_benchmarks(criterion: &mut Criterion) {
     ]);
     group.bench_function("single_net_cutout", |bencher| {
         bencher.iter(|| route_board(black_box(&cutout)).unwrap())
+    });
+
+    let mut dense = board_with_nets(1);
+    dense.width_nm = 100_000_000;
+    dense.height_nm = 100_000_000;
+    dense.nets[0].terminals[1].position.x_nm = 99_000_000;
+    for index in 0..200 {
+        dense.round_obstacles.push(RoundObstacle {
+            center: Point {
+                x_nm: 5_000_000 + (index % 20) as i64 * 4_500_000,
+                y_nm: 10_000_000 + (index / 20) as i64 * 8_000_000,
+            },
+            diameter_nm: 1_000_000,
+            layers: vec![Layer::Front, Layer::Back],
+            net_id: None,
+        });
+    }
+    group.bench_function("large_board_200_round_obstacles", |bencher| {
+        bencher.iter(|| route_board(black_box(&dense)).unwrap())
     });
     group.finish();
 }

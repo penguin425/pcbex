@@ -187,6 +187,13 @@ rotations. `region` constraints keep a complete component body inside a
 specified rectangle. KiCad placement derives component dimensions from
 `F.CrtYd`/`B.CrtYd` geometry when available instead of pad extents alone.
 
+## Routing scalability
+
+Obstacle rasterization uses conservative grid-cell windows derived from each
+circle, capsule, polygon, and keepout bounding envelope. Exact geometry remains
+the final predicate, while distant board cells are no longer scanned once per
+obstacle. The Criterion suite includes a 100 mm board with 200 round obstacles.
+
 ## Planning and repair agent
 
 The dependency-free Python agent converts bounded natural-language requirements
