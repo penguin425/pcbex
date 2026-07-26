@@ -444,6 +444,8 @@ routing and hole checks consume their geometry.
 All pad shapes require positive dimensions and a finite rotation. Roundrect
 radii must fit the source pad, and trapezoid deltas must leave a non-degenerate
 shape.
+Pads must also name at least one unique layer present in the board copper
+stackup; invalid or duplicate layer memberships are rejected by normal DRC.
 
 ## Planning and repair agent
 
