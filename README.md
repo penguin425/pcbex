@@ -21,6 +21,8 @@ When an explicit board outline is supplied, it must be a simple,
 non-degenerate polygon; an empty outline retains the rectangular fallback.
 Every board cutout must likewise be a simple, non-degenerate polygon before
 boundary and copper-edge checks consume it.
+Valid cutouts must additionally keep every vertex inside the effective board
+outline, including the rectangular fallback.
 
 The requirement-by-requirement evidence is recorded in
 [`docs/COMPLETION_AUDIT.md`](docs/COMPLETION_AUDIT.md).
