@@ -380,6 +380,11 @@ pairs use the same stackup geometry. This is an early
 layout constraint, not a replacement for a field solver or fabrication-house
 stackup validation.
 
+Set `maximum_impedance_step_ohms` on a net class to limit discontinuity where
+connected segments change layers through a via. This check is independent of
+the absolute target, so it also catches large layer-to-layer steps when both
+segments would individually fit a broad target tolerance.
+
 Use `pcbex impedance-width board.json --layer F.Cu --target-ohms 50` to
 reverse-solve a trace width from the imported stackup. Add
 `--differential-gap-mm 0.15` for a differential target. The command searches

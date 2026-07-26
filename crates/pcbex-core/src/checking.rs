@@ -378,13 +378,13 @@ fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut Ch
         else {
             continue;
         };
-        let (Some(target), Some(tolerance), Some(route)) = (
-            class.target_impedance_ohms,
-            class.impedance_tolerance_ohms,
-            routes.get(&net.id),
-        ) else {
+        let Some(route) = routes.get(&net.id) else {
             continue;
         };
+        if class.target_impedance_ohms.is_none() && class.maximum_impedance_step_ohms.is_none() {
+            continue;
+        }
+        let mut estimates = Vec::new();
         for segment in &route.segments {
             let Some(stackup) = board
                 .stackup
@@ -411,12 +411,47 @@ fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut Ch
                 );
                 break;
             };
-            if (estimated - target).abs() > tolerance {
+            estimates.push((segment, estimated));
+            if let (Some(target), Some(tolerance)) =
+                (class.target_impedance_ohms, class.impedance_tolerance_ohms)
+                && (estimated - target).abs() > tolerance
+            {
                 report.push(
                     "impedance",
                     format!(
                         "net {} estimates {:.2} Ω, outside {:.2} ± {:.2} Ω",
                         net.name, estimated, target, tolerance
+                    ),
+                    vec![net.id],
+                );
+                break;
+            }
+        }
+        let Some(maximum_step) = class.maximum_impedance_step_ohms else {
+            continue;
+        };
+        for via in &route.vias {
+            let connected = estimates
+                .iter()
+                .filter(|(segment, _)| {
+                    (segment.start == via.position || segment.end == via.position)
+                        && via.spans_layer(segment.layer)
+                })
+                .map(|(_, impedance)| *impedance)
+                .collect::<Vec<_>>();
+            if connected.len() < 2 {
+                continue;
+            }
+            let minimum = connected.iter().copied().fold(f64::INFINITY, f64::min);
+            let maximum = connected.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            if maximum - minimum > maximum_step {
+                report.push(
+                    "impedance_transition",
+                    format!(
+                        "net {} changes impedance by {:.2} Ω at a layer transition, exceeding {:.2} Ω",
+                        net.name,
+                        maximum - minimum,
+                        maximum_step
                     ),
                     vec![net.id],
                 );
