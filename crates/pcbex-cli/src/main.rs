@@ -153,6 +153,9 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Previous impedance JSON report; regressions fail the command.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
         /// Exit unsuccessfully when geometry, target, or transition violations exist.
         #[arg(long)]
         fail_on_violations: bool,
@@ -560,9 +563,21 @@ fn main() -> Result<()> {
         Command::ImpedanceReport {
             input,
             output,
+            baseline,
             fail_on_violations,
         } => {
             let result = impedance_report(&read(&input)?);
+            let regressions = baseline
+                .map(|path| -> Result<Vec<String>> {
+                    let baseline: pcbex_core::ImpedanceReport = serde_json::from_str(
+                        &fs::read_to_string(&path)
+                            .with_context(|| format!("reading {}", path.display()))?,
+                    )
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                    Ok(result.regressions_against(&baseline))
+                })
+                .transpose()?
+                .unwrap_or_default();
             let report = serde_json::to_string_pretty(&result)?;
             if let Some(path) = output {
                 fs::write(path, report)?;
@@ -576,6 +591,9 @@ fn main() -> Result<()> {
                     result.out_of_tolerance_segment_count,
                     result.excessive_transition_count
                 )
+            }
+            if !regressions.is_empty() {
+                bail!("impedance regressions: {}", regressions.join("; "))
             }
         }
         Command::Render { input, output } => fs::write(output, render_svg(&read(&input)?))?,
@@ -797,6 +815,8 @@ mod tests {
             "board.json",
             "--output",
             "report.json",
+            "--baseline",
+            "baseline.json",
             "--fail-on-violations",
         ])
         .unwrap();
@@ -806,8 +826,11 @@ mod tests {
             Command::ImpedanceReport {
                 input,
                 output: Some(output),
+                baseline: Some(baseline),
                 fail_on_violations: true
-            } if input.as_os_str() == "board.json" && output.as_os_str() == "report.json"
+            } if input.as_os_str() == "board.json"
+                && output.as_os_str() == "report.json"
+                && baseline.as_os_str() == "baseline.json"
         ));
     }
 }
