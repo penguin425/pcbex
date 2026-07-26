@@ -195,6 +195,10 @@ pub struct NetClassRules {
     pub differential_width_nm: Option<Nm>,
     #[serde(default)]
     pub differential_gap_nm: Option<Nm>,
+    #[serde(default)]
+    pub minimum_length_nm: Option<Nm>,
+    #[serde(default)]
+    pub maximum_length_nm: Option<Nm>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -335,6 +339,16 @@ impl Board {
             .and_then(|net| net.class.as_ref())
             .and_then(|class| self.net_classes.get(class))
             .and_then(|rules| rules.layers.as_deref())
+    }
+
+    pub fn length_limits_for_net(&self, net_id: u32) -> (Option<Nm>, Option<Nm>) {
+        self.nets
+            .iter()
+            .find(|net| net.id == net_id)
+            .and_then(|net| net.class.as_ref())
+            .and_then(|class| self.net_classes.get(class))
+            .map(|rules| (rules.minimum_length_nm, rules.maximum_length_nm))
+            .unwrap_or((None, None))
     }
 
     fn maximum_routing_envelope(&self) -> (Nm, Nm) {
@@ -555,6 +569,15 @@ impl<'a> Router<'a> {
             }
             if rules.layers.as_ref().is_some_and(Vec::is_empty) {
                 return Err(format!("net class {name} must allow at least one layer"));
+            }
+            if rules.minimum_length_nm.is_some_and(|value| value <= 0)
+                || rules.maximum_length_nm.is_some_and(|value| value <= 0)
+                || matches!(
+                    (rules.minimum_length_nm, rules.maximum_length_nm),
+                    (Some(minimum), Some(maximum)) if minimum > maximum
+                )
+            {
+                return Err(format!("net class {name} has invalid length limits"));
             }
             if rules
                 .layers
@@ -1458,7 +1481,112 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     let (routes, report) = Router::new(board)?.route_all();
     let mut out = board.clone();
     out.routes = routes;
+    tune_route_lengths(&mut out)?;
     Ok((out, report))
+}
+
+pub fn tune_route_lengths(board: &mut Board) -> Result<(), String> {
+    for route_index in 0..board.routes.len() {
+        let net_id = board.routes[route_index].net_id;
+        let (minimum, maximum) = board.length_limits_for_net(net_id);
+        let Some(minimum) = minimum else { continue };
+        let current = route_length_nm(&board.routes[route_index]);
+        if current >= minimum {
+            continue;
+        }
+        let grid = board.rules_for_net(net_id).grid_nm;
+        let amplitude = ((minimum - current + 2 * grid - 1) / (2 * grid)) * grid;
+        let original = board.routes[route_index].clone();
+        let mut tuned = None;
+        for segment_index in (0..original.segments.len()).rev() {
+            let segment = &original.segments[segment_index];
+            let dx = segment.end.x_nm - segment.start.x_nm;
+            let dy = segment.end.y_nm - segment.start.y_nm;
+            if dx != 0 && dy != 0 {
+                continue;
+            }
+            let span = dx.abs().max(dy.abs());
+            if span < 4 * grid {
+                continue;
+            }
+            for direction in [1, -1] {
+                let mut candidate = original.clone();
+                let one = Point {
+                    x_nm: segment.start.x_nm + dx / 3,
+                    y_nm: segment.start.y_nm + dy / 3,
+                };
+                let two = Point {
+                    x_nm: segment.start.x_nm + 2 * dx / 3,
+                    y_nm: segment.start.y_nm + 2 * dy / 3,
+                };
+                let offset = if dx == 0 {
+                    Point {
+                        x_nm: direction * amplitude,
+                        y_nm: 0,
+                    }
+                } else {
+                    Point {
+                        x_nm: 0,
+                        y_nm: direction * amplitude,
+                    }
+                };
+                let points = [
+                    segment.start,
+                    one,
+                    Point {
+                        x_nm: one.x_nm + offset.x_nm,
+                        y_nm: one.y_nm + offset.y_nm,
+                    },
+                    Point {
+                        x_nm: two.x_nm + offset.x_nm,
+                        y_nm: two.y_nm + offset.y_nm,
+                    },
+                    two,
+                    segment.end,
+                ];
+                let replacement = points
+                    .windows(2)
+                    .map(|points| Segment {
+                        start: points[0],
+                        end: points[1],
+                        layer: segment.layer,
+                        width_nm: segment.width_nm,
+                    })
+                    .collect::<Vec<_>>();
+                candidate
+                    .segments
+                    .splice(segment_index..=segment_index, replacement);
+                board.routes[route_index] = candidate.clone();
+                let check = crate::checking::check_board(board);
+                if check.violations.iter().all(|violation| {
+                    violation.rule == "trace_length" && !violation.net_ids.contains(&net_id)
+                }) && maximum.is_none_or(|limit| route_length_nm(&candidate) <= limit)
+                {
+                    tuned = Some(candidate);
+                    break;
+                }
+            }
+            if tuned.is_some() {
+                break;
+            }
+        }
+        board.routes[route_index] = tuned.ok_or_else(|| {
+            format!("unable to satisfy minimum length for net {net_id} with a legal meander")
+        })?;
+    }
+    Ok(())
+}
+
+pub fn route_length_nm(route: &Route) -> Nm {
+    route
+        .segments
+        .iter()
+        .map(|segment| {
+            let dx = (segment.end.x_nm - segment.start.x_nm) as f64;
+            let dy = (segment.end.y_nm - segment.start.y_nm) as f64;
+            dx.hypot(dy).round() as Nm
+        })
+        .sum()
 }
 
 pub fn render_svg(board: &Board) -> String {
@@ -1925,6 +2053,8 @@ mod tests {
                 layers: Some(vec![Layer::Back]),
                 differential_width_nm: None,
                 differential_gap_nm: None,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
             },
         );
         let (routed, report) = route_board(&b).unwrap();
@@ -2070,6 +2200,8 @@ mod tests {
                 layers: Some(vec![Layer::Front]),
                 differential_width_nm: None,
                 differential_gap_nm: None,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
             },
         );
         b.nets = vec![
@@ -2275,6 +2407,8 @@ mod tests {
                 layers: Some(vec![Layer::Front]),
                 differential_width_nm: None,
                 differential_gap_nm: None,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
             },
         );
         b.nets[0].terminals = vec![
@@ -2328,6 +2462,8 @@ mod tests {
                 layers: Some(vec![Layer::Front]),
                 differential_width_nm: None,
                 differential_gap_nm: None,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
             },
         );
         board.nets[0].terminals = vec![
@@ -2352,5 +2488,41 @@ mod tests {
         assert!(crate::checking::check_board(&routed).is_clean());
         assert!(!routed.routes[0].segments.is_empty());
         assert!(routed.routes[0].vias.is_empty());
+    }
+
+    #[test]
+    fn tunes_a_short_route_with_a_legal_meander() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].class = Some("Matched".into());
+        board.nets[0].terminals[0].position = Point {
+            x_nm: 1_000_000,
+            y_nm: 5_000_000,
+        };
+        board.nets[0].terminals[1].position = Point {
+            x_nm: 9_000_000,
+            y_nm: 5_000_000,
+        };
+        board.net_classes.insert(
+            "Matched".into(),
+            NetClassRules {
+                track_width_nm: 250_000,
+                clearance_nm: 200_000,
+                via_diameter_nm: 600_000,
+                via_drill_nm: 300_000,
+                layers: Some(vec![Layer::Front]),
+                differential_width_nm: None,
+                differential_gap_nm: None,
+                minimum_length_nm: Some(10_000_000),
+                maximum_length_nm: Some(11_000_000),
+            },
+        );
+
+        let (routed, report) = route_board(&board).unwrap();
+
+        assert!(report.unrouted.is_empty());
+        assert!(crate::checking::check_board(&routed).is_clean());
+        assert!((10_000_000..=11_000_000).contains(&route_length_nm(&routed.routes[0])));
+        assert!(routed.routes[0].segments.len() >= 5);
     }
 }

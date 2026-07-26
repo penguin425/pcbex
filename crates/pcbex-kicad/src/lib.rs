@@ -209,6 +209,8 @@ fn import_net_classes(
                     layers: None,
                     differential_width_nm: optional_dimension("diff_pair_width"),
                     differential_gap_nm: optional_dimension("diff_pair_gap"),
+                    minimum_length_nm: None,
+                    maximum_length_nm: None,
                 },
             );
             for child in values {
