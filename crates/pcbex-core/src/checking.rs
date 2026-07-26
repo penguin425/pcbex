@@ -26,7 +26,11 @@ impl CheckReport {
 }
 
 pub fn check_board(board: &Board) -> CheckReport {
-    if board.routes.iter().any(|route| !route.arcs.is_empty()) {
+    if board
+        .routes
+        .iter()
+        .any(|route| !route.arcs.is_empty() || !route.teardrops.is_empty())
+    {
         let arc_net_ids: HashSet<_> = board
             .routes
             .iter()
@@ -35,6 +39,17 @@ pub fn check_board(board: &Board) -> CheckReport {
             .collect();
         let mut linearized = board.clone();
         linearized.routes = board.routes.iter().map(Route::linearized_arcs).collect();
+        let mut teardrop_obstacles = Vec::new();
+        for route in &mut linearized.routes {
+            for teardrop in route.teardrops.drain(..) {
+                teardrop_obstacles.push(crate::PolygonObstacle {
+                    polygon: teardrop.polygon,
+                    layers: vec![teardrop.layer],
+                    net_id: Some(route.net_id),
+                });
+            }
+        }
+        linearized.polygon_obstacles.extend(teardrop_obstacles);
         let mut report = check_board(&linearized);
         report.violations.retain(|violation| {
             violation.rule != "track_angle"

@@ -645,6 +645,8 @@ pub struct RouteReport {
     pub ripup_events: usize,
     #[serde(default)]
     pub coupled_differential_pairs: Vec<String>,
+    #[serde(default)]
+    pub generated_teardrops: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -2064,11 +2066,89 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     out.routes = routes;
     tune_route_lengths(&mut out)?;
     couple_differential_pairs(&mut out, &mut report);
+    report.generated_teardrops = generate_route_teardrops(&mut out);
     report.expanded_states += paired_expanded;
     report.coupled_differential_pairs.extend(coupled);
     report.coupled_differential_pairs.sort();
     report.coupled_differential_pairs.dedup();
     Ok((out, report))
+}
+
+pub fn generate_route_teardrops(board: &mut Board) -> usize {
+    let mut generated = 0;
+    for route_index in 0..board.routes.len() {
+        let net_id = board.routes[route_index].net_id;
+        let vias = board.routes[route_index].vias.clone();
+        let segments = board.routes[route_index].segments.clone();
+        for via in vias {
+            for segment in &segments {
+                if !via.spans_layer(segment.layer) {
+                    continue;
+                }
+                let other = if segment.start == via.position {
+                    segment.end
+                } else if segment.end == via.position {
+                    segment.start
+                } else {
+                    continue;
+                };
+                let dx = (other.x_nm - via.position.x_nm) as f64;
+                let dy = (other.y_nm - via.position.y_nm) as f64;
+                let span = dx.hypot(dy);
+                let length = via.diameter_nm.max(3 * segment.width_nm) as f64;
+                if span < length || span == 0.0 {
+                    continue;
+                }
+                let (ux, uy) = (dx / span, dy / span);
+                let (px, py) = (-uy, ux);
+                let base_half = via.diameter_nm as f64 * 0.45;
+                let tip_half = segment.width_nm as f64 / 2.0;
+                let tip_x = via.position.x_nm as f64 + ux * length;
+                let tip_y = via.position.y_nm as f64 + uy * length;
+                let polygon = vec![
+                    Point {
+                        x_nm: (via.position.x_nm as f64 + px * base_half).round() as Nm,
+                        y_nm: (via.position.y_nm as f64 + py * base_half).round() as Nm,
+                    },
+                    Point {
+                        x_nm: (tip_x + px * tip_half).round() as Nm,
+                        y_nm: (tip_y + py * tip_half).round() as Nm,
+                    },
+                    Point {
+                        x_nm: (tip_x - px * tip_half).round() as Nm,
+                        y_nm: (tip_y - py * tip_half).round() as Nm,
+                    },
+                    Point {
+                        x_nm: (via.position.x_nm as f64 - px * base_half).round() as Nm,
+                        y_nm: (via.position.y_nm as f64 - py * base_half).round() as Nm,
+                    },
+                ];
+                if polygon
+                    .iter()
+                    .any(|point| !board.point_inside_board(*point, 0))
+                    || board.routes[route_index].teardrops.iter().any(|teardrop| {
+                        teardrop.layer == segment.layer && teardrop.polygon == polygon
+                    })
+                {
+                    continue;
+                }
+                board.routes[route_index].teardrops.push(Teardrop {
+                    polygon,
+                    layer: segment.layer,
+                });
+                let invalid = checking::check_board(board)
+                    .violations
+                    .iter()
+                    .any(|violation| violation.net_ids.contains(&net_id));
+                if invalid {
+                    board.routes[route_index].teardrops.pop();
+                } else {
+                    generated += 1;
+                }
+            }
+        }
+    }
+    generated
 }
 
 fn couple_differential_pairs(board: &mut Board, report: &mut RouteReport) {
@@ -3411,5 +3491,47 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "clearance")
         );
+    }
+
+    #[test]
+    fn automatically_generates_checked_via_teardrops() {
+        let mut board = board();
+        board.obstacles.clear();
+        let start = Point {
+            x_nm: 2_000_000,
+            y_nm: 5_000_000,
+        };
+        let end = Point {
+            x_nm: 8_000_000,
+            y_nm: 5_000_000,
+        };
+        board.nets[0].terminals[0].position = start;
+        board.nets[0].terminals[1].position = end;
+        board.routes = vec![Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start,
+                end,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![Via {
+                position: start,
+                diameter_nm: 600_000,
+                drill_nm: 300_000,
+                kind: ViaKind::Through,
+                start_layer: Layer::Front,
+                end_layer: Layer::Back,
+            }],
+            teardrops: vec![],
+            zones: vec![],
+        }];
+
+        assert_eq!(generate_route_teardrops(&mut board), 1);
+        assert_eq!(board.routes[0].teardrops[0].polygon.len(), 4);
+        assert_eq!(board.routes[0].teardrops[0].layer, Layer::Front);
+        assert!(checking::check_board(&board).is_clean());
+        assert_eq!(generate_route_teardrops(&mut board), 0);
     }
 }
