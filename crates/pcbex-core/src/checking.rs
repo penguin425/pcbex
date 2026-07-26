@@ -3,7 +3,7 @@ use crate::geometry::{
     point_segment_within, points_closer_than, points_within, segment_polygon_closer_than,
     segment_rect_closer_than, segments_closer_than, segments_within,
 };
-use crate::{Board, Net, Route, Segment};
+use crate::{Board, Net, Route, Segment, route_length_nm};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -40,6 +40,17 @@ pub fn check_board(board: &Board) -> CheckReport {
         check_route_connectivity(net, route, &mut report);
     }
     for route in &board.routes {
+        let length = route_length_nm(route);
+        let (minimum, maximum) = board.length_limits_for_net(route.net_id);
+        if minimum.is_some_and(|limit| length < limit)
+            || maximum.is_some_and(|limit| length > limit)
+        {
+            report.push(
+                "trace_length",
+                format!("route length {length} nm is outside its net-class limits"),
+                vec![route.net_id],
+            );
+        }
         for segment in &route.segments {
             check_segment(board, route.net_id, segment, &mut report);
         }
@@ -216,15 +227,7 @@ fn check_differential_pairs(
 }
 
 fn route_length(route: &Route) -> i64 {
-    route
-        .segments
-        .iter()
-        .map(|segment| {
-            let dx = (segment.end.x_nm - segment.start.x_nm) as f64;
-            let dy = (segment.end.y_nm - segment.start.y_nm) as f64;
-            dx.hypot(dy).round() as i64
-        })
-        .sum()
+    route_length_nm(route)
 }
 
 fn coupled_percent(route: &Route, partner: &Route, pair: &crate::DifferentialPair) -> u8 {

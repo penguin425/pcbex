@@ -152,6 +152,13 @@ The checker reports skew, layer/via asymmetry, and insufficient coupling.
 KiCad net classes containing `diff_pair_width` and `diff_pair_gap` automatically
 pair `_P`/`_N` or `+`/`-` nets and apply the differential trace width.
 
+## Length constraints and tuning
+
+Net classes may set `minimum_length_nm` and `maximum_length_nm`. The checker
+reports routes outside that interval. After routing, pcbex deterministically
+adds an orthogonal meander to short routes and accepts it only when the complete
+board remains free of boundary, obstacle, connectivity, and clearance errors.
+
 ## Planning and repair agent
 
 The dependency-free Python agent converts bounded natural-language requirements
