@@ -401,12 +401,9 @@ fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut Ch
                 );
                 break;
             };
-            let Some(estimated) = crate::estimated_impedance_with_copper_ohms(
-                segment.width_nm,
-                stackup.dielectric_height_nm,
-                stackup.copper_thickness_nm,
-                stackup.dielectric_constant,
-            ) else {
+            let Some(estimated) =
+                crate::estimated_stackup_impedance_ohms(segment.width_nm, stackup)
+            else {
                 report.push(
                     "impedance_stackup",
                     format!("net {} has an invalid impedance geometry", net.name),
@@ -930,12 +927,10 @@ fn check_differential_pairs(
                 );
                 break;
             };
-            let Some(estimated) = crate::estimated_differential_impedance_ohms(
+            let Some(estimated) = crate::estimated_stackup_differential_impedance_ohms(
                 segment.width_nm,
                 pair.gap_nm,
-                stackup.dielectric_height_nm,
-                stackup.copper_thickness_nm,
-                stackup.dielectric_constant,
+                stackup,
             ) else {
                 report.push(
                     "differential_impedance_stackup",
@@ -2100,6 +2095,9 @@ mod tests {
             dielectric_constant: 4.2,
             copper_thickness_nm: 35_000,
             reference_layer: Some(Layer::Back),
+            secondary_reference_layer: None,
+            secondary_dielectric_height_nm: None,
+            secondary_dielectric_constant: None,
         });
         let target =
             crate::estimated_differential_impedance_ohms(250_000, 350_000, 200_000, 35_000, 4.2)

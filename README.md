@@ -367,12 +367,16 @@ clearance, edge, length, and manufacturing checks.
 ## Stackup impedance checks
 
 KiCad `(setup (stackup ...))` data is imported automatically, including copper
-thickness, adjacent dielectric height/permittivity, and the nearest reference
-copper layer. JSON `stackup` entries can define the same values directly.
+thickness, adjacent dielectric height/permittivity, and reference planes on
+both sides. Inner layers therefore retain symmetric stripline or asymmetric
+embedded-microstrip geometry. JSON entries can define the second side with
+`secondary_reference_layer`, `secondary_dielectric_height_nm`, and
+`secondary_dielectric_constant`.
 Net classes may set
 `target_impedance_ohms` and `impedance_tolerance_ohms`; the normal checker uses
-the copper-thickness-aware IPC-2141 microstrip estimate for every routed segment
-and reports missing stackup data or out-of-range geometry. This is an early
+the copper-thickness-aware microstrip or embedded estimate for every routed
+segment and reports missing stackup data or out-of-range geometry. Differential
+pairs use the same stackup geometry. This is an early
 layout constraint, not a replacement for a field solver or fabrication-house
 stackup validation.
 
