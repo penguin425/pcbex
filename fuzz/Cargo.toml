@@ -28,3 +28,17 @@ path = "fuzz_targets/board_json.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "length_tuning"
+path = "fuzz_targets/length_tuning.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bga_escape"
+path = "fuzz_targets/bga_escape.rs"
+test = false
+doc = false
+bench = false

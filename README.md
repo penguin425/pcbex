@@ -136,7 +136,8 @@ outline; arcs use a maximum chord deviation of 0.01 mm.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated
-libFuzzer targets exercise arbitrary KiCad input and serialized board models.
+libFuzzer targets exercise arbitrary KiCad input, migrated/serialized board
+models, constrained multi-section length tuning, and grid/ring BGA escape.
 Criterion benchmarks cover obstacle, multi-net, and board-cutout routing
 scenarios. Every pull request also enforces deterministic search and
 rasterization operation budgets; see `docs/BENCHMARKS.md`.

@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [kicad_import, board_json]
+        target: [kicad_import, board_json, length_tuning, bga_escape]
     steps:
       - uses: actions/checkout@v7
       - name: Install nightly Rust

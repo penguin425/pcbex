@@ -4063,6 +4063,12 @@ mod tests {
             serde_json::json!(CURRENT_SCHEMA_VERSION)
         );
         assert!(migrated.get("board_width_nm").is_none());
+        let reparsed = parse_board_json(&migrated.to_string()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&board).unwrap(),
+            serde_json::to_value(&reparsed).unwrap(),
+            "v1 migration and native v2 parsing must be semantically identical"
+        );
         assert!(
             parse_board_json(r#"{"schema_version":99}"#)
                 .unwrap_err()
@@ -4078,6 +4084,30 @@ mod tests {
             board_json_schema()["properties"]["schema_version"]["const"],
             serde_json::json!(CURRENT_SCHEMA_VERSION)
         );
+        let schema = board_json_schema();
+        for property in [
+            "rules",
+            "net_classes",
+            "length_groups",
+            "escape_groups",
+            "return_path_rules",
+            "stackup",
+        ] {
+            assert!(schema["properties"].get(property).is_some());
+        }
+        for definition in [
+            "rules",
+            "net_class",
+            "length_group",
+            "escape_group",
+            "return_path_rule",
+            "stackup_layer",
+        ] {
+            assert_eq!(
+                schema["$defs"][definition]["additionalProperties"],
+                serde_json::json!(false)
+            );
+        }
     }
     #[test]
     fn routes_around_obstacle() {
