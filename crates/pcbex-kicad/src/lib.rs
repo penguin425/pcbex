@@ -537,6 +537,8 @@ fn infer_differential_pairs(
                 gap_tolerance_nm: 100_000,
                 max_skew_nm: 500_000,
                 min_coupled_percent: 80,
+                target_differential_impedance_ohms: None,
+                differential_impedance_tolerance_ohms: None,
                 minimum_length_nm: None,
                 tuning_amplitude_nm: None,
                 tuning_pitch_nm: None,

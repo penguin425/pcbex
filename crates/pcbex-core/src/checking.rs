@@ -908,6 +908,57 @@ fn check_differential_pairs(
                 vec![pair.positive_net_id, pair.negative_net_id],
             );
         }
+        let (Some(target), Some(tolerance)) = (
+            pair.target_differential_impedance_ohms,
+            pair.differential_impedance_tolerance_ohms,
+        ) else {
+            continue;
+        };
+        for segment in &positive.segments {
+            let Some(stackup) = board
+                .stackup
+                .iter()
+                .find(|entry| entry.layer == segment.layer)
+            else {
+                report.push(
+                    "differential_impedance_stackup",
+                    format!(
+                        "differential pair {} has no stackup entry for {:?}",
+                        pair.name, segment.layer
+                    ),
+                    vec![pair.positive_net_id, pair.negative_net_id],
+                );
+                break;
+            };
+            let Some(estimated) = crate::estimated_differential_impedance_ohms(
+                segment.width_nm,
+                pair.gap_nm,
+                stackup.dielectric_height_nm,
+                stackup.copper_thickness_nm,
+                stackup.dielectric_constant,
+            ) else {
+                report.push(
+                    "differential_impedance_stackup",
+                    format!(
+                        "differential pair {} has invalid impedance geometry",
+                        pair.name
+                    ),
+                    vec![pair.positive_net_id, pair.negative_net_id],
+                );
+                break;
+            };
+            if (estimated - target).abs() > tolerance {
+                report.push(
+                    "differential_impedance",
+                    format!(
+                        "differential pair {} estimates {:.2} Ω, outside {:.2} ± {:.2} Ω",
+                        pair.name, estimated, target, tolerance
+                    ),
+                    vec![pair.positive_net_id, pair.negative_net_id],
+                );
+                break;
+            }
+        }
     }
 }
 
@@ -2043,6 +2094,16 @@ mod tests {
                 vias: vec![],
             });
         }
+        board.stackup.push(crate::StackupLayer {
+            layer: Layer::Front,
+            dielectric_height_nm: 200_000,
+            dielectric_constant: 4.2,
+            copper_thickness_nm: 35_000,
+            reference_layer: Some(Layer::Back),
+        });
+        let target =
+            crate::estimated_differential_impedance_ohms(250_000, 350_000, 200_000, 35_000, 4.2)
+                .unwrap();
         board.differential_pairs.push(DifferentialPair {
             name: "USB".into(),
             positive_net_id: 1,
@@ -2051,6 +2112,8 @@ mod tests {
             gap_tolerance_nm: 50_000,
             max_skew_nm: 100_000,
             min_coupled_percent: 90,
+            target_differential_impedance_ohms: Some(target),
+            differential_impedance_tolerance_ohms: Some(0.01),
             minimum_length_nm: None,
             tuning_amplitude_nm: None,
             tuning_pitch_nm: None,
@@ -2058,6 +2121,15 @@ mod tests {
         });
         assert!(check_board(&board).is_clean());
 
+        board.differential_pairs[0].target_differential_impedance_ohms = Some(target + 20.0);
+        let impedance_report = check_board(&board);
+        assert!(
+            impedance_report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "differential_impedance")
+        );
+        board.differential_pairs[0].target_differential_impedance_ohms = Some(target);
         board.routes[1].segments[0].end.x_nm = 8_000_000;
         board.nets[1].terminals[1].position.x_nm = 8_000_000;
         let report = check_board(&board);
