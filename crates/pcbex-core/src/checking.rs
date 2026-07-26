@@ -146,6 +146,13 @@ pub fn check_board(board: &Board) -> CheckReport {
         return report;
     }
     let mut report = CheckReport::default();
+    if board.width_nm <= 0 || board.height_nm <= 0 {
+        report.push(
+            "board_dimensions",
+            "board width and height must be positive".into(),
+            vec![],
+        );
+    }
     let known_net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
     let mut seen_net_ids = HashSet::new();
     let mut seen_net_names = HashSet::new();
@@ -4184,6 +4191,33 @@ mod tests {
                 .filter(|violation| violation.rule == "zone_rules")
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_non_positive_board_dimensions() {
+        let mut zero_width = base();
+        zero_width.width_nm = 0;
+        let mut negative_height = base();
+        negative_height.height_nm = -1;
+        let valid = base();
+
+        for board in [&zero_width, &negative_height] {
+            let report = check_board(board);
+            assert_eq!(
+                report
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "board_dimensions")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&valid)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "board_dimensions")
         );
     }
 }
