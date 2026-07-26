@@ -268,6 +268,38 @@ pub fn check_board(board: &Board) -> CheckReport {
         }
     }
     let known_net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
+    for net_id in board
+        .obstacles
+        .iter()
+        .filter_map(|obstacle| obstacle.net_id)
+        .chain(
+            board
+                .round_obstacles
+                .iter()
+                .filter_map(|obstacle| obstacle.net_id),
+        )
+        .chain(
+            board
+                .capsule_obstacles
+                .iter()
+                .filter_map(|obstacle| obstacle.net_id),
+        )
+        .chain(
+            board
+                .polygon_obstacles
+                .iter()
+                .filter_map(|obstacle| obstacle.net_id),
+        )
+        .chain(board.keepouts.iter().filter_map(|keepout| keepout.net_id))
+    {
+        if !known_net_ids.contains(&net_id) {
+            report.push(
+                "obstacle_net",
+                format!("obstacle references undeclared net {net_id}"),
+                vec![net_id],
+            );
+        }
+    }
     let mut seen_net_ids = HashSet::new();
     let mut seen_net_names = HashSet::new();
     for net in &board.nets {
@@ -3815,6 +3847,76 @@ mod tests {
                 .count(),
             4
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_unknown_obstacle_net_references() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "declared".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let point = Point { x_nm: 1, y_nm: 1 };
+        board.obstacles.extend([
+            crate::Obstacle {
+                min: point,
+                max: Point { x_nm: 2, y_nm: 2 },
+                layers: vec![Layer::Front],
+                net_id: Some(99),
+            },
+            crate::Obstacle {
+                min: point,
+                max: Point { x_nm: 2, y_nm: 2 },
+                layers: vec![Layer::Front],
+                net_id: Some(1),
+            },
+        ]);
+        board.round_obstacles.push(RoundObstacle {
+            center: point,
+            diameter_nm: 1,
+            layers: vec![Layer::Front],
+            net_id: Some(98),
+        });
+        board.capsule_obstacles.push(CapsuleObstacle {
+            start: point,
+            end: Point { x_nm: 2, y_nm: 2 },
+            diameter_nm: 1,
+            layers: vec![Layer::Front],
+            net_id: Some(97),
+        });
+        let polygon = vec![
+            point,
+            Point { x_nm: 2, y_nm: 1 },
+            Point { x_nm: 1, y_nm: 2 },
+        ];
+        board.polygon_obstacles.push(crate::PolygonObstacle {
+            polygon: polygon.clone(),
+            layers: vec![Layer::Front],
+            net_id: Some(96),
+        });
+        board.keepouts.push(crate::Keepout {
+            polygon,
+            layers: vec![Layer::Front],
+            net_id: Some(95),
+            tracks_not_allowed: true,
+            vias_not_allowed: true,
+            zones_not_allowed: true,
+            footprints_not_allowed: false,
+            minimum_track_width_nm: None,
+            minimum_clearance_nm: None,
+        });
+
+        let report = check_board(&board);
+        let invalid_ids: HashSet<_> = report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "obstacle_net")
+            .flat_map(|violation| violation.net_ids.iter().copied())
+            .collect();
+        assert_eq!(invalid_ids, HashSet::from([95, 96, 97, 98, 99]));
     }
 
     #[test]

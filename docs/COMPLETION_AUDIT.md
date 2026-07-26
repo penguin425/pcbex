@@ -116,6 +116,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Routing-grid validation | Normal DRC independently requires a positive global routing grid, matching the routing precondition | Zero-grid, negative-grid, and valid-grid regressions |
 | Base routing-rule validation | Normal DRC and Router require positive track width/drill, non-negative clearance, and via diameter greater than drill | Invalid width, clearance, drill, annulus, valid-rule, and Router regressions |
 | Obstacle-layer validation | Normal DRC requires rectangular, round, capsule, polygon, and keepout obstacles to use a non-empty unique subset of the declared copper stackup | Empty, duplicate, undeclared, and valid layer-list regressions across all obstacle families |
+| Obstacle net-reference validation | Normal DRC requires optional net ownership on rectangular, round, capsule, polygon, and keepout obstacles to resolve against the board net table | Unknown ownership across all five obstacle families plus declared ownership regression |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -139,7 +140,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.87.0 exposes 134 Rust tests and 11 Python tests. The release workflow
+Version 1.88.0 exposes 135 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

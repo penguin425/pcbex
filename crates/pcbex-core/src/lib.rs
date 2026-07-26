@@ -5398,6 +5398,21 @@ mod tests {
     #[test]
     fn foreign_net_pad_blocks_but_own_pad_is_enterable() {
         let mut b = board();
+        b.nets.push(Net {
+            id: 2,
+            name: "foreign-pad".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        b.routes.push(Route {
+            net_id: 2,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
         b.obstacles = vec![
             Obstacle {
                 min: Point {
@@ -5428,8 +5443,13 @@ mod tests {
         b.nets[0].terminals[1].layers = vec![Layer::Front];
         let (routed, report) = route_board(&b).unwrap();
         assert!(report.unrouted.is_empty());
+        let signal_route = routed
+            .routes
+            .iter()
+            .find(|route| route.net_id == 1)
+            .unwrap();
         assert!(
-            routed.routes[0]
+            signal_route
                 .segments
                 .iter()
                 .any(|s| s.start.y_nm != 1_000_000 || s.end.y_nm != 1_000_000),
