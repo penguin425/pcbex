@@ -462,6 +462,8 @@ Vias require a positive drill diameter and a larger outer diameter before
 layer-range, board-edge, minimum-size, or copper-clearance evaluation.
 Via endpoints must also belong to distinct declared copper layers, and
 microvias may span only adjacent layers, before further physical checks.
+Teardrops must form simple, non-degenerate polygons on declared copper layers
+before normal DRC converts them into net-owned copper obstacles.
 
 ## Planning and repair agent
 
