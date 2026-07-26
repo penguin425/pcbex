@@ -343,6 +343,16 @@ pub struct ReturnPathRule {
     pub plane_sample_spacing_nm: Option<Nm>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PowerNetRule {
+    pub net_id: u32,
+    pub current_ma: f64,
+    pub maximum_voltage_drop_mv: f64,
+    #[serde(default)]
+    pub minimum_parallel_vias: usize,
+}
+
 fn default_maximum_via_aspect_ratio() -> u16 {
     10
 }
@@ -420,6 +430,8 @@ pub struct Board {
     pub manufacturing_rules: Option<ManufacturingRules>,
     #[serde(default)]
     pub return_path_rules: Vec<ReturnPathRule>,
+    #[serde(default)]
+    pub power_net_rules: Vec<PowerNetRule>,
     #[serde(default)]
     pub stackup: Vec<StackupLayer>,
     #[serde(default)]
@@ -1131,6 +1143,18 @@ impl<'a> Router<'a> {
                     .any(|net_id| *net_id == rule.reference_net_id || !net_ids.contains(net_id))
             {
                 return Err(format!("return path rule {} is invalid", rule.name));
+            }
+        }
+        let mut power_net_ids = HashSet::new();
+        for rule in &board.power_net_rules {
+            if !power_net_ids.insert(rule.net_id)
+                || !net_ids.contains(&rule.net_id)
+                || !rule.current_ma.is_finite()
+                || rule.current_ma <= 0.0
+                || !rule.maximum_voltage_drop_mv.is_finite()
+                || rule.maximum_voltage_drop_mv <= 0.0
+            {
+                return Err(format!("power-net rule for net {} is invalid", rule.net_id));
             }
         }
         let mut route_net_ids = HashSet::new();
@@ -4020,6 +4044,7 @@ mod tests {
             escape_groups: vec![],
             manufacturing_rules: None,
             return_path_rules: vec![],
+            power_net_rules: vec![],
             stackup: vec![],
             via_strategy: ViaStrategy::ThroughOnly,
             nets: vec![Net {

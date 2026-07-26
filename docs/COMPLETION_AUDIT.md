@@ -51,6 +51,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Deterministic parallel candidate search | Configurable 1–8 bounded workers explore first-pass A* candidates; ordered validation reuses one board snapshot per pass and sequential conflict fallback controls commits | Ten-net 1-vs-8-worker regression is byte-identical; Criterion measures actual 1/2/4/8-worker wall time |
 | Local push-and-shove edit | Grid-aligned route-interior translation keeps terminal anchors fixed and atomically rolls back any full-board DRC failure | Successful shove preserves both terminals; boundary-crossing shove is rejected without changing accepted copper |
 | KiCad Rule Area semantics | Track, via, and copper-pour prohibitions are imported independently and applied only by the relevant router/checker/fill subsystem | Selective via-only Rule Area import retains allowed tracks and pours; legacy all-purpose keepouts remain compatible |
+| PDN design checks | Per-power-net current, voltage-drop budget, and parallel-via minimum use routed geometry and stackup copper thickness for DC resistance estimation | 1 A narrow-trace regression reports both excessive voltage drop and insufficient vias |
 | Practical board regression corpus | Anonymized USB differential, four-layer power/inner-signal, and eight-net BGA fanout topologies | Clean, byte-idempotent routing with per-fixture search budgets on every PR |
 | BGA escape routing | Deterministic radial/row/column/four-way dog-bone stubs, optional via-grid snapping, multi-ring collision fallback, stackup-aware fanout vias, and inner-layer continuation before global routing | Two-net BGA regression blocks every first-ring site, checks grid-aligned second-ring microvias, front stubs, inner tracks, and full-board cleanliness |
 | Return-path control | Per-signal/reference-net transition rules check maximum stitching-via distance, sample stackup-selected reference fills for split-plane/slot crossings, and add fully checked Zone-connected or track-connected reference vias | Filled-plane gap regression detects a slot; two-layer transitions insert legal direct-to-Zone and track-connected GND stitches and finish DRC-clean |
@@ -99,7 +100,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.43.0 exposes 86 Rust tests and 11 Python tests. The release workflow
+Version 1.44.0 exposes 87 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

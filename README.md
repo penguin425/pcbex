@@ -244,6 +244,14 @@ net-owned copper geometry. They block foreign nets with the normal clearance
 while remaining enterable by their owning net. Existing zone definitions and
 fills are preserved when routed tracks are written back to the board.
 
+## PDN checks
+
+`power_net_rules` declares a power net's expected current in mA, maximum
+permitted DC drop in mV, and optional minimum parallel-via count. The checker
+uses each routed segment's real length and width plus per-layer stackup copper
+thickness (35 µm fallback) to estimate copper resistance and reports
+`pdn_voltage_drop` or `pdn_via_count` violations.
+
 ## Via types and layer ranges
 
 Vias carry an explicit `through`, `blind_buried`, or `micro` kind plus start and

@@ -36,6 +36,7 @@ fn board_with_nets(net_count: usize) -> Board {
         escape_groups: vec![],
         manufacturing_rules: None,
         return_path_rules: vec![],
+        power_net_rules: vec![],
         stackup: vec![],
         via_strategy: ViaStrategy::ThroughOnly,
         nets: (0..net_count)
