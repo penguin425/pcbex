@@ -1613,6 +1613,9 @@ fn import_keepout(
         tracks_not_allowed: child_atom(restrictions, "tracks") == Some("not_allowed"),
         vias_not_allowed: child_atom(restrictions, "vias") == Some("not_allowed"),
         zones_not_allowed: child_atom(restrictions, "copperpour") == Some("not_allowed"),
+        footprints_not_allowed: child_atom(restrictions, "footprints") == Some("not_allowed"),
+        minimum_track_width_nm: None,
+        minimum_clearance_nm: None,
     });
 }
 
@@ -2808,7 +2811,7 @@ mod tests {
         let pcb = r#"(kicad_pcb
           (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
           (zone (net 0) (net_name "") (layer "F.Cu")
-            (keepout (tracks allowed) (vias not_allowed) (copperpour allowed))
+            (keepout (tracks allowed) (vias not_allowed) (copperpour allowed) (footprints not_allowed))
             (polygon (pts (xy 4 5) (xy 9 5) (xy 9 11) (xy 4 11))))
         )"#;
 
@@ -2818,6 +2821,7 @@ mod tests {
         assert!(!rule_area.tracks_not_allowed);
         assert!(rule_area.vias_not_allowed);
         assert!(!rule_area.zones_not_allowed);
+        assert!(rule_area.footprints_not_allowed);
     }
 
     #[test]

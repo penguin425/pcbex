@@ -50,7 +50,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Performance regression gate | Deterministic search-state budgets for 10 parallel nets and a 100 mm board with 200 obstacles | Dedicated `performance_budget` target runs on every PR |
 | Deterministic parallel candidate search | Configurable 1–8 bounded workers explore first-pass A* candidates; ordered validation reuses one board snapshot per pass and sequential conflict fallback controls commits | Ten-net 1-vs-8-worker regression is byte-identical; Criterion measures actual 1/2/4/8-worker wall time |
 | Automatic local push-and-shove | Grid-aligned route-interior translation keeps terminal anchors fixed; failed nets try bounded blocker shoves before selective rip-up and atomically accept only checked combined routes | Successful manual shove preserves terminals, invalid edits roll back, and automatic blocker recovery produces a clean two-route board |
-| KiCad Rule Area semantics | Track, via, and copper-pour prohibitions are imported independently and applied only by the relevant router/checker/fill subsystem | Selective via-only Rule Area import retains allowed tracks and pours; legacy all-purpose keepouts remain compatible |
+| Complete Rule Area constraints | Track, via, copper-pour, and footprint prohibitions are independent; local minimum width/clearance profiles participate in routing and DRC | KiCad selective Rule Area retains footprint/via-only flags; undersized nets route around a local profile and existing footprint/track violations are reported |
 | PDN design checks | Per-power-net current, voltage-drop budget, and parallel-via minimum use routed geometry and stackup copper thickness for DC resistance estimation | 1 A narrow-trace regression reports both excessive voltage drop and insufficient vias |
 | Decoupling placement quality | Dedicated capacitor-anchor to IC-power-pin distance and same-side constraint uses transformed named anchors | Colocated anchors score clean on one side and receive a deterministic penalty across board sides |
 | Practical board regression corpus | Anonymized USB differential, four-layer power/inner-signal, eight-net BGA fanout, and reproducibly generated 100-net six-layer backplane topologies | Clean, byte-idempotent routing with per-fixture search budgets on every PR; large fixture completes in 46,500 states under a 100,000-state ceiling |
@@ -101,7 +101,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.47.0 exposes 89 Rust tests and 11 Python tests. The release workflow
+Version 1.48.0 exposes 91 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

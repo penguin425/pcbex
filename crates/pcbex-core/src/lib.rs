@@ -150,6 +150,12 @@ pub struct Keepout {
     pub vias_not_allowed: bool,
     #[serde(default = "prohibited")]
     pub zones_not_allowed: bool,
+    #[serde(default)]
+    pub footprints_not_allowed: bool,
+    #[serde(default)]
+    pub minimum_track_width_nm: Option<Nm>,
+    #[serde(default)]
+    pub minimum_clearance_nm: Option<Nm>,
 }
 
 fn prohibited() -> bool {
@@ -990,7 +996,14 @@ impl<'a> Router<'a> {
             !geometry::polygon_is_simple(&keepout.polygon)
                 || !(keepout.tracks_not_allowed
                     || keepout.vias_not_allowed
-                    || keepout.zones_not_allowed)
+                    || keepout.zones_not_allowed
+                    || keepout.footprints_not_allowed
+                    || keepout.minimum_track_width_nm.is_some()
+                    || keepout.minimum_clearance_nm.is_some())
+                || keepout
+                    .minimum_track_width_nm
+                    .is_some_and(|value| value <= 0)
+                || keepout.minimum_clearance_nm.is_some_and(|value| value < 0)
         }) {
             return Err("keepout must be a simple polygon".into());
         }
@@ -2108,7 +2121,26 @@ impl<'a> Router<'a> {
     }
 
     fn foreign_obstacle(&self, cell: (i32, i32, u8), net_id: u32) -> bool {
-        self.owned.get(&cell).is_some_and(|owner| *owner != net_id)
+        if self.owned.get(&cell).is_some_and(|owner| *owner != net_id) {
+            return true;
+        }
+        let layer = index_layer(cell.2);
+        let point = Point {
+            x_nm: cell.0 as Nm * self.board.rules_for_net(net_id).grid_nm,
+            y_nm: cell.1 as Nm * self.board.rules_for_net(net_id).grid_nm,
+        };
+        let rules = self.board.rules_for_net(net_id);
+        self.board.keepouts.iter().any(|area| {
+            area.net_id != Some(net_id)
+                && area.layers.contains(&layer)
+                && geometry::point_in_polygon(point, &area.polygon)
+                && (area
+                    .minimum_track_width_nm
+                    .is_some_and(|minimum| rules.track_width_nm < minimum)
+                    || area
+                        .minimum_clearance_nm
+                        .is_some_and(|minimum| rules.clearance_nm < minimum))
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -5509,6 +5541,9 @@ mod tests {
             tracks_not_allowed: true,
             vias_not_allowed: true,
             zones_not_allowed: true,
+            footprints_not_allowed: false,
+            minimum_track_width_nm: None,
+            minimum_clearance_nm: None,
         });
         b.nets[0].class = Some("FrontOnly".into());
         b.net_classes.insert(
@@ -5552,6 +5587,57 @@ mod tests {
                 segment.start.y_nm == 7_500_000 && segment.end.y_nm == 7_500_000
             })
         );
+    }
+
+    #[test]
+    fn routes_around_unsatisfied_local_rule_area_constraints() {
+        let mut b = board();
+        b.obstacles.clear();
+        b.copper_layers = vec![Layer::Front];
+        b.nets[0].terminals.iter_mut().for_each(|terminal| {
+            terminal.layers = vec![Layer::Front];
+            terminal.position.y_nm = 5_000_000;
+        });
+        b.keepouts.push(Keepout {
+            polygon: vec![
+                Point {
+                    x_nm: 4_000_000,
+                    y_nm: 4_000_000,
+                },
+                Point {
+                    x_nm: 6_000_000,
+                    y_nm: 4_000_000,
+                },
+                Point {
+                    x_nm: 6_000_000,
+                    y_nm: 6_000_000,
+                },
+                Point {
+                    x_nm: 4_000_000,
+                    y_nm: 6_000_000,
+                },
+            ],
+            layers: vec![Layer::Front],
+            net_id: None,
+            tracks_not_allowed: false,
+            vias_not_allowed: false,
+            zones_not_allowed: false,
+            footprints_not_allowed: false,
+            minimum_track_width_nm: Some(500_000),
+            minimum_clearance_nm: Some(400_000),
+        });
+
+        let (routed, report) = route_board(&b).unwrap();
+
+        assert!(report.unrouted.is_empty());
+        assert!(checking::check_board(&routed).is_clean());
+        assert!(routed.routes[0].segments.iter().all(|segment| {
+            let midpoint = Point {
+                x_nm: segment.start.x_nm + (segment.end.x_nm - segment.start.x_nm) / 2,
+                y_nm: segment.start.y_nm + (segment.end.y_nm - segment.start.y_nm) / 2,
+            };
+            !geometry::point_in_polygon(midpoint, &b.keepouts[0].polygon)
+        }));
     }
 
     #[test]
@@ -6383,6 +6469,9 @@ mod tests {
             tracks_not_allowed: true,
             vias_not_allowed: true,
             zones_not_allowed: true,
+            footprints_not_allowed: false,
+            minimum_track_width_nm: None,
+            minimum_clearance_nm: None,
         });
         board.nets[0].terminals[0].position = Point {
             x_nm: 2_000_000,

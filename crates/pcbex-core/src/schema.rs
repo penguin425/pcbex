@@ -63,7 +63,7 @@ pub fn board_json_schema() -> serde_json::Value {
             "round_obstacles": {"type": "array"},
             "capsule_obstacles": {"type": "array"},
             "polygon_obstacles": {"type": "array"},
-            "keepouts": {"type": "array"},
+            "keepouts": {"type": "array", "items": {"$ref": "#/$defs/keepout"}},
             "footprints": {"type": "array"},
             "net_classes": {
                 "type": "object",
@@ -120,6 +120,22 @@ pub fn board_json_schema() -> serde_json::Value {
                     "maximum_length_nm": {"type": ["integer", "null"]},
                     "target_impedance_ohms": {"type": ["number", "null"], "exclusiveMinimum": 0},
                     "impedance_tolerance_ohms": {"type": ["number", "null"], "minimum": 0}
+                }
+            },
+            "keepout": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["polygon"],
+                "properties": {
+                    "polygon": {"type": "array", "minItems": 3, "items": {"$ref": "#/$defs/point"}},
+                    "layers": {"type": "array", "items": {"type": "string"}},
+                    "net_id": {"type": ["integer", "null"], "minimum": 0},
+                    "tracks_not_allowed": {"type": "boolean"},
+                    "vias_not_allowed": {"type": "boolean"},
+                    "zones_not_allowed": {"type": "boolean"},
+                    "footprints_not_allowed": {"type": "boolean"},
+                    "minimum_track_width_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
+                    "minimum_clearance_nm": {"type": ["integer", "null"], "minimum": 0}
                 }
             },
             "length_group": {

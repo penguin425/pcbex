@@ -282,6 +282,7 @@ pub fn check_board(board: &Board) -> CheckReport {
             check_route_clearance(board, a, b, &mut report);
         }
     }
+    check_footprint_rule_areas(board, &mut report);
     check_differential_pairs(board, &routes, &mut report);
     check_length_groups(board, &routes, &mut report);
     check_return_paths(board, &routes, &mut report);
@@ -291,6 +292,32 @@ pub fn check_board(board: &Board) -> CheckReport {
         .violations
         .extend(check_manufacturability(board).violations);
     report
+}
+
+fn check_footprint_rule_areas(board: &Board, report: &mut CheckReport) {
+    for footprint in &board.footprints {
+        for area in &board.keepouts {
+            if !area.footprints_not_allowed {
+                continue;
+            }
+            let intersects = point_in_polygon(footprint.position, &area.polygon)
+                || footprint
+                    .pads
+                    .iter()
+                    .any(|pad| point_in_polygon(pad.position, &area.polygon));
+            if intersects {
+                report.push(
+                    "rule_area_footprint",
+                    format!(
+                        "footprint {} intersects a footprint-prohibited Rule Area",
+                        footprint.reference
+                    ),
+                    footprint.pads.iter().filter_map(|pad| pad.net_id).collect(),
+                );
+                break;
+            }
+        }
+    }
 }
 
 fn check_power_nets(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
@@ -1084,6 +1111,35 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         }
     }
     for keepout in &board.keepouts {
+        let midpoint = Point {
+            x_nm: segment.start.x_nm + (segment.end.x_nm - segment.start.x_nm) / 2,
+            y_nm: segment.start.y_nm + (segment.end.y_nm - segment.start.y_nm) / 2,
+        };
+        if keepout.net_id != Some(net_id)
+            && keepout.layers.contains(&segment.layer)
+            && point_in_polygon(midpoint, &keepout.polygon)
+        {
+            if keepout
+                .minimum_track_width_nm
+                .is_some_and(|minimum| segment.width_nm < minimum)
+            {
+                report.push(
+                    "rule_area_track_width",
+                    "track is narrower than the local Rule Area minimum".into(),
+                    vec![net_id],
+                );
+            }
+            if keepout
+                .minimum_clearance_nm
+                .is_some_and(|minimum| rules.clearance_nm < minimum)
+            {
+                report.push(
+                    "rule_area_clearance",
+                    "net clearance is below the local Rule Area minimum".into(),
+                    vec![net_id],
+                );
+            }
+        }
         if !keepout.tracks_not_allowed
             || keepout.net_id == Some(net_id)
             || !keepout.layers.contains(&segment.layer)
@@ -1519,6 +1575,82 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "pdn_via_count")
         );
+    }
+
+    #[test]
+    fn checks_footprint_and_local_rule_area_constraints() {
+        let mut board = base();
+        board.keepouts.push(crate::Keepout {
+            polygon: vec![
+                Point {
+                    x_nm: 3_000_000,
+                    y_nm: 3_000_000,
+                },
+                Point {
+                    x_nm: 7_000_000,
+                    y_nm: 3_000_000,
+                },
+                Point {
+                    x_nm: 7_000_000,
+                    y_nm: 7_000_000,
+                },
+                Point {
+                    x_nm: 3_000_000,
+                    y_nm: 7_000_000,
+                },
+            ],
+            layers: vec![Layer::Front],
+            net_id: None,
+            tracks_not_allowed: false,
+            vias_not_allowed: false,
+            zones_not_allowed: false,
+            footprints_not_allowed: true,
+            minimum_track_width_nm: Some(500_000),
+            minimum_clearance_nm: Some(400_000),
+        });
+        board.footprints.push(crate::Footprint {
+            reference: "U1".into(),
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            rotation_deg: 0.0,
+            pads: vec![],
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: Point {
+                    x_nm: 4_000_000,
+                    y_nm: 5_000_000,
+                },
+                end: Point {
+                    x_nm: 6_000_000,
+                    y_nm: 5_000_000,
+                },
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        let report = check_board(&board);
+
+        for rule in [
+            "rule_area_footprint",
+            "rule_area_track_width",
+            "rule_area_clearance",
+        ] {
+            assert!(
+                report
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == rule)
+            );
+        }
     }
 
     #[test]

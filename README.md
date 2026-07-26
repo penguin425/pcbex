@@ -89,7 +89,11 @@ polygon; an empty outline uses the width/height rectangle. `keepouts` use exact
 polygons and layer sets, with independent `tracks_not_allowed`,
 `vias_not_allowed`, and `zones_not_allowed` flags. KiCad Rule Area
 `tracks`/`vias`/`copperpour` restrictions map to those flags without collapsing
-selective areas into a blanket prohibition. Legacy `obstacles` remain
+selective areas into a blanket prohibition. `footprints_not_allowed` is also
+imported, while JSON Rule Areas may set local `minimum_track_width_nm` and
+`minimum_clearance_nm`; nets whose class cannot satisfy those local dimensions
+route around the area and existing copper/footprints receive dedicated DRC
+violations. Legacy `obstacles` remain
 axis-aligned rectangles. Copper envelopes are expanded by width/via radius plus clearance.
 Terminals declare the layers on which they may be reached. See
 [`examples/simple.json`](examples/simple.json).
