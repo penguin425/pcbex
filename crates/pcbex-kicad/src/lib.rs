@@ -232,6 +232,36 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
         );
     }
 
+    if let Some(patterns) = settings.get("netclass_patterns") {
+        let patterns = patterns
+            .as_array()
+            .ok_or_else(|| "KiCad project netclass_patterns is not an array".to_string())?;
+        for assignment in patterns.iter().rev() {
+            let assignment = assignment.as_object().ok_or_else(|| {
+                "KiCad project contains a non-object net-class pattern".to_string()
+            })?;
+            let pattern = assignment
+                .get("pattern")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "net-class pattern is missing pattern".to_string())?;
+            let class = assignment
+                .get("netclass")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "net-class pattern is missing netclass".to_string())?;
+            if !board.net_classes.contains_key(class) {
+                return Err(format!(
+                    "net-class pattern {pattern} references unknown class {class}"
+                ));
+            }
+            let matcher = compile_net_pattern(pattern)?;
+            for net in &mut board.nets {
+                if matcher.is_match(&net.name) {
+                    net.class = Some(class.to_string());
+                }
+            }
+        }
+    }
+
     if let Some(assignments) = settings.get("netclass_assignments") {
         let assignments = assignments
             .as_object()
@@ -254,6 +284,134 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
     }
     board.differential_pairs = infer_differential_pairs(&board.nets, &board.net_classes);
     Ok(())
+}
+
+fn compile_net_pattern(pattern: &str) -> Result<regex::Regex, String> {
+    let looks_like_regex = pattern.starts_with('^')
+        || pattern.ends_with('$')
+        || pattern.contains('[')
+        || pattern.contains('(')
+        || pattern.contains('|')
+        || pattern.contains('\\');
+    let expression = if looks_like_regex {
+        pattern.to_string()
+    } else {
+        let mut expression = String::from("^");
+        for character in pattern.chars() {
+            match character {
+                '*' => expression.push_str(".*"),
+                '?' => expression.push('.'),
+                other => expression.push_str(&regex::escape(&other.to_string())),
+            }
+        }
+        expression.push('$');
+        expression
+    };
+    regex::Regex::new(&expression)
+        .map_err(|error| format!("invalid KiCad net-class pattern {pattern}: {error}"))
+}
+
+/// Apply the routing-relevant subset of KiCad custom design rules whose
+/// condition selects one NetClass. Unsupported rules remain KiCad's authority.
+pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usize, String> {
+    let root = parse(&format!("({source})"))?;
+    let top = root
+        .as_list()
+        .ok_or_else(|| "KiCad custom rules are not an s-expression".to_string())?;
+    let mut applied = 0;
+    for item in top {
+        let Some(rule) = item.as_list() else { continue };
+        if atom(rule.first()) != Some("rule") {
+            continue;
+        }
+        let Some(condition) = child_atom(rule, "condition") else {
+            continue;
+        };
+        let Some(class_name) = condition_net_class(condition) else {
+            continue;
+        };
+        let Some(class) = board.net_classes.get_mut(&class_name) else {
+            return Err(format!(
+                "custom rule references unknown net class {class_name}"
+            ));
+        };
+        for item in rule {
+            let Some(constraint) = item.as_list() else {
+                continue;
+            };
+            if atom(constraint.first()) != Some("constraint") {
+                continue;
+            }
+            let Some(kind) = atom(constraint.get(1)) else {
+                continue;
+            };
+            match kind {
+                "clearance" => class.clearance_nm = constraint_value(constraint, &["min"])?,
+                "track_width" => {
+                    class.track_width_nm = constraint_value(constraint, &["opt", "min"])?
+                }
+                "via_diameter" => {
+                    class.via_diameter_nm = constraint_value(constraint, &["opt", "min"])?
+                }
+                "hole_size" => class.via_drill_nm = constraint_value(constraint, &["opt", "min"])?,
+                "diff_pair_gap" => {
+                    class.differential_gap_nm = Some(constraint_value(constraint, &["opt", "min"])?)
+                }
+                "length" => {
+                    class.minimum_length_nm = constraint_optional_value(constraint, "min")?;
+                    class.maximum_length_nm = constraint_optional_value(constraint, "max")?;
+                }
+                _ => continue,
+            }
+            applied += 1;
+        }
+    }
+    board.differential_pairs = infer_differential_pairs(&board.nets, &board.net_classes);
+    Ok(applied)
+}
+
+fn condition_net_class(condition: &str) -> Option<String> {
+    let marker = "NetClass";
+    let rest = &condition[condition.find(marker)? + marker.len()..];
+    let rest = rest.trim_start();
+    let rest = rest.strip_prefix("==")?.trim_start();
+    let quote = rest.chars().next()?;
+    if quote != '\'' && quote != '"' {
+        return None;
+    }
+    Some(rest[1..].split(quote).next()?.to_string())
+}
+
+fn constraint_value(constraint: &[Sexp], preferences: &[&str]) -> Result<i64, String> {
+    for preference in preferences {
+        if let Some(value) = constraint_optional_value(constraint, preference)? {
+            return Ok(value);
+        }
+    }
+    Err(format!(
+        "custom constraint {} has no supported value",
+        atom(constraint.get(1)).unwrap_or("unknown")
+    ))
+}
+
+fn constraint_optional_value(constraint: &[Sexp], name: &str) -> Result<Option<i64>, String> {
+    let Some(values) = child_values(constraint, name) else {
+        return Ok(None);
+    };
+    let token =
+        atom(values.get(1)).ok_or_else(|| format!("custom constraint {name} value is missing"))?;
+    let millimetres = if let Some(value) = token.strip_suffix("mm") {
+        value.parse::<f64>()
+    } else if let Some(value) = token.strip_suffix("mil") {
+        value.parse::<f64>().map(|value| value * 0.0254)
+    } else {
+        token.parse::<f64>()
+    }
+    .map_err(|_| format!("invalid custom-rule dimension {token}"))?;
+    if !millimetres.is_finite() || millimetres < 0.0 {
+        return Err(format!("invalid custom-rule dimension {token}"));
+    }
+    Ok(Some(nm(millimetres)))
 }
 
 fn import_net_classes(
@@ -2373,11 +2531,18 @@ mod tests {
         let project = r#"{
           "net_settings": {
             "classes": [{
-              "name": "USB", "clearance": 0.18, "track_width": 0.16,
-              "via_diameter": 0.5, "via_drill": 0.25,
-              "diff_pair_width": 0.16, "diff_pair_gap": 0.20
+                "name": "USB", "clearance": 0.18, "track_width": 0.16,
+                "via_diameter": 0.5, "via_drill": 0.25,
+                "diff_pair_width": 0.16, "diff_pair_gap": 0.20
+              }, {
+                "name": "Slow", "clearance": 0.20, "track_width": 0.25,
+                "via_diameter": 0.6, "via_drill": 0.3
             }],
-            "netclass_assignments": {"USB_P": "USB", "USB_N": "USB"}
+            "netclass_patterns": [
+              {"pattern": "USB_*", "netclass": "USB"},
+              {"pattern": "USB_N", "netclass": "Slow"}
+            ],
+            "netclass_assignments": {"USB_N": "USB"}
           }
         }"#;
         apply_project_net_settings(&mut imported.board, project).unwrap();
@@ -2396,6 +2561,36 @@ mod tests {
         );
         assert_eq!(imported.board.differential_pairs.len(), 1);
         assert_eq!(imported.board.differential_pairs[0].gap_nm, 200_000);
+
+        let applied = apply_custom_design_rules(
+            &mut imported.board,
+            r#"
+              (version 1)
+              (rule "USB routing"
+                (condition "A.NetClass == 'USB'")
+                (constraint clearance (min 0.22mm))
+                (constraint track_width (min 0.18mm) (opt 0.19mm))
+                (constraint via_diameter (min 0.55mm))
+                (constraint hole_size (min 10mil))
+                (constraint diff_pair_gap (min 0.21mm))
+                (constraint length (min 20mm) (max 25mm)))
+            "#,
+        )
+        .unwrap();
+        let class = &imported.board.net_classes["USB"];
+        assert_eq!(applied, 6);
+        assert_eq!(class.clearance_nm, 220_000);
+        assert_eq!(class.track_width_nm, 190_000);
+        assert_eq!(class.via_diameter_nm, 550_000);
+        assert_eq!(class.via_drill_nm, 254_000);
+        assert_eq!(class.differential_gap_nm, Some(210_000));
+        assert_eq!(class.minimum_length_nm, Some(20_000_000));
+        assert_eq!(class.maximum_length_nm, Some(25_000_000));
+        assert!(
+            compile_net_pattern("^/sheet/D[0-9]+$")
+                .unwrap()
+                .is_match("/sheet/D12")
+        );
     }
 
     #[test]

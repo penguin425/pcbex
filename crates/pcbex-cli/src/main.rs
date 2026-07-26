@@ -7,7 +7,7 @@ use pcbex_core::{
     Board, RoutingQuality, Rules, board_json_schema, migrate_board_json, parse_board_json,
     render_svg, repair_routes, repairable_net_ids, route_board, routing_quality,
 };
-use pcbex_kicad::{apply_project_net_settings, import as import_kicad};
+use pcbex_kicad::{apply_custom_design_rules, apply_project_net_settings, import as import_kicad};
 use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
 
 #[derive(Parser)]
@@ -90,6 +90,9 @@ enum Command {
         /// KiCad project settings. Defaults to the input's sibling `.kicad_pro` when present.
         #[arg(long)]
         project: Option<PathBuf>,
+        /// KiCad custom design rules. Defaults to the input's sibling `.kicad_dru`.
+        #[arg(long)]
+        rules_file: Option<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long, default_value_t = 0.25)]
@@ -321,6 +324,7 @@ fn main() -> Result<()> {
         Command::RouteKicad {
             input,
             project,
+            rules_file,
             output,
             grid_mm,
             width_mm,
@@ -359,6 +363,21 @@ fn main() -> Result<()> {
                 apply_project_net_settings(&mut imported.board, &project_source)
                     .map_err(anyhow::Error::msg)
                     .with_context(|| format!("importing rules from {}", path.display()))?;
+            }
+            let rules_file = rules_file.or_else(|| {
+                let candidate = input.with_extension("kicad_dru");
+                candidate.exists().then_some(candidate)
+            });
+            if let Some(path) = rules_file {
+                let rules_source = fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                let applied = apply_custom_design_rules(&mut imported.board, &rules_source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("importing custom rules from {}", path.display()))?;
+                eprintln!(
+                    "applied {applied} routing constraints from {}",
+                    path.display()
+                );
             }
             let (board, report) = route_board(&imported.board).map_err(anyhow::Error::msg)?;
             fs::write(
