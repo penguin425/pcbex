@@ -150,6 +150,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         escape_groups: vec![],
         manufacturing_rules: None,
         return_path_rules: vec![],
+        power_net_rules: vec![],
         stackup,
         via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets,

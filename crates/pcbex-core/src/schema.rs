@@ -74,6 +74,7 @@ pub fn board_json_schema() -> serde_json::Value {
             "escape_groups": {"type": "array", "items": {"$ref": "#/$defs/escape_group"}},
             "manufacturing_rules": {"type": ["object", "null"]},
             "return_path_rules": {"type": "array", "items": {"$ref": "#/$defs/return_path_rule"}},
+            "power_net_rules": {"type": "array", "items": {"$ref": "#/$defs/power_net_rule"}},
             "stackup": {"type": "array", "items": {"$ref": "#/$defs/stackup_layer"}},
             "via_strategy": {"enum": ["through_only", "auto"]},
             "nets": {"type": "array"},
@@ -132,6 +133,17 @@ pub fn board_json_schema() -> serde_json::Value {
                     "tuning_amplitude_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
                     "tuning_pitch_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
                     "max_tuning_sections": {"type": "integer", "minimum": 1, "maximum": 16}
+                }
+            },
+            "power_net_rule": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["net_id", "current_ma", "maximum_voltage_drop_mv"],
+                "properties": {
+                    "net_id": {"type": "integer", "minimum": 0},
+                    "current_ma": {"type": "number", "exclusiveMinimum": 0},
+                    "maximum_voltage_drop_mv": {"type": "number", "exclusiveMinimum": 0},
+                    "minimum_parallel_vias": {"type": "integer", "minimum": 0}
                 }
             },
             "escape_group": {

@@ -285,11 +285,61 @@ pub fn check_board(board: &Board) -> CheckReport {
     check_differential_pairs(board, &routes, &mut report);
     check_length_groups(board, &routes, &mut report);
     check_return_paths(board, &routes, &mut report);
+    check_power_nets(board, &routes, &mut report);
     check_impedance(board, &routes, &mut report);
     report
         .violations
         .extend(check_manufacturability(board).violations);
     report
+}
+
+fn check_power_nets(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
+    const COPPER_RESISTIVITY_OHM_M: f64 = 1.724e-8;
+    for rule in &board.power_net_rules {
+        let Some(route) = routes.get(&rule.net_id) else {
+            continue;
+        };
+        let resistance_ohms = route
+            .segments
+            .iter()
+            .map(|segment| {
+                let length_m = (((segment.end.x_nm - segment.start.x_nm) as f64)
+                    .hypot((segment.end.y_nm - segment.start.y_nm) as f64))
+                    * 1e-9;
+                let copper_thickness_m = board
+                    .stackup
+                    .iter()
+                    .find(|entry| entry.layer == segment.layer)
+                    .map_or(35_000, |entry| entry.copper_thickness_nm.max(1))
+                    as f64
+                    * 1e-9;
+                let cross_section_m2 = segment.width_nm as f64 * 1e-9 * copper_thickness_m;
+                COPPER_RESISTIVITY_OHM_M * length_m / cross_section_m2
+            })
+            .sum::<f64>();
+        let voltage_drop_mv = rule.current_ma * resistance_ohms;
+        if voltage_drop_mv > rule.maximum_voltage_drop_mv {
+            report.push(
+                "pdn_voltage_drop",
+                format!(
+                    "estimated {:.3} mV drop exceeds {:.3} mV at {:.3} mA",
+                    voltage_drop_mv, rule.maximum_voltage_drop_mv, rule.current_ma
+                ),
+                vec![rule.net_id],
+            );
+        }
+        if route.vias.len() < rule.minimum_parallel_vias {
+            report.push(
+                "pdn_via_count",
+                format!(
+                    "power route has {} vias but requires at least {}",
+                    route.vias.len(),
+                    rule.minimum_parallel_vias
+                ),
+                vec![rule.net_id],
+            );
+        }
+    }
 }
 
 fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
@@ -1354,6 +1404,7 @@ mod tests {
             escape_groups: vec![],
             manufacturing_rules: None,
             return_path_rules: vec![],
+            power_net_rules: vec![],
             stackup: vec![],
             via_strategy: crate::ViaStrategy::ThroughOnly,
             nets: vec![],
@@ -1422,6 +1473,51 @@ mod tests {
                 .violations
                 .iter()
                 .any(|v| v.rule == "clearance")
+        );
+    }
+
+    #[test]
+    fn checks_power_net_voltage_drop_and_parallel_vias() {
+        let mut board = base();
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: Point {
+                    x_nm: 1_000_000,
+                    y_nm: 1_000_000,
+                },
+                end: Point {
+                    x_nm: 9_000_000,
+                    y_nm: 1_000_000,
+                },
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+        board.power_net_rules.push(crate::PowerNetRule {
+            net_id: 1,
+            current_ma: 1_000.0,
+            maximum_voltage_drop_mv: 10.0,
+            minimum_parallel_vias: 2,
+        });
+
+        let report = check_board(&board);
+
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "pdn_voltage_drop")
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "pdn_via_count")
         );
     }
 
