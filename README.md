@@ -438,6 +438,9 @@ sloped edge of the resulting convex pad polygon.
 Custom plated pads use their imported polygon directly: both hole-capsule
 endpoints must be inside, and the centerline must remain more than the drill
 radius from every boundary edge, including concave boundaries.
+The normal board checker also rejects custom pad polygons with fewer than three
+vertices, degenerate edges or area, or non-adjacent self-intersections before
+routing and hole checks consume their geometry.
 
 ## Planning and repair agent
 
