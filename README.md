@@ -466,6 +466,8 @@ Teardrops must form simple, non-degenerate polygons on declared copper layers
 before normal DRC converts them into net-owned copper obstacles.
 Filled zone contours have the same topology and layer requirements before
 their copper participates in clearance and return-plane calculations.
+Zone source outlines must also be simple, non-degenerate polygons on declared
+copper layers so refilling and plane checks never consume malformed inputs.
 
 ## Planning and repair agent
 

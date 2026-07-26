@@ -434,6 +434,16 @@ pub fn check_board(board: &Board) -> CheckReport {
                 }
             }
         }
+        for zone in &route.zones {
+            if !zone_geometry_is_valid(board, zone) {
+                report.push(
+                    "zone_geometry",
+                    "zone outline must be a simple non-degenerate polygon on a declared copper layer"
+                        .into(),
+                    vec![route.net_id],
+                );
+            }
+        }
     }
     for (i, a) in board.routes.iter().enumerate() {
         for b in &board.routes[i + 1..] {
@@ -1090,6 +1100,10 @@ fn teardrop_geometry_is_valid(board: &Board, teardrop: &crate::Teardrop) -> bool
 
 fn zone_fill_geometry_is_valid(board: &Board, layer: crate::Layer, polygon: &[Point]) -> bool {
     board.copper_layers.contains(&layer) && custom_pad_polygon_is_valid(polygon)
+}
+
+fn zone_geometry_is_valid(board: &Board, zone: &crate::CopperZone) -> bool {
+    board.copper_layers.contains(&zone.layer) && custom_pad_polygon_is_valid(&zone.polygon)
 }
 
 fn custom_pad_polygon_is_valid(polygon: &[Point]) -> bool {
@@ -4028,6 +4042,65 @@ mod tests {
                 .violations
                 .iter()
                 .filter(|violation| violation.rule == "zone_fill_geometry")
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_zone_outlines() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "ground".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let valid = vec![
+            point(1_000_000, 1_000_000),
+            point(2_000_000, 1_000_000),
+            point(1_500_000, 2_000_000),
+        ];
+        let zone = |polygon, layer| crate::CopperZone {
+            polygon,
+            layer,
+            clearance_nm: 200_000,
+            minimum_thickness_nm: 250_000,
+            thermal_relief: true,
+            thermal_gap_nm: 200_000,
+            thermal_spoke_width_nm: 250_000,
+            filled_polygons: vec![],
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![
+                zone(valid[..2].to_vec(), Layer::Front),
+                zone(vec![valid[0], valid[0], valid[2]], Layer::Front),
+                zone(
+                    vec![
+                        point(1_000_000, 1_000_000),
+                        point(2_000_000, 1_000_000),
+                        point(3_000_000, 1_000_000),
+                    ],
+                    Layer::Front,
+                ),
+                zone(valid.clone(), Layer::Inner(1)),
+                zone(valid, Layer::Front),
+            ],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "zone_geometry")
                 .count(),
             4
         );
