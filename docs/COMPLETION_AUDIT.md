@@ -67,6 +67,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Impedance transition DRC | Per-net-class maximum step compares stackup-derived impedances of segments connected through each via, independently of absolute target tolerance | Two-layer regression uses different widths around a through-via and reports the dedicated `impedance_transition` rule |
 | Differential impedance transition DRC | Pair-level maximum step evaluates every via on both members with the differential stackup model, independently of an absolute target | Symmetric two-member layer transition with different pre/post-via widths reports `differential_impedance_transition` |
 | Board-wide impedance report | `impedance-report` emits JSON for every routed single-ended segment and differential member, with estimates, target deviations/pass state, via steps, and invalid-geometry count | Core report regression verifies evaluated geometry; CLI regression covers explicit report output |
+| Impedance CI quality gate | Report-level counters aggregate invalid geometry, out-of-tolerance segments, and excessive single-ended/differential transitions; `--fail-on-violations` writes JSON before returning nonzero | Missing-stackup regression fails the clean-state predicate; counter-state and CLI flag regressions cover all gate plumbing |
 | Coupled differential-pair autorouting | Pair-terminal correspondence, full-route translation, and accept-only-on-clean fallback | 100%-coupled, zero-skew autorouting regression |
 | Simultaneous differential-pair search | Pair-state A* validates both offset tracks at every step before committing either route | One-sided obstacle regression requires a joint detour while retaining 100% coupling |
 | Synchronous differential-pair tuning | Pair-level minimum length, amplitude, pitch, and distributed-section controls transform both members atomically with whole-board acceptance | Equal-length translated pair gains a legal synchronized meander and remains DRC-clean |
@@ -106,7 +107,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.54.0 exposes 98 Rust tests and 11 Python tests. The release workflow
+Version 1.55.0 exposes 100 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

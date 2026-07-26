@@ -153,6 +153,9 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Exit unsuccessfully when geometry, target, or transition violations exist.
+        #[arg(long)]
+        fail_on_violations: bool,
     },
     Render {
         input: PathBuf,
@@ -554,12 +557,25 @@ fn main() -> Result<()> {
                 }))?
             );
         }
-        Command::ImpedanceReport { input, output } => {
-            let report = serde_json::to_string_pretty(&impedance_report(&read(&input)?))?;
+        Command::ImpedanceReport {
+            input,
+            output,
+            fail_on_violations,
+        } => {
+            let result = impedance_report(&read(&input)?);
+            let report = serde_json::to_string_pretty(&result)?;
             if let Some(path) = output {
                 fs::write(path, report)?;
             } else {
                 println!("{report}");
+            }
+            if fail_on_violations && !result.is_clean() {
+                bail!(
+                    "impedance quality failed: {} invalid geometries, {} out-of-tolerance segments, {} excessive transitions",
+                    result.invalid_geometry_count,
+                    result.out_of_tolerance_segment_count,
+                    result.excessive_transition_count
+                )
             }
         }
         Command::Render { input, output } => fs::write(output, render_svg(&read(&input)?))?,
@@ -781,6 +797,7 @@ mod tests {
             "board.json",
             "--output",
             "report.json",
+            "--fail-on-violations",
         ])
         .unwrap();
 
@@ -788,7 +805,8 @@ mod tests {
             cli.command,
             Command::ImpedanceReport {
                 input,
-                output: Some(output)
+                output: Some(output),
+                fail_on_violations: true
             } if input.as_os_str() == "board.json" && output.as_os_str() == "report.json"
         ));
     }

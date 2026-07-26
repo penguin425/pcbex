@@ -398,7 +398,9 @@ as JSON, using the same microstrip or embedded model as DRC.
 routed segment and differential-pair member. Its JSON includes layer, width,
 estimate, target deviation/pass state, allowed and observed via-transition
 steps, and a total count of segments whose stackup geometry could not be
-evaluated.
+evaluated. Add `--fail-on-violations` for CI: the report is still written, then
+the command exits unsuccessfully if geometry is missing, a segment misses its
+target, or a via step exceeds its configured limit.
 
 ## Manufacturing checks
 
