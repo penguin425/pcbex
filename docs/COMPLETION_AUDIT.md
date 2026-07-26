@@ -88,6 +88,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Component and mounting-hole DFM | KiCad PTH/NPTH drill dimensions and plating are preserved; minimum drill, plated annular ring, aspect ratio, board-edge, and capsule-exact spacing checks include component holes and vias | Circular PTH and rotated oval NPTH import plus combined component-hole DFM regression |
 | Component-hole model validation | Normal DRC rejects incomplete/non-positive drill dimensions and plated drills that do not fit inside their pads, independently of optional manufacturing rules | Invalid PTH and incomplete NPTH regression without manufacturing rules |
 | Offset component drills | KiCad pad-local drill offsets are preserved and rotated into exact circular/oval hole geometry for DRC and DFM | Rotated offset capsule coordinates plus offset oval NPTH import regression |
+| Exact plated-hole containment | Circular and oval pads validate the complete offset hole capsule against their curved boundary; rectangular pads validate capsule extents | Diagonal-offset circle rejection and valid rotated oval-slot containment regressions |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -111,7 +112,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.59.0 exposes 105 Rust tests and 11 Python tests. The release workflow
+Version 1.60.0 exposes 106 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

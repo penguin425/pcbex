@@ -426,6 +426,9 @@ strictly inside its pad.
 KiCad `(drill ... (offset x y))` values are retained in pad-local coordinates.
 The rotated offset is applied to exact hole capsules for board-edge and
 hole-spacing DFM, and plated-hole validation includes the offset displacement.
+For circular and oval pads, plated-hole containment follows the actual curved
+boundary rather than its bounding box, catching diagonal offset holes that
+leave insufficient copper while retaining valid offset slots.
 
 ## Planning and repair agent
 

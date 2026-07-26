@@ -124,24 +124,7 @@ pub fn check_board(board: &Board) -> CheckReport {
                     }
                 }
                 (Some(width_nm), Some(height_nm)) if width_nm > 0 && height_nm > 0 => {
-                    let pad_width_nm = if pad.source_width_nm > 0 {
-                        pad.source_width_nm
-                    } else {
-                        pad.width_nm
-                    };
-                    let pad_height_nm = if pad.source_height_nm > 0 {
-                        pad.source_height_nm
-                    } else {
-                        pad.height_nm
-                    };
-                    let occupied_width =
-                        i128::from(width_nm) + 2 * i128::from(pad.drill_offset_x_nm).abs();
-                    let occupied_height =
-                        i128::from(height_nm) + 2 * i128::from(pad.drill_offset_y_nm).abs();
-                    if pad.plated
-                        && (occupied_width >= i128::from(pad_width_nm)
-                            || occupied_height >= i128::from(pad_height_nm))
-                    {
+                    if pad.plated && !drill_fits_pad(pad, width_nm, height_nm) {
                         report.push(
                             "component_hole",
                             format!(
@@ -855,6 +838,64 @@ struct DrilledHole {
     end: Point,
     diameter_nm: i64,
     net_id: Option<u32>,
+}
+
+fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
+    let pad_width_nm = if pad.source_width_nm > 0 {
+        pad.source_width_nm
+    } else {
+        pad.width_nm
+    } as f64;
+    let pad_height_nm = if pad.source_height_nm > 0 {
+        pad.source_height_nm
+    } else {
+        pad.height_nm
+    } as f64;
+    if pad_width_nm <= 0.0 || pad_height_nm <= 0.0 {
+        return false;
+    }
+
+    let radius = width_nm.min(height_nm) as f64 / 2.0;
+    let centerline = (width_nm.max(height_nm) - width_nm.min(height_nm)) as f64;
+    let offset_x = pad.drill_offset_x_nm as f64;
+    let offset_y = pad.drill_offset_y_nm as f64;
+    let endpoints = if width_nm >= height_nm {
+        [
+            (offset_x - centerline / 2.0, offset_y),
+            (offset_x + centerline / 2.0, offset_y),
+        ]
+    } else {
+        [
+            (offset_x, offset_y - centerline / 2.0),
+            (offset_x, offset_y + centerline / 2.0),
+        ]
+    };
+
+    match pad.shape {
+        PadShape::Circle => {
+            let pad_radius = pad_width_nm.min(pad_height_nm) / 2.0;
+            endpoints
+                .iter()
+                .all(|(x, y)| x.hypot(*y) + radius < pad_radius)
+        }
+        PadShape::Oval => {
+            let pad_radius = pad_width_nm.min(pad_height_nm) / 2.0;
+            let pad_centerline = pad_width_nm.max(pad_height_nm) - 2.0 * pad_radius;
+            endpoints.iter().all(|(x, y)| {
+                let distance = if pad_width_nm >= pad_height_nm {
+                    let nearest_x = x.clamp(-pad_centerline / 2.0, pad_centerline / 2.0);
+                    (x - nearest_x).hypot(*y)
+                } else {
+                    let nearest_y = y.clamp(-pad_centerline / 2.0, pad_centerline / 2.0);
+                    x.hypot(y - nearest_y)
+                };
+                distance + radius < pad_radius
+            })
+        }
+        _ => endpoints.iter().all(|(x, y)| {
+            x.abs() + radius < pad_width_nm / 2.0 && y.abs() + radius < pad_height_nm / 2.0
+        }),
+    }
 }
 
 fn drilled_pad_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> DrilledHole {
@@ -2876,5 +2917,46 @@ mod tests {
             }
         );
         assert_eq!(hole.diameter_nm, 400_000);
+        assert!(drill_fits_pad(&pad, 800_000, 400_000));
+    }
+
+    #[test]
+    fn normal_check_rejects_diagonal_offset_hole_outside_circle_pad() {
+        let mut board = base();
+        board.footprints.push(crate::Footprint {
+            reference: "J2".into(),
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            rotation_deg: 0.0,
+            pads: vec![Pad {
+                number: "1".into(),
+                position: Point {
+                    x_nm: 5_000_000,
+                    y_nm: 5_000_000,
+                },
+                width_nm: 1_000_000,
+                height_nm: 1_000_000,
+                source_width_nm: 1_000_000,
+                source_height_nm: 1_000_000,
+                rotation_deg: 0.0,
+                shape: PadShape::Circle,
+                custom_polygon: vec![],
+                drill_width_nm: Some(200_000),
+                drill_height_nm: Some(200_000),
+                drill_offset_x_nm: 350_000,
+                drill_offset_y_nm: 350_000,
+                plated: true,
+                layers: vec![Layer::Front, Layer::Back],
+                net_id: Some(1),
+            }],
+        });
+
+        let report = check_board(&board);
+        assert!(report.violations.iter().any(|violation| {
+            violation.rule == "component_hole"
+                && violation.message.contains("plated drill must fit")
+        }));
     }
 }
