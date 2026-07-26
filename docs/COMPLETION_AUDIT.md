@@ -105,6 +105,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Via layer-range validation | Normal DRC requires distinct declared endpoint layers and restricts microvias to adjacent copper layers before edge, size, or clearance checks consume the via | Unknown-layer, same-layer, non-adjacent microvia, adjacent microvia, and through-via regressions |
 | Teardrop geometry validation | Normal DRC requires simple non-degenerate polygons on declared copper layers before converting teardrops into net-owned obstacles | Insufficient-point, repeated-edge, zero-area, unknown-layer, and valid-triangle regressions |
 | Filled-zone geometry validation | Normal DRC requires every filled contour to be a simple non-degenerate polygon on a declared copper layer before conversion into a net-owned obstacle | Insufficient-point, repeated-edge, zero-area, unknown-layer, and valid-fill regressions |
+| Zone outline validation | Normal DRC requires every source zone outline to be a simple non-degenerate polygon on a declared copper layer before refilling or plane analysis consumes it | Insufficient-point, repeated-edge, zero-area, unknown-layer, and valid-outline regressions |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -128,7 +129,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.76.0 exposes 122 Rust tests and 11 Python tests. The release workflow
+Version 1.77.0 exposes 123 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
