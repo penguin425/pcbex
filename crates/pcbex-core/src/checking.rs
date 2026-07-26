@@ -280,10 +280,45 @@ pub fn check_board(board: &Board) -> CheckReport {
     }
     check_differential_pairs(board, &routes, &mut report);
     check_length_groups(board, &routes, &mut report);
+    check_return_paths(board, &routes, &mut report);
     report
         .violations
         .extend(check_manufacturability(board).violations);
     report
+}
+
+fn check_return_paths(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
+    for rule in &board.return_path_rules {
+        let reference_vias = routes
+            .get(&rule.reference_net_id)
+            .map_or(&[][..], |route| route.vias.as_slice());
+        for signal_net_id in &rule.signal_net_ids {
+            let Some(signal_route) = routes.get(signal_net_id) else {
+                continue;
+            };
+            for signal_via in &signal_route.vias {
+                let has_return = reference_vias.iter().any(|reference_via| {
+                    if !signal_via.shares_layer_with(reference_via) {
+                        return false;
+                    }
+                    let dx = i128::from(signal_via.position.x_nm - reference_via.position.x_nm);
+                    let dy = i128::from(signal_via.position.y_nm - reference_via.position.y_nm);
+                    let limit = i128::from(rule.max_via_distance_nm);
+                    dx * dx + dy * dy <= limit * limit
+                });
+                if !has_return {
+                    report.push(
+                        "return_path",
+                        format!(
+                            "{} requires a reference-net via within {} nm of the signal transition",
+                            rule.name, rule.max_via_distance_nm
+                        ),
+                        vec![*signal_net_id, rule.reference_net_id],
+                    );
+                }
+            }
+        }
+    }
 }
 
 pub fn check_manufacturability(board: &Board) -> CheckReport {
@@ -1133,6 +1168,7 @@ mod tests {
             length_groups: vec![],
             escape_groups: vec![],
             manufacturing_rules: None,
+            return_path_rules: vec![],
             via_strategy: crate::ViaStrategy::ThroughOnly,
             nets: vec![],
             routes: vec![],

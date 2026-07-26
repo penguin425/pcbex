@@ -284,6 +284,17 @@ pub struct ManufacturingRules {
     pub minimum_trace_angle_deg: u16,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReturnPathRule {
+    pub name: String,
+    pub signal_net_ids: Vec<u32>,
+    pub reference_net_id: u32,
+    pub max_via_distance_nm: Nm,
+    #[serde(default)]
+    pub auto_stitch: bool,
+}
+
 fn default_maximum_via_aspect_ratio() -> u16 {
     10
 }
@@ -359,6 +370,8 @@ pub struct Board {
     pub escape_groups: Vec<EscapeGroup>,
     #[serde(default)]
     pub manufacturing_rules: Option<ManufacturingRules>,
+    #[serde(default)]
+    pub return_path_rules: Vec<ReturnPathRule>,
     #[serde(default)]
     pub via_strategy: ViaStrategy,
     #[serde(default)]
@@ -740,6 +753,8 @@ pub struct RouteReport {
     pub parallel_fallbacks: usize,
     #[serde(default)]
     pub parallel_workers: usize,
+    #[serde(default)]
+    pub generated_return_vias: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -981,6 +996,21 @@ impl<'a> Router<'a> {
                 })
             {
                 return Err(format!("escape group {} is invalid", group.name));
+            }
+        }
+        let mut return_path_names = HashSet::new();
+        for rule in &board.return_path_rules {
+            if rule.name.is_empty()
+                || !return_path_names.insert(rule.name.as_str())
+                || rule.max_via_distance_nm <= 0
+                || !net_ids.contains(&rule.reference_net_id)
+                || rule.signal_net_ids.is_empty()
+                || rule
+                    .signal_net_ids
+                    .iter()
+                    .any(|net_id| *net_id == rule.reference_net_id || !net_ids.contains(net_id))
+            {
+                return Err(format!("return path rule {} is invalid", rule.name));
             }
         }
         let mut route_net_ids = HashSet::new();
@@ -2287,6 +2317,7 @@ pub fn route_board_with_workers(
         report.escaped_nets += 1;
     }
     out.nets = board.nets.clone();
+    report.generated_return_vias = stitch_return_paths(&mut out);
     let mutable_net_ids: HashSet<u32> = report
         .routed
         .iter()
@@ -2318,6 +2349,150 @@ pub fn route_board_with_workers(
         ));
     }
     Ok((out, report))
+}
+
+/// Add checked reference-net vias beside signal-layer transitions for rules
+/// that opt into automatic stitching.
+pub fn stitch_return_paths(board: &mut Board) -> usize {
+    let mut generated = 0;
+    for rule in board
+        .return_path_rules
+        .clone()
+        .into_iter()
+        .filter(|rule| rule.auto_stitch && rule.max_via_distance_nm > 0)
+    {
+        let Some(reference_index) = board
+            .routes
+            .iter()
+            .position(|route| route.net_id == rule.reference_net_id)
+        else {
+            continue;
+        };
+        let signal_vias: Vec<_> = board
+            .routes
+            .iter()
+            .filter(|route| rule.signal_net_ids.contains(&route.net_id))
+            .flat_map(|route| route.vias.iter().cloned().map(|via| (route.net_id, via)))
+            .collect();
+        for (signal_net_id, signal_via) in signal_vias {
+            if board.routes[reference_index]
+                .vias
+                .iter()
+                .any(|reference_via| {
+                    signal_via.shares_layer_with(reference_via)
+                        && point_distance_nm(signal_via.position, reference_via.position)
+                            <= rule.max_via_distance_nm
+                })
+            {
+                continue;
+            }
+            let anchors: Vec<_> = board.routes[reference_index]
+                .segments
+                .iter()
+                .filter(|segment| signal_via.spans_layer(segment.layer))
+                .flat_map(|segment| [segment.start, segment.end])
+                .chain(
+                    board
+                        .nets
+                        .iter()
+                        .find(|net| net.id == rule.reference_net_id)
+                        .into_iter()
+                        .flat_map(|net| &net.terminals)
+                        .filter(|terminal| {
+                            terminal
+                                .layers
+                                .iter()
+                                .any(|layer| signal_via.spans_layer(*layer))
+                        })
+                        .map(|terminal| terminal.position),
+                )
+                .collect();
+            let Some(anchor) = anchors
+                .into_iter()
+                .min_by_key(|point| point_distance_nm(*point, signal_via.position))
+            else {
+                continue;
+            };
+            let reference_rules = board.rules_for_net(rule.reference_net_id);
+            let distance = rule.max_via_distance_nm;
+            let baseline_non_return = checking::check_board(board)
+                .violations
+                .iter()
+                .filter(|violation| violation.rule != "return_path")
+                .count();
+            for (dx, dy) in [(distance, 0), (-distance, 0), (0, distance), (0, -distance)] {
+                let position = Point {
+                    x_nm: signal_via.position.x_nm + dx,
+                    y_nm: signal_via.position.y_nm + dy,
+                };
+                if !board.point_inside_board(position, reference_rules.via_diameter_nm) {
+                    continue;
+                }
+                let layer = signal_via.start_layer;
+                let points = if anchor.x_nm == position.x_nm
+                    || anchor.y_nm == position.y_nm
+                    || (anchor.x_nm - position.x_nm).abs() == (anchor.y_nm - position.y_nm).abs()
+                {
+                    vec![anchor, position]
+                } else {
+                    vec![
+                        anchor,
+                        Point {
+                            x_nm: position.x_nm,
+                            y_nm: anchor.y_nm,
+                        },
+                        position,
+                    ]
+                };
+                let segments = points
+                    .windows(2)
+                    .map(|points| Segment {
+                        start: points[0],
+                        end: points[1],
+                        layer,
+                        width_nm: reference_rules.track_width_nm,
+                    })
+                    .collect::<Vec<_>>();
+                let via = Via {
+                    position,
+                    diameter_nm: reference_rules.via_diameter_nm,
+                    drill_nm: reference_rules.via_drill_nm,
+                    kind: signal_via.kind,
+                    start_layer: signal_via.start_layer,
+                    end_layer: signal_via.end_layer,
+                };
+                let mut candidate = board.clone();
+                candidate.routes[reference_index]
+                    .segments
+                    .extend(segments.iter().cloned());
+                candidate.routes[reference_index].vias.push(via.clone());
+                let report = checking::check_board(&candidate);
+                let non_return = report
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule != "return_path")
+                    .count();
+                let still_missing = report.violations.iter().any(|violation| {
+                    violation.rule == "return_path"
+                        && violation.net_ids.contains(&rule.reference_net_id)
+                        && violation.net_ids.contains(&signal_net_id)
+                });
+                if non_return == baseline_non_return && !still_missing {
+                    board.routes[reference_index].segments.extend(segments);
+                    board.routes[reference_index].vias.push(via);
+                    generated += 1;
+                    break;
+                }
+            }
+        }
+    }
+    generated
+}
+
+fn point_distance_nm(left: Point, right: Point) -> Nm {
+    let dx = (left.x_nm - right.x_nm) as f64;
+    let dy = (left.y_nm - right.y_nm) as f64;
+    dx.hypot(dy).round() as Nm
 }
 
 /// Rip up and reroute only the selected nets. Every unselected route remains
@@ -3341,6 +3516,7 @@ mod tests {
             length_groups: vec![],
             escape_groups: vec![],
             manufacturing_rules: None,
+            return_path_rules: vec![],
             via_strategy: ViaStrategy::ThroughOnly,
             nets: vec![Net {
                 id: 1,
@@ -3395,6 +3571,131 @@ mod tests {
             board.via_for_transition(Layer::Front, Layer::Back).0,
             ViaKind::Through
         );
+    }
+
+    #[test]
+    fn checks_and_stitches_signal_return_vias() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].terminals = vec![
+            Terminal {
+                position: Point {
+                    x_nm: 1_000_000,
+                    y_nm: 1_000_000,
+                },
+                layers: vec![Layer::Front],
+            },
+            Terminal {
+                position: Point {
+                    x_nm: 9_000_000,
+                    y_nm: 1_000_000,
+                },
+                layers: vec![Layer::Back],
+            },
+        ];
+        board.nets.push(Net {
+            id: 2,
+            name: "GND".into(),
+            class: None,
+            priority: 0,
+            terminals: vec![
+                Terminal {
+                    position: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 3_000_000,
+                    },
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: Point {
+                        x_nm: 9_000_000,
+                        y_nm: 3_000_000,
+                    },
+                    layers: vec![Layer::Front],
+                },
+            ],
+        });
+        board.routes = vec![
+            Route {
+                net_id: 1,
+                segments: vec![
+                    Segment {
+                        start: Point {
+                            x_nm: 1_000_000,
+                            y_nm: 1_000_000,
+                        },
+                        end: Point {
+                            x_nm: 5_000_000,
+                            y_nm: 1_000_000,
+                        },
+                        layer: Layer::Front,
+                        width_nm: 250_000,
+                    },
+                    Segment {
+                        start: Point {
+                            x_nm: 5_000_000,
+                            y_nm: 1_000_000,
+                        },
+                        end: Point {
+                            x_nm: 9_000_000,
+                            y_nm: 1_000_000,
+                        },
+                        layer: Layer::Back,
+                        width_nm: 250_000,
+                    },
+                ],
+                arcs: vec![],
+                vias: vec![Via {
+                    position: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    diameter_nm: 600_000,
+                    drill_nm: 300_000,
+                    kind: ViaKind::Through,
+                    start_layer: Layer::Front,
+                    end_layer: Layer::Back,
+                }],
+                teardrops: vec![],
+                zones: vec![],
+            },
+            Route {
+                net_id: 2,
+                segments: vec![Segment {
+                    start: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 3_000_000,
+                    },
+                    end: Point {
+                        x_nm: 9_000_000,
+                        y_nm: 3_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                }],
+                arcs: vec![],
+                vias: vec![],
+                teardrops: vec![],
+                zones: vec![],
+            },
+        ];
+        board.return_path_rules.push(ReturnPathRule {
+            name: "high-speed reference".into(),
+            signal_net_ids: vec![1],
+            reference_net_id: 2,
+            max_via_distance_nm: 1_000_000,
+            auto_stitch: true,
+        });
+
+        assert!(
+            checking::check_board(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "return_path")
+        );
+        assert_eq!(stitch_return_paths(&mut board), 1);
+        assert!(checking::check_board(&board).is_clean());
+        assert_eq!(board.routes[1].vias.len(), 1);
     }
 
     #[test]

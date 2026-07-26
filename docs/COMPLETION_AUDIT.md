@@ -50,6 +50,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Deterministic parallel candidate search | Configurable 1–8 bounded workers explore first-pass A* candidates; ordered validation reuses one board snapshot per pass and sequential conflict fallback controls commits | Ten-net 1-vs-8-worker regression is byte-identical; Criterion measures actual 1/2/4/8-worker wall time |
 | Practical board regression corpus | Anonymized USB differential, four-layer power/inner-signal, and eight-net BGA fanout topologies | Clean, byte-idempotent routing with per-fixture search budgets on every PR |
 | BGA escape routing | Deterministic radial/row/column/four-way dog-bone stubs, optional via-grid snapping, multi-ring collision fallback, stackup-aware fanout vias, and inner-layer continuation before global routing | Two-net BGA regression blocks every first-ring site, checks grid-aligned second-ring microvias, front stubs, inner tracks, and full-board cleanliness |
+| Return-path control | Per-signal/reference-net transition rules check maximum stitching-via distance and optional routing adds fully checked reference vias connected to existing copper | Two-layer signal transition regression detects the missing return path, inserts one legal GND stitch, and finishes DRC-clean |
 | KiCad placement I/O | Footprints, pad-net connections, locked state, origin-aware position/rotation write-back, and `place-kicad` CLI | Locked/rotated/non-zero-origin round-trip regression and CLI integration test |
 | Multilayer routing | `In1.Cu`–`In30.Cu` model/serde, KiCad layer-table and item I/O, all-layer through vias, and per-net layer constraints | Forced inner-layer core regression, four-layer importer test, and real-KiCad four-layer DRC/idempotence fixture |
 | Differential-pair rules and checking | Explicit pair model, KiCad net-class inference, differential width, skew/coupling/layer-via symmetry checks | Coupled/skew core regression and KiCad `_P`/`_N` inference test |
@@ -91,7 +92,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.33.0 exposes 77 Rust tests and 11 Python tests. The release workflow
+Version 1.34.0 exposes 78 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
