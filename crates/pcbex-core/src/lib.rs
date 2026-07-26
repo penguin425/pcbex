@@ -797,6 +797,10 @@ pub struct RouteReport {
     pub optimized_segments: usize,
     #[serde(default)]
     pub escaped_nets: usize,
+    #[serde(default)]
+    pub parallel_candidates: usize,
+    #[serde(default)]
+    pub parallel_fallbacks: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1469,6 +1473,8 @@ impl<'a> Router<'a> {
             ..RouteReport::default()
         };
         let mut total_expanded = 0;
+        let mut parallel_candidates = 0;
+        let mut parallel_fallbacks = 0;
         for attempt in 0..4 {
             self.occupied.clear();
             self.occupied_by.clear();
@@ -1493,8 +1499,60 @@ impl<'a> Router<'a> {
             });
             let mut blockers = HashSet::new();
             let mut failed_ids = HashSet::new();
-            for net in attempt_nets {
-                match self.route_net(net) {
+            let initial_results = if attempt == 0 && attempt_nets.len() > 1 {
+                parallel_candidates += attempt_nets.len();
+                let worker_count = std::thread::available_parallelism()
+                    .map_or(2, usize::from)
+                    .min(attempt_nets.len())
+                    .min(8);
+                let next = std::sync::atomic::AtomicUsize::new(0);
+                let results = std::sync::Mutex::new(
+                    (0..attempt_nets.len())
+                        .map(|_| None)
+                        .collect::<Vec<Option<Result<(Route, usize), RouteFailure>>>>(),
+                );
+                std::thread::scope(|scope| {
+                    for _ in 0..worker_count {
+                        scope.spawn(|| {
+                            loop {
+                                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                let Some(net) = attempt_nets.get(index) else {
+                                    break;
+                                };
+                                results.lock().expect("result lock poisoned")[index] =
+                                    Some(self.route_net(net));
+                            }
+                        });
+                    }
+                });
+                results
+                    .into_inner()
+                    .expect("result lock poisoned")
+                    .into_iter()
+                    .map(|result| result.expect("parallel worker skipped a net"))
+                    .map(Some)
+                    .collect::<Vec<_>>()
+            } else {
+                (0..attempt_nets.len()).map(|_| None).collect()
+            };
+            for (net, initial_result) in attempt_nets.into_iter().zip(initial_results) {
+                let mut result = initial_result.unwrap_or_else(|| self.route_net(net));
+                if attempt == 0
+                    && let Ok((candidate, _)) = &result
+                {
+                    let mut validation = self.board.clone();
+                    validation.routes.extend(accepted.iter().cloned());
+                    validation.routes.push(candidate.clone());
+                    if checking::check_board(&validation)
+                        .violations
+                        .iter()
+                        .any(|violation| violation.net_ids.contains(&net.id))
+                    {
+                        parallel_fallbacks += 1;
+                        result = self.route_net(net);
+                    }
+                }
+                match result {
                     Ok((route, expanded)) => {
                         total_expanded += expanded;
                         self.commit(&route);
@@ -1527,6 +1585,8 @@ impl<'a> Router<'a> {
                     .map(|net| net.name.clone())
                     .collect(),
                 ripup_events,
+                parallel_candidates,
+                parallel_fallbacks,
                 ..RouteReport::default()
             };
             if report.unrouted.len() < best_report.unrouted.len() {
@@ -3581,7 +3641,14 @@ mod tests {
             })
             .collect();
         let (routed, report) = route_board(&b).unwrap();
+        let (routed_again, repeated_report) = route_board(&b).unwrap();
         assert!(report.unrouted.is_empty(), "{:?}", report.unrouted);
+        assert_eq!(report.parallel_candidates, 10);
+        assert_eq!(repeated_report.parallel_candidates, 10);
+        assert_eq!(
+            serde_json::to_vec(&routed).unwrap(),
+            serde_json::to_vec(&routed_again).unwrap()
+        );
         assert!(
             report.expanded_states < 100_000,
             "parallel-net search budget regressed: {} states",

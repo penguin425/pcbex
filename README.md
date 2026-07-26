@@ -259,6 +259,11 @@ a four-layer power/inner-signal board, and an eight-net BGA fanout. Each fixture
 has a deterministic search budget and must remain clean and byte-idempotent;
 see `docs/REGRESSION_CORPUS.md`.
 
+Independent first-pass A* candidates are explored concurrently by up to eight
+workers. Results are validated and committed in the original deterministic net
+order. A candidate that conflicts with an earlier commit is discarded and
+searched again against the updated board, retaining byte-identical output.
+
 Generate a stable quality report for review or CI:
 
 ```sh
