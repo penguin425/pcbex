@@ -234,6 +234,7 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 maximum_length_nm: optional_dimension("max_track_length")?,
                 target_impedance_ohms: None,
                 impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
             },
         );
     }
@@ -472,6 +473,7 @@ fn import_net_classes(
                     maximum_length_nm: None,
                     target_impedance_ohms: None,
                     impedance_tolerance_ohms: None,
+                    maximum_impedance_step_ohms: None,
                 },
             );
             for child in values {

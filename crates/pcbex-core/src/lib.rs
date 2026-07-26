@@ -235,6 +235,8 @@ pub struct NetClassRules {
     pub target_impedance_ohms: Option<f64>,
     #[serde(default)]
     pub impedance_tolerance_ohms: Option<f64>,
+    #[serde(default)]
+    pub maximum_impedance_step_ohms: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1238,6 +1240,9 @@ impl<'a> Router<'a> {
                     .is_some_and(|value| !value.is_finite() || value <= 0.0)
                 || rules
                     .impedance_tolerance_ohms
+                    .is_some_and(|value| !value.is_finite() || value < 0.0)
+                || rules
+                    .maximum_impedance_step_ohms
                     .is_some_and(|value| !value.is_finite() || value < 0.0)
             {
                 return Err(format!("net class {name} has invalid impedance limits"));
@@ -4916,6 +4921,7 @@ mod tests {
                 maximum_length_nm: None,
                 target_impedance_ohms: Some(estimated),
                 impedance_tolerance_ohms: Some(1.0),
+                maximum_impedance_step_ohms: None,
             },
         );
         board.stackup.push(StackupLayer {
@@ -4953,6 +4959,83 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "impedance")
+        );
+    }
+
+    #[test]
+    fn detects_impedance_steps_at_layer_transitions() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].class = Some("Transition".into());
+        board.net_classes.insert(
+            "Transition".into(),
+            NetClassRules {
+                track_width_nm: 250_000,
+                clearance_nm: 200_000,
+                via_diameter_nm: 600_000,
+                via_drill_nm: 300_000,
+                layers: None,
+                differential_width_nm: None,
+                differential_gap_nm: None,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: Some(2.0),
+            },
+        );
+        for (layer, reference) in [(Layer::Front, Layer::Back), (Layer::Back, Layer::Front)] {
+            board.stackup.push(StackupLayer {
+                layer,
+                dielectric_height_nm: 200_000,
+                dielectric_constant: 4.2,
+                copper_thickness_nm: 35_000,
+                reference_layer: Some(reference),
+                secondary_reference_layer: None,
+                secondary_dielectric_height_nm: None,
+                secondary_dielectric_constant: None,
+            });
+        }
+        let start = board.nets[0].terminals[0].position;
+        let end = board.nets[0].terminals[1].position;
+        let transition = Point {
+            x_nm: (start.x_nm + end.x_nm) / 2,
+            y_nm: (start.y_nm + end.y_nm) / 2,
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![
+                Segment {
+                    start,
+                    end: transition,
+                    layer: Layer::Front,
+                    width_nm: 150_000,
+                },
+                Segment {
+                    start: transition,
+                    end,
+                    layer: Layer::Back,
+                    width_nm: 400_000,
+                },
+            ],
+            arcs: vec![],
+            vias: vec![Via {
+                position: transition,
+                diameter_nm: 600_000,
+                drill_nm: 300_000,
+                kind: ViaKind::Through,
+                start_layer: Layer::Front,
+                end_layer: Layer::Back,
+            }],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        assert!(
+            checking::check_board(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "impedance_transition")
         );
     }
 
@@ -5375,6 +5458,7 @@ mod tests {
                 maximum_length_nm: None,
                 target_impedance_ohms: None,
                 impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
             },
         );
         let (routed, report) = route_board(&b).unwrap();
@@ -5533,6 +5617,7 @@ mod tests {
                 maximum_length_nm: None,
                 target_impedance_ohms: None,
                 impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
             },
         );
         b.nets = vec![
@@ -5809,6 +5894,7 @@ mod tests {
                 maximum_length_nm: None,
                 target_impedance_ohms: None,
                 impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
             },
         );
         b.nets[0].terminals = vec![
@@ -5917,6 +6003,7 @@ mod tests {
                 maximum_length_nm: None,
                 target_impedance_ohms: None,
                 impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
             },
         );
         board.nets[0].terminals = vec![
@@ -5970,6 +6057,7 @@ mod tests {
                 maximum_length_nm: Some(11_000_000),
                 target_impedance_ohms: None,
                 impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
             },
         );
 

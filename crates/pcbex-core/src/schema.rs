@@ -119,7 +119,8 @@ pub fn board_json_schema() -> serde_json::Value {
                     "minimum_length_nm": {"type": ["integer", "null"]},
                     "maximum_length_nm": {"type": ["integer", "null"]},
                     "target_impedance_ohms": {"type": ["number", "null"], "exclusiveMinimum": 0},
-                    "impedance_tolerance_ohms": {"type": ["number", "null"], "minimum": 0}
+                    "impedance_tolerance_ohms": {"type": ["number", "null"], "minimum": 0},
+                    "maximum_impedance_step_ohms": {"type": ["number", "null"], "minimum": 0}
                 }
             },
             "keepout": {
