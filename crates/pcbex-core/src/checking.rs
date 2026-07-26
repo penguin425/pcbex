@@ -233,6 +233,17 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![],
             );
         }
+        if rules.differential_width_nm.is_some_and(|value| value <= 0)
+            || rules.differential_gap_nm.is_some_and(|value| value < 0)
+        {
+            report.push(
+                "net_class_differential_dimensions",
+                format!(
+                    "net class {name} differential width must be positive and differential gap must be non-negative"
+                ),
+                vec![],
+            );
+        }
     }
     if !copper_layer_table_is_valid(board) {
         report.push(
@@ -5152,6 +5163,58 @@ mod tests {
                     .violations
                     .iter()
                     .any(|violation| violation.rule == "net_class_impedance_limits")
+            );
+        }
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_net_class_differential_dimensions() {
+        let with_dimensions = |name: &str, differential_width_nm, differential_gap_nm| {
+            let mut board = base();
+            board.net_classes.insert(
+                name.into(),
+                crate::NetClassRules {
+                    track_width_nm: 250_000,
+                    clearance_nm: 200_000,
+                    via_diameter_nm: 600_000,
+                    via_drill_nm: 300_000,
+                    layers: None,
+                    differential_width_nm,
+                    differential_gap_nm,
+                    minimum_length_nm: None,
+                    maximum_length_nm: None,
+                    target_impedance_ohms: None,
+                    impedance_tolerance_ohms: None,
+                    maximum_impedance_step_ohms: None,
+                },
+            );
+            board
+        };
+
+        for board in [
+            with_dimensions("zero-width", Some(0), None),
+            with_dimensions("negative-width", Some(-1), None),
+            with_dimensions("negative-gap", None, Some(-1)),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "net_class_differential_dimensions")
+                    .count(),
+                1
+            );
+        }
+        for board in [
+            with_dimensions("unset", None, None),
+            with_dimensions("zero-gap", None, Some(0)),
+            with_dimensions("configured", Some(200_000), Some(150_000)),
+        ] {
+            assert!(
+                !check_board(&board)
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == "net_class_differential_dimensions")
             );
         }
     }
