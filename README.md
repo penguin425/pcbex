@@ -109,6 +109,9 @@ and through vias are appended at board level without duplicating locked routes,
 while preserving the source document.
 The route model also preserves KiCad three-point copper arcs and can emit
 native pad/via teardrop zones from explicit polygon geometry.
+New via-to-track junctions automatically receive tapered teardrop polygons
+when sufficient straight length is available. Each candidate is accepted only
+after complete-board clearance checking and generation is idempotent.
 Arc length is calculated from the circumcircle and sweep angle. Connectivity,
 clearance, and boundary checks use a conservative adaptive curve envelope with
 1 µm maximum chord deviation, and SVG output renders the complete curve.
