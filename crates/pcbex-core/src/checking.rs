@@ -153,6 +153,13 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    if board.rules.grid_nm <= 0 {
+        report.push(
+            "routing_grid",
+            "routing grid must be positive".into(),
+            vec![],
+        );
+    }
     if !copper_layer_table_is_valid(board) {
         report.push(
             "copper_layers",
@@ -4292,6 +4299,33 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "board_dimensions")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_non_positive_routing_grids() {
+        let mut zero = base();
+        zero.rules.grid_nm = 0;
+        let mut negative = base();
+        negative.rules.grid_nm = -1;
+        let valid = base();
+
+        for board in [&zero, &negative] {
+            let report = check_board(board);
+            assert_eq!(
+                report
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "routing_grid")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&valid)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "routing_grid")
         );
     }
 
