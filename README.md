@@ -321,12 +321,15 @@ clearance, edge, length, and manufacturing checks.
 
 ## Stackup impedance checks
 
-`stackup` entries define the reference-plane dielectric height and relative
-permittivity for each controlled copper layer. Net classes may set
+KiCad `(setup (stackup ...))` data is imported automatically, including copper
+thickness, adjacent dielectric height/permittivity, and the nearest reference
+copper layer. JSON `stackup` entries can define the same values directly.
+Net classes may set
 `target_impedance_ohms` and `impedance_tolerance_ohms`; the normal checker uses
-the IPC-2141 microstrip estimate for every routed segment and reports missing
-stackup data or out-of-range geometry. This is an early layout constraint, not
-a replacement for a field solver or fabrication-house stackup validation.
+the copper-thickness-aware IPC-2141 microstrip estimate for every routed segment
+and reports missing stackup data or out-of-range geometry. This is an early
+layout constraint, not a replacement for a field solver or fabrication-house
+stackup validation.
 
 ## Manufacturing checks
 

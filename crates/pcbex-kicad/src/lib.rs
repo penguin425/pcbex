@@ -1,7 +1,7 @@
 use pcbex_core::{
     Board, CapsuleObstacle, CopperZone, DifferentialPair, Footprint, Keepout, Layer, Net,
     NetClassRules, Obstacle, Pad, PadShape, Point, PolygonObstacle, RoundObstacle, Route, RouteArc,
-    Rules, Segment, Terminal, Via, ViaKind,
+    Rules, Segment, StackupLayer, Terminal, Via, ViaKind,
     checking::check_board,
     placement::{BoardSide, Component, Connection, PinRef, PlacementProblem},
 };
@@ -49,6 +49,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         return Err("expected a kicad_pcb document".into());
     }
     let copper_layers = board_copper_layers(top)?;
+    let stackup = import_stackup(top, &copper_layers)?;
 
     let BoardGeometry {
         min,
@@ -149,7 +150,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         escape_groups: vec![],
         manufacturing_rules: None,
         return_path_rules: vec![],
-        stackup: vec![],
+        stackup,
         via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets,
         routes,
@@ -1963,6 +1964,113 @@ fn board_copper_layers(top: &[Sexp]) -> Result<Vec<Layer>, String> {
     }
     Ok(layers)
 }
+
+#[derive(Clone, Copy)]
+struct ImportedStackEntry {
+    copper: Option<Layer>,
+    thickness_nm: i64,
+    dielectric_constant: Option<f64>,
+}
+
+fn import_stackup(top: &[Sexp], copper_layers: &[Layer]) -> Result<Vec<StackupLayer>, String> {
+    let Some(setup) = child_values(top, "setup") else {
+        return Ok(vec![]);
+    };
+    let Some(stackup) = child_values(setup, "stackup") else {
+        return Ok(vec![]);
+    };
+    let mut entries = Vec::new();
+    for item in stackup.iter().skip(1) {
+        let Some(values) = item.as_list() else {
+            continue;
+        };
+        if atom(values.first()) != Some("layer") {
+            continue;
+        }
+        let Some(name) = atom(values.get(1)) else {
+            return Err("KiCad stackup layer is missing its name".into());
+        };
+        let copper = parse_layer(name).filter(|layer| copper_layers.contains(layer));
+        let layer_type = child_atom(values, "type").unwrap_or_default();
+        let is_dielectric = copper.is_none()
+            && (name.starts_with("dielectric")
+                || matches!(layer_type, "core" | "prepreg" | "dielectric"));
+        if copper.is_none() && !is_dielectric {
+            continue;
+        }
+        let thickness = child_values(values, "thickness")
+            .and_then(|values| number(values.get(1)))
+            .unwrap_or(0.0);
+        if !thickness.is_finite() || thickness < 0.0 {
+            return Err(format!("KiCad stackup layer {name} has invalid thickness"));
+        }
+        let dielectric_constant =
+            child_values(values, "epsilon_r").and_then(|values| number(values.get(1)));
+        if dielectric_constant.is_some_and(|value| !value.is_finite() || value <= 1.0) {
+            return Err(format!(
+                "KiCad stackup layer {name} has invalid dielectric constant"
+            ));
+        }
+        entries.push(ImportedStackEntry {
+            copper,
+            thickness_nm: nm(thickness),
+            dielectric_constant,
+        });
+    }
+
+    let mut imported = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(layer) = entry.copper else {
+            continue;
+        };
+        let mut candidates = Vec::new();
+        for direction in [-1_i32, 1] {
+            let dielectric_index = index as i32 + direction;
+            if dielectric_index < 0 {
+                continue;
+            }
+            let Some(dielectric) = entries.get(dielectric_index as usize) else {
+                continue;
+            };
+            if dielectric.copper.is_some()
+                || dielectric.thickness_nm <= 0
+                || dielectric.dielectric_constant.is_none()
+            {
+                continue;
+            }
+            let reference_index = dielectric_index + direction;
+            if reference_index < 0 {
+                continue;
+            }
+            let Some(reference) = entries.get(reference_index as usize) else {
+                continue;
+            };
+            let Some(reference_layer) = reference.copper else {
+                continue;
+            };
+            candidates.push((
+                dielectric.thickness_nm,
+                dielectric.dielectric_constant.unwrap(),
+                reference_layer,
+            ));
+        }
+        let Some((height, dielectric_constant, reference_layer)) =
+            candidates.into_iter().min_by_key(|candidate| candidate.0)
+        else {
+            continue;
+        };
+        imported.push(StackupLayer {
+            layer,
+            dielectric_height_nm: height,
+            dielectric_constant,
+            copper_thickness_nm: entry.thickness_nm,
+            reference_layer: Some(reference_layer),
+        });
+    }
+    imported.sort_by_key(|entry| entry.layer.index());
+    Ok(imported)
+}
+
 fn point_mm(x: f64, y: f64) -> Point {
     Point {
         x_nm: nm(x),
@@ -2485,6 +2593,50 @@ mod tests {
             imported.board.obstacles[0]
                 .layers
                 .contains(&Layer::Inner(1))
+        );
+    }
+
+    #[test]
+    fn imports_stackup_geometry_and_reference_layers() {
+        let pcb = r#"(kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (2 "In1.Cu" power)
+            (4 "In2.Cu" power)
+            (31 "B.Cu" signal)
+            (44 "Edge.Cuts" user))
+          (setup
+            (stackup
+              (layer "F.Cu" (type "copper") (thickness 0.035))
+              (layer "dielectric 1" (type "prepreg") (thickness 0.20) (epsilon_r 4.2))
+              (layer "In1.Cu" (type "copper") (thickness 0.018))
+              (layer "dielectric 2" (type "core") (thickness 0.80) (epsilon_r 4.4))
+              (layer "In2.Cu" (type "copper") (thickness 0.018))
+              (layer "dielectric 3" (type "prepreg") (thickness 0.25) (epsilon_r 4.1))
+              (layer "B.Cu" (type "copper") (thickness 0.035))))
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+
+        assert_eq!(imported.board.stackup.len(), 4);
+        assert_eq!(imported.board.stackup[0].layer, Layer::Front);
+        assert_eq!(imported.board.stackup[0].dielectric_height_nm, 200_000);
+        assert_eq!(imported.board.stackup[0].dielectric_constant, 4.2);
+        assert_eq!(imported.board.stackup[0].copper_thickness_nm, 35_000);
+        assert_eq!(
+            imported.board.stackup[0].reference_layer,
+            Some(Layer::Inner(1))
+        );
+        assert_eq!(
+            imported
+                .board
+                .stackup
+                .iter()
+                .find(|entry| entry.layer == Layer::Inner(2))
+                .unwrap()
+                .reference_layer,
+            Some(Layer::Back)
         );
     }
 

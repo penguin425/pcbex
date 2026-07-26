@@ -167,7 +167,9 @@ pub fn board_json_schema() -> serde_json::Value {
                 "properties": {
                     "layer": {"type": "string"},
                     "dielectric_height_nm": {"type": "integer", "exclusiveMinimum": 0},
-                    "dielectric_constant": {"type": "number", "exclusiveMinimum": 1}
+                    "dielectric_constant": {"type": "number", "exclusiveMinimum": 1},
+                    "copper_thickness_nm": {"type": "integer", "minimum": 0},
+                    "reference_layer": {"type": ["string", "null"]}
                 }
             }
         }
