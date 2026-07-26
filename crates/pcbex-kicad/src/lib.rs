@@ -97,7 +97,10 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                 &mut route_candidates,
                 &copper_layers,
             ),
-            Some("zone") => import_keepout(xs, min, &mut keepouts, &copper_layers),
+            Some("zone") => {
+                import_keepout(xs, min, &mut keepouts, &copper_layers);
+                import_copper_zone(xs, min, &mut footprint_geometry.polygon_obstacles);
+            }
             _ => {}
         }
     }
@@ -993,6 +996,57 @@ fn import_keepout(
     });
 }
 
+fn import_copper_zone(xs: &[Sexp], origin: Point, polygon_obstacles: &mut Vec<PolygonObstacle>) {
+    if child_values(xs, "keepout").is_some() {
+        return;
+    }
+    let Some(net_id) = child_values(xs, "net").and_then(|values| number_u32(values.get(1))) else {
+        return;
+    };
+    if net_id == 0 {
+        return;
+    }
+    let zone_layer = child_atom(xs, "layer").and_then(parse_layer);
+    for child in xs {
+        let Some(filled) = child.as_list() else {
+            continue;
+        };
+        if atom(filled.first()) != Some("filled_polygon") {
+            continue;
+        }
+        let Some(layer) = child_atom(filled, "layer")
+            .and_then(parse_layer)
+            .or(zone_layer)
+        else {
+            continue;
+        };
+        let Some(values) = child_values(filled, "pts") else {
+            continue;
+        };
+        let polygon: Vec<_> = values
+            .iter()
+            .skip(1)
+            .filter_map(|value| {
+                let xy = value.as_list()?;
+                if atom(xy.first()) != Some("xy") {
+                    return None;
+                }
+                Some(relative(
+                    point_mm(number(xy.get(1))?, number(xy.get(2))?),
+                    origin,
+                ))
+            })
+            .collect();
+        if polygon.len() >= 3 {
+            polygon_obstacles.push(PolygonObstacle {
+                polygon,
+                layers: vec![layer],
+                net_id: Some(net_id),
+            });
+        }
+    }
+}
+
 fn rect_obstacle(
     center: Point,
     width: i64,
@@ -1597,5 +1651,31 @@ mod tests {
                 y_nm: 5_000_000
             }
         );
+    }
+
+    #[test]
+    fn imports_filled_copper_zone_as_net_owned_geometry() {
+        let pcb = r#"(kicad_pcb
+          (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+          (net 1 "GND")
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (footprint "TP" (layer "F.Cu") (at 2 2)
+            (pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "GND")))
+          (zone (net 1) (net_name "GND") (layer "F.Cu")
+            (polygon (pts (xy 1 1) (xy 10 1) (xy 10 10) (xy 1 10)))
+            (filled_polygon (layer "F.Cu")
+              (pts (xy 1 1) (xy 10 1) (xy 10 10) (xy 1 10))))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+        let zone = imported
+            .board
+            .polygon_obstacles
+            .iter()
+            .find(|obstacle| obstacle.net_id == Some(1))
+            .unwrap();
+        assert_eq!(zone.layers, vec![Layer::Front]);
+        assert_eq!(zone.polygon.len(), 4);
+        assert_eq!(zone.polygon[0], point_mm(1.0, 1.0));
     }
 }
