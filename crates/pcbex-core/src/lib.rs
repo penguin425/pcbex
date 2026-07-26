@@ -1334,8 +1334,11 @@ impl<'a> Router<'a> {
         }
         let net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
         let mut paired_net_ids = HashSet::new();
+        let mut pair_names = HashSet::new();
         for pair in &board.differential_pairs {
-            if pair.positive_net_id == pair.negative_net_id
+            if pair.name.trim().is_empty()
+                || !pair_names.insert(pair.name.as_str())
+                || pair.positive_net_id == pair.negative_net_id
                 || !net_ids.contains(&pair.positive_net_id)
                 || !net_ids.contains(&pair.negative_net_id)
                 || pair.gap_nm < 0
@@ -4662,6 +4665,35 @@ mod tests {
             Router::new(&invalid),
             Err(message) if message == "net class names must not be blank"
         ));
+    }
+
+    #[test]
+    fn router_rejects_invalid_differential_pair_identities() {
+        let pair = |name: &str| DifferentialPair {
+            name: name.into(),
+            positive_net_id: 1,
+            negative_net_id: 1,
+            gap_nm: 100_000,
+            gap_tolerance_nm: 0,
+            max_skew_nm: 0,
+            min_coupled_percent: 0,
+            target_differential_impedance_ohms: None,
+            differential_impedance_tolerance_ohms: None,
+            maximum_differential_impedance_step_ohms: None,
+            minimum_length_nm: None,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
+        };
+        for invalid_pair in [pair(""), pair("self")] {
+            let mut invalid = board();
+            invalid.differential_pairs.push(invalid_pair);
+            assert!(matches!(
+                Router::new(&invalid),
+                Err(message) if message.starts_with("differential pair ")
+                    && message.ends_with(" is invalid")
+            ));
+        }
     }
 
     #[test]
