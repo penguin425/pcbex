@@ -53,7 +53,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | KiCad Rule Area semantics | Track, via, and copper-pour prohibitions are imported independently and applied only by the relevant router/checker/fill subsystem | Selective via-only Rule Area import retains allowed tracks and pours; legacy all-purpose keepouts remain compatible |
 | PDN design checks | Per-power-net current, voltage-drop budget, and parallel-via minimum use routed geometry and stackup copper thickness for DC resistance estimation | 1 A narrow-trace regression reports both excessive voltage drop and insufficient vias |
 | Decoupling placement quality | Dedicated capacitor-anchor to IC-power-pin distance and same-side constraint uses transformed named anchors | Colocated anchors score clean on one side and receive a deterministic penalty across board sides |
-| Practical board regression corpus | Anonymized USB differential, four-layer power/inner-signal, and eight-net BGA fanout topologies | Clean, byte-idempotent routing with per-fixture search budgets on every PR |
+| Practical board regression corpus | Anonymized USB differential, four-layer power/inner-signal, eight-net BGA fanout, and reproducibly generated 100-net six-layer backplane topologies | Clean, byte-idempotent routing with per-fixture search budgets on every PR; large fixture completes in 46,500 states under a 100,000-state ceiling |
 | BGA escape routing | Deterministic radial/row/column/four-way dog-bone stubs, optional via-grid snapping, multi-ring collision fallback, stackup-aware fanout vias, and inner-layer continuation before global routing | Two-net BGA regression blocks every first-ring site, checks grid-aligned second-ring microvias, front stubs, inner tracks, and full-board cleanliness |
 | Return-path control | Per-signal/reference-net transition rules check maximum stitching-via distance, sample stackup-selected reference fills for split-plane/slot crossings, and add fully checked Zone-connected or track-connected reference vias | Filled-plane gap regression detects a slot; two-layer transitions insert legal direct-to-Zone and track-connected GND stitches and finish DRC-clean |
 | Automatic rounded routing | Orthogonal corners are trimmed into tangent quarter-circle native arcs at the routing-grid radius, with whole-board acceptance checks and reporting | Right-angle regression verifies valid arc geometry, preserved connectivity, and a clean full-board check |
@@ -101,7 +101,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.45.0 exposes 88 Rust tests and 11 Python tests. The release workflow
+Version 1.46.0 exposes 88 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

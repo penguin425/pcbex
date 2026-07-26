@@ -8,7 +8,7 @@ mkdir -p "$output_dir"
 run_fixture() {
   local name="$1"
   local budget="$2"
-  local input="corpus/${name}.json"
+  local input="${3:-corpus/${name}.json}"
   local routed="${output_dir}/${name}.routed.json"
   local rerouted="${output_dir}/${name}.rerouted.json"
   local report
@@ -28,3 +28,6 @@ run_fixture() {
 run_fixture usb_diff 8000
 run_fixture four_layer_power 15000
 run_fixture bga_fanout 12000
+large_fixture="${output_dir}/large_backplane.json"
+python3 scripts/generate-large-corpus.py "$large_fixture"
+run_fixture large_backplane 100000 "$large_fixture"
