@@ -160,18 +160,35 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
-    if !board.outline.is_empty() && !custom_pad_polygon_is_valid(&board.outline) {
+    let explicit_outline_is_valid =
+        board.outline.is_empty() || custom_pad_polygon_is_valid(&board.outline);
+    if !explicit_outline_is_valid {
         report.push(
             "board_outline",
             "explicit board outline must be a simple non-degenerate polygon".into(),
             vec![],
         );
     }
+    let effective_outline = explicit_outline_is_valid.then(|| board.effective_outline());
     for cutout in &board.cutouts {
-        if !custom_pad_polygon_is_valid(cutout) {
+        let topology_is_valid = custom_pad_polygon_is_valid(cutout);
+        if !topology_is_valid {
             report.push(
                 "board_cutout",
                 "board cutout must be a simple non-degenerate polygon".into(),
+                vec![],
+            );
+        }
+        if topology_is_valid
+            && effective_outline.as_ref().is_some_and(|outline| {
+                cutout
+                    .iter()
+                    .any(|point| !point_in_polygon(*point, outline))
+            })
+        {
+            report.push(
+                "board_cutout_bounds",
+                "board cutout must remain inside the effective board outline".into(),
                 vec![],
             );
         }
@@ -4371,6 +4388,36 @@ mod tests {
                 .filter(|violation| violation.rule == "board_cutout")
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_board_cutouts_outside_the_outline() {
+        let mut board = base();
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        board.cutouts = vec![
+            vec![
+                point(2_000_000, 2_000_000),
+                point(4_000_000, 2_000_000),
+                point(4_000_000, 4_000_000),
+                point(2_000_000, 4_000_000),
+            ],
+            vec![
+                point(9_000_000, 2_000_000),
+                point(11_000_000, 2_000_000),
+                point(11_000_000, 4_000_000),
+                point(9_000_000, 4_000_000),
+            ],
+        ];
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "board_cutout_bounds")
+                .count(),
+            1
         );
     }
 }
