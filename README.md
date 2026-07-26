@@ -380,6 +380,12 @@ pairs use the same stackup geometry. This is an early
 layout constraint, not a replacement for a field solver or fabrication-house
 stackup validation.
 
+Use `pcbex impedance-width board.json --layer F.Cu --target-ohms 50` to
+reverse-solve a trace width from the imported stackup. Add
+`--differential-gap-mm 0.15` for a differential target. The command searches
+the configured width range and emits the selected width and estimated impedance
+as JSON, using the same microstrip or embedded model as DRC.
+
 ## Manufacturing checks
 
 Boards may define `manufacturing_rules` for minimum track width, copper

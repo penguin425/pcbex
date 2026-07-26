@@ -6,6 +6,7 @@ use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{
     Board, RoutingQuality, Rules, board_json_schema, migrate_board_json, parse_board_json,
     render_svg, repair_routes, repairable_net_ids, route_board, routing_quality,
+    solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{apply_custom_design_rules, apply_project_net_settings, import as import_kicad};
 use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
@@ -130,6 +131,22 @@ enum Command {
         output: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
         format: ReportFormat,
+    },
+    /// Solve trace width from a stackup layer and target impedance.
+    ImpedanceWidth {
+        input: PathBuf,
+        /// Copper layer name, for example F.Cu or In1.Cu.
+        #[arg(long)]
+        layer: String,
+        #[arg(long)]
+        target_ohms: f64,
+        /// Pair gap in millimetres; when set, solve differential impedance.
+        #[arg(long)]
+        differential_gap_mm: Option<f64>,
+        #[arg(long, default_value_t = 0.01)]
+        minimum_width_mm: f64,
+        #[arg(long, default_value_t = 5.0)]
+        maximum_width_mm: f64,
     },
     Render {
         input: PathBuf,
@@ -476,6 +493,61 @@ fn main() -> Result<()> {
                 bail!("{} manufacturing violations", report.violations.len())
             }
         }
+        Command::ImpedanceWidth {
+            input,
+            layer,
+            target_ohms,
+            differential_gap_mm,
+            minimum_width_mm,
+            maximum_width_mm,
+        } => {
+            if !target_ohms.is_finite() || target_ohms <= 0.0 {
+                bail!("target impedance must be a positive finite value")
+            }
+            let board = read(&input)?;
+            let stackup = board
+                .stackup
+                .iter()
+                .find(|entry| entry.layer.name() == layer)
+                .with_context(|| format!("no stackup entry for layer {layer}"))?;
+            let minimum = to_nm(minimum_width_mm, "minimum width")?;
+            let maximum = to_nm(maximum_width_mm, "maximum width")?;
+            if maximum < minimum {
+                bail!("maximum width must be at least minimum width")
+            }
+            let (width, estimated, mode) = if let Some(gap_mm) = differential_gap_mm {
+                let gap = to_nm(gap_mm, "differential gap")?;
+                let width = solve_stackup_differential_width_nm(
+                    target_ohms,
+                    gap,
+                    stackup,
+                    minimum,
+                    maximum,
+                )
+                .context("target impedance is unreachable within the width range")?;
+                let estimated =
+                    pcbex_core::estimated_stackup_differential_impedance_ohms(width, gap, stackup)
+                        .context("solved differential geometry is invalid")?;
+                (width, estimated, "differential")
+            } else {
+                let width = solve_stackup_width_nm(target_ohms, stackup, minimum, maximum)
+                    .context("target impedance is unreachable within the width range")?;
+                let estimated = pcbex_core::estimated_stackup_impedance_ohms(width, stackup)
+                    .context("solved single-ended geometry is invalid")?;
+                (width, estimated, "single_ended")
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "mode": mode,
+                    "layer": layer,
+                    "target_ohms": target_ohms,
+                    "estimated_ohms": estimated,
+                    "width_nm": width,
+                    "width_mm": width as f64 / 1_000_000.0
+                }))?
+            );
+        }
         Command::Render { input, output } => fs::write(output, render_svg(&read(&input)?))?,
         Command::Place {
             input,
@@ -659,5 +731,31 @@ mod tests {
             assert!(output.contains("pcbex"));
             assert!(output.contains("completion"));
         }
+    }
+
+    #[test]
+    fn parses_impedance_width_solver_arguments() {
+        let cli = Cli::try_parse_from([
+            "pcbex",
+            "impedance-width",
+            "board.json",
+            "--layer",
+            "In1.Cu",
+            "--target-ohms",
+            "90",
+            "--differential-gap-mm",
+            "0.15",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::ImpedanceWidth {
+                layer,
+                target_ohms: 90.0,
+                differential_gap_mm: Some(0.15),
+                ..
+            } if layer == "In1.Cu"
+        ));
     }
 }
