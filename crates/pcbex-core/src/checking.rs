@@ -940,56 +940,123 @@ fn check_differential_pairs(
                 vec![pair.positive_net_id, pair.negative_net_id],
             );
         }
-        let (Some(target), Some(tolerance)) = (
+        if let (Some(target), Some(tolerance)) = (
             pair.target_differential_impedance_ohms,
             pair.differential_impedance_tolerance_ohms,
-        ) else {
-            continue;
-        };
-        for segment in &positive.segments {
-            let Some(stackup) = board
-                .stackup
-                .iter()
-                .find(|entry| entry.layer == segment.layer)
-            else {
-                report.push(
-                    "differential_impedance_stackup",
-                    format!(
-                        "differential pair {} has no stackup entry for {:?}",
-                        pair.name, segment.layer
-                    ),
-                    vec![pair.positive_net_id, pair.negative_net_id],
-                );
-                break;
-            };
-            let Some(estimated) = crate::estimated_stackup_differential_impedance_ohms(
-                segment.width_nm,
-                pair.gap_nm,
-                stackup,
-            ) else {
-                report.push(
-                    "differential_impedance_stackup",
-                    format!(
-                        "differential pair {} has invalid impedance geometry",
-                        pair.name
-                    ),
-                    vec![pair.positive_net_id, pair.negative_net_id],
-                );
-                break;
-            };
-            if (estimated - target).abs() > tolerance {
-                report.push(
-                    "differential_impedance",
-                    format!(
-                        "differential pair {} estimates {:.2} Ω, outside {:.2} ± {:.2} Ω",
-                        pair.name, estimated, target, tolerance
-                    ),
-                    vec![pair.positive_net_id, pair.negative_net_id],
-                );
-                break;
+        ) {
+            for segment in &positive.segments {
+                let Some(stackup) = board
+                    .stackup
+                    .iter()
+                    .find(|entry| entry.layer == segment.layer)
+                else {
+                    report.push(
+                        "differential_impedance_stackup",
+                        format!(
+                            "differential pair {} has no stackup entry for {:?}",
+                            pair.name, segment.layer
+                        ),
+                        vec![pair.positive_net_id, pair.negative_net_id],
+                    );
+                    break;
+                };
+                let Some(estimated) = crate::estimated_stackup_differential_impedance_ohms(
+                    segment.width_nm,
+                    pair.gap_nm,
+                    stackup,
+                ) else {
+                    report.push(
+                        "differential_impedance_stackup",
+                        format!(
+                            "differential pair {} has invalid impedance geometry",
+                            pair.name
+                        ),
+                        vec![pair.positive_net_id, pair.negative_net_id],
+                    );
+                    break;
+                };
+                if (estimated - target).abs() > tolerance {
+                    report.push(
+                        "differential_impedance",
+                        format!(
+                            "differential pair {} estimates {:.2} Ω, outside {:.2} ± {:.2} Ω",
+                            pair.name, estimated, target, tolerance
+                        ),
+                        vec![pair.positive_net_id, pair.negative_net_id],
+                    );
+                    break;
+                }
             }
         }
+        let Some(maximum_step) = pair.maximum_differential_impedance_step_ohms else {
+            continue;
+        };
+        let steps = [positive, negative]
+            .into_iter()
+            .map(|route| differential_impedance_transition_step(board, route, pair))
+            .collect::<Result<Vec<_>, _>>();
+        let Ok(steps) = steps else {
+            report.push(
+                "differential_impedance_stackup",
+                format!(
+                    "differential pair {} has invalid transition stackup geometry",
+                    pair.name
+                ),
+                vec![pair.positive_net_id, pair.negative_net_id],
+            );
+            continue;
+        };
+        let step = steps.into_iter().flatten().fold(0.0_f64, f64::max);
+        if step > maximum_step {
+            report.push(
+                "differential_impedance_transition",
+                format!(
+                    "differential pair {} changes impedance by {:.2} Ω at a layer transition, exceeding {:.2} Ω",
+                    pair.name, step, maximum_step
+                ),
+                vec![pair.positive_net_id, pair.negative_net_id],
+            );
+        }
     }
+}
+
+fn differential_impedance_transition_step(
+    board: &Board,
+    route: &Route,
+    pair: &crate::DifferentialPair,
+) -> Result<Option<f64>, ()> {
+    let mut maximum_step = None::<f64>;
+    for via in &route.vias {
+        let connected = route
+            .segments
+            .iter()
+            .filter(|segment| {
+                (segment.start == via.position || segment.end == via.position)
+                    && via.spans_layer(segment.layer)
+            })
+            .map(|segment| {
+                let stackup = board
+                    .stackup
+                    .iter()
+                    .find(|entry| entry.layer == segment.layer)
+                    .ok_or(())?;
+                crate::estimated_stackup_differential_impedance_ohms(
+                    segment.width_nm,
+                    pair.gap_nm,
+                    stackup,
+                )
+                .ok_or(())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if connected.len() < 2 {
+            continue;
+        }
+        let minimum = connected.iter().copied().fold(f64::INFINITY, f64::min);
+        let maximum = connected.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        maximum_step =
+            Some(maximum_step.map_or(maximum - minimum, |current| current.max(maximum - minimum)));
+    }
+    Ok(maximum_step)
 }
 
 fn check_length_groups(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
@@ -2147,6 +2214,7 @@ mod tests {
             min_coupled_percent: 90,
             target_differential_impedance_ohms: Some(target),
             differential_impedance_tolerance_ohms: Some(0.01),
+            maximum_differential_impedance_step_ohms: None,
             minimum_length_nm: None,
             tuning_amplitude_nm: None,
             tuning_pitch_nm: None,
@@ -2171,6 +2239,104 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "differential_skew")
+        );
+    }
+
+    #[test]
+    fn checks_differential_impedance_at_layer_transitions() {
+        let mut board = base();
+        for (id, name, y_nm) in [(1, "USB_P", 4_000_000), (2, "USB_N", 4_350_000)] {
+            let start = Point {
+                x_nm: 1_000_000,
+                y_nm,
+            };
+            let transition = Point {
+                x_nm: 5_000_000,
+                y_nm,
+            };
+            let end = Point {
+                x_nm: 9_000_000,
+                y_nm,
+            };
+            board.nets.push(Net {
+                id,
+                name: name.into(),
+                terminals: vec![
+                    Terminal {
+                        position: start,
+                        layers: vec![Layer::Front],
+                    },
+                    Terminal {
+                        position: end,
+                        layers: vec![Layer::Back],
+                    },
+                ],
+                class: None,
+                priority: 0,
+            });
+            board.routes.push(Route {
+                net_id: id,
+                arcs: vec![],
+                teardrops: vec![],
+                zones: vec![],
+                segments: vec![
+                    Segment {
+                        start,
+                        end: transition,
+                        layer: Layer::Front,
+                        width_nm: 150_000,
+                    },
+                    Segment {
+                        start: transition,
+                        end,
+                        layer: Layer::Back,
+                        width_nm: 400_000,
+                    },
+                ],
+                vias: vec![Via {
+                    position: transition,
+                    diameter_nm: 600_000,
+                    drill_nm: 300_000,
+                    kind: crate::ViaKind::Through,
+                    start_layer: Layer::Front,
+                    end_layer: Layer::Back,
+                }],
+            });
+        }
+        for (layer, reference) in [(Layer::Front, Layer::Back), (Layer::Back, Layer::Front)] {
+            board.stackup.push(crate::StackupLayer {
+                layer,
+                dielectric_height_nm: 200_000,
+                dielectric_constant: 4.2,
+                copper_thickness_nm: 35_000,
+                reference_layer: Some(reference),
+                secondary_reference_layer: None,
+                secondary_dielectric_height_nm: None,
+                secondary_dielectric_constant: None,
+            });
+        }
+        board.differential_pairs.push(DifferentialPair {
+            name: "USB".into(),
+            positive_net_id: 1,
+            negative_net_id: 2,
+            gap_nm: 350_000,
+            gap_tolerance_nm: 50_000,
+            max_skew_nm: 100_000,
+            min_coupled_percent: 90,
+            target_differential_impedance_ohms: None,
+            differential_impedance_tolerance_ohms: None,
+            maximum_differential_impedance_step_ohms: Some(2.0),
+            minimum_length_nm: None,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
+        });
+
+        assert!(
+            check_board(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "differential_impedance_transition")
         );
     }
 

@@ -274,6 +274,8 @@ pub struct DifferentialPair {
     #[serde(default)]
     pub differential_impedance_tolerance_ohms: Option<f64>,
     #[serde(default)]
+    pub maximum_differential_impedance_step_ohms: Option<f64>,
+    #[serde(default)]
     pub minimum_length_nm: Option<Nm>,
     #[serde(default)]
     pub tuning_amplitude_nm: Option<Nm>,
@@ -1293,6 +1295,9 @@ impl<'a> Router<'a> {
                     .is_some_and(|value| !value.is_finite() || value <= 0.0)
                 || pair
                     .differential_impedance_tolerance_ohms
+                    .is_some_and(|value| !value.is_finite() || value < 0.0)
+                || pair
+                    .maximum_differential_impedance_step_ohms
                     .is_some_and(|value| !value.is_finite() || value < 0.0)
                 || pair.target_differential_impedance_ohms.is_some()
                     != pair.differential_impedance_tolerance_ohms.is_some()
@@ -6525,6 +6530,7 @@ mod tests {
             min_coupled_percent: 100,
             target_differential_impedance_ohms: None,
             differential_impedance_tolerance_ohms: None,
+            maximum_differential_impedance_step_ohms: None,
             minimum_length_nm: None,
             tuning_amplitude_nm: None,
             tuning_pitch_nm: None,
@@ -6650,6 +6656,7 @@ mod tests {
             min_coupled_percent: 70,
             target_differential_impedance_ohms: None,
             differential_impedance_tolerance_ohms: None,
+            maximum_differential_impedance_step_ohms: None,
             minimum_length_nm: Some(9_000_000),
             tuning_amplitude_nm: Some(500_000),
             tuning_pitch_nm: Some(1_000_000),
