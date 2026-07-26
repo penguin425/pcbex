@@ -923,10 +923,29 @@ fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
                 .iter()
                 .all(|point| disk_inside_convex_polygon(*point, radius, &polygon))
         }
+        PadShape::Custom => custom_pad_contains_hole(pad, width_nm, height_nm),
         _ => endpoints.iter().all(|(x, y)| {
             x.abs() + radius < pad_width_nm / 2.0 && y.abs() + radius < pad_height_nm / 2.0
         }),
     }
+}
+
+fn custom_pad_contains_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
+    if pad.custom_polygon.len() < 3 {
+        return false;
+    }
+    let hole = drilled_pad_hole(pad, width_nm, height_nm);
+    if !point_in_polygon(hole.start, &pad.custom_polygon)
+        || !point_in_polygon(hole.end, &pad.custom_polygon)
+    {
+        return false;
+    }
+    pad.custom_polygon
+        .iter()
+        .copied()
+        .zip(pad.custom_polygon.iter().copied().cycle().skip(1))
+        .take(pad.custom_polygon.len())
+        .all(|(start, end)| !segments_within(hole.start, hole.end, start, end, hole.diameter_nm))
 }
 
 fn point_inside_roundrect(
@@ -3109,6 +3128,49 @@ mod tests {
             drill_height_nm: Some(200_000),
             drill_offset_x_nm: 800_000,
             drill_offset_y_nm: 350_000,
+            plated: true,
+            layers: vec![Layer::Front, Layer::Back],
+            net_id: Some(1),
+        };
+
+        assert!(!drill_fits_pad(&pad, 200_000, 200_000));
+    }
+
+    #[test]
+    fn custom_pad_hole_containment_respects_polygon_edges() {
+        let pad = Pad {
+            number: "1".into(),
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            width_nm: 2_000_000,
+            height_nm: 1_000_000,
+            source_width_nm: 2_000_000,
+            source_height_nm: 1_000_000,
+            rotation_deg: 0.0,
+            shape: PadShape::Custom,
+            custom_polygon: vec![
+                Point {
+                    x_nm: 4_000_000,
+                    y_nm: 4_500_000,
+                },
+                Point {
+                    x_nm: 6_000_000,
+                    y_nm: 4_500_000,
+                },
+                Point {
+                    x_nm: 5_000_000,
+                    y_nm: 5_500_000,
+                },
+            ],
+            roundrect_radius_nm: 0,
+            trapezoid_delta_x_nm: 0,
+            trapezoid_delta_y_nm: 0,
+            drill_width_nm: Some(200_000),
+            drill_height_nm: Some(200_000),
+            drill_offset_x_nm: 700_000,
+            drill_offset_y_nm: 200_000,
             plated: true,
             layers: vec![Layer::Front, Layer::Back],
             net_id: Some(1),
