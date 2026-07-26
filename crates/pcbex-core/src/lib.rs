@@ -3434,6 +3434,82 @@ fn translate_point(point: Point, offset: Point) -> Point {
     }
 }
 
+/// Pushes the movable interior geometry of one route by a local offset.
+///
+/// Net terminals remain fixed, shared interior vertices move together, and
+/// the edit is committed only when the complete board passes checking.
+pub fn shove_route(board: &mut Board, net_id: u32, offset: Point) -> Result<(), String> {
+    let grid = board.rules_for_net(net_id).grid_nm;
+    if offset == Point::default() || offset.x_nm % grid != 0 || offset.y_nm % grid != 0 {
+        return Err("shove offset must be a non-zero grid multiple".into());
+    }
+    let terminals: HashSet<Point> = board
+        .nets
+        .iter()
+        .find(|net| net.id == net_id)
+        .ok_or_else(|| format!("unknown net {net_id}"))?
+        .terminals
+        .iter()
+        .map(|terminal| terminal.position)
+        .collect();
+    let route_index = board
+        .routes
+        .iter()
+        .position(|route| route.net_id == net_id)
+        .ok_or_else(|| format!("net {net_id} has no route"))?;
+    let mut candidate = board.routes[route_index].clone();
+    let move_point = |point| {
+        if terminals.contains(&point) {
+            point
+        } else {
+            translate_point(point, offset)
+        }
+    };
+    for segment in &mut candidate.segments {
+        segment.start = move_point(segment.start);
+        segment.end = move_point(segment.end);
+    }
+    for arc in &mut candidate.arcs {
+        arc.start = move_point(arc.start);
+        arc.mid = move_point(arc.mid);
+        arc.end = move_point(arc.end);
+    }
+    for via in &mut candidate.vias {
+        via.position = move_point(via.position);
+    }
+    for teardrop in &mut candidate.teardrops {
+        for point in &mut teardrop.polygon {
+            *point = move_point(*point);
+        }
+    }
+    for zone in &mut candidate.zones {
+        for point in &mut zone.polygon {
+            *point = move_point(*point);
+        }
+    }
+    if candidate == board.routes[route_index] {
+        return Err(format!(
+            "route for net {net_id} has no movable interior geometry"
+        ));
+    }
+    let original = std::mem::replace(&mut board.routes[route_index], candidate);
+    let report = checking::check_board(board);
+    if report.is_clean() {
+        Ok(())
+    } else {
+        board.routes[route_index] = original;
+        Err(format!(
+            "shove for net {net_id} rejected by board rules: {}",
+            report
+                .violations
+                .iter()
+                .map(|violation| violation.rule.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
 pub fn tune_differential_pairs_synchronously(board: &mut Board) -> Result<(), String> {
     for pair in board.differential_pairs.clone() {
         let Some(minimum) = pair.minimum_length_nm else {
@@ -3965,6 +4041,87 @@ mod tests {
             ),
             (0, 4, 16, 20)
         );
+    }
+
+    #[test]
+    fn locally_shoves_only_route_interior_and_rolls_back_invalid_edits() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![
+                Segment {
+                    start: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    end: Point {
+                        x_nm: 4_000_000,
+                        y_nm: 3_500_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+                Segment {
+                    start: Point {
+                        x_nm: 4_000_000,
+                        y_nm: 3_500_000,
+                    },
+                    end: Point {
+                        x_nm: 6_000_000,
+                        y_nm: 3_500_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+                Segment {
+                    start: Point {
+                        x_nm: 6_000_000,
+                        y_nm: 3_500_000,
+                    },
+                    end: Point {
+                        x_nm: 9_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+            ],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        shove_route(
+            &mut board,
+            1,
+            Point {
+                x_nm: 0,
+                y_nm: 500_000,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            board.routes[0].segments[0].start,
+            board.nets[0].terminals[0].position
+        );
+        assert_eq!(board.routes[0].segments[0].end.y_nm, 4_000_000);
+        assert!(checking::check_board(&board).is_clean());
+        let accepted = board.routes[0].clone();
+        assert!(
+            shove_route(
+                &mut board,
+                1,
+                Point {
+                    x_nm: 0,
+                    y_nm: 7_000_000,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(board.routes[0], accepted);
     }
 
     #[test]

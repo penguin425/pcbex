@@ -72,6 +72,11 @@ with the failed net ordered first; unrelated and imported locked routes remain
 in place. The route report separates preserved, newly routed, rerouted, and
 unrouted nets and includes the number of rip-up events.
 
+For interactive repair, `shove_route` applies a grid-aligned offset only to a
+route's interior vertices, vias, teardrops, and zones while keeping terminal
+anchors fixed. The edit is atomic: boundary, angle, clearance, connectivity,
+and every other board check must pass or the original route is restored.
+
 ## JSON model
 
 All coordinates and dimensions use integer nanometres. Layers are `F.Cu` and
