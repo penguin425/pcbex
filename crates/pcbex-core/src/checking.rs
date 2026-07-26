@@ -279,6 +279,7 @@ pub fn check_board(board: &Board) -> CheckReport {
         }
     }
     check_differential_pairs(board, &routes, &mut report);
+    check_length_groups(board, &routes, &mut report);
     report
         .violations
         .extend(check_manufacturability(board).violations);
@@ -649,6 +650,38 @@ fn check_differential_pairs(
                     pair.name, pair.min_coupled_percent
                 ),
                 vec![pair.positive_net_id, pair.negative_net_id],
+            );
+        }
+    }
+}
+
+fn check_length_groups(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
+    for group in &board.length_groups {
+        let lengths: Vec<_> = group
+            .net_ids
+            .iter()
+            .filter_map(|net_id| {
+                routes
+                    .get(net_id)
+                    .map(|route| (*net_id, route_length(route)))
+            })
+            .collect();
+        let (Some(minimum), Some(maximum)) = (
+            lengths.iter().min_by_key(|(_, length)| length),
+            lengths.iter().max_by_key(|(_, length)| length),
+        ) else {
+            continue;
+        };
+        if maximum.1 - minimum.1 > group.max_skew_nm {
+            report.push(
+                "length_group_skew",
+                format!(
+                    "length group {} has {} nm skew, exceeding {} nm",
+                    group.name,
+                    maximum.1 - minimum.1,
+                    group.max_skew_nm
+                ),
+                group.net_ids.clone(),
             );
         }
     }
@@ -1097,6 +1130,7 @@ mod tests {
             footprints: vec![],
             net_classes: HashMap::new(),
             differential_pairs: vec![],
+            length_groups: vec![],
             manufacturing_rules: None,
             via_strategy: crate::ViaStrategy::ThroughOnly,
             nets: vec![],

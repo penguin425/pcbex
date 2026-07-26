@@ -32,6 +32,7 @@ fn board_with_nets(net_count: usize) -> Board {
         footprints: vec![],
         net_classes: HashMap::new(),
         differential_pairs: vec![],
+        length_groups: vec![],
         manufacturing_rules: None,
         via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets: (0..net_count)

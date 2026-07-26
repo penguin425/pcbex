@@ -199,6 +199,9 @@ Net classes may set `minimum_length_nm` and `maximum_length_nm`. The checker
 reports routes outside that interval. After routing, pcbex deterministically
 adds an orthogonal meander to short routes and accepts it only when the complete
 board remains free of boundary, obstacle, connectivity, and clearance errors.
+For parallel buses, `length_groups` declares a name, member net IDs, and maximum
+skew. The checker reports group skew and the router tunes shorter members toward
+the longest route while retaining every normal board constraint.
 
 ## Copper zones
 
