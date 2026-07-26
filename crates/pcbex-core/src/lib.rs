@@ -556,6 +556,8 @@ pub struct RouteReport {
     pub rasterized_candidate_cells: usize,
     pub reroute_passes: usize,
     pub ripup_events: usize,
+    #[serde(default)]
+    pub coupled_differential_pairs: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1760,11 +1762,99 @@ fn push_segment(route: &mut Route, a: Node, b: Node, g: Nm, w: Nm) {
 }
 
 pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
-    let (routes, report) = Router::new(board)?.route_all();
+    let (routes, mut report) = Router::new(board)?.route_all();
     let mut out = board.clone();
     out.routes = routes;
     tune_route_lengths(&mut out)?;
+    couple_differential_pairs(&mut out, &mut report);
     Ok((out, report))
+}
+
+fn couple_differential_pairs(board: &mut Board, report: &mut RouteReport) {
+    for pair in board.differential_pairs.clone() {
+        let (Some(positive_net), Some(negative_net)) = (
+            board.nets.iter().find(|net| net.id == pair.positive_net_id),
+            board.nets.iter().find(|net| net.id == pair.negative_net_id),
+        ) else {
+            continue;
+        };
+        if positive_net.terminals.len() != negative_net.terminals.len()
+            || positive_net.terminals.is_empty()
+        {
+            continue;
+        }
+        let offset = Point {
+            x_nm: negative_net.terminals[0].position.x_nm - positive_net.terminals[0].position.x_nm,
+            y_nm: negative_net.terminals[0].position.y_nm - positive_net.terminals[0].position.y_nm,
+        };
+        if !positive_net
+            .terminals
+            .iter()
+            .zip(&negative_net.terminals)
+            .all(|(positive, negative)| {
+                translate_point(positive.position, offset) == negative.position
+                    && positive.layers == negative.layers
+            })
+        {
+            continue;
+        }
+        let (Some(positive_index), Some(negative_index)) = (
+            board
+                .routes
+                .iter()
+                .position(|route| route.net_id == pair.positive_net_id),
+            board
+                .routes
+                .iter()
+                .position(|route| route.net_id == pair.negative_net_id),
+        ) else {
+            continue;
+        };
+        let mut translated = translate_route(&board.routes[positive_index], offset);
+        translated.net_id = pair.negative_net_id;
+        let original = std::mem::replace(&mut board.routes[negative_index], translated);
+        let invalid = checking::check_board(board)
+            .violations
+            .iter()
+            .any(|violation| {
+                violation.net_ids.contains(&pair.positive_net_id)
+                    || violation.net_ids.contains(&pair.negative_net_id)
+            });
+        if invalid {
+            board.routes[negative_index] = original;
+        } else {
+            report.coupled_differential_pairs.push(pair.name);
+        }
+    }
+}
+
+fn translate_route(route: &Route, offset: Point) -> Route {
+    let mut translated = route.clone();
+    for segment in &mut translated.segments {
+        segment.start = translate_point(segment.start, offset);
+        segment.end = translate_point(segment.end, offset);
+    }
+    for arc in &mut translated.arcs {
+        arc.start = translate_point(arc.start, offset);
+        arc.mid = translate_point(arc.mid, offset);
+        arc.end = translate_point(arc.end, offset);
+    }
+    for via in &mut translated.vias {
+        via.position = translate_point(via.position, offset);
+    }
+    for teardrop in &mut translated.teardrops {
+        for point in &mut teardrop.polygon {
+            *point = translate_point(*point, offset);
+        }
+    }
+    translated
+}
+
+fn translate_point(point: Point, offset: Point) -> Point {
+    Point {
+        x_nm: point.x_nm + offset.x_nm,
+        y_nm: point.y_nm + offset.y_nm,
+    }
 }
 
 pub fn tune_route_lengths(board: &mut Board) -> Result<(), String> {
@@ -2850,5 +2940,83 @@ mod tests {
         assert!(crate::checking::check_board(&routed).is_clean());
         assert!((10_000_000..=11_000_000).contains(&route_length_nm(&routed.routes[0])));
         assert!(routed.routes[0].segments.len() >= 5);
+    }
+
+    #[test]
+    fn autoroutes_a_coupled_differential_pair() {
+        let mut board = board();
+        board.obstacles.clear();
+        let terminals = |y_nm| {
+            vec![
+                Terminal {
+                    position: Point {
+                        x_nm: 1_000_000,
+                        y_nm,
+                    },
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: Point {
+                        x_nm: 9_000_000,
+                        y_nm,
+                    },
+                    layers: vec![Layer::Front],
+                },
+            ]
+        };
+        board.nets = vec![
+            Net {
+                id: 1,
+                name: "USB_D+".into(),
+                class: None,
+                priority: 0,
+                terminals: terminals(4_000_000),
+            },
+            Net {
+                id: 2,
+                name: "USB_D-".into(),
+                class: None,
+                priority: 0,
+                terminals: terminals(5_000_000),
+            },
+        ];
+        board.differential_pairs = vec![DifferentialPair {
+            name: "USB_D".into(),
+            positive_net_id: 1,
+            negative_net_id: 2,
+            gap_nm: 750_000,
+            gap_tolerance_nm: 50_000,
+            max_skew_nm: 0,
+            min_coupled_percent: 100,
+        }];
+
+        let (routed, report) = route_board(&board).unwrap();
+
+        assert!(report.unrouted.is_empty());
+        assert_eq!(report.coupled_differential_pairs, ["USB_D"]);
+        assert!(crate::checking::check_board(&routed).is_clean());
+        let positive = routed
+            .routes
+            .iter()
+            .find(|route| route.net_id == 1)
+            .unwrap();
+        let negative = routed
+            .routes
+            .iter()
+            .find(|route| route.net_id == 2)
+            .unwrap();
+        assert_eq!(positive.segments.len(), negative.segments.len());
+        assert!(
+            positive
+                .segments
+                .iter()
+                .zip(&negative.segments)
+                .all(|(positive, negative)| {
+                    negative.start.y_nm - positive.start.y_nm == 1_000_000
+                        && negative.end.y_nm - positive.end.y_nm == 1_000_000
+                        && negative.start.x_nm == positive.start.x_nm
+                        && negative.end.x_nm == positive.end.x_nm
+                })
+        );
     }
 }

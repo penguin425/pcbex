@@ -109,6 +109,9 @@ and through vias are appended at board level without duplicating locked routes,
 while preserving the source document.
 The route model also preserves KiCad three-point copper arcs and can emit
 native pad/via teardrop zones from explicit polygon geometry.
+Matched differential-pair terminals are autorouted as a coupled translation
+when the resulting pair passes connectivity, clearance, skew, and coupling
+checks; otherwise the independently routed fallback is retained.
 Use `--drc` to run `kicad-cli pcb drc` on the result when KiCad is installed.
 After DRC passes, generate Gerber and Excellon drill files with:
 
