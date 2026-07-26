@@ -2,10 +2,10 @@ use crate::{
     Board, Layer, Nm, Route, estimated_stackup_differential_impedance_ohms,
     estimated_stackup_impedance_ohms,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ImpedanceReport {
     pub nets: Vec<NetImpedanceReport>,
     pub differential_pairs: Vec<DifferentialImpedanceReport>,
@@ -20,9 +20,83 @@ impl ImpedanceReport {
             && self.out_of_tolerance_segment_count == 0
             && self.excessive_transition_count == 0
     }
+
+    pub fn regressions_against(&self, baseline: &Self) -> Vec<String> {
+        let mut regressions = Vec::new();
+        for (name, current, previous) in [
+            (
+                "invalid geometry count",
+                self.invalid_geometry_count,
+                baseline.invalid_geometry_count,
+            ),
+            (
+                "out-of-tolerance segment count",
+                self.out_of_tolerance_segment_count,
+                baseline.out_of_tolerance_segment_count,
+            ),
+            (
+                "excessive transition count",
+                self.excessive_transition_count,
+                baseline.excessive_transition_count,
+            ),
+        ] {
+            if current > previous {
+                regressions.push(format!("{name} increased from {previous} to {current}"));
+            }
+        }
+        for net in &self.nets {
+            let Some(previous) = baseline.nets.iter().find(|item| item.net_id == net.net_id) else {
+                continue;
+            };
+            compare_step(
+                &format!("net {}", net.name),
+                net.maximum_observed_step_ohms,
+                previous.maximum_observed_step_ohms,
+                &mut regressions,
+            );
+            compare_segments(
+                &format!("net {}", net.name),
+                &net.segments,
+                &previous.segments,
+                &mut regressions,
+            );
+        }
+        for pair in &self.differential_pairs {
+            let Some(previous_pair) = baseline
+                .differential_pairs
+                .iter()
+                .find(|item| item.name == pair.name)
+            else {
+                continue;
+            };
+            for member in &pair.members {
+                let Some(previous) = previous_pair
+                    .members
+                    .iter()
+                    .find(|item| item.net_id == member.net_id)
+                else {
+                    continue;
+                };
+                let label = format!("differential pair {} net {}", pair.name, member.net_id);
+                compare_step(
+                    &label,
+                    member.maximum_observed_step_ohms,
+                    previous.maximum_observed_step_ohms,
+                    &mut regressions,
+                );
+                compare_segments(
+                    &label,
+                    &member.segments,
+                    &previous.segments,
+                    &mut regressions,
+                );
+            }
+        }
+        regressions
+    }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct NetImpedanceReport {
     pub net_id: u32,
     pub name: String,
@@ -34,7 +108,7 @@ pub struct NetImpedanceReport {
     pub segments: Vec<SegmentImpedanceReport>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DifferentialImpedanceReport {
     pub name: String,
     pub positive_net_id: u32,
@@ -46,14 +120,14 @@ pub struct DifferentialImpedanceReport {
     pub members: Vec<DifferentialMemberImpedanceReport>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct DifferentialMemberImpedanceReport {
     pub net_id: u32,
     pub maximum_observed_step_ohms: Option<f64>,
     pub segments: Vec<SegmentImpedanceReport>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SegmentImpedanceReport {
     pub index: usize,
     pub layer: Layer,
@@ -61,6 +135,44 @@ pub struct SegmentImpedanceReport {
     pub estimated_ohms: Option<f64>,
     pub deviation_ohms: Option<f64>,
     pub within_target: Option<bool>,
+}
+
+fn compare_step(
+    label: &str,
+    current: Option<f64>,
+    previous: Option<f64>,
+    regressions: &mut Vec<String>,
+) {
+    if let (Some(current), Some(previous)) = (current, previous)
+        && current > previous + f64::EPSILON
+    {
+        regressions.push(format!(
+            "{label} maximum transition step increased from {previous:.2} to {current:.2} Ω"
+        ));
+    }
+}
+
+fn compare_segments(
+    label: &str,
+    current: &[SegmentImpedanceReport],
+    previous: &[SegmentImpedanceReport],
+    regressions: &mut Vec<String>,
+) {
+    for segment in current {
+        let Some(previous) = previous.iter().find(|item| item.index == segment.index) else {
+            continue;
+        };
+        if let (Some(current), Some(previous)) = (segment.deviation_ohms, previous.deviation_ohms)
+            && current.abs() > previous.abs() + f64::EPSILON
+        {
+            regressions.push(format!(
+                "{label} segment {} target deviation increased from {:.2} to {:.2} Ω",
+                segment.index,
+                previous.abs(),
+                current.abs()
+            ));
+        }
+    }
 }
 
 pub fn impedance_report(board: &Board) -> ImpedanceReport {
@@ -272,5 +384,47 @@ mod tests {
         assert!(report.is_clean());
         report.excessive_transition_count = 1;
         assert!(!report.is_clean());
+    }
+
+    #[test]
+    fn baseline_comparison_detects_count_and_segment_regressions() {
+        let segment = SegmentImpedanceReport {
+            index: 0,
+            layer: Layer::Front,
+            width_nm: 250_000,
+            estimated_ohms: Some(50.0),
+            deviation_ohms: Some(0.5),
+            within_target: Some(true),
+        };
+        let mut baseline = ImpedanceReport {
+            nets: vec![NetImpedanceReport {
+                net_id: 1,
+                name: "CLK".into(),
+                class_name: Some("Controlled".into()),
+                target_ohms: Some(50.0),
+                tolerance_ohms: Some(2.0),
+                maximum_allowed_step_ohms: Some(3.0),
+                maximum_observed_step_ohms: Some(1.0),
+                segments: vec![segment],
+            }],
+            differential_pairs: vec![],
+            invalid_geometry_count: 0,
+            out_of_tolerance_segment_count: 0,
+            excessive_transition_count: 0,
+        };
+        let mut current = baseline.clone();
+        current.invalid_geometry_count = 1;
+        current.nets[0].segments[0].deviation_ohms = Some(1.5);
+        current.nets[0].maximum_observed_step_ohms = Some(2.0);
+
+        let regressions = current.regressions_against(&baseline);
+        assert_eq!(regressions.len(), 3);
+        baseline.invalid_geometry_count = 2;
+        assert!(
+            current
+                .regressions_against(&baseline)
+                .iter()
+                .all(|message| !message.contains("invalid geometry count"))
+        );
     }
 }

@@ -401,6 +401,10 @@ steps, and a total count of segments whose stackup geometry could not be
 evaluated. Add `--fail-on-violations` for CI: the report is still written, then
 the command exits unsuccessfully if geometry is missing, a segment misses its
 target, or a via step exceeds its configured limit.
+Use `--baseline previous-impedance.json` to reject regressions against an
+earlier report. Besides increases in the three summary counters, this compares
+the absolute target deviation of stable net/segment indexes and observed
+transition steps for single-ended nets and both differential members.
 
 ## Manufacturing checks
 
