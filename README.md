@@ -144,6 +144,14 @@ through-hole pads span every copper layer, and generated through vias connect
 the full stack. Net-class layer restrictions continue to constrain which
 layers the router may use.
 
+## Differential-pair rules
+
+JSON boards may declare `differential_pairs` with positive/negative net IDs,
+nominal gap, gap tolerance, maximum skew, and minimum coupled percentage.
+The checker reports skew, layer/via asymmetry, and insufficient coupling.
+KiCad net classes containing `diff_pair_width` and `diff_pair_gap` automatically
+pair `_P`/`_N` or `+`/`-` nets and apply the differential trace width.
+
 ## Planning and repair agent
 
 The dependency-free Python agent converts bounded natural-language requirements
