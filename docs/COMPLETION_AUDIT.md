@@ -119,6 +119,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Obstacle net-reference validation | Normal DRC requires optional net ownership on rectangular, round, capsule, polygon, and keepout obstacles to resolve against the board net table | Unknown ownership across all five obstacle families plus declared ownership regression |
 | Rectangular-obstacle geometry validation | Normal DRC and Router require strictly ordered minimum/maximum coordinates on both axes | Reversed-X, zero-height, valid rectangle, and Router-construction regressions |
 | Curved-obstacle diameter validation | Normal DRC and Router require strictly positive diameters for round and capsule obstacles | Zero/negative and valid diameter regressions for both shapes plus Router-construction coverage |
+| Polygon-obstacle topology validation | Normal DRC and Router require polygon obstacles to be simple and non-degenerate before rasterization or clearance checks consume them | Insufficient-point, repeated-edge, zero-area, self-crossing, valid-triangle, and Router regressions |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -142,7 +143,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.90.0 exposes 139 Rust tests and 11 Python tests. The release workflow
+Version 1.91.0 exposes 141 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

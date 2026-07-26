@@ -208,6 +208,15 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
         }
     }
+    for obstacle in &board.polygon_obstacles {
+        if !custom_pad_polygon_is_valid(&obstacle.polygon) {
+            report.push(
+                "polygon_obstacle",
+                "polygon obstacle must be a simple non-degenerate polygon".into(),
+                obstacle.net_id.into_iter().collect(),
+            );
+        }
+    }
     for layers in board
         .obstacles
         .iter()
@@ -3947,6 +3956,34 @@ mod tests {
                 .filter(|violation| violation.rule == "obstacle_diameter")
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_polygon_obstacle_topology() {
+        let mut board = base();
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let polygon = |points| crate::PolygonObstacle {
+            polygon: points,
+            layers: vec![Layer::Front],
+            net_id: None,
+        };
+        board.polygon_obstacles = vec![
+            polygon(vec![point(1, 1), point(2, 1)]),
+            polygon(vec![point(1, 1), point(1, 1), point(2, 2)]),
+            polygon(vec![point(1, 1), point(2, 1), point(3, 1)]),
+            polygon(vec![point(1, 1), point(3, 3), point(1, 3), point(3, 1)]),
+            polygon(vec![point(1, 1), point(3, 1), point(2, 3)]),
+        ];
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "polygon_obstacle")
+                .count(),
+            4
         );
     }
 

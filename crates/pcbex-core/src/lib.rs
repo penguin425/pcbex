@@ -4533,6 +4533,24 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_invalid_polygon_obstacle_topology() {
+        let mut invalid = board();
+        invalid.polygon_obstacles.push(PolygonObstacle {
+            polygon: vec![
+                Point { x_nm: 1, y_nm: 1 },
+                Point { x_nm: 2, y_nm: 1 },
+                Point { x_nm: 3, y_nm: 1 },
+            ],
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
+        assert!(matches!(
+            Router::new(&invalid),
+            Err(message) if message == "polygon obstacle must be a simple polygon"
+        ));
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(
