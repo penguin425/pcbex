@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
-use pcbex_core::checking::{check_board, check_manufacturability};
+use pcbex_core::checking::{check_board, check_manufacturability, check_report_to_sarif};
 use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{Board, Rules, render_svg, route_board};
 use pcbex_kicad::import as import_kicad;
@@ -12,6 +12,12 @@ use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
 struct Cli {
     #[command(subcommand)]
     command: Command,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ReportFormat {
+    Json,
+    Sarif,
 }
 
 #[derive(Subcommand)]
@@ -68,6 +74,8 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
+        format: ReportFormat,
     },
     Render {
         input: PathBuf,
@@ -236,13 +244,22 @@ fn main() -> Result<()> {
                 b.routes.len()
             );
         }
-        Command::Dfm { input, output } => {
+        Command::Dfm {
+            input,
+            output,
+            format,
+        } => {
             let board = read(&input)?;
             if board.manufacturing_rules.is_none() {
                 bail!("board does not define manufacturing_rules")
             }
             let report = check_manufacturability(&board);
-            let json = serde_json::to_string_pretty(&report)?;
+            let json = match format {
+                ReportFormat::Json => serde_json::to_string_pretty(&report)?,
+                ReportFormat::Sarif => {
+                    serde_json::to_string_pretty(&check_report_to_sarif(&report))?
+                }
+            };
             if let Some(path) = output {
                 fs::write(path, &json)?;
             } else {

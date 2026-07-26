@@ -156,6 +156,12 @@ pub struct Pad {
     pub width_nm: Nm,
     pub height_nm: Nm,
     #[serde(default)]
+    pub source_width_nm: Nm,
+    #[serde(default)]
+    pub source_height_nm: Nm,
+    #[serde(default)]
+    pub rotation_deg: f64,
+    #[serde(default)]
     pub shape: PadShape,
     #[serde(default)]
     pub custom_polygon: Vec<Point>,
@@ -230,10 +236,20 @@ pub struct ManufacturingRules {
     pub board_thickness_nm: Nm,
     #[serde(default = "default_maximum_via_aspect_ratio")]
     pub maximum_via_aspect_ratio: u16,
+    #[serde(default)]
+    pub minimum_drill_to_drill_nm: Nm,
+    #[serde(default = "allow_via_in_pad")]
+    pub allow_via_in_pad: bool,
+    #[serde(default)]
+    pub minimum_trace_angle_deg: u16,
 }
 
 fn default_maximum_via_aspect_ratio() -> u16 {
     10
+}
+
+fn allow_via_in_pad() -> bool {
+    true
 }
 
 fn differential_gap_tolerance() -> Nm {

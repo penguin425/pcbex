@@ -207,6 +207,9 @@ clearance, drill, annular ring, copper-to-edge distance, board thickness, and
 maximum via aspect ratio. These checks are included in the normal board checker.
 `pcbex dfm board.json [--output report.json]` emits a machine-readable report
 and exits unsuccessfully when manufacturing violations are present.
+Optional rules also detect drill-to-drill spacing, prohibited Via-in-pad, and
+acute trace junctions. Use `--format sarif` to emit SARIF 2.1.0 suitable for
+GitHub Code Scanning; JSON remains the default.
 
 ## Planning and repair agent
 

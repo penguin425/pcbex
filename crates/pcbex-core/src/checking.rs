@@ -3,7 +3,7 @@ use crate::geometry::{
     point_segment_within, points_closer_than, points_within, segment_polygon_closer_than,
     segment_rect_closer_than, segments_closer_than, segments_within,
 };
-use crate::{Board, Net, Route, Segment, route_length_nm};
+use crate::{Board, Net, Pad, PadShape, Point, Route, Segment, route_length_nm};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -220,6 +220,8 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
         || rules.minimum_copper_to_edge_nm < 0
         || rules.board_thickness_nm <= 0
         || rules.maximum_via_aspect_ratio == 0
+        || rules.minimum_drill_to_drill_nm < 0
+        || rules.minimum_trace_angle_deg > 180
     {
         report.push(
             "dfm_rules",
@@ -280,14 +282,163 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
                     vec![route.net_id],
                 );
             }
+            if !rules.allow_via_in_pad
+                && board
+                    .footprints
+                    .iter()
+                    .flat_map(|footprint| &footprint.pads)
+                    .any(|pad| {
+                        pad.layers.iter().any(|layer| via.spans_layer(*layer))
+                            && point_in_pad(via.position, pad)
+                    })
+            {
+                report.push(
+                    "dfm_via_in_pad",
+                    "via is located inside a component pad".into(),
+                    vec![route.net_id],
+                );
+            }
         }
+        check_trace_angles(route, rules.minimum_trace_angle_deg, &mut report);
     }
     for (index, route) in board.routes.iter().enumerate() {
         for other in &board.routes[index + 1..] {
             check_manufacturing_clearance(route, other, rules.minimum_clearance_nm, &mut report);
         }
     }
+    let vias: Vec<_> = board
+        .routes
+        .iter()
+        .flat_map(|route| route.vias.iter().map(move |via| (route.net_id, via)))
+        .collect();
+    for (index, (net_id, via)) in vias.iter().enumerate() {
+        for (other_net_id, other) in &vias[index + 1..] {
+            let required_twice =
+                via.drill_nm + other.drill_nm + 2 * rules.minimum_drill_to_drill_nm;
+            if points_closer_than(via.position, other.position, required_twice) {
+                report.push(
+                    "dfm_drill_spacing",
+                    "drilled holes are below the manufacturing spacing minimum".into(),
+                    vec![*net_id, *other_net_id],
+                );
+            }
+        }
+    }
     report
+}
+
+fn check_trace_angles(route: &Route, minimum_angle_deg: u16, report: &mut CheckReport) {
+    if minimum_angle_deg == 0 {
+        return;
+    }
+    for (index, segment) in route.segments.iter().enumerate() {
+        for other in &route.segments[index + 1..] {
+            if segment.layer != other.layer {
+                continue;
+            }
+            let Some((junction, first_end, second_end)) = shared_endpoint(segment, other) else {
+                continue;
+            };
+            let ax = (first_end.x_nm - junction.x_nm) as f64;
+            let ay = (first_end.y_nm - junction.y_nm) as f64;
+            let bx = (second_end.x_nm - junction.x_nm) as f64;
+            let by = (second_end.y_nm - junction.y_nm) as f64;
+            let denominator = ax.hypot(ay) * bx.hypot(by);
+            if denominator == 0.0 {
+                continue;
+            }
+            let angle = ((ax * bx + ay * by) / denominator)
+                .clamp(-1.0, 1.0)
+                .acos()
+                .to_degrees();
+            if angle + f64::EPSILON < f64::from(minimum_angle_deg) {
+                report.push(
+                    "dfm_trace_angle",
+                    format!("trace junction angle {angle:.1}° is below the manufacturing minimum"),
+                    vec![route.net_id],
+                );
+            }
+        }
+    }
+}
+
+fn shared_endpoint(left: &Segment, right: &Segment) -> Option<(Point, Point, Point)> {
+    for (junction, first_end) in [(left.start, left.end), (left.end, left.start)] {
+        if right.start == junction {
+            return Some((junction, first_end, right.end));
+        }
+        if right.end == junction {
+            return Some((junction, first_end, right.start));
+        }
+    }
+    None
+}
+
+fn point_in_pad(point: Point, pad: &Pad) -> bool {
+    if pad.shape == PadShape::Custom && pad.custom_polygon.len() >= 3 {
+        return point_in_polygon(point, &pad.custom_polygon);
+    }
+    let width = if pad.source_width_nm > 0 {
+        pad.source_width_nm
+    } else {
+        pad.width_nm
+    };
+    let height = if pad.source_height_nm > 0 {
+        pad.source_height_nm
+    } else {
+        pad.height_nm
+    };
+    let radians = (-pad.rotation_deg).to_radians();
+    let dx = (point.x_nm - pad.position.x_nm) as f64;
+    let dy = (point.y_nm - pad.position.y_nm) as f64;
+    let x = dx * radians.cos() - dy * radians.sin();
+    let y = dx * radians.sin() + dy * radians.cos();
+    match pad.shape {
+        PadShape::Circle => x.hypot(y) <= width.max(height) as f64 / 2.0,
+        PadShape::Oval => {
+            let (major, minor, along, across) = if width >= height {
+                (width, height, x.abs(), y.abs())
+            } else {
+                (height, width, y.abs(), x.abs())
+            };
+            let half_line = (major - minor) as f64 / 2.0;
+            let radius = minor as f64 / 2.0;
+            across <= radius && (along <= half_line || (along - half_line).hypot(across) <= radius)
+        }
+        _ => x.abs() <= width as f64 / 2.0 && y.abs() <= height as f64 / 2.0,
+    }
+}
+
+pub fn check_report_to_sarif(report: &CheckReport) -> serde_json::Value {
+    let mut rule_ids: Vec<_> = report
+        .violations
+        .iter()
+        .map(|violation| violation.rule.as_str())
+        .collect();
+    rule_ids.sort_unstable();
+    rule_ids.dedup();
+    serde_json::json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "pcbex",
+                    "informationUri": "https://github.com/penguin425/pcbex",
+                    "rules": rule_ids.iter().map(|rule| serde_json::json!({
+                        "id": rule,
+                        "shortDescription": {"text": rule.replace('_', " ")}
+                    })).collect::<Vec<_>>()
+                }
+            },
+            "results": report.violations.iter().map(|violation| serde_json::json!({
+                "ruleId": violation.rule,
+                "level": "error",
+                "message": {"text": violation.message},
+                "properties": {"netIds": violation.net_ids}
+            })).collect::<Vec<_>>()
+        }]
+    })
 }
 
 fn check_manufacturing_clearance(
@@ -1341,24 +1492,80 @@ mod tests {
             minimum_copper_to_edge_nm: 500_000,
             board_thickness_nm: 1_600_000,
             maximum_via_aspect_ratio: 4,
+            minimum_drill_to_drill_nm: 300_000,
+            allow_via_in_pad: false,
+            minimum_trace_angle_deg: 90,
+        });
+        board.footprints.push(crate::Footprint {
+            reference: "U1".into(),
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 1_000_000,
+            },
+            rotation_deg: 0.0,
+            pads: vec![Pad {
+                number: "1".into(),
+                position: Point {
+                    x_nm: 5_000_000,
+                    y_nm: 1_000_000,
+                },
+                width_nm: 1_000_000,
+                height_nm: 1_000_000,
+                source_width_nm: 1_000_000,
+                source_height_nm: 1_000_000,
+                rotation_deg: 0.0,
+                shape: PadShape::Circle,
+                custom_polygon: vec![],
+                layers: vec![Layer::Front],
+                net_id: Some(1),
+            }],
         });
         board.routes.push(Route {
             net_id: 1,
-            segments: vec![Segment {
-                start: Point {
-                    x_nm: 100_000,
-                    y_nm: 1_000_000,
+            segments: vec![
+                Segment {
+                    start: Point {
+                        x_nm: 100_000,
+                        y_nm: 1_000_000,
+                    },
+                    end: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 200_000,
                 },
-                end: Point {
-                    x_nm: 5_000_000,
-                    y_nm: 1_000_000,
+                Segment {
+                    start: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    end: Point {
+                        x_nm: 4_000_000,
+                        y_nm: 2_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 200_000,
                 },
-                layer: Layer::Front,
-                width_nm: 200_000,
-            }],
+            ],
             vias: vec![Via {
                 position: Point {
                     x_nm: 5_000_000,
+                    y_nm: 1_000_000,
+                },
+                diameter_nm: 600_000,
+                drill_nm: 300_000,
+                kind: crate::ViaKind::Through,
+                start_layer: Layer::Front,
+                end_layer: Layer::Back,
+            }],
+        });
+        board.routes.push(Route {
+            net_id: 2,
+            segments: vec![],
+            vias: vec![Via {
+                position: Point {
+                    x_nm: 5_500_000,
                     y_nm: 1_000_000,
                 },
                 diameter_nm: 600_000,
@@ -1376,6 +1583,9 @@ mod tests {
             "dfm_annular_ring",
             "dfm_aspect_ratio",
             "dfm_copper_to_edge",
+            "dfm_via_in_pad",
+            "dfm_drill_spacing",
+            "dfm_trace_angle",
         ] {
             assert!(
                 report
@@ -1385,5 +1595,12 @@ mod tests {
                 "missing {rule}"
             );
         }
+        let sarif = check_report_to_sarif(&report);
+        assert_eq!(sarif["version"], "2.1.0");
+        assert!(
+            sarif["runs"][0]["results"]
+                .as_array()
+                .is_some_and(|results| results.len() == report.violations.len())
+        );
     }
 }
