@@ -262,6 +262,10 @@ pub struct DifferentialPair {
     #[serde(default = "differential_min_coupled_percent")]
     pub min_coupled_percent: u8,
     #[serde(default)]
+    pub target_differential_impedance_ohms: Option<f64>,
+    #[serde(default)]
+    pub differential_impedance_tolerance_ohms: Option<f64>,
+    #[serde(default)]
     pub minimum_length_nm: Option<Nm>,
     #[serde(default)]
     pub tuning_amplitude_nm: Option<Nm>,
@@ -804,6 +808,30 @@ pub fn estimated_impedance_with_copper_ohms(
     Some(87.0 / (dielectric_constant + 1.41).sqrt() * argument.ln())
 }
 
+/// Estimate edge-coupled differential microstrip impedance.
+///
+/// Uses the IPC-2141 single-ended estimate and the common exponential
+/// odd-mode coupling correction as an early layout constraint.
+pub fn estimated_differential_impedance_ohms(
+    width_nm: Nm,
+    gap_nm: Nm,
+    dielectric_height_nm: Nm,
+    copper_thickness_nm: Nm,
+    dielectric_constant: f64,
+) -> Option<f64> {
+    if gap_nm < 0 {
+        return None;
+    }
+    let single = estimated_impedance_with_copper_ohms(
+        width_nm,
+        dielectric_height_nm,
+        copper_thickness_nm,
+        dielectric_constant,
+    )?;
+    let normalized_gap = gap_nm as f64 / dielectric_height_nm as f64;
+    Some(2.0 * single * (1.0 - 0.48 * (-0.96 * normalized_gap).exp()))
+}
+
 pub fn arc_polyline(arc: &RouteArc, maximum_deviation_nm: Nm) -> Vec<Point> {
     let Some((center_x, center_y, radius, sweep)) = arc_geometry(arc) else {
         return vec![arc.start, arc.mid, arc.end];
@@ -1090,6 +1118,14 @@ impl<'a> Router<'a> {
                 || pair.gap_tolerance_nm < 0
                 || pair.max_skew_nm < 0
                 || pair.min_coupled_percent > 100
+                || pair
+                    .target_differential_impedance_ohms
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+                || pair
+                    .differential_impedance_tolerance_ohms
+                    .is_some_and(|value| !value.is_finite() || value < 0.0)
+                || pair.target_differential_impedance_ohms.is_some()
+                    != pair.differential_impedance_tolerance_ohms.is_some()
                 || pair.minimum_length_nm.is_some_and(|value| value <= 0)
                 || pair.tuning_amplitude_nm.is_some_and(|value| value <= 0)
                 || pair.tuning_pitch_nm.is_some_and(|value| value <= 0)
@@ -6186,6 +6222,8 @@ mod tests {
             gap_tolerance_nm: 50_000,
             max_skew_nm: 0,
             min_coupled_percent: 100,
+            target_differential_impedance_ohms: None,
+            differential_impedance_tolerance_ohms: None,
             minimum_length_nm: None,
             tuning_amplitude_nm: None,
             tuning_pitch_nm: None,
@@ -6309,6 +6347,8 @@ mod tests {
             gap_tolerance_nm: 100_000,
             max_skew_nm: 0,
             min_coupled_percent: 70,
+            target_differential_impedance_ohms: None,
+            differential_impedance_tolerance_ohms: None,
             minimum_length_nm: Some(9_000_000),
             tuning_amplitude_nm: Some(500_000),
             tuning_pitch_nm: Some(1_000_000),

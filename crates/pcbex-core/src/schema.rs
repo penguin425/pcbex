@@ -69,7 +69,7 @@ pub fn board_json_schema() -> serde_json::Value {
                 "type": "object",
                 "additionalProperties": {"$ref": "#/$defs/net_class"}
             },
-            "differential_pairs": {"type": "array"},
+            "differential_pairs": {"type": "array", "items": {"$ref": "#/$defs/differential_pair"}},
             "length_groups": {"type": "array", "items": {"$ref": "#/$defs/length_group"}},
             "escape_groups": {"type": "array", "items": {"$ref": "#/$defs/escape_group"}},
             "manufacturing_rules": {"type": ["object", "null"]},
@@ -136,6 +136,26 @@ pub fn board_json_schema() -> serde_json::Value {
                     "footprints_not_allowed": {"type": "boolean"},
                     "minimum_track_width_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
                     "minimum_clearance_nm": {"type": ["integer", "null"], "minimum": 0}
+                }
+            },
+            "differential_pair": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "positive_net_id", "negative_net_id", "gap_nm"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "positive_net_id": {"type": "integer", "minimum": 0},
+                    "negative_net_id": {"type": "integer", "minimum": 0},
+                    "gap_nm": {"type": "integer", "minimum": 0},
+                    "gap_tolerance_nm": {"type": "integer", "minimum": 0},
+                    "max_skew_nm": {"type": "integer", "minimum": 0},
+                    "min_coupled_percent": {"type": "integer", "minimum": 0, "maximum": 100},
+                    "target_differential_impedance_ohms": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                    "differential_impedance_tolerance_ohms": {"type": ["number", "null"], "minimum": 0},
+                    "minimum_length_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
+                    "tuning_amplitude_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
+                    "tuning_pitch_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
+                    "max_tuning_sections": {"type": "integer", "minimum": 1, "maximum": 16}
                 }
             },
             "length_group": {
