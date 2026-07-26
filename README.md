@@ -278,6 +278,9 @@ specified rectangle. KiCad placement derives component dimensions from
 Polygon courtyards are transformed with component rotation and side mirroring,
 so non-overlapping concave space is not rejected by bounding boxes. Side flips
 swap all footprint front/back layers atomically during KiCad write-back.
+The `decoupling` constraint measures transformed capacitor and IC-pin anchors,
+enforces a maximum connection distance, and can require both parts on the same
+board side.
 
 ## Routing scalability
 

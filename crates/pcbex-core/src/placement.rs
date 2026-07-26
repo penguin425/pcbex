@@ -70,6 +70,13 @@ pub enum PlacementConstraint {
         target: String,
         max_distance_nm: Nm,
     },
+    Decoupling {
+        capacitor_anchor: String,
+        power_pin: String,
+        max_distance_nm: Nm,
+        #[serde(default = "same_side_required")]
+        require_same_side: bool,
+    },
     BoardEdge {
         subject: String,
         edge: Edge,
@@ -94,6 +101,10 @@ pub enum Edge {
     Right,
     Top,
     Bottom,
+}
+
+fn same_side_required() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -306,6 +317,11 @@ fn validate_references(
             PlacementConstraint::Near {
                 subject, target, ..
             } => vec![subject, target],
+            PlacementConstraint::Decoupling {
+                capacitor_anchor,
+                power_pin,
+                ..
+            } => vec![capacitor_anchor, power_pin],
             PlacementConstraint::BoardEdge { subject, .. } => vec![subject],
             PlacementConstraint::KeepTogether { components, .. } => {
                 components.iter().map(String::as_str).collect()
@@ -520,6 +536,28 @@ fn constraint_penalty(
                 (((a.x_nm - b.x_nm).abs() + (a.y_nm - b.y_nm).abs() - max_distance_nm).max(0))
                     as f64
                     / unit
+            }
+            PlacementConstraint::Decoupling {
+                capacitor_anchor,
+                power_pin,
+                max_distance_nm,
+                require_same_side,
+            } => {
+                let capacitor = named_position(capacitor_anchor, components, index);
+                let power = named_position(power_pin, components, index);
+                let distance_penalty = ((capacitor.x_nm - power.x_nm).abs()
+                    + (capacitor.y_nm - power.y_nm).abs()
+                    - max_distance_nm)
+                    .max(0) as f64
+                    / unit;
+                let capacitor_component = &components[index[component_name(capacitor_anchor)]];
+                let power_component = &components[index[component_name(power_pin)]];
+                distance_penalty
+                    + if *require_same_side && capacitor_component.side != power_component.side {
+                        2.0 * problem.width_nm.max(problem.height_nm) as f64 / unit
+                    } else {
+                        0.0
+                    }
             }
             PlacementConstraint::BoardEdge {
                 subject,
@@ -897,6 +935,55 @@ mod tests {
         };
         let result = place(&p, &PlacementOptions::default()).unwrap();
         assert_eq!(result.final_score.constraint_violation, 0.0);
+    }
+
+    #[test]
+    fn decoupling_constraint_uses_pin_anchors_and_board_side() {
+        let mut u1 = component(
+            "U1",
+            Some(Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            }),
+        );
+        u1.anchors.insert(
+            "VDD".into(),
+            Point {
+                x_nm: 1_000_000,
+                y_nm: 0,
+            },
+        );
+        let mut c1 = component(
+            "C1",
+            Some(Point {
+                x_nm: 6_000_000,
+                y_nm: 5_000_000,
+            }),
+        );
+        c1.anchors.insert("1".into(), Point::default());
+        c1.side = BoardSide::Back;
+        let problem = PlacementProblem {
+            width_nm: 10_000_000,
+            height_nm: 10_000_000,
+            grid_nm: 500_000,
+            components: vec![u1, c1],
+            connections: vec![],
+            constraints: vec![PlacementConstraint::Decoupling {
+                capacitor_anchor: "C1.1".into(),
+                power_pin: "U1.VDD".into(),
+                max_distance_nm: 500_000,
+                require_same_side: true,
+            }],
+        };
+
+        let opposite_side =
+            evaluate(&problem, &problem.components, &ScoreWeights::default()).unwrap();
+        let mut same_side = problem.components.clone();
+        same_side[1].side = BoardSide::Front;
+        let colocated = evaluate(&problem, &same_side, &ScoreWeights::default()).unwrap();
+
+        assert!(opposite_side.constraint_violation > 0.0);
+        assert_eq!(colocated.constraint_violation, 0.0);
     }
 
     #[test]
