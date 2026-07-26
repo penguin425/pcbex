@@ -1077,6 +1077,7 @@ mod tests {
                 net_id: id,
                 arcs: vec![],
                 teardrops: vec![],
+                zones: vec![],
                 segments: vec![Segment {
                     start: a,
                     end: z,
@@ -1134,6 +1135,7 @@ mod tests {
             net_id: 1,
             arcs: vec![],
             teardrops: vec![],
+            zones: vec![],
             segments: vec![Segment {
                 start,
                 end,
@@ -1209,6 +1211,7 @@ mod tests {
             net_id: 1,
             arcs: vec![],
             teardrops: vec![],
+            zones: vec![],
             segments: vec![Segment {
                 start,
                 end,
@@ -1271,6 +1274,7 @@ mod tests {
             net_id: 1,
             arcs: vec![],
             teardrops: vec![],
+            zones: vec![],
             segments: vec![
                 Segment {
                     start,
@@ -1340,6 +1344,7 @@ mod tests {
             net_id: 1,
             arcs: vec![],
             teardrops: vec![],
+            zones: vec![],
             segments: vec![
                 Segment {
                     start,
@@ -1406,6 +1411,7 @@ mod tests {
             net_id: 1,
             arcs: vec![],
             teardrops: vec![],
+            zones: vec![],
             segments: vec![
                 Segment {
                     start,
@@ -1469,6 +1475,7 @@ mod tests {
                 net_id: id,
                 arcs: vec![],
                 teardrops: vec![],
+                zones: vec![],
                 segments: vec![Segment {
                     start,
                     end,
@@ -1543,6 +1550,7 @@ mod tests {
             net_id: 1,
             arcs: vec![],
             teardrops: vec![],
+            zones: vec![],
             segments: vec![
                 Segment {
                     start: Point {
@@ -1585,6 +1593,7 @@ mod tests {
             net_id: 2,
             arcs: vec![],
             teardrops: vec![],
+            zones: vec![],
             segments: vec![],
             vias: vec![Via {
                 position: Point {
