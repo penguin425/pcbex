@@ -9,6 +9,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | --- | --- | --- |
 | Rust core/CLI and Python agent separation | `pcbex-core`, `pcbex-kicad`, `pcbex-cli`, `pcbex_agent` | Workspace release build |
 | Integer-nanometre model | `Point`, `Board`, `Footprint`, `Pad`, `Obstacle`, `Rules`, `Route`, `Via` | Serde models and round-trip tests |
+| Versioned JSON contract | Draft 2020-12 schema, `schema_version`, v1 aliases, strict unknown-field/future-version diagnostics, and migrate CLI | Legacy width/height/signals migration and rejection regressions |
 | JSON single-net routing and SVG | Multi-layer A* and `render_svg` | `routes_around_obstacle`, `svg_is_produced` |
 | 8-way tracks and path simplification | Directional A* state and segment coalescing | Internal checker enforces H/V/45-degree tracks |
 | Width and clearance | Inflated fixed obstacles and expanded committed routes | `separate_nets_keep_clearance` |
@@ -82,7 +83,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.20.0 exposes 69 Rust tests and 11 Python tests. The release workflow
+Version 1.21.0 exposes 70 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

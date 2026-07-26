@@ -17,6 +17,7 @@ fn rules() -> Rules {
 
 fn board_with_nets(net_count: usize) -> Board {
     Board {
+        schema_version: pcbex_core::CURRENT_SCHEMA_VERSION,
         width_nm: 20_000_000,
         height_nm: 20_000_000,
         outline: vec![],

@@ -61,6 +61,16 @@ rectangles. Copper envelopes are expanded by width/via radius plus clearance.
 Terminals declare the layers on which they may be reached. See
 [`examples/simple.json`](examples/simple.json).
 
+Board documents use `schema_version: 2`. Inputs without a version are migrated
+from the legacy shape before strict deserialization; unsupported versions and
+unknown top-level fields are rejected. Inspect the current JSON Schema or
+upgrade a file with:
+
+```sh
+pcbex schema --output board-v2.schema.json
+pcbex migrate old-board.json --output board-v2.json
+```
+
 Optional `net_classes` define per-class track width, clearance, via dimensions,
 and allowed layers. Assign a class by setting a net's `class` field. Routing and
 internal rule checking both apply the class; unspecified nets use board defaults.

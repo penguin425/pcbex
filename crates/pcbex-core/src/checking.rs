@@ -1074,6 +1074,7 @@ mod tests {
     };
     fn base() -> Board {
         Board {
+            schema_version: crate::CURRENT_SCHEMA_VERSION,
             width_nm: 10_000_000,
             height_nm: 10_000_000,
             outline: vec![],

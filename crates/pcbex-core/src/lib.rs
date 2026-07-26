@@ -283,7 +283,10 @@ fn via_cost() -> u32 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Board {
+    #[serde(default = "legacy_schema_version")]
+    pub schema_version: u32,
     pub width_nm: Nm,
     pub height_nm: Nm,
     #[serde(default)]
@@ -317,6 +320,97 @@ pub struct Board {
     pub nets: Vec<Net>,
     #[serde(default)]
     pub routes: Vec<Route>,
+}
+
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
+fn legacy_schema_version() -> u32 {
+    1
+}
+
+pub fn migrate_board_json(source: &str) -> Result<serde_json::Value, String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(source).map_err(|error| error.to_string())?;
+    let object = value
+        .as_object_mut()
+        .ok_or("board JSON root must be an object")?;
+    let mut version = object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(1) as u32;
+    if version == 0 || version > CURRENT_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported board schema version {version}; latest is {CURRENT_SCHEMA_VERSION}"
+        ));
+    }
+    while version < CURRENT_SCHEMA_VERSION {
+        match version {
+            1 => {
+                for (legacy, current) in [
+                    ("board_width_nm", "width_nm"),
+                    ("board_height_nm", "height_nm"),
+                    ("signals", "nets"),
+                ] {
+                    if !object.contains_key(current)
+                        && let Some(value) = object.remove(legacy)
+                    {
+                        object.insert(current.into(), value);
+                    }
+                }
+                version = 2;
+                object.insert("schema_version".into(), serde_json::json!(version));
+            }
+            _ => return Err(format!("no migration path from schema version {version}")),
+        }
+    }
+    Ok(value)
+}
+
+pub fn parse_board_json(source: &str) -> Result<Board, String> {
+    let value = migrate_board_json(source)?;
+    serde_json::from_value(value).map_err(|error| error.to_string())
+}
+
+pub fn board_json_schema() -> serde_json::Value {
+    serde_json::json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/board-v2.json",
+        "title": "pcbex board",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "width_nm", "height_nm", "rules"],
+        "properties": {
+            "schema_version": {"const": CURRENT_SCHEMA_VERSION},
+            "width_nm": {"type": "integer", "exclusiveMinimum": 0},
+            "height_nm": {"type": "integer", "exclusiveMinimum": 0},
+            "outline": {"type": "array", "items": {"$ref": "#/$defs/point"}},
+            "cutouts": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/point"}}},
+            "copper_layers": {"type": "array", "items": {"type": "string"}},
+            "rules": {"type": "object"},
+            "obstacles": {"type": "array"},
+            "round_obstacles": {"type": "array"},
+            "capsule_obstacles": {"type": "array"},
+            "polygon_obstacles": {"type": "array"},
+            "keepouts": {"type": "array"},
+            "footprints": {"type": "array"},
+            "net_classes": {"type": "object"},
+            "differential_pairs": {"type": "array"},
+            "manufacturing_rules": {"type": ["object", "null"]},
+            "via_strategy": {"enum": ["through_only", "auto"]},
+            "nets": {"type": "array"},
+            "routes": {"type": "array"}
+        },
+        "$defs": {
+            "point": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["x_nm", "y_nm"],
+                "properties": {
+                    "x_nm": {"type": "integer"},
+                    "y_nm": {"type": "integer"}
+                }
+            }
+        }
+    })
 }
 
 impl Board {
@@ -2726,6 +2820,7 @@ mod tests {
     use super::*;
     fn board() -> Board {
         Board {
+            schema_version: CURRENT_SCHEMA_VERSION,
             width_nm: 10_000_000,
             height_nm: 10_000_000,
             outline: vec![],
@@ -2827,6 +2922,49 @@ mod tests {
             Layer::Inner(1)
         );
         assert!(serde_json::from_str::<Layer>(r#""In31.Cu""#).is_err());
+    }
+
+    #[test]
+    fn migrates_legacy_board_json_and_rejects_unknown_versions_and_fields() {
+        let legacy = r#"{
+            "board_width_nm": 10000000,
+            "board_height_nm": 8000000,
+            "rules": {
+                "grid_nm": 250000,
+                "track_width_nm": 250000,
+                "clearance_nm": 200000,
+                "via_diameter_nm": 600000,
+                "via_drill_nm": 300000,
+                "bend_cost": 5,
+                "via_cost": 20
+            },
+            "signals": []
+        }"#;
+        let board = parse_board_json(legacy).unwrap();
+        assert_eq!(board.schema_version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(board.width_nm, 10_000_000);
+        assert!(board.nets.is_empty());
+        let migrated = migrate_board_json(legacy).unwrap();
+        assert_eq!(
+            migrated["schema_version"],
+            serde_json::json!(CURRENT_SCHEMA_VERSION)
+        );
+        assert!(migrated.get("board_width_nm").is_none());
+        assert!(
+            parse_board_json(r#"{"schema_version":99}"#)
+                .unwrap_err()
+                .contains("unsupported board schema version")
+        );
+        let unknown = legacy.replace("\"signals\": []", "\"signals\": [], \"typo\": true");
+        assert!(
+            parse_board_json(&unknown)
+                .unwrap_err()
+                .contains("unknown field")
+        );
+        assert_eq!(
+            board_json_schema()["properties"]["schema_version"]["const"],
+            serde_json::json!(CURRENT_SCHEMA_VERSION)
+        );
     }
     #[test]
     fn routes_around_obstacle() {
