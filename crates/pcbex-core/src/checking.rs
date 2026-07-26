@@ -202,6 +202,15 @@ pub fn check_board(board: &Board) -> CheckReport {
             }
         }
     }
+    for route in &board.routes {
+        if !known_net_ids.contains(&route.net_id) {
+            report.push(
+                "route_net",
+                format!("route {} references an undeclared net", route.net_id),
+                vec![route.net_id],
+            );
+        }
+    }
     let routes: HashMap<u32, &Route> = board.routes.iter().map(|r| (r.net_id, r)).collect();
     for net in &board.nets {
         let Some(route) = routes.get(&net.id) else {
@@ -3569,5 +3578,35 @@ mod tests {
                 .count(),
             4
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_unknown_route_net_references() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let route = |net_id| Route {
+            net_id,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        };
+        board.routes = vec![route(1), route(99)];
+
+        let report = check_board(&board);
+        let violations: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "route_net")
+            .collect();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].net_ids, vec![99]);
     }
 }

@@ -450,6 +450,8 @@ When a pad carries a net identifier, that identifier must exist in the board
 net table; normal DRC reports undeclared pad-net references explicitly.
 The net table itself requires unique non-zero identifiers and unique non-empty
 names, preventing ambiguous routing, rule lookup, and pad ownership.
+Every route must likewise reference a declared net; normal DRC reports unknown
+route ownership before applying connectivity, width, or clearance rules.
 
 ## Planning and repair agent
 
