@@ -412,6 +412,9 @@ segment and reports missing stackup data or out-of-range geometry. Differential
 pairs use the same stackup geometry. This is an early
 layout constraint, not a replacement for a field solver or fabrication-house
 stackup validation.
+Every net-class name assigned to a net must exist in `net_classes`; both the
+normal checker and Router reject unresolved names instead of silently applying
+the base routing rules.
 
 Set `maximum_impedance_step_ohms` on a net class to limit discontinuity where
 connected segments change layers through a via. This check is independent of

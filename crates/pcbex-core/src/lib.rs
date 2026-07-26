@@ -1188,6 +1188,13 @@ impl<'a> Router<'a> {
         {
             return Err("board items reference undeclared copper layers".into());
         }
+        if board.nets.iter().any(|net| {
+            net.class
+                .as_ref()
+                .is_some_and(|class| !board.net_classes.contains_key(class))
+        }) {
+            return Err("net references an undeclared net class".into());
+        }
         if !board.outline.is_empty()
             && (!geometry::polygon_is_simple(&board.outline)
                 || board.outline.iter().any(|point| {
@@ -4582,6 +4589,16 @@ mod tests {
         assert!(matches!(
             Router::new(&invalid),
             Err(message) if message == "board items reference undeclared copper layers"
+        ));
+    }
+
+    #[test]
+    fn router_rejects_unknown_net_class_references() {
+        let mut invalid = board();
+        invalid.nets[0].class = Some("missing".into());
+        assert!(matches!(
+            Router::new(&invalid),
+            Err(message) if message == "net references an undeclared net class"
         ));
     }
 
