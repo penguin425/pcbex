@@ -227,6 +227,10 @@ pub struct StackupLayer {
     pub layer: Layer,
     pub dielectric_height_nm: Nm,
     pub dielectric_constant: f64,
+    #[serde(default)]
+    pub copper_thickness_nm: Nm,
+    #[serde(default)]
+    pub reference_layer: Option<Layer>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -733,12 +737,27 @@ pub fn estimated_impedance_ohms(
     dielectric_height_nm: Nm,
     dielectric_constant: f64,
 ) -> Option<f64> {
-    if width_nm <= 0 || dielectric_height_nm <= 0 || dielectric_constant <= 1.0 {
+    estimated_impedance_with_copper_ohms(width_nm, dielectric_height_nm, 0, dielectric_constant)
+}
+
+/// Estimate single-ended microstrip impedance including conductor thickness.
+pub fn estimated_impedance_with_copper_ohms(
+    width_nm: Nm,
+    dielectric_height_nm: Nm,
+    copper_thickness_nm: Nm,
+    dielectric_constant: f64,
+) -> Option<f64> {
+    if width_nm <= 0
+        || dielectric_height_nm <= 0
+        || copper_thickness_nm < 0
+        || dielectric_constant <= 1.0
+    {
         return None;
     }
     let width = width_nm as f64;
     let height = dielectric_height_nm as f64;
-    let argument = 5.98 * height / (0.8 * width);
+    let thickness = copper_thickness_nm as f64;
+    let argument = 5.98 * height / (0.8 * width + thickness);
     if argument <= 1.0 {
         return None;
     }
@@ -1002,8 +1021,12 @@ impl<'a> Router<'a> {
             !stackup_layers.insert(entry.layer)
                 || !board.copper_layers.contains(&entry.layer)
                 || entry.dielectric_height_nm <= 0
+                || entry.copper_thickness_nm < 0
                 || !entry.dielectric_constant.is_finite()
                 || entry.dielectric_constant <= 1.0
+                || entry.reference_layer.is_some_and(|layer| {
+                    !board.copper_layers.contains(&layer) || layer == entry.layer
+                })
         }) {
             return Err("stackup has invalid or duplicate layer entries".into());
         }
@@ -3995,6 +4018,8 @@ mod tests {
             layer: Layer::Front,
             dielectric_height_nm: 200_000,
             dielectric_constant: 4.0,
+            copper_thickness_nm: 0,
+            reference_layer: Some(Layer::Back),
         });
         board.routes.push(Route {
             net_id: 1,

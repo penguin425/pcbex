@@ -320,9 +320,10 @@ fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut Ch
                 );
                 break;
             };
-            let Some(estimated) = crate::estimated_impedance_ohms(
+            let Some(estimated) = crate::estimated_impedance_with_copper_ohms(
                 segment.width_nm,
                 stackup.dielectric_height_nm,
+                stackup.copper_thickness_nm,
                 stackup.dielectric_constant,
             ) else {
                 report.push(
