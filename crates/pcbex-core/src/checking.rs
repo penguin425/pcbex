@@ -172,6 +172,21 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    for (name, rules) in &board.net_classes {
+        if rules.track_width_nm <= 0
+            || rules.clearance_nm < 0
+            || rules.via_drill_nm <= 0
+            || rules.via_diameter_nm <= rules.via_drill_nm
+        {
+            report.push(
+                "net_class_dimensions",
+                format!(
+                    "net class {name} requires a positive track width and via drill, non-negative clearance, and a via diameter larger than its drill"
+                ),
+                vec![],
+            );
+        }
+    }
     if !copper_layer_table_is_valid(board) {
         report.push(
             "copper_layers",
@@ -4876,6 +4891,59 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "routing_rules")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_net_class_dimensions() {
+        let class = || crate::NetClassRules {
+            track_width_nm: 250_000,
+            clearance_nm: 200_000,
+            via_diameter_nm: 600_000,
+            via_drill_nm: 300_000,
+            layers: None,
+            differential_width_nm: None,
+            differential_gap_nm: None,
+            minimum_length_nm: None,
+            maximum_length_nm: None,
+            target_impedance_ohms: None,
+            impedance_tolerance_ohms: None,
+            maximum_impedance_step_ohms: None,
+        };
+        let with_class = |name: &str, rules| {
+            let mut board = base();
+            board.net_classes.insert(name.into(), rules);
+            board
+        };
+        let mut zero_width = class();
+        zero_width.track_width_nm = 0;
+        let mut negative_clearance = class();
+        negative_clearance.clearance_nm = -1;
+        let mut zero_drill = class();
+        zero_drill.via_drill_nm = 0;
+        let mut equal_via_dimensions = class();
+        equal_via_dimensions.via_diameter_nm = equal_via_dimensions.via_drill_nm;
+
+        for board in [
+            with_class("zero-width", zero_width),
+            with_class("negative-clearance", negative_clearance),
+            with_class("zero-drill", zero_drill),
+            with_class("equal-via-dimensions", equal_via_dimensions),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "net_class_dimensions")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&with_class("valid", class()))
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "net_class_dimensions")
         );
     }
 
