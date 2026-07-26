@@ -672,25 +672,159 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
             check_manufacturing_clearance(route, other, rules.minimum_clearance_nm, &mut report);
         }
     }
-    let vias: Vec<_> = board
+
+    let mut drilled_holes: Vec<_> = board
         .routes
         .iter()
-        .flat_map(|route| route.vias.iter().map(move |via| (route.net_id, via)))
+        .flat_map(|route| {
+            route.vias.iter().map(move |via| DrilledHole {
+                start: via.position,
+                end: via.position,
+                diameter_nm: via.drill_nm,
+                net_id: Some(route.net_id),
+            })
+        })
         .collect();
-    for (index, (net_id, via)) in vias.iter().enumerate() {
-        for (other_net_id, other) in &vias[index + 1..] {
+    for footprint in &board.footprints {
+        for pad in &footprint.pads {
+            let (Some(drill_width_nm), Some(drill_height_nm)) =
+                (pad.drill_width_nm, pad.drill_height_nm)
+            else {
+                if pad.drill_width_nm.is_some() || pad.drill_height_nm.is_some() {
+                    report.push(
+                        "dfm_component_drill",
+                        format!(
+                            "{} pad {} has incomplete drill dimensions",
+                            footprint.reference, pad.number
+                        ),
+                        pad.net_id.into_iter().collect(),
+                    );
+                }
+                continue;
+            };
+            if drill_width_nm <= 0 || drill_height_nm <= 0 {
+                report.push(
+                    "dfm_component_drill",
+                    format!(
+                        "{} pad {} has invalid drill dimensions",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                );
+                continue;
+            }
+            let drill_nm = drill_width_nm.min(drill_height_nm);
+            if drill_nm < rules.minimum_drill_nm {
+                report.push(
+                    "dfm_component_drill",
+                    format!(
+                        "{} pad {} drill is smaller than the manufacturing minimum",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                );
+            }
+            let pad_width_nm = if pad.source_width_nm > 0 {
+                pad.source_width_nm
+            } else {
+                pad.width_nm
+            };
+            let pad_height_nm = if pad.source_height_nm > 0 {
+                pad.source_height_nm
+            } else {
+                pad.height_nm
+            };
+            if pad.plated
+                && (pad_width_nm - drill_width_nm < 2 * rules.minimum_annular_ring_nm
+                    || pad_height_nm - drill_height_nm < 2 * rules.minimum_annular_ring_nm)
+            {
+                report.push(
+                    "dfm_component_annular_ring",
+                    format!(
+                        "{} pad {} annular ring is smaller than the manufacturing minimum",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                );
+            }
+            if rules.board_thickness_nm > drill_nm * i64::from(rules.maximum_via_aspect_ratio) {
+                report.push(
+                    "dfm_component_aspect_ratio",
+                    format!(
+                        "{} pad {} exceeds the manufacturing aspect-ratio limit",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                );
+            }
+            let hole = drilled_pad_hole(pad, drill_width_nm, drill_height_nm);
+            let edge_envelope = hole.diameter_nm + 2 * rules.minimum_copper_to_edge_nm;
+            if !board.point_inside_board(hole.start, edge_envelope)
+                || !board.point_inside_board(hole.end, edge_envelope)
+            {
+                report.push(
+                    "dfm_hole_to_edge",
+                    format!(
+                        "{} pad {} hole is too close to the routed board edge",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                );
+            }
+            drilled_holes.push(hole);
+        }
+    }
+    for (index, hole) in drilled_holes.iter().enumerate() {
+        for other in &drilled_holes[index + 1..] {
             let required_twice =
-                via.drill_nm + other.drill_nm + 2 * rules.minimum_drill_to_drill_nm;
-            if points_closer_than(via.position, other.position, required_twice) {
+                hole.diameter_nm + other.diameter_nm + 2 * rules.minimum_drill_to_drill_nm;
+            if segments_closer_than(hole.start, hole.end, other.start, other.end, required_twice) {
+                let mut net_ids: Vec<_> =
+                    [hole.net_id, other.net_id].into_iter().flatten().collect();
+                net_ids.sort_unstable();
+                net_ids.dedup();
                 report.push(
                     "dfm_drill_spacing",
                     "drilled holes are below the manufacturing spacing minimum".into(),
-                    vec![*net_id, *other_net_id],
+                    net_ids,
                 );
             }
         }
     }
     report
+}
+
+#[derive(Clone, Copy)]
+struct DrilledHole {
+    start: Point,
+    end: Point,
+    diameter_nm: i64,
+    net_id: Option<u32>,
+}
+
+fn drilled_pad_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> DrilledHole {
+    let diameter_nm = width_nm.min(height_nm);
+    let centerline_nm = width_nm.max(height_nm) - diameter_nm;
+    let angle_deg = if width_nm >= height_nm {
+        pad.rotation_deg
+    } else {
+        pad.rotation_deg + 90.0
+    };
+    let radians = angle_deg.to_radians();
+    let half_dx = (radians.cos() * centerline_nm as f64 / 2.0).round() as i64;
+    let half_dy = (radians.sin() * centerline_nm as f64 / 2.0).round() as i64;
+    DrilledHole {
+        start: Point {
+            x_nm: pad.position.x_nm - half_dx,
+            y_nm: pad.position.y_nm - half_dy,
+        },
+        end: Point {
+            x_nm: pad.position.x_nm + half_dx,
+            y_nm: pad.position.y_nm + half_dy,
+        },
+        diameter_nm,
+        net_id: pad.net_id,
+    }
 }
 
 fn check_trace_angles(route: &Route, minimum_angle_deg: u16, report: &mut CheckReport) {
@@ -2375,6 +2509,9 @@ mod tests {
                 rotation_deg: 0.0,
                 shape: PadShape::Circle,
                 custom_polygon: vec![],
+                drill_width_nm: Some(200_000),
+                drill_height_nm: Some(200_000),
+                plated: true,
                 layers: vec![Layer::Front],
                 net_id: Some(1),
             }],
@@ -2466,6 +2603,97 @@ mod tests {
             sarif["runs"][0]["results"]
                 .as_array()
                 .is_some_and(|results| results.len() == report.violations.len())
+        );
+    }
+
+    #[test]
+    fn reports_plated_and_non_plated_component_hole_dfm() {
+        let mut board = base();
+        board.manufacturing_rules = Some(crate::ManufacturingRules {
+            minimum_track_width_nm: 200_000,
+            minimum_clearance_nm: 200_000,
+            minimum_drill_nm: 400_000,
+            minimum_annular_ring_nm: 200_000,
+            minimum_copper_to_edge_nm: 300_000,
+            board_thickness_nm: 1_600_000,
+            maximum_via_aspect_ratio: 3,
+            minimum_drill_to_drill_nm: 300_000,
+            allow_via_in_pad: true,
+            minimum_trace_angle_deg: 0,
+        });
+        board.footprints.push(crate::Footprint {
+            reference: "J1".into(),
+            position: Point {
+                x_nm: 300_000,
+                y_nm: 1_000_000,
+            },
+            rotation_deg: 0.0,
+            pads: vec![
+                Pad {
+                    number: "1".into(),
+                    position: Point {
+                        x_nm: 300_000,
+                        y_nm: 1_000_000,
+                    },
+                    width_nm: 600_000,
+                    height_nm: 600_000,
+                    source_width_nm: 600_000,
+                    source_height_nm: 600_000,
+                    rotation_deg: 0.0,
+                    shape: PadShape::Circle,
+                    custom_polygon: vec![],
+                    drill_width_nm: Some(300_000),
+                    drill_height_nm: Some(300_000),
+                    plated: true,
+                    layers: vec![Layer::Front, Layer::Back],
+                    net_id: Some(1),
+                },
+                Pad {
+                    number: String::new(),
+                    position: Point {
+                        x_nm: 800_000,
+                        y_nm: 1_000_000,
+                    },
+                    width_nm: 1_200_000,
+                    height_nm: 800_000,
+                    source_width_nm: 1_200_000,
+                    source_height_nm: 800_000,
+                    rotation_deg: 0.0,
+                    shape: PadShape::Oval,
+                    custom_polygon: vec![],
+                    drill_width_nm: Some(700_000),
+                    drill_height_nm: Some(300_000),
+                    plated: false,
+                    layers: vec![Layer::Front, Layer::Back],
+                    net_id: None,
+                },
+            ],
+        });
+
+        let report = check_manufacturability(&board);
+        for rule in [
+            "dfm_component_drill",
+            "dfm_component_annular_ring",
+            "dfm_component_aspect_ratio",
+            "dfm_hole_to_edge",
+            "dfm_drill_spacing",
+        ] {
+            assert!(
+                report
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == rule),
+                "missing {rule}"
+            );
+        }
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "dfm_component_annular_ring")
+                .count(),
+            1,
+            "NPTH pads must not require an annular ring"
         );
     }
 }

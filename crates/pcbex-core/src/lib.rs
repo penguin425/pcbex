@@ -188,8 +188,18 @@ pub struct Pad {
     pub shape: PadShape,
     #[serde(default)]
     pub custom_polygon: Vec<Point>,
+    #[serde(default)]
+    pub drill_width_nm: Option<Nm>,
+    #[serde(default)]
+    pub drill_height_nm: Option<Nm>,
+    #[serde(default = "plated_pad")]
+    pub plated: bool,
     pub layers: Vec<Layer>,
     pub net_id: Option<u32>,
+}
+
+fn plated_pad() -> bool {
+    true
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -6902,6 +6912,9 @@ mod tests {
                 rotation_deg: 0.0,
                 shape: PadShape::Rect,
                 custom_polygon: vec![],
+                drill_width_nm: None,
+                drill_height_nm: None,
+                plated: true,
                 layers: vec![Layer::Front],
                 net_id: Some(1),
             }],
