@@ -214,6 +214,25 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![],
             );
         }
+        if rules.target_impedance_ohms.is_some() != rules.impedance_tolerance_ohms.is_some()
+            || rules
+                .target_impedance_ohms
+                .is_some_and(|value| !value.is_finite() || value <= 0.0)
+            || rules
+                .impedance_tolerance_ohms
+                .is_some_and(|value| !value.is_finite() || value < 0.0)
+            || rules
+                .maximum_impedance_step_ohms
+                .is_some_and(|value| !value.is_finite() || value < 0.0)
+        {
+            report.push(
+                "net_class_impedance_limits",
+                format!(
+                    "net class {name} impedance target and tolerance must be paired finite values with a positive target and non-negative limits"
+                ),
+                vec![],
+            );
+        }
     }
     if !copper_layer_table_is_valid(board) {
         report.push(
@@ -5075,6 +5094,64 @@ mod tests {
                     .violations
                     .iter()
                     .any(|violation| violation.rule == "net_class_length_limits")
+            );
+        }
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_net_class_impedance_limits() {
+        let with_impedance = |name: &str, target, tolerance, maximum_step| {
+            let mut board = base();
+            board.net_classes.insert(
+                name.into(),
+                crate::NetClassRules {
+                    track_width_nm: 250_000,
+                    clearance_nm: 200_000,
+                    via_diameter_nm: 600_000,
+                    via_drill_nm: 300_000,
+                    layers: None,
+                    differential_width_nm: None,
+                    differential_gap_nm: None,
+                    minimum_length_nm: None,
+                    maximum_length_nm: None,
+                    target_impedance_ohms: target,
+                    impedance_tolerance_ohms: tolerance,
+                    maximum_impedance_step_ohms: maximum_step,
+                },
+            );
+            board
+        };
+
+        for board in [
+            with_impedance("target-only", Some(50.0), None, None),
+            with_impedance("tolerance-only", None, Some(5.0), None),
+            with_impedance("zero-target", Some(0.0), Some(5.0), None),
+            with_impedance("nan-target", Some(f64::NAN), Some(5.0), None),
+            with_impedance("infinite-tolerance", Some(50.0), Some(f64::INFINITY), None),
+            with_impedance("negative-tolerance", Some(50.0), Some(-1.0), None),
+            with_impedance("negative-step", None, None, Some(-1.0)),
+            with_impedance("nan-step", None, None, Some(f64::NAN)),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "net_class_impedance_limits")
+                    .count(),
+                1
+            );
+        }
+        for board in [
+            with_impedance("unrestricted", None, None, None),
+            with_impedance("target", Some(50.0), Some(0.0), None),
+            with_impedance("step", None, None, Some(0.0)),
+            with_impedance("all", Some(90.0), Some(9.0), Some(4.0)),
+        ] {
+            assert!(
+                !check_board(&board)
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == "net_class_impedance_limits")
             );
         }
     }
