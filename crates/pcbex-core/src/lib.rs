@@ -319,6 +319,10 @@ pub struct ReturnPathRule {
     pub max_via_distance_nm: Nm,
     #[serde(default)]
     pub auto_stitch: bool,
+    #[serde(default)]
+    pub require_continuous_plane: bool,
+    #[serde(default)]
+    pub plane_sample_spacing_nm: Option<Nm>,
 }
 
 fn default_maximum_via_aspect_ratio() -> u16 {
@@ -1093,6 +1097,9 @@ impl<'a> Router<'a> {
             if rule.name.is_empty()
                 || !return_path_names.insert(rule.name.as_str())
                 || rule.max_via_distance_nm <= 0
+                || rule
+                    .plane_sample_spacing_nm
+                    .is_some_and(|spacing| spacing <= 0)
                 || !net_ids.contains(&rule.reference_net_id)
                 || rule.signal_net_ids.is_empty()
                 || rule
@@ -2498,12 +2505,9 @@ pub fn stitch_return_paths(board: &mut Board) -> usize {
                         .map(|terminal| terminal.position),
                 )
                 .collect();
-            let Some(anchor) = anchors
+            let anchor = anchors
                 .into_iter()
-                .min_by_key(|point| point_distance_nm(*point, signal_via.position))
-            else {
-                continue;
-            };
+                .min_by_key(|point| point_distance_nm(*point, signal_via.position));
             let reference_rules = board.rules_for_net(rule.reference_net_id);
             let distance = rule.max_via_distance_nm;
             let baseline_non_return = checking::check_board(board)
@@ -2520,20 +2524,30 @@ pub fn stitch_return_paths(board: &mut Board) -> usize {
                     continue;
                 }
                 let layer = signal_via.start_layer;
-                let points = if anchor.x_nm == position.x_nm
-                    || anchor.y_nm == position.y_nm
-                    || (anchor.x_nm - position.x_nm).abs() == (anchor.y_nm - position.y_nm).abs()
-                {
-                    vec![anchor, position]
+                let touches_zone = board.routes[reference_index].zones.iter().any(|zone| {
+                    signal_via.spans_layer(zone.layer) && zone_contains_point(zone, position)
+                });
+                let points = if touches_zone {
+                    vec![position]
+                } else if let Some(anchor) = anchor {
+                    if anchor.x_nm == position.x_nm
+                        || anchor.y_nm == position.y_nm
+                        || (anchor.x_nm - position.x_nm).abs()
+                            == (anchor.y_nm - position.y_nm).abs()
+                    {
+                        vec![anchor, position]
+                    } else {
+                        vec![
+                            anchor,
+                            Point {
+                                x_nm: position.x_nm,
+                                y_nm: anchor.y_nm,
+                            },
+                            position,
+                        ]
+                    }
                 } else {
-                    vec![
-                        anchor,
-                        Point {
-                            x_nm: position.x_nm,
-                            y_nm: anchor.y_nm,
-                        },
-                        position,
-                    ]
+                    continue;
                 };
                 let segments = points
                     .windows(2)
@@ -2578,6 +2592,16 @@ pub fn stitch_return_paths(board: &mut Board) -> usize {
         }
     }
     generated
+}
+
+fn zone_contains_point(zone: &CopperZone, point: Point) -> bool {
+    if zone.filled_polygons.is_empty() {
+        geometry::point_in_polygon(point, &zone.polygon)
+    } else {
+        zone.filled_polygons
+            .iter()
+            .any(|polygon| geometry::point_in_polygon(point, polygon))
+    }
 }
 
 fn point_distance_nm(left: Point, right: Point) -> Nm {
@@ -3928,6 +3952,8 @@ mod tests {
             reference_net_id: 2,
             max_via_distance_nm: 1_000_000,
             auto_stitch: true,
+            require_continuous_plane: false,
+            plane_sample_spacing_nm: None,
         });
 
         assert!(
@@ -3939,6 +3965,171 @@ mod tests {
         assert_eq!(stitch_return_paths(&mut board), 1);
         assert!(checking::check_board(&board).is_clean());
         assert_eq!(board.routes[1].vias.len(), 1);
+    }
+
+    #[test]
+    fn detects_reference_plane_gaps_and_stitches_directly_to_zones() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].terminals[0].layers = vec![Layer::Front];
+        board.nets[0].terminals[1].layers = vec![Layer::Front];
+        board.nets.push(Net {
+            id: 2,
+            name: "GND".into(),
+            class: None,
+            priority: 0,
+            terminals: vec![Terminal {
+                position: Point {
+                    x_nm: 1_000_000,
+                    y_nm: 2_000_000,
+                },
+                layers: vec![Layer::Back],
+            }],
+        });
+        board.stackup.push(StackupLayer {
+            layer: Layer::Front,
+            dielectric_height_nm: 200_000,
+            dielectric_constant: 4.2,
+            copper_thickness_nm: 35_000,
+            reference_layer: Some(Layer::Back),
+        });
+        let plane = CopperZone {
+            polygon: vec![
+                Point { x_nm: 0, y_nm: 0 },
+                Point {
+                    x_nm: 10_000_000,
+                    y_nm: 0,
+                },
+                Point {
+                    x_nm: 10_000_000,
+                    y_nm: 10_000_000,
+                },
+                Point {
+                    x_nm: 0,
+                    y_nm: 10_000_000,
+                },
+            ],
+            layer: Layer::Back,
+            clearance_nm: 200_000,
+            minimum_thickness_nm: 250_000,
+            thermal_relief: false,
+            thermal_gap_nm: 0,
+            thermal_spoke_width_nm: 0,
+            filled_polygons: vec![
+                vec![
+                    Point { x_nm: 0, y_nm: 0 },
+                    Point {
+                        x_nm: 4_000_000,
+                        y_nm: 0,
+                    },
+                    Point {
+                        x_nm: 4_000_000,
+                        y_nm: 10_000_000,
+                    },
+                    Point {
+                        x_nm: 0,
+                        y_nm: 10_000_000,
+                    },
+                ],
+                vec![
+                    Point {
+                        x_nm: 6_000_000,
+                        y_nm: 0,
+                    },
+                    Point {
+                        x_nm: 10_000_000,
+                        y_nm: 0,
+                    },
+                    Point {
+                        x_nm: 10_000_000,
+                        y_nm: 10_000_000,
+                    },
+                    Point {
+                        x_nm: 6_000_000,
+                        y_nm: 10_000_000,
+                    },
+                ],
+            ],
+        };
+        board.routes = vec![
+            Route {
+                net_id: 1,
+                segments: vec![Segment {
+                    start: board.nets[0].terminals[0].position,
+                    end: board.nets[0].terminals[1].position,
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                }],
+                arcs: vec![],
+                vias: vec![],
+                teardrops: vec![],
+                zones: vec![],
+            },
+            Route {
+                net_id: 2,
+                segments: vec![],
+                arcs: vec![],
+                vias: vec![],
+                teardrops: vec![],
+                zones: vec![plane],
+            },
+        ];
+        board.return_path_rules.push(ReturnPathRule {
+            name: "plane".into(),
+            signal_net_ids: vec![1],
+            reference_net_id: 2,
+            max_via_distance_nm: 1_000_000,
+            auto_stitch: true,
+            require_continuous_plane: true,
+            plane_sample_spacing_nm: Some(250_000),
+        });
+
+        assert!(
+            checking::check_board(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "return_path_plane")
+        );
+
+        board.routes[1].zones[0].filled_polygons.clear();
+        board.return_path_rules[0].require_continuous_plane = false;
+        board.routes[0].segments = vec![
+            Segment {
+                start: board.nets[0].terminals[0].position,
+                end: Point {
+                    x_nm: 5_000_000,
+                    y_nm: 1_000_000,
+                },
+                layer: Layer::Front,
+                width_nm: 250_000,
+            },
+            Segment {
+                start: Point {
+                    x_nm: 5_000_000,
+                    y_nm: 1_000_000,
+                },
+                end: board.nets[0].terminals[1].position,
+                layer: Layer::Back,
+                width_nm: 250_000,
+            },
+        ];
+        board.nets[0].terminals[1].layers = vec![Layer::Back];
+        board.routes[0].vias.push(Via {
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 1_000_000,
+            },
+            diameter_nm: 600_000,
+            drill_nm: 300_000,
+            kind: ViaKind::Through,
+            start_layer: Layer::Front,
+            end_layer: Layer::Back,
+        });
+
+        assert_eq!(stitch_return_paths(&mut board), 1);
+        assert!(board.routes[1].segments.is_empty());
+        assert_eq!(board.routes[1].vias.len(), 1);
+        assert!(checking::check_board(&board).is_clean());
     }
 
     #[test]

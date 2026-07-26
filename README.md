@@ -310,7 +310,14 @@ including every fanout stub, must pass the normal full-board checker.
 a maximum signal-to-reference via distance. The board checker reports every
 layer transition without a nearby reference via that spans the same layers.
 With `auto_stitch: true`, routing adds a checked reference via and short
-connection to existing reference copper when a legal site is available.
+connection to existing reference copper when a legal site is available. A via
+inside an owned reference Zone connects directly to that plane without an
+artificial track.
+
+With `require_continuous_plane: true`, each signal segment is sampled against
+the stackup-selected reference layer. Missing fills and split-plane/slot
+crossings produce `return_path_plane` violations; the optional
+`plane_sample_spacing_nm` controls resolution.
 
 ## Rounded routing
 
