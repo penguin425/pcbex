@@ -210,7 +210,7 @@ fn main() -> Result<()> {
                 fs::write(path, render_svg(&board))?;
             }
             eprintln!(
-                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; escaped nets: {}; optimized segments: {}; parallel candidates: {}; fallbacks: {}; expanded states: {}; passes: {}",
+                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; escaped nets: {}; optimized segments: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
                 report.preserved.len(),
                 report.routed.len(),
                 report.rerouted.len(),
@@ -219,6 +219,7 @@ fn main() -> Result<()> {
                 report.escaped_nets,
                 report.optimized_segments,
                 report.parallel_candidates,
+                report.parallel_workers,
                 report.parallel_fallbacks,
                 report.expanded_states,
                 report.reroute_passes
@@ -404,7 +405,7 @@ fn main() -> Result<()> {
                 )?;
             }
             eprintln!(
-                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; escaped nets: {}; optimized segments: {}; parallel candidates: {}; fallbacks: {}; expanded states: {}; passes: {}",
+                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; escaped nets: {}; optimized segments: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
                 report.preserved.len(),
                 report.routed.len(),
                 report.rerouted.len(),
@@ -413,6 +414,7 @@ fn main() -> Result<()> {
                 report.escaped_nets,
                 report.optimized_segments,
                 report.parallel_candidates,
+                report.parallel_workers,
                 report.parallel_fallbacks,
                 report.expanded_states,
                 report.reroute_passes
