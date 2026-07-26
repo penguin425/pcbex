@@ -738,6 +738,8 @@ pub struct RouteReport {
     pub parallel_candidates: usize,
     #[serde(default)]
     pub parallel_fallbacks: usize,
+    #[serde(default)]
+    pub parallel_workers: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1237,7 +1239,12 @@ impl<'a> Router<'a> {
         }
     }
 
-    pub fn route_all(mut self) -> (Vec<Route>, RouteReport) {
+    pub fn route_all(self) -> (Vec<Route>, RouteReport) {
+        let worker_limit = std::thread::available_parallelism().map_or(2, usize::from);
+        self.route_all_with_workers(worker_limit)
+    }
+
+    pub fn route_all_with_workers(mut self, worker_limit: usize) -> (Vec<Route>, RouteReport) {
         let fixed_net_ids: HashSet<u32> =
             self.board.routes.iter().map(|route| route.net_id).collect();
         let preserved: Vec<String> = self
@@ -1275,6 +1282,7 @@ impl<'a> Router<'a> {
         let mut total_expanded = 0;
         let mut parallel_candidates = 0;
         let mut parallel_fallbacks = 0;
+        let mut parallel_workers = 0;
         for attempt in 0..4 {
             self.occupied.clear();
             self.occupied_by.clear();
@@ -1301,10 +1309,8 @@ impl<'a> Router<'a> {
             let mut failed_ids = HashSet::new();
             let initial_results = if attempt == 0 && attempt_nets.len() > 1 {
                 parallel_candidates += attempt_nets.len();
-                let worker_count = std::thread::available_parallelism()
-                    .map_or(2, usize::from)
-                    .min(attempt_nets.len())
-                    .min(8);
+                let worker_count = worker_limit.max(1).min(attempt_nets.len()).min(8);
+                parallel_workers = worker_count;
                 let next = std::sync::atomic::AtomicUsize::new(0);
                 let results = std::sync::Mutex::new(
                     (0..attempt_nets.len())
@@ -1335,19 +1341,20 @@ impl<'a> Router<'a> {
             } else {
                 (0..attempt_nets.len()).map(|_| None).collect()
             };
+            let mut validation = self.board.clone();
+            validation.routes.extend(accepted.iter().cloned());
             for (net, initial_result) in attempt_nets.into_iter().zip(initial_results) {
                 let mut result = initial_result.unwrap_or_else(|| self.route_net(net));
                 if attempt == 0
                     && let Ok((candidate, _)) = &result
                 {
-                    let mut validation = self.board.clone();
-                    validation.routes.extend(accepted.iter().cloned());
                     validation.routes.push(candidate.clone());
-                    if checking::check_board(&validation)
+                    let invalid = checking::check_board(&validation)
                         .violations
                         .iter()
-                        .any(|violation| violation.net_ids.contains(&net.id))
-                    {
+                        .any(|violation| violation.net_ids.contains(&net.id));
+                    validation.routes.pop();
+                    if invalid {
                         parallel_fallbacks += 1;
                         result = self.route_net(net);
                     }
@@ -1356,6 +1363,7 @@ impl<'a> Router<'a> {
                     Ok((route, expanded)) => {
                         total_expanded += expanded;
                         self.commit(&route);
+                        validation.routes.push(route.clone());
                         accepted.push(route);
                     }
                     Err(failure) => {
@@ -1387,6 +1395,7 @@ impl<'a> Router<'a> {
                 ripup_events,
                 parallel_candidates,
                 parallel_fallbacks,
+                parallel_workers,
                 ..RouteReport::default()
             };
             if report.unrouted.len() < best_report.unrouted.len() {
@@ -2209,6 +2218,21 @@ fn empty_route(net_id: u32) -> Route {
 }
 
 pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
+    let workers = std::thread::available_parallelism().map_or(2, usize::from);
+    route_board_with_workers(board, workers)
+}
+
+/// Route a board with a deterministic upper bound on first-pass search workers.
+///
+/// The limit is clamped to 1..=8 and is primarily useful for repeatable
+/// performance measurements and resource-constrained integrations.
+pub fn route_board_with_workers(
+    board: &Board,
+    worker_limit: usize,
+) -> Result<(Board, RouteReport), String> {
+    if worker_limit == 0 {
+        return Err("worker limit must be at least 1".into());
+    }
     let (mut seeded, escape_stubs) = prepare_escape_routing(board)?;
     let mut coupled = Vec::new();
     let mut paired_expanded = 0;
@@ -2247,7 +2271,7 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
             paired_expanded += expanded;
         }
     }
-    let (routes, mut report) = Router::new(&seeded)?.route_all();
+    let (routes, mut report) = Router::new(&seeded)?.route_all_with_workers(worker_limit);
     let mut out = seeded;
     out.routes = routes;
     tune_route_lengths(&mut out)?;
@@ -3531,11 +3555,13 @@ mod tests {
                 }
             })
             .collect();
-        let (routed, report) = route_board(&b).unwrap();
-        let (routed_again, repeated_report) = route_board(&b).unwrap();
+        let (routed, report) = route_board_with_workers(&b, 1).unwrap();
+        let (routed_again, repeated_report) = route_board_with_workers(&b, 8).unwrap();
         assert!(report.unrouted.is_empty(), "{:?}", report.unrouted);
         assert_eq!(report.parallel_candidates, 10);
         assert_eq!(repeated_report.parallel_candidates, 10);
+        assert_eq!(report.parallel_workers, 1);
+        assert_eq!(repeated_report.parallel_workers, 8);
         assert_eq!(
             serde_json::to_vec(&routed).unwrap(),
             serde_json::to_vec(&routed_again).unwrap()

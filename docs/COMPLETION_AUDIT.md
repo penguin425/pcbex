@@ -47,7 +47,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Routing performance suite | Criterion scenarios for obstacle, 5/10-net, and board-cutout routing | Benchmark targets compile on every PR and retain local Criterion baselines |
 | Routing quality gates | Stable per-net, board-total, and differential-pair metrics with JSON/SARIF output, thresholds, and baseline regression comparison | Geometry-count regression plus CLI JSON/baseline smoke test |
 | Performance regression gate | Deterministic search-state budgets for 10 parallel nets and a 100 mm board with 200 obstacles | Dedicated `performance_budget` target runs on every PR |
-| Deterministic parallel candidate search | Up to eight bounded workers explore first-pass A* candidates; ordered full-board validation and sequential conflict fallback control commits | Ten-net regression runs twice with byte-identical output and records all parallel candidates |
+| Deterministic parallel candidate search | Configurable 1–8 bounded workers explore first-pass A* candidates; ordered validation reuses one board snapshot per pass and sequential conflict fallback controls commits | Ten-net 1-vs-8-worker regression is byte-identical; Criterion measures actual 1/2/4/8-worker wall time |
 | Practical board regression corpus | Anonymized USB differential, four-layer power/inner-signal, and eight-net BGA fanout topologies | Clean, byte-idempotent routing with per-fixture search budgets on every PR |
 | BGA escape routing | Deterministic radial/row/column/four-way dog-bone stubs, optional via-grid snapping, multi-ring collision fallback, stackup-aware fanout vias, and inner-layer continuation before global routing | Two-net BGA regression blocks every first-ring site, checks grid-aligned second-ring microvias, front stubs, inner tracks, and full-board cleanliness |
 | KiCad placement I/O | Footprints, pad-net connections, locked state, origin-aware position/rotation write-back, and `place-kicad` CLI | Locked/rotated/non-zero-origin round-trip regression and CLI integration test |
@@ -91,7 +91,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.32.0 exposes 77 Rust tests and 11 Python tests. The release workflow
+Version 1.33.0 exposes 77 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

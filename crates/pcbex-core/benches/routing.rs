@@ -1,5 +1,8 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use pcbex_core::{Board, Layer, Net, Obstacle, Point, RoundObstacle, Rules, Terminal, route_board};
+use pcbex_core::{
+    Board, Layer, Net, Obstacle, Point, RoundObstacle, Rules, Terminal, route_board,
+    route_board_with_workers,
+};
 use std::collections::HashMap;
 use std::hint::black_box;
 
@@ -93,6 +96,20 @@ fn routing_benchmarks(criterion: &mut Criterion) {
             BenchmarkId::new("parallel_nets", net_count),
             &board,
             |bencher, board| bencher.iter(|| route_board(black_box(board)).unwrap()),
+        );
+    }
+
+    let parallel_board = board_with_nets(10);
+    for worker_count in [1, 2, 4, 8] {
+        group.bench_with_input(
+            BenchmarkId::new("parallel_workers", worker_count),
+            &worker_count,
+            |bencher, worker_count| {
+                bencher.iter(|| {
+                    route_board_with_workers(black_box(&parallel_board), black_box(*worker_count))
+                        .unwrap()
+                })
+            },
         );
     }
 
