@@ -1118,6 +1118,13 @@ impl<'a> Router<'a> {
         if board.rules.grid_nm <= 0 {
             return Err("grid_nm must be positive".into());
         }
+        if board.rules.track_width_nm <= 0
+            || board.rules.clearance_nm < 0
+            || board.rules.via_drill_nm <= 0
+            || board.rules.via_diameter_nm <= board.rules.via_drill_nm
+        {
+            return Err("base routing rules have invalid dimensions".into());
+        }
         if board.width_nm <= 0 || board.height_nm <= 0 {
             return Err("board dimensions must be positive".into());
         }
@@ -4470,6 +4477,16 @@ mod tests {
             }],
             routes: vec![],
         }
+    }
+
+    #[test]
+    fn router_rejects_invalid_base_routing_rules() {
+        let mut invalid = board();
+        invalid.rules.via_diameter_nm = invalid.rules.via_drill_nm;
+        assert!(matches!(
+            Router::new(&invalid),
+            Err(message) if message == "base routing rules have invalid dimensions"
+        ));
     }
 
     #[test]
