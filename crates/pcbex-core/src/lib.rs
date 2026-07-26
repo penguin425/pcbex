@@ -1153,6 +1153,7 @@ impl<'a> Router<'a> {
                 && layers
                     .iter()
                     .all(|layer| board.copper_layers.contains(layer))
+                && layers.iter().copied().collect::<HashSet<_>>().len() == layers.len()
         };
         if board
             .nets
@@ -4571,6 +4572,16 @@ mod tests {
         assert!(matches!(
             Router::new(&invalid),
             Err(message) if message == "keepout must be a simple polygon"
+        ));
+    }
+
+    #[test]
+    fn router_rejects_duplicate_terminal_layers() {
+        let mut invalid = board();
+        invalid.nets[0].terminals[0].layers = vec![Layer::Front, Layer::Front];
+        assert!(matches!(
+            Router::new(&invalid),
+            Err(message) if message == "board items reference undeclared copper layers"
         ));
     }
 
