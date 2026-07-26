@@ -33,6 +33,7 @@ fn board_with_nets(net_count: usize) -> Board {
         net_classes: HashMap::new(),
         differential_pairs: vec![],
         length_groups: vec![],
+        escape_groups: vec![],
         manufacturing_rules: None,
         via_strategy: ViaStrategy::ThroughOnly,
         nets: (0..net_count)

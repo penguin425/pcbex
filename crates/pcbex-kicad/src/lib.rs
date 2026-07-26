@@ -146,6 +146,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         net_classes,
         differential_pairs,
         length_groups: vec![],
+        escape_groups: vec![],
         manufacturing_rules: None,
         via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets,
