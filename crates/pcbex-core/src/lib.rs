@@ -921,6 +921,66 @@ pub fn estimated_stackup_differential_impedance_ohms(
     Some(2.0 * single * (1.0 - 0.48 * (-0.96 * normalized_gap).exp()))
 }
 
+/// Solve a manufacturable single-ended width for a target impedance.
+pub fn solve_stackup_width_nm(
+    target_ohms: f64,
+    stackup: &StackupLayer,
+    minimum_width_nm: Nm,
+    maximum_width_nm: Nm,
+) -> Option<Nm> {
+    solve_impedance_width(target_ohms, minimum_width_nm, maximum_width_nm, |width| {
+        estimated_stackup_impedance_ohms(width, stackup)
+    })
+}
+
+/// Solve a manufacturable differential width for a target impedance and gap.
+pub fn solve_stackup_differential_width_nm(
+    target_ohms: f64,
+    gap_nm: Nm,
+    stackup: &StackupLayer,
+    minimum_width_nm: Nm,
+    maximum_width_nm: Nm,
+) -> Option<Nm> {
+    solve_impedance_width(target_ohms, minimum_width_nm, maximum_width_nm, |width| {
+        estimated_stackup_differential_impedance_ohms(width, gap_nm, stackup)
+    })
+}
+
+fn solve_impedance_width(
+    target_ohms: f64,
+    minimum_width_nm: Nm,
+    maximum_width_nm: Nm,
+    estimate: impl Fn(Nm) -> Option<f64>,
+) -> Option<Nm> {
+    if !target_ohms.is_finite()
+        || target_ohms <= 0.0
+        || minimum_width_nm <= 0
+        || maximum_width_nm < minimum_width_nm
+    {
+        return None;
+    }
+    let mut low = minimum_width_nm;
+    let mut high = maximum_width_nm;
+    let mut best = None;
+    while low <= high {
+        let width = low + (high - low) / 2;
+        match estimate(width) {
+            Some(impedance) => {
+                if best.is_none_or(|(_, error)| (impedance - target_ohms).abs() < error) {
+                    best = Some((width, (impedance - target_ohms).abs()));
+                }
+                if impedance > target_ohms {
+                    low = width.saturating_add(1);
+                } else {
+                    high = width.saturating_sub(1);
+                }
+            }
+            None => high = width.saturating_sub(1),
+        }
+    }
+    best.map(|(width, _)| width)
+}
+
 pub fn arc_polyline(arc: &RouteArc, maximum_deviation_nm: Nm) -> Vec<Point> {
     let Some((center_x, center_y, radius, sweep)) = arc_geometry(arc) else {
         return vec![arc.start, arc.mid, arc.end];
@@ -4906,6 +4966,36 @@ mod tests {
         assert!(symmetric > 0.0);
         assert!(asymmetric > 0.0);
         assert!((symmetric - asymmetric).abs() > 0.1);
+    }
+
+    #[test]
+    fn solves_single_ended_and_differential_impedance_widths() {
+        let stackup = StackupLayer {
+            layer: Layer::Front,
+            dielectric_height_nm: 200_000,
+            dielectric_constant: 4.2,
+            copper_thickness_nm: 35_000,
+            reference_layer: Some(Layer::Back),
+            secondary_reference_layer: None,
+            secondary_dielectric_height_nm: None,
+            secondary_dielectric_constant: None,
+        };
+        let single_width = solve_stackup_width_nm(50.0, &stackup, 10_000, 1_000_000).unwrap();
+        let differential_width =
+            solve_stackup_differential_width_nm(90.0, 150_000, &stackup, 10_000, 1_000_000)
+                .unwrap();
+
+        assert!(
+            (estimated_stackup_impedance_ohms(single_width, &stackup).unwrap() - 50.0).abs()
+                < 0.001
+        );
+        assert!(
+            (estimated_stackup_differential_impedance_ohms(differential_width, 150_000, &stackup)
+                .unwrap()
+                - 90.0)
+                .abs()
+                < 0.001
+        );
     }
 
     #[test]
