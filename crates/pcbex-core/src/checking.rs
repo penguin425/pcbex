@@ -202,11 +202,19 @@ pub fn check_board(board: &Board) -> CheckReport {
             }
         }
     }
+    let mut seen_route_net_ids = HashSet::new();
     for route in &board.routes {
         if !known_net_ids.contains(&route.net_id) {
             report.push(
                 "route_net",
                 format!("route {} references an undeclared net", route.net_id),
+                vec![route.net_id],
+            );
+        }
+        if !seen_route_net_ids.insert(route.net_id) {
+            report.push(
+                "duplicate_route",
+                format!("net {} has more than one route", route.net_id),
                 vec![route.net_id],
             );
         }
@@ -3608,5 +3616,35 @@ mod tests {
             .collect();
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].net_ids, vec![99]);
+    }
+
+    #[test]
+    fn normal_check_rejects_duplicate_routes_for_one_net() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let route = || Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        };
+        board.routes = vec![route(), route()];
+
+        let report = check_board(&board);
+        let violations: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "duplicate_route")
+            .collect();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].net_ids, vec![1]);
     }
 }
