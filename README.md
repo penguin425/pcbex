@@ -306,6 +306,13 @@ layer transition without a nearby reference via that spans the same layers.
 With `auto_stitch: true`, routing adds a checked reference via and short
 connection to existing reference copper when a legal site is available.
 
+## Rounded routing
+
+New routes automatically replace legal orthogonal corners with tangent
+quarter-circle arcs using the routing grid as the preferred radius. Each
+replacement is kept only when the complete board passes connectivity,
+clearance, edge, length, and manufacturing checks.
+
 ## Manufacturing checks
 
 Boards may define `manufacturing_rules` for minimum track width, copper
