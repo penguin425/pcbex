@@ -53,13 +53,18 @@ pub fn check_board(board: &Board) -> CheckReport {
             })
             .collect();
         let mut teardrop_obstacles = Vec::new();
+        let mut invalid_teardrop_net_ids = Vec::new();
         for route in &mut linearized.routes {
             for teardrop in route.teardrops.drain(..) {
-                teardrop_obstacles.push(crate::PolygonObstacle {
-                    polygon: teardrop.polygon,
-                    layers: vec![teardrop.layer],
-                    net_id: Some(route.net_id),
-                });
+                if teardrop_geometry_is_valid(board, &teardrop) {
+                    teardrop_obstacles.push(crate::PolygonObstacle {
+                        polygon: teardrop.polygon,
+                        layers: vec![teardrop.layer],
+                        net_id: Some(route.net_id),
+                    });
+                } else {
+                    invalid_teardrop_net_ids.push(route.net_id);
+                }
             }
             for zone in &mut route.zones {
                 for polygon in zone.filled_polygons.drain(..) {
@@ -73,6 +78,14 @@ pub fn check_board(board: &Board) -> CheckReport {
         }
         linearized.polygon_obstacles.extend(teardrop_obstacles);
         let mut report = check_board(&linearized);
+        for net_id in invalid_teardrop_net_ids {
+            report.push(
+                "teardrop_geometry",
+                "teardrop must be a simple non-degenerate polygon on a declared copper layer"
+                    .into(),
+                vec![net_id],
+            );
+        }
         report.violations.retain(|violation| {
             violation.rule != "track_angle"
                 || !violation.net_ids.iter().any(|id| arc_net_ids.contains(id))
@@ -1056,6 +1069,10 @@ fn via_layer_range_is_valid(via: &crate::Via, start: Option<usize>, end: Option<
         && start != end
         && (via.kind != crate::ViaKind::Micro
             || start.zip(end).is_some_and(|(a, b)| a.abs_diff(b) == 1))
+}
+
+fn teardrop_geometry_is_valid(board: &Board, teardrop: &crate::Teardrop) -> bool {
+    board.copper_layers.contains(&teardrop.layer) && custom_pad_polygon_is_valid(&teardrop.polygon)
 }
 
 fn custom_pad_polygon_is_valid(polygon: &[Point]) -> bool {
@@ -3885,6 +3902,56 @@ mod tests {
                 .filter(|violation| violation.rule == "via_layers")
                 .count(),
             3
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_teardrop_geometry_before_obstacle_conversion() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let teardrop = |polygon, layer| crate::Teardrop { polygon, layer };
+        let valid = vec![
+            point(1_000_000, 1_000_000),
+            point(2_000_000, 1_000_000),
+            point(1_500_000, 2_000_000),
+        ];
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![
+                teardrop(valid[..2].to_vec(), Layer::Front),
+                teardrop(vec![valid[0], valid[0], valid[2]], Layer::Front),
+                teardrop(
+                    vec![
+                        point(1_000_000, 1_000_000),
+                        point(2_000_000, 1_000_000),
+                        point(3_000_000, 1_000_000),
+                    ],
+                    Layer::Front,
+                ),
+                teardrop(valid.clone(), Layer::Inner(1)),
+                teardrop(valid, Layer::Front),
+            ],
+            zones: vec![],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "teardrop_geometry")
+                .count(),
+            4
         );
     }
 }
