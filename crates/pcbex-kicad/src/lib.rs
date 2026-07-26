@@ -1338,6 +1338,11 @@ fn import_footprint(
             rotation_deg: angle + pad_angle,
             shape,
             custom_polygon: custom_polygon.clone(),
+            roundrect_radius_nm: if shape == PadShape::RoundRect {
+                nm(width.min(height) * roundrect_ratio)
+            } else {
+                0
+            },
             drill_width_nm: drill.map(|(width, _, _, _)| nm(width)),
             drill_height_nm: drill.map(|(_, height, _, _)| nm(height)),
             drill_offset_x_nm: drill.map(|(_, _, x, _)| nm(x)).unwrap_or(0),
@@ -2970,6 +2975,7 @@ mod tests {
         let imported = import(pcb, rules()).unwrap();
         let pads = &imported.board.footprints[0].pads;
         assert_eq!(pads[0].shape, PadShape::RoundRect);
+        assert_eq!(pads[0].roundrect_radius_nm, 250_000);
         assert_eq!(pads[1].shape, PadShape::Trapezoid);
         assert_eq!(pads[2].shape, PadShape::Custom);
         assert_eq!(pads[2].custom_polygon.len(), 3);
