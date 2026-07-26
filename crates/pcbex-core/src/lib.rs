@@ -509,6 +509,8 @@ pub struct RouteReport {
     pub rerouted: Vec<String>,
     pub unrouted: Vec<String>,
     pub expanded_states: usize,
+    #[serde(default)]
+    pub rasterized_candidate_cells: usize,
     pub reroute_passes: usize,
     pub ripup_events: usize,
 }
@@ -548,6 +550,7 @@ pub struct Router<'a> {
     occupied: HashSet<(i32, i32, u8)>,
     occupied_by: HashMap<(i32, i32, u8), u32>,
     congestion: HashMap<(i32, i32, u8), u16>,
+    rasterized_candidate_cells: usize,
 }
 
 struct RouteFailure {
@@ -730,6 +733,7 @@ impl<'a> Router<'a> {
             occupied: HashSet::new(),
             occupied_by: HashMap::new(),
             congestion: HashMap::new(),
+            rasterized_candidate_cells: 0,
         };
         router.rasterize_obstacles();
         Ok(router)
@@ -743,6 +747,7 @@ impl<'a> Router<'a> {
         let max_y = self.board.height_nm / g;
         for y in 0..=max_y {
             for x in 0..=max_x {
+                self.rasterized_candidate_cells += 1;
                 let point = Point {
                     x_nm: x as Nm * g,
                     y_nm: y as Nm * g,
@@ -767,6 +772,7 @@ impl<'a> Router<'a> {
                 let l = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
+                        self.rasterized_candidate_cells += 1;
                         let cell = (x, y, l);
                         if let Some(net_id) = o.net_id {
                             if self
@@ -799,6 +805,7 @@ impl<'a> Router<'a> {
                 let layer = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
+                        self.rasterized_candidate_cells += 1;
                         let point = Point {
                             x_nm: x as Nm * g,
                             y_nm: y as Nm * g,
@@ -838,6 +845,7 @@ impl<'a> Router<'a> {
                 let layer = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
+                        self.rasterized_candidate_cells += 1;
                         let point = Point {
                             x_nm: x as Nm * g,
                             y_nm: y as Nm * g,
@@ -886,6 +894,7 @@ impl<'a> Router<'a> {
                 let layer = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
+                        self.rasterized_candidate_cells += 1;
                         let point = Point {
                             x_nm: x as Nm * g,
                             y_nm: y as Nm * g,
@@ -933,6 +942,7 @@ impl<'a> Router<'a> {
                 let layer = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
+                        self.rasterized_candidate_cells += 1;
                         let point = Point {
                             x_nm: x as Nm * g,
                             y_nm: y as Nm * g,
@@ -995,6 +1005,7 @@ impl<'a> Router<'a> {
         let mut best_report = RouteReport {
             preserved: preserved.clone(),
             unrouted: nets.iter().map(|n| n.name.clone()).collect(),
+            rasterized_candidate_cells: self.rasterized_candidate_cells,
             ..RouteReport::default()
         };
         let mut total_expanded = 0;
@@ -1064,6 +1075,7 @@ impl<'a> Router<'a> {
             }
             if report.unrouted.is_empty() {
                 report.expanded_states = total_expanded;
+                report.rasterized_candidate_cells = self.rasterized_candidate_cells;
                 report.reroute_passes = attempt + 1;
                 return (routes, report);
             }
@@ -1073,6 +1085,7 @@ impl<'a> Router<'a> {
                 .collect();
             if rip_ids.is_empty() {
                 best_report.expanded_states = total_expanded;
+                best_report.rasterized_candidate_cells = self.rasterized_candidate_cells;
                 best_report.reroute_passes = attempt + 1;
                 best_report.rerouted = nets
                     .iter()
@@ -1097,6 +1110,7 @@ impl<'a> Router<'a> {
             pending.extend(rip_ids);
         }
         best_report.expanded_states = total_expanded;
+        best_report.rasterized_candidate_cells = self.rasterized_candidate_cells;
         best_report.reroute_passes = 4;
         best_report.rerouted = nets
             .iter()
