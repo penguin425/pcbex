@@ -313,6 +313,15 @@ quarter-circle arcs using the routing grid as the preferred radius. Each
 replacement is kept only when the complete board passes connectivity,
 clearance, edge, length, and manufacturing checks.
 
+## Stackup impedance checks
+
+`stackup` entries define the reference-plane dielectric height and relative
+permittivity for each controlled copper layer. Net classes may set
+`target_impedance_ohms` and `impedance_tolerance_ohms`; the normal checker uses
+the IPC-2141 microstrip estimate for every routed segment and reports missing
+stackup data or out-of-range geometry. This is an early layout constraint, not
+a replacement for a field solver or fabrication-house stackup validation.
+
 ## Manufacturing checks
 
 Boards may define `manufacturing_rules` for minimum track width, copper

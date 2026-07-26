@@ -149,6 +149,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         escape_groups: vec![],
         manufacturing_rules: None,
         return_path_rules: vec![],
+        stackup: vec![],
         via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets,
         routes,
@@ -229,6 +230,8 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 differential_gap_nm: optional_dimension("diff_pair_gap")?,
                 minimum_length_nm: optional_dimension("min_track_length")?,
                 maximum_length_nm: optional_dimension("max_track_length")?,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
             },
         );
     }
@@ -465,6 +468,8 @@ fn import_net_classes(
                     differential_gap_nm: optional_dimension("diff_pair_gap"),
                     minimum_length_nm: None,
                     maximum_length_nm: None,
+                    target_impedance_ohms: None,
+                    impedance_tolerance_ohms: None,
                 },
             );
             for child in values {
