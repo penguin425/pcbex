@@ -108,6 +108,7 @@ pub fn check_board(board: &Board) -> CheckReport {
         return report;
     }
     let mut report = CheckReport::default();
+    let known_net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
     for footprint in &board.footprints {
         for pad in &footprint.pads {
             if !pad_geometry_is_valid(pad) {
@@ -131,6 +132,19 @@ pub fn check_board(board: &Board) -> CheckReport {
                     "pad_layers",
                     format!(
                         "{} pad {} must use unique layers from the board copper stackup",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                );
+            }
+            if pad
+                .net_id
+                .is_some_and(|net_id| !known_net_ids.contains(&net_id))
+            {
+                report.push(
+                    "pad_net",
+                    format!(
+                        "{} pad {} references an undeclared net",
                         footprint.reference, pad.number
                     ),
                     pad.net_id.into_iter().collect(),
@@ -3462,5 +3476,53 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_unknown_pad_net_references() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let pad = |number: &str, net_id: Option<u32>| Pad {
+            number: number.into(),
+            position: Point { x_nm: 0, y_nm: 0 },
+            width_nm: 1_000_000,
+            height_nm: 1_000_000,
+            source_width_nm: 1_000_000,
+            source_height_nm: 1_000_000,
+            rotation_deg: 0.0,
+            shape: PadShape::Rect,
+            custom_polygon: vec![],
+            roundrect_radius_nm: 0,
+            trapezoid_delta_x_nm: 0,
+            trapezoid_delta_y_nm: 0,
+            drill_width_nm: None,
+            drill_height_nm: None,
+            drill_offset_x_nm: 0,
+            drill_offset_y_nm: 0,
+            plated: false,
+            layers: vec![Layer::Front],
+            net_id,
+        };
+        board.footprints.push(crate::Footprint {
+            reference: "U4".into(),
+            position: Point { x_nm: 0, y_nm: 0 },
+            rotation_deg: 0.0,
+            pads: vec![pad("1", None), pad("2", Some(1)), pad("3", Some(99))],
+        });
+
+        let report = check_board(&board);
+        let violations: Vec<_> = report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "pad_net")
+            .collect();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].net_ids, vec![99]);
     }
 }
