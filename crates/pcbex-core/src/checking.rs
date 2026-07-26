@@ -173,6 +173,13 @@ pub fn check_board(board: &Board) -> CheckReport {
         );
     }
     for (name, rules) in &board.net_classes {
+        if name.trim().is_empty() {
+            report.push(
+                "net_class_name",
+                "net class names must contain at least one non-whitespace character".into(),
+                vec![],
+            );
+        }
         if rules.track_width_nm <= 0
             || rules.clearance_nm < 0
             || rules.via_drill_nm <= 0
@@ -5217,6 +5224,48 @@ mod tests {
                     .any(|violation| violation.rule == "net_class_differential_dimensions")
             );
         }
+    }
+
+    #[test]
+    fn normal_check_rejects_blank_net_class_names() {
+        let with_name = |name: &str| {
+            let mut board = base();
+            board.net_classes.insert(
+                name.into(),
+                crate::NetClassRules {
+                    track_width_nm: 250_000,
+                    clearance_nm: 200_000,
+                    via_diameter_nm: 600_000,
+                    via_drill_nm: 300_000,
+                    layers: None,
+                    differential_width_nm: None,
+                    differential_gap_nm: None,
+                    minimum_length_nm: None,
+                    maximum_length_nm: None,
+                    target_impedance_ohms: None,
+                    impedance_tolerance_ohms: None,
+                    maximum_impedance_step_ohms: None,
+                },
+            );
+            board
+        };
+
+        for board in [with_name(""), with_name(" \t")] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "net_class_name")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&with_name("signals"))
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "net_class_name")
+        );
     }
 
     #[test]

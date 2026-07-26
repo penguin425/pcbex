@@ -1252,6 +1252,9 @@ impl<'a> Router<'a> {
             return Err("capsule obstacle diameter must be positive".into());
         }
         for (name, rules) in &board.net_classes {
+            if name.trim().is_empty() {
+                return Err("net class names must not be blank".into());
+            }
             if rules.track_width_nm <= 0
                 || rules.clearance_nm < 0
                 || rules.via_drill_nm <= 0
@@ -4632,6 +4635,32 @@ mod tests {
         assert!(matches!(
             Router::new(&invalid),
             Err(message) if message == "net class diff has invalid differential dimensions"
+        ));
+    }
+
+    #[test]
+    fn router_rejects_blank_net_class_names() {
+        let mut invalid = board();
+        invalid.net_classes.insert(
+            " \t".into(),
+            NetClassRules {
+                track_width_nm: 250_000,
+                clearance_nm: 200_000,
+                via_diameter_nm: 600_000,
+                via_drill_nm: 300_000,
+                layers: None,
+                differential_width_nm: None,
+                differential_gap_nm: None,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
+            },
+        );
+        assert!(matches!(
+            Router::new(&invalid),
+            Err(message) if message == "net class names must not be blank"
         ));
     }
 

@@ -428,6 +428,7 @@ targets must be positive, while tolerances and maximum impedance steps must be
 non-negative.
 Optional differential widths must be positive and differential gaps must be
 non-negative; both normal DRC and Router construction enforce these dimensions.
+Net-class table keys must contain at least one non-whitespace character.
 
 Set `maximum_impedance_step_ohms` on a net class to limit discontinuity where
 connected segments change layers through a via. This check is independent of
