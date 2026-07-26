@@ -97,6 +97,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Pad layer membership validation | Normal DRC requires a non-empty, duplicate-free pad layer set drawn entirely from the board copper stackup | Empty, duplicate, unknown-inner-layer, and valid multilayer regressions |
 | Pad net-reference validation | Normal DRC rejects pad net identifiers absent from the board net table while accepting mechanical and declared-net pads | Mechanical, declared-net, and undeclared-net regression |
 | Net table identity validation | Normal DRC requires unique non-zero net IDs and unique non-empty names before routing, rule lookup, or pad ownership consumes the table | Zero ID, blank name, duplicate ID, and duplicate name regressions |
+| Route net-reference validation | Normal DRC rejects route net identifiers absent from the board net table before connectivity, width, or clearance checks consume the route | Declared and undeclared empty-route regression |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -120,7 +121,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.68.0 exposes 114 Rust tests and 11 Python tests. The release workflow
+Version 1.69.0 exposes 115 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
