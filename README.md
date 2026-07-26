@@ -173,6 +173,13 @@ end copper layers. KiCad blind/buried and microvias retain their ranges during
 import and write-back. Connectivity and clearance checks only consider layers
 actually spanned by the via, and microvias are restricted to adjacent layers.
 
+## Extended pad geometry
+
+KiCad round-rectangle, trapezoid, and custom polygon pads retain their shape in
+the board model. Rounded corners, trapezoid deltas, rotation, and custom
+`gr_poly` primitives are converted to polygon obstacles instead of rectangular
+bounding-box approximations.
+
 ## Planning and repair agent
 
 The dependency-free Python agent converts bounded natural-language requirements

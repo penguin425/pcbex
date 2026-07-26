@@ -157,6 +157,8 @@ pub struct Pad {
     pub height_nm: Nm,
     #[serde(default)]
     pub shape: PadShape,
+    #[serde(default)]
+    pub custom_polygon: Vec<Point>,
     pub layers: Vec<Layer>,
     pub net_id: Option<u32>,
 }
@@ -168,6 +170,9 @@ pub enum PadShape {
     Rect,
     Circle,
     Oval,
+    RoundRect,
+    Trapezoid,
+    Custom,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
