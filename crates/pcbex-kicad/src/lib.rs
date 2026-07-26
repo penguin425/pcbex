@@ -1560,9 +1560,9 @@ fn import_keepout(
     keepouts: &mut Vec<Keepout>,
     copper_layers: &[Layer],
 ) {
-    if child_values(xs, "keepout").is_none() {
+    let Some(restrictions) = child_values(xs, "keepout") else {
         return;
-    }
+    };
     let layers = if let Some(layer) = child_atom(xs, "layer").and_then(parse_layer) {
         vec![layer]
     } else if matches!(child_atom(xs, "layer"), Some("*.Cu") | Some("F&B.Cu")) {
@@ -1609,6 +1609,9 @@ fn import_keepout(
         polygon: points,
         layers,
         net_id: None,
+        tracks_not_allowed: child_atom(restrictions, "tracks") == Some("not_allowed"),
+        vias_not_allowed: child_atom(restrictions, "vias") == Some("not_allowed"),
+        zones_not_allowed: child_atom(restrictions, "copperpour") == Some("not_allowed"),
     });
 }
 
@@ -2787,6 +2790,9 @@ mod tests {
         let imported = import(pcb, rules()).unwrap();
         assert_eq!(imported.board.keepouts.len(), 1);
         assert_eq!(imported.board.keepouts[0].layers, vec![Layer::Front]);
+        assert!(imported.board.keepouts[0].tracks_not_allowed);
+        assert!(imported.board.keepouts[0].vias_not_allowed);
+        assert!(imported.board.keepouts[0].zones_not_allowed);
         assert_eq!(
             imported.board.keepouts[0].polygon[0],
             Point {
@@ -2794,6 +2800,23 @@ mod tests {
                 y_nm: 5_000_000
             }
         );
+    }
+
+    #[test]
+    fn preserves_selective_rule_area_restrictions() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (zone (net 0) (net_name "") (layer "F.Cu")
+            (keepout (tracks allowed) (vias not_allowed) (copperpour allowed))
+            (polygon (pts (xy 4 5) (xy 9 5) (xy 9 11) (xy 4 11))))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+        let rule_area = &imported.board.keepouts[0];
+
+        assert!(!rule_area.tracks_not_allowed);
+        assert!(rule_area.vias_not_allowed);
+        assert!(!rule_area.zones_not_allowed);
     }
 
     #[test]

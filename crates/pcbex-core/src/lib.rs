@@ -144,6 +144,16 @@ pub struct Keepout {
     pub layers: Vec<Layer>,
     #[serde(default)]
     pub net_id: Option<u32>,
+    #[serde(default = "prohibited")]
+    pub tracks_not_allowed: bool,
+    #[serde(default = "prohibited")]
+    pub vias_not_allowed: bool,
+    #[serde(default = "prohibited")]
+    pub zones_not_allowed: bool,
+}
+
+fn prohibited() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -962,11 +972,12 @@ impl<'a> Router<'a> {
         }) {
             return Err("board cutouts must be simple polygons inside the outline".into());
         }
-        if board
-            .keepouts
-            .iter()
-            .any(|keepout| !geometry::polygon_is_simple(&keepout.polygon))
-        {
+        if board.keepouts.iter().any(|keepout| {
+            !geometry::polygon_is_simple(&keepout.polygon)
+                || !(keepout.tracks_not_allowed
+                    || keepout.vias_not_allowed
+                    || keepout.zones_not_allowed)
+        }) {
             return Err("keepout must be a simple polygon".into());
         }
         if board
@@ -1329,6 +1340,9 @@ impl<'a> Router<'a> {
             }
         }
         for keepout in &self.board.keepouts {
+            if !keepout.tracks_not_allowed {
+                continue;
+            }
             let Some((min_x_nm, max_x_nm, min_y_nm, max_y_nm)) = polygon_bounds(&keepout.polygon)
             else {
                 continue;
@@ -3141,7 +3155,8 @@ fn zone_cell_blocked(
     }
     let clearance_twice = 2 * zone.clearance_nm;
     if board.keepouts.iter().any(|keepout| {
-        keepout.layers.contains(&zone.layer)
+        keepout.zones_not_allowed
+            && keepout.layers.contains(&zone.layer)
             && keepout.net_id != Some(net_id)
             && corners.iter().any(|point| {
                 geometry::point_in_polygon(*point, &keepout.polygon)
@@ -5271,6 +5286,9 @@ mod tests {
             ],
             layers: vec![Layer::Front],
             net_id: None,
+            tracks_not_allowed: true,
+            vias_not_allowed: true,
+            zones_not_allowed: true,
         });
         b.nets[0].class = Some("FrontOnly".into());
         b.net_classes.insert(
@@ -6142,6 +6160,9 @@ mod tests {
             ],
             layers: vec![Layer::Front],
             net_id: None,
+            tracks_not_allowed: true,
+            vias_not_allowed: true,
+            zones_not_allowed: true,
         });
         board.nets[0].terminals[0].position = Point {
             x_nm: 2_000_000,
