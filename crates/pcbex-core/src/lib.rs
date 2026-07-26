@@ -2296,6 +2296,80 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     Ok((out, report))
 }
 
+/// Rip up and reroute only the selected nets. Every unselected route remains
+/// locked and is compared byte-for-byte before the result is returned.
+pub fn repair_routes(
+    board: &Board,
+    requested_net_ids: &HashSet<u32>,
+) -> Result<(Board, RouteReport), String> {
+    let known_net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
+    if requested_net_ids.is_empty() {
+        return Err("local repair requires at least one net".into());
+    }
+    if let Some(unknown) = requested_net_ids
+        .iter()
+        .find(|net_id| !known_net_ids.contains(net_id))
+    {
+        return Err(format!("cannot repair unknown net {unknown}"));
+    }
+    let locked: HashMap<_, _> = board
+        .routes
+        .iter()
+        .filter(|route| !requested_net_ids.contains(&route.net_id))
+        .map(|route| (route.net_id, route.clone()))
+        .collect();
+    let zones: HashMap<_, _> = board
+        .routes
+        .iter()
+        .filter(|route| requested_net_ids.contains(&route.net_id) && !route.zones.is_empty())
+        .map(|route| (route.net_id, route.zones.clone()))
+        .collect();
+    let mut candidate = board.clone();
+    candidate
+        .routes
+        .retain(|route| !requested_net_ids.contains(&route.net_id));
+    let (mut repaired, mut report) = route_board(&candidate)?;
+    for route in &mut repaired.routes {
+        if let Some(saved) = zones.get(&route.net_id) {
+            route.zones = saved.clone();
+        }
+    }
+    fill_copper_zones(&mut repaired);
+    for (net_id, original) in locked {
+        if repaired.routes.iter().find(|route| route.net_id == net_id) != Some(&original) {
+            return Err(format!("local repair changed locked net {net_id}"));
+        }
+    }
+    let check = checking::check_board(&repaired);
+    if !report.unrouted.is_empty() || !check.is_clean() {
+        return Err(format!(
+            "local repair did not produce a clean board: {}",
+            check
+                .violations
+                .iter()
+                .map(|violation| violation.rule.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    report.rerouted = board
+        .nets
+        .iter()
+        .filter(|net| requested_net_ids.contains(&net.id))
+        .map(|net| net.name.clone())
+        .collect();
+    report.routed.clear();
+    Ok((repaired, report))
+}
+
+pub fn repairable_net_ids(board: &Board) -> HashSet<u32> {
+    checking::check_board(board)
+        .violations
+        .into_iter()
+        .flat_map(|violation| violation.net_ids)
+        .collect()
+}
+
 fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> {
     let mut adjusted = board.clone();
     let mut stubs = Vec::new();
@@ -4181,6 +4255,104 @@ mod tests {
                     .any(|segment| segment.layer == Layer::Inner(1))
             );
         }
+    }
+
+    #[test]
+    fn local_repair_reroutes_only_the_violating_net() {
+        let mut board = board();
+        board.obstacles = vec![Obstacle {
+            min: Point {
+                x_nm: 4_000_000,
+                y_nm: 2_000_000,
+            },
+            max: Point {
+                x_nm: 6_000_000,
+                y_nm: 4_000_000,
+            },
+            layers: both_layers(),
+            net_id: None,
+        }];
+        board.nets = vec![
+            Net {
+                id: 1,
+                name: "broken".into(),
+                class: None,
+                priority: 0,
+                terminals: vec![
+                    Terminal {
+                        position: Point {
+                            x_nm: 1_000_000,
+                            y_nm: 3_000_000,
+                        },
+                        layers: both_layers(),
+                    },
+                    Terminal {
+                        position: Point {
+                            x_nm: 9_000_000,
+                            y_nm: 3_000_000,
+                        },
+                        layers: both_layers(),
+                    },
+                ],
+            },
+            Net {
+                id: 2,
+                name: "locked".into(),
+                class: None,
+                priority: 0,
+                terminals: vec![
+                    Terminal {
+                        position: Point {
+                            x_nm: 1_000_000,
+                            y_nm: 8_000_000,
+                        },
+                        layers: both_layers(),
+                    },
+                    Terminal {
+                        position: Point {
+                            x_nm: 9_000_000,
+                            y_nm: 8_000_000,
+                        },
+                        layers: both_layers(),
+                    },
+                ],
+            },
+        ];
+        let direct = |net_id, y_nm| Route {
+            net_id,
+            segments: vec![Segment {
+                start: Point {
+                    x_nm: 1_000_000,
+                    y_nm,
+                },
+                end: Point {
+                    x_nm: 9_000_000,
+                    y_nm,
+                },
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        };
+        board.routes = vec![direct(1, 3_000_000), direct(2, 8_000_000)];
+        let locked = board.routes[1].clone();
+
+        assert!(repairable_net_ids(&board).contains(&1));
+        let (repaired, report) = repair_routes(&board, &HashSet::from([1])).unwrap();
+
+        assert_eq!(report.rerouted, vec!["broken"]);
+        assert_eq!(
+            repaired.routes.iter().find(|route| route.net_id == 2),
+            Some(&locked)
+        );
+        assert_ne!(
+            repaired.routes.iter().find(|route| route.net_id == 1),
+            Some(&board.routes[0])
+        );
+        assert!(checking::check_board(&repaired).is_clean());
     }
 
     #[test]

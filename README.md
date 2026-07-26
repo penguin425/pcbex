@@ -45,6 +45,17 @@ optimizer. It replaces contiguous detours with direct horizontal, vertical, or
 45-degree segments only when the complete board remains clean; imported locked
 routes are never rewritten.
 
+Repair checker violations without disturbing clean routes:
+
+```sh
+pcbex repair board.json --output repaired.json
+pcbex repair board.json --output repaired.json --net-id 12 --net-id 15
+```
+
+With no explicit IDs, `repair` selects the nets named by the internal checker.
+Selected tracks are ripped up and rerouted; every other route is locked and
+verified byte-for-byte, and owned zones survive the replacement.
+
 For nets with three or more terminals, the router chooses a central root and
 repeatedly connects the cheapest remaining terminal to any point in the routed
 tree. This avoids the input-order-dependent detours of terminal-to-terminal
