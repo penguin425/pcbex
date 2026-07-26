@@ -114,6 +114,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Board cutout containment validation | Normal DRC requires every topologically valid cutout vertex to remain inside the effective explicit or rectangular board outline | Inside and partially outside cutout regressions |
 | Board outline bounds validation | Normal DRC requires every topologically valid explicit-outline vertex to remain within the declared board width and height | Negative-coordinate, oversized-coordinate, and boundary-inclusive valid regressions |
 | Routing-grid validation | Normal DRC independently requires a positive global routing grid, matching the routing precondition | Zero-grid, negative-grid, and valid-grid regressions |
+| Base routing-rule validation | Normal DRC and Router require positive track width/drill, non-negative clearance, and via diameter greater than drill | Invalid width, clearance, drill, annulus, valid-rule, and Router regressions |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -137,7 +138,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.85.0 exposes 131 Rust tests and 11 Python tests. The release workflow
+Version 1.86.0 exposes 133 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

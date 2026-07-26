@@ -160,6 +160,18 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    if board.rules.track_width_nm <= 0
+        || board.rules.clearance_nm < 0
+        || board.rules.via_drill_nm <= 0
+        || board.rules.via_diameter_nm <= board.rules.via_drill_nm
+    {
+        report.push(
+            "routing_rules",
+            "base routing rules require a positive track width and via drill, non-negative clearance, and a via diameter larger than its drill"
+                .into(),
+            vec![],
+        );
+    }
     if !copper_layer_table_is_valid(board) {
         report.push(
             "copper_layers",
@@ -4326,6 +4338,42 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "routing_grid")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_base_routing_rules() {
+        let mut zero_width = base();
+        zero_width.rules.track_width_nm = 0;
+        let mut negative_clearance = base();
+        negative_clearance.rules.clearance_nm = -1;
+        let mut zero_drill = base();
+        zero_drill.rules.via_drill_nm = 0;
+        let mut equal_via_dimensions = base();
+        equal_via_dimensions.rules.via_diameter_nm = equal_via_dimensions.rules.via_drill_nm;
+        let valid = base();
+
+        for board in [
+            &zero_width,
+            &negative_clearance,
+            &zero_drill,
+            &equal_via_dimensions,
+        ] {
+            let report = check_board(board);
+            assert_eq!(
+                report
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "routing_rules")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&valid)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "routing_rules")
         );
     }
 
