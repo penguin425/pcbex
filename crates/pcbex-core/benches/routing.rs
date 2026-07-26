@@ -32,6 +32,7 @@ fn board_with_nets(net_count: usize) -> Board {
         net_classes: HashMap::new(),
         differential_pairs: vec![],
         manufacturing_rules: None,
+        via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets: (0..net_count)
             .map(|index| {
                 let y_nm = 1_000_000 + index as i64 * 1_500_000;
