@@ -10,6 +10,16 @@ pub struct ImpedanceReport {
     pub nets: Vec<NetImpedanceReport>,
     pub differential_pairs: Vec<DifferentialImpedanceReport>,
     pub invalid_geometry_count: usize,
+    pub out_of_tolerance_segment_count: usize,
+    pub excessive_transition_count: usize,
+}
+
+impl ImpedanceReport {
+    pub fn is_clean(&self) -> bool {
+        self.invalid_geometry_count == 0
+            && self.out_of_tolerance_segment_count == 0
+            && self.excessive_transition_count == 0
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -150,10 +160,49 @@ pub fn impedance_report(board: &Board) -> ImpedanceReport {
             members,
         });
     }
+    let out_of_tolerance_segment_count = nets
+        .iter()
+        .flat_map(|net| &net.segments)
+        .chain(
+            differential_pairs
+                .iter()
+                .flat_map(|pair| &pair.members)
+                .flat_map(|member| &member.segments),
+        )
+        .filter(|segment| segment.within_target == Some(false))
+        .count();
+    let excessive_transition_count = nets
+        .iter()
+        .filter(|net| {
+            matches!(
+                (
+                    net.maximum_observed_step_ohms,
+                    net.maximum_allowed_step_ohms
+                ),
+                (Some(observed), Some(allowed)) if observed > allowed
+            )
+        })
+        .count()
+        + differential_pairs
+            .iter()
+            .flat_map(|pair| {
+                pair.members.iter().map(move |member| {
+                    (
+                        member.maximum_observed_step_ohms,
+                        pair.maximum_allowed_step_ohms,
+                    )
+                })
+            })
+            .filter(|(observed, allowed)| {
+                matches!((observed, allowed), (Some(observed), Some(allowed)) if observed > allowed)
+            })
+            .count();
     ImpedanceReport {
         nets,
         differential_pairs,
         invalid_geometry_count,
+        out_of_tolerance_segment_count,
+        excessive_transition_count,
     }
 }
 
@@ -205,4 +254,23 @@ fn maximum_transition_step(route: &Route, estimates: &[Option<f64>]) -> Option<f
         maximum = Some(maximum.map_or(high - low, |current| current.max(high - low)));
     }
     maximum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_state_includes_every_gate_counter() {
+        let mut report = ImpedanceReport {
+            nets: vec![],
+            differential_pairs: vec![],
+            invalid_geometry_count: 0,
+            out_of_tolerance_segment_count: 0,
+            excessive_transition_count: 0,
+        };
+        assert!(report.is_clean());
+        report.excessive_transition_count = 1;
+        assert!(!report.is_clean());
+    }
 }

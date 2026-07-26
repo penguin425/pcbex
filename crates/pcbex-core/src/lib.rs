@@ -5097,6 +5097,29 @@ mod tests {
     }
 
     #[test]
+    fn impedance_report_gates_missing_stackup_geometry() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: board.nets[0].terminals[0].position,
+                end: board.nets[0].terminals[1].position,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        let report = impedance_report(&board);
+        assert_eq!(report.invalid_geometry_count, 1);
+        assert!(!report.is_clean());
+    }
+
+    #[test]
     fn solves_single_ended_and_differential_impedance_widths() {
         let stackup = StackupLayer {
             layer: Layer::Front,
