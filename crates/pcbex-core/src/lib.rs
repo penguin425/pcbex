@@ -234,6 +234,14 @@ pub struct LengthGroup {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EscapeGroup {
+    pub name: String,
+    pub net_ids: Vec<u32>,
+    pub fanout_distance_nm: Nm,
+    pub target_layer: Layer,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ManufacturingRules {
     pub minimum_track_width_nm: Nm,
     pub minimum_clearance_nm: Nm,
@@ -322,6 +330,8 @@ pub struct Board {
     pub differential_pairs: Vec<DifferentialPair>,
     #[serde(default)]
     pub length_groups: Vec<LengthGroup>,
+    #[serde(default)]
+    pub escape_groups: Vec<EscapeGroup>,
     #[serde(default)]
     pub manufacturing_rules: Option<ManufacturingRules>,
     #[serde(default)]
@@ -418,6 +428,7 @@ pub fn board_json_schema() -> serde_json::Value {
             "net_classes": {"type": "object"},
             "differential_pairs": {"type": "array"},
             "length_groups": {"type": "array"},
+            "escape_groups": {"type": "array"},
             "manufacturing_rules": {"type": ["object", "null"]},
             "via_strategy": {"enum": ["through_only", "auto"]},
             "nets": {"type": "array"},
@@ -784,6 +795,8 @@ pub struct RouteReport {
     pub generated_teardrops: usize,
     #[serde(default)]
     pub optimized_segments: usize,
+    #[serde(default)]
+    pub escaped_nets: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -999,6 +1012,29 @@ impl<'a> Router<'a> {
                 || !members.iter().all(|net_id| net_ids.contains(net_id))
             {
                 return Err(format!("length group {} is invalid", group.name));
+            }
+        }
+        let mut escaped_net_ids = HashSet::new();
+        for group in &board.escape_groups {
+            if group.name.is_empty()
+                || group.net_ids.is_empty()
+                || group.fanout_distance_nm <= 0
+                || group.target_layer == Layer::Front
+                || !board.copper_layers.contains(&group.target_layer)
+                || group.net_ids.iter().any(|net_id| {
+                    !net_ids.contains(net_id)
+                        || !escaped_net_ids.insert(*net_id)
+                        || board
+                            .nets
+                            .iter()
+                            .find(|net| net.id == *net_id)
+                            .is_none_or(|net| {
+                                net.terminals.is_empty()
+                                    || !net.terminals[0].layers.contains(&Layer::Front)
+                            })
+                })
+            {
+                return Err(format!("escape group {} is invalid", group.name));
             }
         }
         let mut route_net_ids = HashSet::new();
@@ -2173,7 +2209,7 @@ fn empty_route(net_id: u32) -> Route {
 }
 
 pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
-    let mut seeded = board.clone();
+    let (mut seeded, escape_stubs) = prepare_escape_routing(board)?;
     let mut coupled = Vec::new();
     let mut paired_expanded = 0;
     for pair in &board.differential_pairs {
@@ -2216,6 +2252,17 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     out.routes = routes;
     tune_route_lengths(&mut out)?;
     couple_differential_pairs(&mut out, &mut report);
+    for stub in escape_stubs {
+        let route = out
+            .routes
+            .iter_mut()
+            .find(|route| route.net_id == stub.net_id)
+            .ok_or_else(|| format!("escaped net {} was not routed", stub.net_id))?;
+        route.segments.extend(stub.segments);
+        route.vias.extend(stub.vias);
+        report.escaped_nets += 1;
+    }
+    out.nets = board.nets.clone();
     let mutable_net_ids: HashSet<u32> = report
         .routed
         .iter()
@@ -2234,7 +2281,100 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     report.coupled_differential_pairs.extend(coupled);
     report.coupled_differential_pairs.sort();
     report.coupled_differential_pairs.dedup();
+    let final_check = checking::check_board(&out);
+    if report.unrouted.is_empty() && !final_check.is_clean() {
+        return Err(format!(
+            "post-routing checks failed: {}",
+            final_check
+                .violations
+                .iter()
+                .map(|violation| violation.rule.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     Ok((out, report))
+}
+
+fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> {
+    let mut adjusted = board.clone();
+    let mut stubs = Vec::new();
+    for group in &board.escape_groups {
+        let terminals: Vec<_> = group
+            .net_ids
+            .iter()
+            .filter_map(|net_id| {
+                board
+                    .nets
+                    .iter()
+                    .find(|net| net.id == *net_id)
+                    .and_then(|net| net.terminals.first())
+                    .map(|terminal| terminal.position)
+            })
+            .collect();
+        if terminals.is_empty() {
+            continue;
+        }
+        let centroid = Point {
+            x_nm: terminals.iter().map(|point| point.x_nm).sum::<Nm>() / terminals.len() as Nm,
+            y_nm: terminals.iter().map(|point| point.y_nm).sum::<Nm>() / terminals.len() as Nm,
+        };
+        for net_id in &group.net_ids {
+            let net_index = adjusted
+                .nets
+                .iter()
+                .position(|net| net.id == *net_id)
+                .ok_or_else(|| format!("unknown escaped net {net_id}"))?;
+            let original = adjusted.nets[net_index].terminals[0].position;
+            let mut dx = (original.x_nm - centroid.x_nm).signum();
+            let dy = (original.y_nm - centroid.y_nm).signum();
+            if dx == 0 && dy == 0 {
+                dx = if net_id % 2 == 0 { -1 } else { 1 };
+            }
+            let escape = Point {
+                x_nm: original.x_nm + dx * group.fanout_distance_nm,
+                y_nm: original.y_nm + dy * group.fanout_distance_nm,
+            };
+            if !adjusted.point_inside_board(escape, adjusted.rules.via_diameter_nm) {
+                return Err(format!(
+                    "escape point for net {net_id} is outside the board"
+                ));
+            }
+            let rules = adjusted.rules_for_net(*net_id);
+            let kind = if group.target_layer.index() == 1 {
+                ViaKind::Micro
+            } else if group.target_layer == Layer::Back {
+                ViaKind::Through
+            } else {
+                ViaKind::BlindBuried
+            };
+            stubs.push(Route {
+                net_id: *net_id,
+                segments: vec![Segment {
+                    start: original,
+                    end: escape,
+                    layer: Layer::Front,
+                    width_nm: rules.track_width_nm,
+                }],
+                arcs: vec![],
+                vias: vec![Via {
+                    position: escape,
+                    diameter_nm: rules.via_diameter_nm,
+                    drill_nm: rules.via_drill_nm,
+                    kind,
+                    start_layer: Layer::Front,
+                    end_layer: group.target_layer,
+                }],
+                teardrops: vec![],
+                zones: vec![],
+            });
+            let terminal = &mut adjusted.nets[net_index].terminals[0];
+            terminal.position = escape;
+            terminal.layers = vec![group.target_layer];
+        }
+    }
+    adjusted.escape_groups.clear();
+    Ok((adjusted, stubs))
 }
 
 /// Deterministically replace legal contiguous track detours with shorter direct
@@ -3010,6 +3150,7 @@ mod tests {
             net_classes: HashMap::new(),
             differential_pairs: vec![],
             length_groups: vec![],
+            escape_groups: vec![],
             manufacturing_rules: None,
             via_strategy: ViaStrategy::ThroughOnly,
             nets: vec![Net {
@@ -3955,6 +4096,91 @@ mod tests {
                 .len()
                 >= 5
         );
+    }
+
+    #[test]
+    fn generates_bga_dogbones_before_global_inner_layer_routing() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.copper_layers = vec![Layer::Front, Layer::Inner(1), Layer::Back];
+        board.nets = vec![
+            Net {
+                id: 1,
+                name: "BGA1".into(),
+                class: None,
+                priority: 0,
+                terminals: vec![
+                    Terminal {
+                        position: Point {
+                            x_nm: 4_000_000,
+                            y_nm: 3_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                    Terminal {
+                        position: Point {
+                            x_nm: 3_000_000,
+                            y_nm: 9_000_000,
+                        },
+                        layers: vec![Layer::Inner(1)],
+                    },
+                ],
+            },
+            Net {
+                id: 2,
+                name: "BGA2".into(),
+                class: None,
+                priority: 0,
+                terminals: vec![
+                    Terminal {
+                        position: Point {
+                            x_nm: 6_000_000,
+                            y_nm: 3_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                    Terminal {
+                        position: Point {
+                            x_nm: 7_000_000,
+                            y_nm: 9_000_000,
+                        },
+                        layers: vec![Layer::Inner(1)],
+                    },
+                ],
+            },
+        ];
+        board.escape_groups.push(EscapeGroup {
+            name: "U1".into(),
+            net_ids: vec![1, 2],
+            fanout_distance_nm: 1_000_000,
+            target_layer: Layer::Inner(1),
+        });
+
+        let (routed, report) = route_board(&board).unwrap();
+
+        assert!(report.unrouted.is_empty());
+        assert_eq!(report.escaped_nets, 2);
+        assert!(checking::check_board(&routed).is_clean());
+        for route in &routed.routes {
+            assert!(route.vias.iter().any(|via| via.kind == ViaKind::Micro));
+            assert!(route.segments.iter().any(|segment| {
+                segment.layer == Layer::Front
+                    && segment.start
+                        == board
+                            .nets
+                            .iter()
+                            .find(|net| net.id == route.net_id)
+                            .unwrap()
+                            .terminals[0]
+                            .position
+            }));
+            assert!(
+                route
+                    .segments
+                    .iter()
+                    .any(|segment| segment.layer == Layer::Inner(1))
+            );
+        }
     }
 
     #[test]

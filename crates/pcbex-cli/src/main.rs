@@ -172,12 +172,13 @@ fn main() -> Result<()> {
                 fs::write(path, render_svg(&board))?;
             }
             eprintln!(
-                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; optimized segments: {}; expanded states: {}; passes: {}",
+                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; escaped nets: {}; optimized segments: {}; expanded states: {}; passes: {}",
                 report.preserved.len(),
                 report.routed.len(),
                 report.rerouted.len(),
                 report.unrouted.len(),
                 report.ripup_events,
+                report.escaped_nets,
                 report.optimized_segments,
                 report.expanded_states,
                 report.reroute_passes
@@ -254,12 +255,13 @@ fn main() -> Result<()> {
                 )?;
             }
             eprintln!(
-                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; optimized segments: {}; expanded states: {}; passes: {}",
+                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; escaped nets: {}; optimized segments: {}; expanded states: {}; passes: {}",
                 report.preserved.len(),
                 report.routed.len(),
                 report.rerouted.len(),
                 report.unrouted.len(),
                 report.ripup_events,
+                report.escaped_nets,
                 report.optimized_segments,
                 report.expanded_states,
                 report.reroute_passes

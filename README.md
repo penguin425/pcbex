@@ -248,6 +248,14 @@ a four-layer power/inner-signal board, and an eight-net BGA fanout. Each fixture
 has a deterministic search budget and must remain clean and byte-idempotent;
 see `docs/REGRESSION_CORPUS.md`.
 
+## BGA escape routing
+
+`escape_groups` assigns dense package nets a fanout distance and target copper
+layer. Before global routing, pcbex creates deterministic radial dog-bone
+tracks and stackup-aware vias from each first terminal, routes from the escaped
+inner-layer locations, then restores the original pad terminals. The completed
+board, including every fanout stub, must pass the normal full-board checker.
+
 ## Manufacturing checks
 
 Boards may define `manufacturing_rules` for minimum track width, copper
