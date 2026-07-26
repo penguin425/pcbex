@@ -82,8 +82,11 @@ and every other board check must pass or the original route is restored.
 All coordinates and dimensions use integer nanometres. Layers are `F.Cu` and
 `B.Cu`. An optional ordered `outline` defines a simple, concave or convex board
 polygon; an empty outline uses the width/height rectangle. `keepouts` use exact
-polygons and layer sets, while legacy `obstacles` remain axis-aligned
-rectangles. Copper envelopes are expanded by width/via radius plus clearance.
+polygons and layer sets, with independent `tracks_not_allowed`,
+`vias_not_allowed`, and `zones_not_allowed` flags. KiCad Rule Area
+`tracks`/`vias`/`copperpour` restrictions map to those flags without collapsing
+selective areas into a blanket prohibition. Legacy `obstacles` remain
+axis-aligned rectangles. Copper envelopes are expanded by width/via radius plus clearance.
 Terminals declare the layers on which they may be reached. See
 [`examples/simple.json`](examples/simple.json).
 

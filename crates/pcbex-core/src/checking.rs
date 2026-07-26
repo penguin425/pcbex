@@ -257,7 +257,7 @@ pub fn check_board(board: &Board) -> CheckReport {
                 }
             }
             for keepout in &board.keepouts {
-                if keepout.net_id == Some(route.net_id) {
+                if !keepout.vias_not_allowed || keepout.net_id == Some(route.net_id) {
                     continue;
                 }
                 if !keepout.layers.iter().any(|layer| via.spans_layer(*layer)) {
@@ -1034,7 +1034,10 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         }
     }
     for keepout in &board.keepouts {
-        if keepout.net_id == Some(net_id) || !keepout.layers.contains(&segment.layer) {
+        if !keepout.tracks_not_allowed
+            || keepout.net_id == Some(net_id)
+            || !keepout.layers.contains(&segment.layer)
+        {
             continue;
         }
         let required_twice = segment.width_nm + 2 * rules.clearance_nm;
