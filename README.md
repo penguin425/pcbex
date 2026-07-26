@@ -40,6 +40,11 @@ Routes already present in the JSON input are preserved and reserved while only
 missing nets are routed. Running the router again on its output is therefore
 idempotent.
 
+New and selectively rerouted tracks pass through a deterministic post-router
+optimizer. It replaces contiguous detours with direct horizontal, vertical, or
+45-degree segments only when the complete board remains clean; imported locked
+routes are never rewritten.
+
 For nets with three or more terminals, the router chooses a central root and
 repeatedly connects the cheapest remaining terminal to any point in the routed
 tree. This avoids the input-order-dependent detours of terminal-to-terminal
