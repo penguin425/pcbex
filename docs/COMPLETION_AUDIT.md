@@ -50,6 +50,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Length constraints and meander tuning | Net-class minimum/maximum length checks and deterministic legal orthogonal detours | Meander regression verifies the interval and a clean full-board check |
 | Filled copper-zone interoperability | KiCad filled polygons become exact layer/net-owned copper and are preserved during route write-back | Filled GND-zone import regression |
 | Native copper-zone generation | Net-owned polygon model with layer, clearance, and minimum thickness; native KiCad zone output and outline/fill import | Zone syntax, parameter, polygon, and owned-obstacle round-trip regression |
+| Internal copper-zone fill | Conservative cell fill, foreign-copper/keepout clearance, pad thermal spokes, connected-component island removal, and filled-polygon export | Split-zone and thermal regression plus KiCad filled-polygon round trip |
 | Via types and layer ranges | Through, blind/buried, and microvia model; KiCad round-trip; range-aware connectivity/clearance | Blind and adjacent-layer microvia regression |
 | Automatic Via strategy | Stackup-aware micro, blind/buried, and through selection with span-aware collision reservation and cost | Transition classification and forced inner-layer autorouting regressions |
 | Extended pad shapes | Roundrect, trapezoid, and custom polygon model/import with rotated exact polygon obstacles | Three-shape KiCad geometry regression |
@@ -81,7 +82,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.19.0 exposes 68 Rust tests and 11 Python tests. The release workflow
+Version 1.20.0 exposes 69 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
