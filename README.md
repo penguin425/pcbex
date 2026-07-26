@@ -231,6 +231,10 @@ Obstacle rasterization uses conservative grid-cell windows derived from each
 circle, capsule, polygon, and keepout bounding envelope. Exact geometry remains
 the final predicate, while distant board cells are no longer scanned once per
 obstacle. The Criterion suite includes a 100 mm board with 200 round obstacles.
+CI also routes an anonymized practical corpus covering a USB differential pair,
+a four-layer power/inner-signal board, and an eight-net BGA fanout. Each fixture
+has a deterministic search budget and must remain clean and byte-idempotent;
+see `docs/REGRESSION_CORPUS.md`.
 
 ## Manufacturing checks
 
