@@ -1308,6 +1308,17 @@ fn import_footprint(
             custom_pad_polygon(pad, position, angle + pad_angle).unwrap_or_default();
         let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
         let net_id = child_values(pad, "net").and_then(|values| number_u32(values.get(1)));
+        let drill = child_values(pad, "drill").and_then(|values| {
+            if atom(values.get(1)) == Some("oval") {
+                Some((
+                    number(values.get(2))?,
+                    number(values.get(3)).or_else(|| number(values.get(2)))?,
+                ))
+            } else {
+                let width = number(values.get(1))?;
+                Some((width, number(values.get(2)).unwrap_or(width)))
+            }
+        });
         model.pads.push(Pad {
             number: atom(pad.get(1)).unwrap_or("").to_string(),
             position,
@@ -1318,6 +1329,9 @@ fn import_footprint(
             rotation_deg: angle + pad_angle,
             shape,
             custom_polygon: custom_polygon.clone(),
+            drill_width_nm: drill.map(|(width, _)| nm(width)),
+            drill_height_nm: drill.map(|(_, height)| nm(height)),
+            plated: atom(pad.get(2)) != Some("np_thru_hole"),
             layers: layers.clone(),
             net_id,
         });
@@ -2281,6 +2295,27 @@ mod tests {
         let power = &b.board.net_classes["Power"];
         assert_eq!(power.track_width_nm, 800_000);
         assert_eq!(power.clearance_nm, 400_000);
+        let through_hole = &b.board.footprints[0].pads[0];
+        assert_eq!(through_hole.drill_width_nm, Some(500_000));
+        assert_eq!(through_hole.drill_height_nm, Some(500_000));
+        assert!(through_hole.plated);
+    }
+
+    #[test]
+    fn imports_non_plated_oval_drill_dimensions() {
+        let source = r#"(kicad_pcb
+          (net 0 "")
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (footprint "MountingHole" (layer "F.Cu") (at 10 10 90)
+            (pad "" np_thru_hole oval (at 0 0 30) (size 3 2)
+              (drill oval 1.2 0.8) (layers "*.Cu" "*.Mask"))))"#;
+
+        let imported = import(source, rules()).unwrap();
+        let pad = &imported.board.footprints[0].pads[0];
+        assert_eq!(pad.drill_width_nm, Some(1_200_000));
+        assert_eq!(pad.drill_height_nm, Some(800_000));
+        assert!(!pad.plated);
+        assert_eq!(pad.rotation_deg, 120.0);
     }
 
     #[test]

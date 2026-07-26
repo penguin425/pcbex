@@ -416,6 +416,10 @@ and exits unsuccessfully when manufacturing violations are present.
 Optional rules also detect drill-to-drill spacing, prohibited Via-in-pad, and
 acute trace junctions. Use `--format sarif` to emit SARIF 2.1.0 suitable for
 GitHub Code Scanning; JSON remains the default.
+KiCad PTH and NPTH pad drill dimensions are retained, including rotated oval
+holes. Component and mounting holes participate in minimum-drill, aspect-ratio,
+board-edge, and exact hole-to-hole spacing checks alongside vias. Plated holes
+also enforce the minimum annular ring, while NPTH mounting holes do not.
 
 ## Planning and repair agent
 
