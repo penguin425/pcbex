@@ -186,6 +186,19 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![],
             );
         }
+        if rules
+            .layers
+            .as_ref()
+            .is_some_and(|layers| !layer_membership_is_valid(board, layers))
+        {
+            report.push(
+                "net_class_layers",
+                format!(
+                    "net class {name} must allow a unique non-empty subset of the board copper stackup"
+                ),
+                vec![],
+            );
+        }
     }
     if !copper_layer_table_is_valid(board) {
         report.push(
@@ -4945,6 +4958,57 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "net_class_dimensions")
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_net_class_layer_membership() {
+        let with_layers = |name: &str, layers| {
+            let mut board = base();
+            board.net_classes.insert(
+                name.into(),
+                crate::NetClassRules {
+                    track_width_nm: 250_000,
+                    clearance_nm: 200_000,
+                    via_diameter_nm: 600_000,
+                    via_drill_nm: 300_000,
+                    layers,
+                    differential_width_nm: None,
+                    differential_gap_nm: None,
+                    minimum_length_nm: None,
+                    maximum_length_nm: None,
+                    target_impedance_ohms: None,
+                    impedance_tolerance_ohms: None,
+                    maximum_impedance_step_ohms: None,
+                },
+            );
+            board
+        };
+
+        for board in [
+            with_layers("empty", Some(vec![])),
+            with_layers("duplicate", Some(vec![Layer::Front, Layer::Front])),
+            with_layers("unknown", Some(vec![Layer::Inner(1)])),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "net_class_layers")
+                    .count(),
+                1
+            );
+        }
+        for board in [
+            with_layers("unrestricted", None),
+            with_layers("multilayer", Some(vec![Layer::Front, Layer::Back])),
+        ] {
+            assert!(
+                !check_board(&board)
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == "net_class_layers")
+            );
+        }
     }
 
     #[test]
