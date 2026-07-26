@@ -298,6 +298,14 @@ stackup-aware vias from each first terminal, routes from the escaped inner-layer
 locations, then restores the original pad terminals. The completed board,
 including every fanout stub, must pass the normal full-board checker.
 
+## Return-path stitching
+
+`return_path_rules` associates high-speed signal nets with a reference net and
+a maximum signal-to-reference via distance. The board checker reports every
+layer transition without a nearby reference via that spans the same layers.
+With `auto_stitch: true`, routing adds a checked reference via and short
+connection to existing reference copper when a legal site is available.
+
 ## Manufacturing checks
 
 Boards may define `manufacturing_rules` for minimum track width, copper

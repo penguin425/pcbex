@@ -38,6 +38,7 @@ fn board_with_nets(net_count: usize) -> Board {
         length_groups: vec![],
         escape_groups: vec![],
         manufacturing_rules: None,
+        return_path_rules: vec![],
         via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets: (0..net_count)
             .map(|index| {
