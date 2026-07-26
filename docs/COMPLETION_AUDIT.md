@@ -51,6 +51,7 @@ out of scope.
 | Extended pad shapes | Roundrect, trapezoid, and custom polygon model/import with rotated exact polygon obstacles | Three-shape KiCad geometry regression |
 | Practical placement constraints | Front/back side, allowed rotations, rectangular regions, and KiCad courtyard dimensions | Region optimization and back-side courtyard regressions |
 | Spatially bounded rasterization | Conservative per-shape cell windows followed by exact predicates | Window regression and 100 mm/200-obstacle Criterion scenario |
+| Configurable DFM checks | Width, actual copper clearance, drill, annular ring, aspect ratio, and copper-to-edge checks with JSON CLI report | Multi-rule manufacturing regression and `dfm` command |
 | KiCad end-to-end CI | KiCad 10 routing, DRC, second-pass idempotence, and retained diagnostics for three fixtures | Rectangular, non-rectangular, and polygon-keepout boards run on every PR |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
 

@@ -31,6 +31,7 @@ fn board_with_nets(net_count: usize) -> Board {
         footprints: vec![],
         net_classes: HashMap::new(),
         differential_pairs: vec![],
+        manufacturing_rules: None,
         nets: (0..net_count)
             .map(|index| {
                 let y_nm = 1_000_000 + index as i64 * 1_500_000;
