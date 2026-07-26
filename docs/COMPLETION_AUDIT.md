@@ -54,6 +54,7 @@ out of scope.
 | Placement flips and exact courtyards | Side-aware pin mirroring, polygon collision/boundary scoring, and atomic KiCad footprint layer swap | Bounding-box false-positive, opposite-side, and front/back round-trip regressions |
 | Spatially bounded rasterization | Conservative per-shape cell windows followed by exact predicates | Window regression and 100 mm/200-obstacle Criterion scenario |
 | Configurable DFM checks | Width, actual copper clearance, drill, annular ring, aspect ratio, and copper-to-edge checks with JSON CLI report | Multi-rule manufacturing regression and `dfm` command |
+| Extended DFM and SARIF | Exact circle/oval/custom Via-in-pad, drill spacing, acute junctions, and SARIF 2.1.0 output | Multi-violation geometry and SARIF result-count regression |
 | KiCad end-to-end CI | KiCad 10 routing, DRC, second-pass idempotence, and retained diagnostics for three fixtures | Rectangular, non-rectangular, and polygon-keepout boards run on every PR |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
 
