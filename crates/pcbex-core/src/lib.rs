@@ -1128,6 +1128,11 @@ impl<'a> Router<'a> {
         if board.width_nm <= 0 || board.height_nm <= 0 {
             return Err("board dimensions must be positive".into());
         }
+        if board.obstacles.iter().any(|obstacle| {
+            obstacle.min.x_nm >= obstacle.max.x_nm || obstacle.min.y_nm >= obstacle.max.y_nm
+        }) {
+            return Err("rectangular obstacle bounds must have positive area".into());
+        }
         if board.copper_layers.is_empty()
             || board
                 .copper_layers
@@ -4486,6 +4491,16 @@ mod tests {
         assert!(matches!(
             Router::new(&invalid),
             Err(message) if message == "base routing rules have invalid dimensions"
+        ));
+    }
+
+    #[test]
+    fn router_rejects_invalid_rectangular_obstacle_geometry() {
+        let mut invalid = board();
+        invalid.obstacles[0].max.x_nm = invalid.obstacles[0].min.x_nm;
+        assert!(matches!(
+            Router::new(&invalid),
+            Err(message) if message == "rectangular obstacle bounds must have positive area"
         ));
     }
 
