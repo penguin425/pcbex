@@ -51,7 +51,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Deterministic parallel candidate search | Configurable 1–8 bounded workers explore first-pass A* candidates; ordered validation reuses one board snapshot per pass and sequential conflict fallback controls commits | Ten-net 1-vs-8-worker regression is byte-identical; Criterion measures actual 1/2/4/8-worker wall time |
 | Practical board regression corpus | Anonymized USB differential, four-layer power/inner-signal, and eight-net BGA fanout topologies | Clean, byte-idempotent routing with per-fixture search budgets on every PR |
 | BGA escape routing | Deterministic radial/row/column/four-way dog-bone stubs, optional via-grid snapping, multi-ring collision fallback, stackup-aware fanout vias, and inner-layer continuation before global routing | Two-net BGA regression blocks every first-ring site, checks grid-aligned second-ring microvias, front stubs, inner tracks, and full-board cleanliness |
-| Return-path control | Per-signal/reference-net transition rules check maximum stitching-via distance and optional routing adds fully checked reference vias connected to existing copper | Two-layer signal transition regression detects the missing return path, inserts one legal GND stitch, and finishes DRC-clean |
+| Return-path control | Per-signal/reference-net transition rules check maximum stitching-via distance, sample stackup-selected reference fills for split-plane/slot crossings, and add fully checked Zone-connected or track-connected reference vias | Filled-plane gap regression detects a slot; two-layer transitions insert legal direct-to-Zone and track-connected GND stitches and finish DRC-clean |
 | Automatic rounded routing | Orthogonal corners are trimmed into tangent quarter-circle native arcs at the routing-grid radius, with whole-board acceptance checks and reporting | Right-angle regression verifies valid arc geometry, preserved connectivity, and a clean full-board check |
 | Stackup impedance constraints | KiCad stackup import captures copper thickness, adjacent dielectric height/permittivity, and nearest reference layer; per-net-class target/tolerance drives IPC-2141 single-ended estimates during normal DRC | Four-layer import verifies reference selection and physical dimensions; controlled-impedance regression accepts the calculated target and reports a deliberately shifted 50 Ω target |
 | Advanced length tuning | Length groups constrain meander amplitude, pitch, and up to 16 distributed tuning sections; each incremental section is whole-board checked | Three-section regression adds exactly 3 mm across separate legal spans and bus-skew regression remains clean |
@@ -96,7 +96,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.39.0 exposes 82 Rust tests and 11 Python tests. The release workflow
+Version 1.40.0 exposes 83 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

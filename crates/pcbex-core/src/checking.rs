@@ -101,6 +101,10 @@ pub fn check_board(board: &Board) -> CheckReport {
                 }
             }
         }
+        report
+            .violations
+            .retain(|violation| violation.rule != "return_path_plane");
+        check_return_plane_continuity(board, &mut report);
         return report;
     }
     let mut report = CheckReport::default();
@@ -376,6 +380,85 @@ fn check_return_paths(board: &Board, routes: &HashMap<u32, &Route>, report: &mut
                         ),
                         vec![*signal_net_id, rule.reference_net_id],
                     );
+                }
+            }
+        }
+    }
+    check_return_plane_continuity(board, report);
+}
+
+fn check_return_plane_continuity(board: &Board, report: &mut CheckReport) {
+    for rule in board
+        .return_path_rules
+        .iter()
+        .filter(|rule| rule.require_continuous_plane)
+    {
+        let Some(reference_route) = board
+            .routes
+            .iter()
+            .find(|route| route.net_id == rule.reference_net_id)
+        else {
+            continue;
+        };
+        for signal_net_id in &rule.signal_net_ids {
+            let Some(signal_route) = board
+                .routes
+                .iter()
+                .find(|route| route.net_id == *signal_net_id)
+            else {
+                continue;
+            };
+            for segment in &signal_route.segments {
+                let Some(reference_layer) = board
+                    .stackup
+                    .iter()
+                    .find(|entry| entry.layer == segment.layer)
+                    .and_then(|entry| entry.reference_layer)
+                else {
+                    report.push(
+                        "return_path_plane",
+                        format!(
+                            "{} has no reference-layer stackup entry for {:?}",
+                            rule.name, segment.layer
+                        ),
+                        vec![*signal_net_id, rule.reference_net_id],
+                    );
+                    break;
+                };
+                let spacing = rule
+                    .plane_sample_spacing_nm
+                    .unwrap_or(board.rules.grid_nm)
+                    .max(1);
+                let dx = segment.end.x_nm - segment.start.x_nm;
+                let dy = segment.end.y_nm - segment.start.y_nm;
+                let length = ((dx as f64).hypot(dy as f64)).round() as i64;
+                let steps = ((length + spacing - 1) / spacing).max(1);
+                let continuous = (0..=steps).all(|step| {
+                    let point = Point {
+                        x_nm: segment.start.x_nm + dx * step / steps,
+                        y_nm: segment.start.y_nm + dy * step / steps,
+                    };
+                    reference_route.zones.iter().any(|zone| {
+                        zone.layer == reference_layer
+                            && if zone.filled_polygons.is_empty() {
+                                point_in_polygon(point, &zone.polygon)
+                            } else {
+                                zone.filled_polygons
+                                    .iter()
+                                    .any(|polygon| point_in_polygon(point, polygon))
+                            }
+                    })
+                });
+                if !continuous {
+                    report.push(
+                        "return_path_plane",
+                        format!(
+                            "{} crosses a gap in the {:?} reference plane",
+                            rule.name, reference_layer
+                        ),
+                        vec![*signal_net_id, rule.reference_net_id],
+                    );
+                    break;
                 }
             }
         }
@@ -1040,7 +1123,9 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
 
 fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) {
     let segment_count = route.segments.len();
-    let node_count = segment_count + route.vias.len();
+    let via_count = route.vias.len();
+    let zone_offset = segment_count + via_count;
+    let node_count = zone_offset + route.zones.len();
     let mut components = DisjointSet::new(node_count);
 
     for (index, segment) in route.segments.iter().enumerate() {
@@ -1081,6 +1166,31 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
             }
         }
     }
+    for (zone_index, zone) in route.zones.iter().enumerate() {
+        let node = zone_offset + zone_index;
+        for (segment_index, segment) in route.segments.iter().enumerate() {
+            if segment.layer == zone.layer
+                && (point_in_polygon(segment.start, &zone.polygon)
+                    || point_in_polygon(segment.end, &zone.polygon)
+                    || segment_polygon_closer_than(
+                        segment.start,
+                        segment.end,
+                        &zone.polygon,
+                        segment.width_nm,
+                    ))
+            {
+                components.union(node, segment_index);
+            }
+        }
+        for (via_index, via) in route.vias.iter().enumerate() {
+            if via.spans_layer(zone.layer)
+                && (point_in_polygon(via.position, &zone.polygon)
+                    || point_polygon_closer_than(via.position, &zone.polygon, via.diameter_nm))
+            {
+                components.union(node, segment_count + via_index);
+            }
+        }
+    }
 
     let mut terminal_nodes = Vec::with_capacity(net.terminals.len());
     for terminal in &net.terminals {
@@ -1108,6 +1218,17 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
                             && points_within(via.position, terminal.position, via.diameter_nm)
                     })
                     .map(|(index, _)| segment_count + index),
+            )
+            .chain(
+                route
+                    .zones
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, zone)| {
+                        terminal.layers.contains(&zone.layer)
+                            && point_in_polygon(terminal.position, &zone.polygon)
+                    })
+                    .map(|(index, _)| zone_offset + index),
             )
             .collect();
 

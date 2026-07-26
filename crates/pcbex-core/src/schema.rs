@@ -157,7 +157,9 @@ pub fn board_json_schema() -> serde_json::Value {
                     "signal_net_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
                     "reference_net_id": {"type": "integer", "minimum": 0},
                     "max_via_distance_nm": {"type": "integer", "exclusiveMinimum": 0},
-                    "auto_stitch": {"type": "boolean"}
+                    "auto_stitch": {"type": "boolean"},
+                    "require_continuous_plane": {"type": "boolean"},
+                    "plane_sample_spacing_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0}
                 }
             },
             "stackup_layer": {
