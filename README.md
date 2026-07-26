@@ -468,6 +468,8 @@ Filled zone contours have the same topology and layer requirements before
 their copper participates in clearance and return-plane calculations.
 Zone source outlines must also be simple, non-degenerate polygons on declared
 copper layers so refilling and plane checks never consume malformed inputs.
+Zone clearance and thermal gaps must be non-negative, minimum copper thickness
+must be positive, and enabled thermal relief requires a positive spoke width.
 
 ## Planning and repair agent
 
