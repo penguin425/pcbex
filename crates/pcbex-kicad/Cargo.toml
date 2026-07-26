@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 pcbex-core = { path = "../pcbex-core" }
 serde_json.workspace = true
+regex.workspace = true

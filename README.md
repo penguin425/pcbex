@@ -109,6 +109,11 @@ cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
 When a sibling `.kicad_pro` file exists, `route-kicad` imports its modern
 net-class dimensions and exact net assignments automatically. Use
 `--project path/to/board.kicad_pro` when the project has a different basename.
+Ordered `netclass_patterns` support hierarchical names, `*`/`?` wildcards, and
+regular expressions; exact assignments retain precedence. A sibling
+`.kicad_dru` is also discovered automatically. NetClass-conditioned clearance,
+track/via/hole dimensions, differential gap, and length constraints are applied
+to routing; use `--rules-file` to select another rules file.
 
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.

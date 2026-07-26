@@ -26,6 +26,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Selective rip-up/reroute | Failed-search blocker attribution, conflict-only rip-up, failed-net-first retry, via reservation | Crossing regression reroutes only the flexible blocker; static blockage stops after one pass |
 | Explicit local route repair | Checker-derived or user-selected net rip-up with byte-locked unrelated routes and owned-zone preservation | Obstacle violation regression reroutes one net while proving the other route is unchanged |
 | KiCad input/output | Rectangular outline, rotated pads, footprints, tracks, vias, keepouts; board-level track/via output | Four `pcbex-kicad` tests |
+| Modern KiCad project/custom rules | Ordered wildcard/regex `netclass_patterns`, exact-assignment precedence, and NetClass-conditioned `.kicad_dru` routing dimensions | KiCad 9-style project fixture plus mm/mil custom-rule regression |
 | Headless KiCad validation | `route-kicad --drc` | KiCad 10.0.5: 0 violations, 0 unconnected pads |
 | Manufacturing output | `fabricate` DRC gate plus Gerber/Excellon export | F/B copper, mask, silkscreen, Edge.Cuts, drill, job file generated |
 | Interactive KiCad integration | Official `kicad-python` IPC adapter and one undoable commit | Mock transaction test and real wrapper-object serialization check |
@@ -90,7 +91,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.30.0 exposes 77 Rust tests and 11 Python tests. The release workflow
+Version 1.31.0 exposes 77 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
