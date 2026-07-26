@@ -109,9 +109,10 @@ and through vias are appended at board level without duplicating locked routes,
 while preserving the source document.
 The route model also preserves KiCad three-point copper arcs and can emit
 native pad/via teardrop zones from explicit polygon geometry.
-Matched differential-pair terminals are autorouted as a coupled translation
-when the resulting pair passes connectivity, clearance, skew, and coupling
-checks; otherwise the independently routed fallback is retained.
+Matched two-terminal differential pairs use a simultaneous A* search that
+evaluates both track positions for every move. The resulting pair is accepted
+only when connectivity, clearance, skew, and coupling checks pass; more general
+terminal arrangements retain the independently routed fallback.
 Net-owned polygonal copper zones can be supplied in route JSON and are emitted
 as native KiCad zones with clearance and minimum-thickness settings. Both
 unfilled outlines and filled zone polygons are imported as owned copper.

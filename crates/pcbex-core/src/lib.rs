@@ -181,7 +181,7 @@ pub enum PadShape {
     Custom,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rules {
     pub grid_nm: Nm,
     pub track_width_nm: Nm,
@@ -1301,6 +1301,165 @@ impl<'a> Router<'a> {
             .collect()
     }
 
+    fn route_coupled_pair(&self, positive: &Net, negative: &Net) -> Option<(Route, Route, usize)> {
+        if positive.terminals.len() != 2 || negative.terminals.len() != 2 {
+            return None;
+        }
+        let rules = self.board.rules_for_net(positive.id);
+        if rules != self.board.rules_for_net(negative.id) {
+            return None;
+        }
+        let g = rules.grid_nm;
+        let start_offset = (
+            nearest_grid(negative.terminals[0].position.x_nm, g)
+                - nearest_grid(positive.terminals[0].position.x_nm, g),
+            nearest_grid(negative.terminals[0].position.y_nm, g)
+                - nearest_grid(positive.terminals[0].position.y_nm, g),
+        );
+        let end_offset = (
+            nearest_grid(negative.terminals[1].position.x_nm, g)
+                - nearest_grid(positive.terminals[1].position.x_nm, g),
+            nearest_grid(negative.terminals[1].position.y_nm, g)
+                - nearest_grid(positive.terminals[1].position.y_nm, g),
+        );
+        if start_offset != end_offset || (start_offset.0 != 0 && start_offset.1 != 0) {
+            return None;
+        }
+        let starts = self.terminal_nodes(positive.id, &positive.terminals[0], &rules);
+        let goals: HashSet<_> = self
+            .terminal_nodes(positive.id, &positive.terminals[1], &rules)
+            .into_iter()
+            .map(|node| (node.x, node.y, node.layer))
+            .collect();
+        let mut open = BinaryHeap::new();
+        let mut costs = HashMap::new();
+        let mut prev = HashMap::new();
+        for node in starts {
+            costs.insert(node, 0);
+            open.push(QueueItem {
+                score: heuristic_to_tree(node.x, node.y, node.layer, &goals),
+                cost: 0,
+                node,
+            });
+        }
+        const DIRS: [(i32, i32); 8] = [
+            (1, 0),
+            (1, 1),
+            (0, 1),
+            (-1, 1),
+            (-1, 0),
+            (-1, -1),
+            (0, -1),
+            (1, -1),
+        ];
+        let max_x = (self.board.width_nm / g) as i32;
+        let max_y = (self.board.height_nm / g) as i32;
+        let mut expanded = 0;
+        while let Some(item) = open.pop() {
+            if item.cost != *costs.get(&item.node).unwrap_or(&u64::MAX) {
+                continue;
+            }
+            expanded += 1;
+            if goals.contains(&(item.node.x, item.node.y, item.node.layer)) {
+                let mut path = vec![item.node];
+                let mut cursor = item.node;
+                while let Some(previous) = prev.get(&cursor) {
+                    cursor = *previous;
+                    path.push(cursor);
+                }
+                path.reverse();
+                let paired_path: Vec<_> = path
+                    .iter()
+                    .map(|node| Node {
+                        x: node.x + start_offset.0 as i32,
+                        y: node.y + start_offset.1 as i32,
+                        ..*node
+                    })
+                    .collect();
+                let mut positive_route = empty_route(positive.id);
+                let mut negative_route = empty_route(negative.id);
+                append_terminal_access(
+                    &mut positive_route,
+                    positive.terminals[0].position,
+                    path[0],
+                    &rules,
+                    true,
+                );
+                append_path(&mut positive_route, &path, &rules, self.board);
+                append_terminal_access(
+                    &mut positive_route,
+                    positive.terminals[1].position,
+                    *path.last().unwrap(),
+                    &rules,
+                    false,
+                );
+                append_terminal_access(
+                    &mut negative_route,
+                    negative.terminals[0].position,
+                    paired_path[0],
+                    &rules,
+                    true,
+                );
+                append_path(&mut negative_route, &paired_path, &rules, self.board);
+                append_terminal_access(
+                    &mut negative_route,
+                    negative.terminals[1].position,
+                    *paired_path.last().unwrap(),
+                    &rules,
+                    false,
+                );
+                return Some((positive_route, negative_route, expanded));
+            }
+            for (direction, (dx, dy)) in DIRS.iter().enumerate() {
+                let next = Node {
+                    x: item.node.x + dx,
+                    y: item.node.y + dy,
+                    layer: item.node.layer,
+                    dir: direction as u8,
+                };
+                let paired = (
+                    next.x + start_offset.0 as i32,
+                    next.y + start_offset.1 as i32,
+                    next.layer,
+                );
+                if next.x < 0
+                    || next.y < 0
+                    || next.x > max_x
+                    || next.y > max_y
+                    || paired.0 < 0
+                    || paired.1 < 0
+                    || paired.0 > max_x
+                    || paired.1 > max_y
+                {
+                    continue;
+                }
+                let positive_cell = (next.x, next.y, next.layer);
+                let endpoint = goals.contains(&positive_cell);
+                if !endpoint
+                    && (self.blocked.contains(&positive_cell)
+                        || self.foreign_obstacle(positive_cell, positive.id)
+                        || self.blocked.contains(&paired)
+                        || self.foreign_obstacle(paired, negative.id))
+                {
+                    continue;
+                }
+                let step = if *dx != 0 && *dy != 0 { 14 } else { 10 };
+                let bend = u64::from(item.node.dir < 8 && item.node.dir != direction as u8)
+                    * rules.bend_cost as u64;
+                self.relax(
+                    item.node,
+                    next,
+                    item.cost + step + bend,
+                    &goals,
+                    &mut costs,
+                    &mut prev,
+                    &mut open,
+                );
+            }
+        }
+        None
+    }
+
     fn astar_to_tree(
         &self,
         net_id: u32,
@@ -1779,12 +1938,65 @@ fn push_segment(route: &mut Route, a: Node, b: Node, g: Nm, w: Nm) {
     });
 }
 
+fn empty_route(net_id: u32) -> Route {
+    Route {
+        net_id,
+        segments: vec![],
+        arcs: vec![],
+        vias: vec![],
+        teardrops: vec![],
+        zones: vec![],
+    }
+}
+
 pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
-    let (routes, mut report) = Router::new(board)?.route_all();
-    let mut out = board.clone();
+    let mut seeded = board.clone();
+    let mut coupled = Vec::new();
+    let mut paired_expanded = 0;
+    for pair in &board.differential_pairs {
+        if seeded.routes.iter().any(|route| {
+            route.net_id == pair.positive_net_id || route.net_id == pair.negative_net_id
+        }) {
+            continue;
+        }
+        let (Some(positive), Some(negative)) = (
+            board.nets.iter().find(|net| net.id == pair.positive_net_id),
+            board.nets.iter().find(|net| net.id == pair.negative_net_id),
+        ) else {
+            continue;
+        };
+        let Some((positive_route, negative_route, expanded)) =
+            Router::new(&seeded)?.route_coupled_pair(positive, negative)
+        else {
+            continue;
+        };
+        seeded.routes.push(positive_route);
+        seeded.routes.push(negative_route);
+        let invalid = checking::check_board(&seeded)
+            .violations
+            .iter()
+            .any(|violation| {
+                violation.net_ids.contains(&pair.positive_net_id)
+                    || violation.net_ids.contains(&pair.negative_net_id)
+            });
+        if invalid {
+            seeded.routes.retain(|route| {
+                route.net_id != pair.positive_net_id && route.net_id != pair.negative_net_id
+            });
+        } else {
+            coupled.push(pair.name.clone());
+            paired_expanded += expanded;
+        }
+    }
+    let (routes, mut report) = Router::new(&seeded)?.route_all();
+    let mut out = seeded;
     out.routes = routes;
     tune_route_lengths(&mut out)?;
     couple_differential_pairs(&mut out, &mut report);
+    report.expanded_states += paired_expanded;
+    report.coupled_differential_pairs.extend(coupled);
+    report.coupled_differential_pairs.sort();
+    report.coupled_differential_pairs.dedup();
     Ok((out, report))
 }
 
@@ -2972,6 +3184,15 @@ mod tests {
     fn autoroutes_a_coupled_differential_pair() {
         let mut board = board();
         board.obstacles.clear();
+        board.round_obstacles.push(RoundObstacle {
+            center: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            diameter_nm: 500_000,
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
         let terminals = |y_nm| {
             vec![
                 Terminal {
@@ -3032,6 +3253,7 @@ mod tests {
             .find(|route| route.net_id == 2)
             .unwrap();
         assert_eq!(positive.segments.len(), negative.segments.len());
+        assert!(positive.segments.len() > 1);
         assert!(
             positive
                 .segments
