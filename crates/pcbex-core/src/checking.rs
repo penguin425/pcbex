@@ -869,6 +869,7 @@ mod tests {
             net_classes: HashMap::new(),
             differential_pairs: vec![],
             manufacturing_rules: None,
+            via_strategy: crate::ViaStrategy::ThroughOnly,
             nets: vec![],
             routes: vec![],
         }

@@ -139,6 +139,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         net_classes,
         differential_pairs,
         manufacturing_rules: None,
+        via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets,
         routes,
     };

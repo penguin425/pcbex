@@ -172,6 +172,9 @@ Vias carry an explicit `through`, `blind_buried`, or `micro` kind plus start and
 end copper layers. KiCad blind/buried and microvias retain their ranges during
 import and write-back. Connectivity and clearance checks only consider layers
 actually spanned by the via, and microvias are restricted to adjacent layers.
+Set `via_strategy` to `auto` to let the router choose microvias for adjacent
+layers, blind/buried vias for partial non-adjacent spans, and through vias for
+the complete stack. Partial-span Via costs discourage unnecessary deep drills.
 
 ## Extended pad geometry
 

@@ -296,6 +296,8 @@ pub struct Board {
     #[serde(default)]
     pub manufacturing_rules: Option<ManufacturingRules>,
     #[serde(default)]
+    pub via_strategy: ViaStrategy,
+    #[serde(default)]
     pub nets: Vec<Net>,
     #[serde(default)]
     pub routes: Vec<Route>,
@@ -374,6 +376,31 @@ impl Board {
             .unwrap_or((None, None))
     }
 
+    fn via_for_transition(&self, from: Layer, to: Layer) -> (ViaKind, Layer, Layer, u64) {
+        if self.via_strategy == ViaStrategy::ThroughOnly {
+            return (ViaKind::Through, Layer::Front, Layer::Back, 1);
+        }
+        let from_position = self
+            .copper_layers
+            .iter()
+            .position(|layer| *layer == from)
+            .expect("router transitions only declared layers");
+        let to_position = self
+            .copper_layers
+            .iter()
+            .position(|layer| *layer == to)
+            .expect("router transitions only declared layers");
+        if from_position.abs_diff(to_position) == 1 {
+            (ViaKind::Micro, from, to, 1)
+        } else if from_position.min(to_position) == 0
+            && from_position.max(to_position) + 1 == self.copper_layers.len()
+        {
+            (ViaKind::Through, Layer::Front, Layer::Back, 1)
+        } else {
+            (ViaKind::BlindBuried, from, to, 2)
+        }
+    }
+
     fn maximum_routing_envelope(&self) -> (Nm, Nm) {
         self.net_classes.values().fold(
             (
@@ -420,6 +447,14 @@ pub enum ViaKind {
     Through,
     BlindBuried,
     Micro,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViaStrategy {
+    #[default]
+    ThroughOnly,
+    Auto,
 }
 
 fn front_layer() -> Layer {
@@ -1129,7 +1164,7 @@ impl<'a> Router<'a> {
             };
             let terminal = &net.terminals[terminal_index];
             append_terminal_access(&mut route, terminal.position, nodes[0], &rules, true);
-            append_path(&mut route, &nodes, &rules);
+            append_path(&mut route, &nodes, &rules, self.board);
             if !root_access_added {
                 append_terminal_access(
                     &mut route,
@@ -1287,12 +1322,38 @@ impl<'a> Router<'a> {
                     {
                         continue;
                     }
-                    let cell = (item.node.x, item.node.y, other);
-                    if self.blocked.contains(&cell) || self.foreign_obstacle(cell, net_id) {
+                    let (kind, start_layer, end_layer, cost_multiplier) = self
+                        .board
+                        .via_for_transition(index_layer(item.node.layer), *other_layer);
+                    let candidate = Via {
+                        position: Point {
+                            x_nm: item.node.x as Nm * g,
+                            y_nm: item.node.y as Nm * g,
+                        },
+                        diameter_nm: rules.via_diameter_nm,
+                        drill_nm: rules.via_drill_nm,
+                        kind,
+                        start_layer,
+                        end_layer,
+                    };
+                    let cells: Vec<_> = self
+                        .board
+                        .copper_layers
+                        .iter()
+                        .filter(|layer| candidate.spans_layer(**layer))
+                        .map(|layer| (item.node.x, item.node.y, layer_index(*layer)))
+                        .collect();
+                    if cells.iter().any(|cell| {
+                        self.blocked.contains(cell) || self.foreign_obstacle(*cell, net_id)
+                    }) {
                         continue;
                     }
-                    if let Some(owner) = self.occupied_by.get(&cell) {
-                        blockers.insert(*owner);
+                    let owners: HashSet<_> = cells
+                        .iter()
+                        .filter_map(|cell| self.occupied_by.get(cell).copied())
+                        .collect();
+                    if !owners.is_empty() {
+                        blockers.extend(owners);
                     } else {
                         let n = Node {
                             x: item.node.x,
@@ -1303,7 +1364,7 @@ impl<'a> Router<'a> {
                         self.relax(
                             item.node,
                             n,
-                            item.cost + rules.via_cost as u64,
+                            item.cost + rules.via_cost as u64 * cost_multiplier,
                             goals,
                             &mut costs,
                             &mut prev,
@@ -1380,7 +1441,12 @@ impl<'a> Router<'a> {
                 (via.diameter_nm / 2 + maximum_diameter / 2 + maximum_clearance + g - 1) / g;
             let center_x = via.position.x_nm / g;
             let center_y = via.position.y_nm / g;
-            for layer in &self.board.copper_layers {
+            for layer in self
+                .board
+                .copper_layers
+                .iter()
+                .filter(|layer| via.spans_layer(**layer))
+            {
                 for offset_y in -clearance_radius..=clearance_radius {
                     for offset_x in -clearance_radius..=clearance_radius {
                         if offset_x * offset_x + offset_y * offset_y
@@ -1515,7 +1581,7 @@ fn steiner_root_index(net: &Net, rules: &Rules) -> usize {
         .map(|(index, _)| index)
         .unwrap_or(0)
 }
-fn append_path(route: &mut Route, nodes: &[Node], rules: &Rules) {
+fn append_path(route: &mut Route, nodes: &[Node], rules: &Rules, board: &Board) {
     if nodes.len() < 2 {
         return;
     }
@@ -1527,6 +1593,8 @@ fn append_path(route: &mut Route, nodes: &[Node], rules: &Rules) {
             if start != pair[0] {
                 push_segment(route, start, pair[0], g, rules.track_width_nm);
             }
+            let (kind, start_layer, end_layer, _) =
+                board.via_for_transition(index_layer(pair[0].layer), index_layer(pair[1].layer));
             route.vias.push(Via {
                 position: Point {
                     x_nm: pair[0].x as Nm * g,
@@ -1534,9 +1602,9 @@ fn append_path(route: &mut Route, nodes: &[Node], rules: &Rules) {
                 },
                 diameter_nm: rules.via_diameter_nm,
                 drill_nm: rules.via_drill_nm,
-                kind: ViaKind::Through,
-                start_layer: Layer::Front,
-                end_layer: Layer::Back,
+                kind,
+                start_layer,
+                end_layer,
             });
             start = pair[1];
             last = pair[1];
@@ -1881,6 +1949,7 @@ mod tests {
             net_classes: HashMap::new(),
             differential_pairs: vec![],
             manufacturing_rules: None,
+            via_strategy: ViaStrategy::ThroughOnly,
             nets: vec![Net {
                 id: 1,
                 name: "N1".into(),
@@ -1914,6 +1983,25 @@ mod tests {
                 -1_000_000, 2_100_000, 8_000_000, 12_000_000, 500_000, 10_000_000, 10_000_000,
             ),
             (0, 4, 16, 20)
+        );
+    }
+
+    #[test]
+    fn automatic_via_strategy_classifies_stackup_transitions() {
+        let mut board = board();
+        board.copper_layers = vec![Layer::Front, Layer::Inner(1), Layer::Inner(2), Layer::Back];
+        board.via_strategy = ViaStrategy::Auto;
+        assert_eq!(
+            board.via_for_transition(Layer::Front, Layer::Inner(1)).0,
+            ViaKind::Micro
+        );
+        assert_eq!(
+            board.via_for_transition(Layer::Front, Layer::Inner(2)).0,
+            ViaKind::BlindBuried
+        );
+        assert_eq!(
+            board.via_for_transition(Layer::Front, Layer::Back).0,
+            ViaKind::Through
         );
     }
 
@@ -2137,6 +2225,7 @@ mod tests {
     fn routes_through_an_inner_copper_layer() {
         let mut b = board();
         b.copper_layers = vec![Layer::Front, Layer::Inner(1), Layer::Back];
+        b.via_strategy = ViaStrategy::Auto;
         b.obstacles = vec![Obstacle {
             min: Point {
                 x_nm: 4_000_000,
@@ -2161,6 +2250,12 @@ mod tests {
                 .any(|segment| segment.layer == Layer::Inner(1))
         );
         assert!(routed.routes[0].vias.len() >= 2);
+        assert!(
+            routed.routes[0]
+                .vias
+                .iter()
+                .all(|via| via.kind == ViaKind::Micro)
+        );
         assert!(checking::check_board(&routed).is_clean());
     }
 

@@ -48,6 +48,7 @@ out of scope.
 | Length constraints and meander tuning | Net-class minimum/maximum length checks and deterministic legal orthogonal detours | Meander regression verifies the interval and a clean full-board check |
 | Filled copper-zone interoperability | KiCad filled polygons become exact layer/net-owned copper and are preserved during route write-back | Filled GND-zone import regression |
 | Via types and layer ranges | Through, blind/buried, and microvia model; KiCad round-trip; range-aware connectivity/clearance | Blind and adjacent-layer microvia regression |
+| Automatic Via strategy | Stackup-aware micro, blind/buried, and through selection with span-aware collision reservation and cost | Transition classification and forced inner-layer autorouting regressions |
 | Extended pad shapes | Roundrect, trapezoid, and custom polygon model/import with rotated exact polygon obstacles | Three-shape KiCad geometry regression |
 | Practical placement constraints | Front/back side, allowed rotations, rectangular regions, and KiCad courtyard dimensions | Region optimization and back-side courtyard regressions |
 | Spatially bounded rasterization | Conservative per-shape cell windows followed by exact predicates | Window regression and 100 mm/200-obstacle Criterion scenario |
