@@ -119,6 +119,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let mut routes: Vec<_> = route_candidates.into_values().collect();
     routes.sort_by_key(|route| route.net_id);
     let mut board = Board {
+        schema_version: pcbex_core::CURRENT_SCHEMA_VERSION,
         width_nm: max.x_nm - min.x_nm,
         height_nm: max.y_nm - min.y_nm,
         outline: outline

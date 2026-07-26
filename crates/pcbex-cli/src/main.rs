@@ -3,7 +3,9 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use pcbex_core::checking::{check_board, check_manufacturability, check_report_to_sarif};
 use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
-use pcbex_core::{Board, Rules, render_svg, route_board};
+use pcbex_core::{
+    Board, Rules, board_json_schema, migrate_board_json, parse_board_json, render_svg, route_board,
+};
 use pcbex_kicad::import as import_kicad;
 use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
 
@@ -26,6 +28,17 @@ enum Command {
     Completion {
         #[arg(value_enum)]
         shell: Shell,
+    },
+    /// Print the current board JSON Schema.
+    Schema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Upgrade an older board JSON document to the current schema.
+    Migrate {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
     },
     Route {
         input: PathBuf,
@@ -115,9 +128,10 @@ enum Command {
 }
 
 fn read(path: &PathBuf) -> Result<Board> {
-    serde_json::from_str(
+    parse_board_json(
         &fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
     )
+    .map_err(anyhow::Error::msg)
     .with_context(|| format!("parsing {}", path.display()))
 }
 fn main() -> Result<()> {
@@ -127,6 +141,21 @@ fn main() -> Result<()> {
             let mut command = Cli::command();
             let name = command.get_name().to_string();
             generate(shell, &mut command, name, &mut io::stdout());
+        }
+        Command::Schema { output } => {
+            let schema = serde_json::to_string_pretty(&board_json_schema())?;
+            if let Some(path) = output {
+                fs::write(path, schema)?;
+            } else {
+                println!("{schema}");
+            }
+        }
+        Command::Migrate { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let migrated = migrate_board_json(&source).map_err(anyhow::Error::msg)?;
+            parse_board_json(&serde_json::to_string(&migrated)?).map_err(anyhow::Error::msg)?;
+            fs::write(output, serde_json::to_string_pretty(&migrated)?)?;
         }
         Command::Route {
             input,
