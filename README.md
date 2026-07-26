@@ -423,6 +423,9 @@ also enforce the minimum annular ring, while NPTH mounting holes do not.
 The normal board checker rejects incomplete or non-positive component drills
 even without manufacturing rules, and requires every plated drill to fit
 strictly inside its pad.
+KiCad `(drill ... (offset x y))` values are retained in pad-local coordinates.
+The rotated offset is applied to exact hole capsules for board-edge and
+hole-spacing DFM, and plated-hole validation includes the offset displacement.
 
 ## Planning and repair agent
 
