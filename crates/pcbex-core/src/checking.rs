@@ -110,11 +110,11 @@ pub fn check_board(board: &Board) -> CheckReport {
     let mut report = CheckReport::default();
     for footprint in &board.footprints {
         for pad in &footprint.pads {
-            if pad.shape == PadShape::Custom && !custom_pad_polygon_is_valid(&pad.custom_polygon) {
+            if !pad_geometry_is_valid(pad) {
                 report.push(
                     "pad_geometry",
                     format!(
-                        "{} pad {} custom polygon must be simple and non-degenerate",
+                        "{} pad {} must have valid dimensions, rotation, and shape parameters",
                         footprint.reference, pad.number
                     ),
                     pad.net_id.into_iter().collect(),
@@ -998,6 +998,36 @@ fn custom_pad_polygon_is_valid(polygon: &[Point]) -> bool {
         }
     }
     true
+}
+
+fn pad_geometry_is_valid(pad: &Pad) -> bool {
+    if pad.width_nm <= 0 || pad.height_nm <= 0 || !pad.rotation_deg.is_finite() {
+        return false;
+    }
+    match pad.shape {
+        PadShape::RoundRect => {
+            let width_nm = if pad.source_width_nm > 0 {
+                pad.source_width_nm
+            } else {
+                pad.width_nm
+            };
+            let height_nm = if pad.source_height_nm > 0 {
+                pad.source_height_nm
+            } else {
+                pad.height_nm
+            };
+            pad.roundrect_radius_nm >= 0
+                && i128::from(pad.roundrect_radius_nm) * 2 <= i128::from(width_nm.min(height_nm))
+        }
+        PadShape::Trapezoid => {
+            pad.source_width_nm > 0
+                && pad.source_height_nm > 0
+                && i128::from(pad.trapezoid_delta_x_nm).abs() < i128::from(pad.source_width_nm)
+                && i128::from(pad.trapezoid_delta_y_nm).abs() < i128::from(pad.source_height_nm)
+        }
+        PadShape::Custom => custom_pad_polygon_is_valid(&pad.custom_polygon),
+        _ => true,
+    }
 }
 
 fn point_inside_roundrect(
@@ -3313,6 +3343,61 @@ mod tests {
                 .filter(|violation| violation.rule == "pad_geometry")
                 .count(),
             3
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_base_pad_geometry() {
+        let mut board = base();
+        let pad = |number: &str, shape: PadShape| Pad {
+            number: number.into(),
+            position: Point { x_nm: 0, y_nm: 0 },
+            width_nm: 1_000_000,
+            height_nm: 1_000_000,
+            source_width_nm: 1_000_000,
+            source_height_nm: 1_000_000,
+            rotation_deg: 0.0,
+            shape,
+            custom_polygon: vec![],
+            roundrect_radius_nm: 0,
+            trapezoid_delta_x_nm: 0,
+            trapezoid_delta_y_nm: 0,
+            drill_width_nm: None,
+            drill_height_nm: None,
+            drill_offset_x_nm: 0,
+            drill_offset_y_nm: 0,
+            plated: false,
+            layers: vec![Layer::Front],
+            net_id: None,
+        };
+        let mut zero_width = pad("1", PadShape::Rect);
+        zero_width.width_nm = 0;
+        let mut non_finite_rotation = pad("2", PadShape::Oval);
+        non_finite_rotation.rotation_deg = f64::INFINITY;
+        let mut invalid_roundrect = pad("3", PadShape::RoundRect);
+        invalid_roundrect.roundrect_radius_nm = 600_000;
+        let mut invalid_trapezoid = pad("4", PadShape::Trapezoid);
+        invalid_trapezoid.trapezoid_delta_x_nm = 1_000_000;
+        board.footprints.push(crate::Footprint {
+            reference: "U2".into(),
+            position: Point { x_nm: 0, y_nm: 0 },
+            rotation_deg: 0.0,
+            pads: vec![
+                zero_width,
+                non_finite_rotation,
+                invalid_roundrect,
+                invalid_trapezoid,
+            ],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "pad_geometry")
+                .count(),
+            4
         );
     }
 }
