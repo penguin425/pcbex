@@ -103,6 +103,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Net-class layer membership validation | Normal DRC requires every optional class layer restriction to be a non-empty unique subset of the declared copper stackup while preserving omitted restrictions | Empty, duplicate, undeclared, unrestricted, and valid multilayer regressions |
 | Net-class length-limit validation | Normal DRC requires optional minimum/maximum route lengths to be positive and ordered while preserving one-sided and unbounded limits | Zero minimum, negative maximum, reversed range, one-sided, bounded, and unbounded regressions |
 | Net-class impedance-limit validation | Normal DRC requires target/tolerance pairing, finite values, positive targets, and non-negative tolerances/transition limits for every class | Missing pair member, zero/NaN target, negative/infinite tolerance, negative/NaN step, and valid optional combinations |
+| Net-class differential-dimension validation | Normal DRC and Router require optional differential widths to be positive and differential gaps to be non-negative | Zero/negative width, negative/zero gap, valid pair, omitted values, and Router-construction regressions |
 | Route net-reference validation | Normal DRC rejects route net identifiers absent from the board net table before connectivity, width, or clearance checks consume the route | Declared and undeclared empty-route regression |
 | Duplicate route validation | Normal DRC permits at most one route record per net so route indexing cannot silently hide additional copper | Two-route single-net regression with one explicit duplicate violation |
 | Track segment geometry validation | Normal DRC requires distinct endpoints, positive width, and a declared copper layer before angle, boundary, or clearance evaluation | Zero-length, zero-width, unknown-layer, and valid segment regressions |
@@ -150,7 +151,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.98.0 exposes 151 Rust tests and 11 Python tests. The release workflow
+Version 1.99.0 exposes 153 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

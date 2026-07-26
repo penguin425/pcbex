@@ -1291,6 +1291,13 @@ impl<'a> Router<'a> {
             {
                 return Err(format!("net class {name} has invalid impedance limits"));
             }
+            if rules.differential_width_nm.is_some_and(|value| value <= 0)
+                || rules.differential_gap_nm.is_some_and(|value| value < 0)
+            {
+                return Err(format!(
+                    "net class {name} has invalid differential dimensions"
+                ));
+            }
         }
         let mut stackup_layers = HashSet::new();
         if board.stackup.iter().any(|entry| {
@@ -4599,6 +4606,32 @@ mod tests {
         assert!(matches!(
             Router::new(&invalid),
             Err(message) if message == "net references an undeclared net class"
+        ));
+    }
+
+    #[test]
+    fn router_rejects_invalid_net_class_differential_dimensions() {
+        let mut invalid = board();
+        invalid.net_classes.insert(
+            "diff".into(),
+            NetClassRules {
+                track_width_nm: 250_000,
+                clearance_nm: 200_000,
+                via_diameter_nm: 600_000,
+                via_drill_nm: 300_000,
+                layers: None,
+                differential_width_nm: Some(0),
+                differential_gap_nm: Some(-1),
+                minimum_length_nm: None,
+                maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
+            },
+        );
+        assert!(matches!(
+            Router::new(&invalid),
+            Err(message) if message == "net class diff has invalid differential dimensions"
         ));
     }
 

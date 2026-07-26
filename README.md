@@ -426,6 +426,8 @@ and a bounded range must place the minimum at or below the maximum.
 Impedance targets and tolerances must be provided together as finite values;
 targets must be positive, while tolerances and maximum impedance steps must be
 non-negative.
+Optional differential widths must be positive and differential gaps must be
+non-negative; both normal DRC and Router construction enforce these dimensions.
 
 Set `maximum_impedance_step_ohms` on a net class to limit discontinuity where
 connected segments change layers through a via. This check is independent of
