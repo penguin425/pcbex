@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{Shell, generate};
-use pcbex_core::checking::check_board;
+use pcbex_core::checking::{check_board, check_manufacturability};
 use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{Board, Rules, render_svg, route_board};
 use pcbex_kicad::import as import_kicad;
@@ -62,6 +62,12 @@ enum Command {
     },
     Check {
         input: PathBuf,
+    },
+    /// Run configured manufacturing checks and optionally write a JSON report.
+    Dfm {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     Render {
         input: PathBuf,
@@ -229,6 +235,22 @@ fn main() -> Result<()> {
                 b.obstacles.len(),
                 b.routes.len()
             );
+        }
+        Command::Dfm { input, output } => {
+            let board = read(&input)?;
+            if board.manufacturing_rules.is_none() {
+                bail!("board does not define manufacturing_rules")
+            }
+            let report = check_manufacturability(&board);
+            let json = serde_json::to_string_pretty(&report)?;
+            if let Some(path) = output {
+                fs::write(path, &json)?;
+            } else {
+                println!("{json}");
+            }
+            if !report.is_clean() {
+                bail!("{} manufacturing violations", report.violations.len())
+            }
         }
         Command::Render { input, output } => fs::write(output, render_svg(&read(&input)?))?,
         Command::Place {

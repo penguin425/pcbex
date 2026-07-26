@@ -203,6 +203,171 @@ pub fn check_board(board: &Board) -> CheckReport {
     }
     check_differential_pairs(board, &routes, &mut report);
     report
+        .violations
+        .extend(check_manufacturability(board).violations);
+    report
+}
+
+pub fn check_manufacturability(board: &Board) -> CheckReport {
+    let mut report = CheckReport::default();
+    let Some(rules) = &board.manufacturing_rules else {
+        return report;
+    };
+    if rules.minimum_track_width_nm <= 0
+        || rules.minimum_clearance_nm < 0
+        || rules.minimum_drill_nm <= 0
+        || rules.minimum_annular_ring_nm < 0
+        || rules.minimum_copper_to_edge_nm < 0
+        || rules.board_thickness_nm <= 0
+        || rules.maximum_via_aspect_ratio == 0
+    {
+        report.push(
+            "dfm_rules",
+            "manufacturing rules contain invalid dimensions".into(),
+            vec![],
+        );
+        return report;
+    }
+    for route in &board.routes {
+        for segment in &route.segments {
+            if segment.width_nm < rules.minimum_track_width_nm {
+                report.push(
+                    "dfm_track_width",
+                    "track is narrower than the manufacturing minimum".into(),
+                    vec![route.net_id],
+                );
+            }
+            let edge_envelope = segment.width_nm + 2 * rules.minimum_copper_to_edge_nm;
+            if !board.point_inside_board(segment.start, edge_envelope)
+                || !board.point_inside_board(segment.end, edge_envelope)
+            {
+                report.push(
+                    "dfm_copper_to_edge",
+                    "track is too close to the routed board edge".into(),
+                    vec![route.net_id],
+                );
+            }
+        }
+        for via in &route.vias {
+            if via.drill_nm < rules.minimum_drill_nm {
+                report.push(
+                    "dfm_drill",
+                    "via drill is smaller than the manufacturing minimum".into(),
+                    vec![route.net_id],
+                );
+            }
+            if via.diameter_nm - via.drill_nm < 2 * rules.minimum_annular_ring_nm {
+                report.push(
+                    "dfm_annular_ring",
+                    "via annular ring is smaller than the manufacturing minimum".into(),
+                    vec![route.net_id],
+                );
+            }
+            if rules.board_thickness_nm > via.drill_nm * i64::from(rules.maximum_via_aspect_ratio) {
+                report.push(
+                    "dfm_aspect_ratio",
+                    "via exceeds the manufacturing aspect-ratio limit".into(),
+                    vec![route.net_id],
+                );
+            }
+            if !board.point_inside_board(
+                via.position,
+                via.diameter_nm + 2 * rules.minimum_copper_to_edge_nm,
+            ) {
+                report.push(
+                    "dfm_copper_to_edge",
+                    "via is too close to the routed board edge".into(),
+                    vec![route.net_id],
+                );
+            }
+        }
+    }
+    for (index, route) in board.routes.iter().enumerate() {
+        for other in &board.routes[index + 1..] {
+            check_manufacturing_clearance(route, other, rules.minimum_clearance_nm, &mut report);
+        }
+    }
+    report
+}
+
+fn check_manufacturing_clearance(
+    route: &Route,
+    other: &Route,
+    clearance_nm: i64,
+    report: &mut CheckReport,
+) {
+    for segment in &route.segments {
+        for candidate in &other.segments {
+            if segment.layer == candidate.layer
+                && segments_closer_than(
+                    segment.start,
+                    segment.end,
+                    candidate.start,
+                    candidate.end,
+                    segment.width_nm + candidate.width_nm + 2 * clearance_nm,
+                )
+            {
+                report.push(
+                    "dfm_clearance",
+                    "copper spacing is below the manufacturing minimum".into(),
+                    vec![route.net_id, other.net_id],
+                );
+                return;
+            }
+        }
+        for via in &other.vias {
+            if via.spans_layer(segment.layer)
+                && point_segment_closer_than(
+                    via.position,
+                    segment.start,
+                    segment.end,
+                    via.diameter_nm + segment.width_nm + 2 * clearance_nm,
+                )
+            {
+                report.push(
+                    "dfm_clearance",
+                    "copper spacing is below the manufacturing minimum".into(),
+                    vec![route.net_id, other.net_id],
+                );
+                return;
+            }
+        }
+    }
+    for via in &route.vias {
+        for segment in &other.segments {
+            if via.spans_layer(segment.layer)
+                && point_segment_closer_than(
+                    via.position,
+                    segment.start,
+                    segment.end,
+                    via.diameter_nm + segment.width_nm + 2 * clearance_nm,
+                )
+            {
+                report.push(
+                    "dfm_clearance",
+                    "copper spacing is below the manufacturing minimum".into(),
+                    vec![route.net_id, other.net_id],
+                );
+                return;
+            }
+        }
+        for candidate in &other.vias {
+            if via.shares_layer_with(candidate)
+                && points_closer_than(
+                    via.position,
+                    candidate.position,
+                    via.diameter_nm + candidate.diameter_nm + 2 * clearance_nm,
+                )
+            {
+                report.push(
+                    "dfm_clearance",
+                    "copper spacing is below the manufacturing minimum".into(),
+                    vec![route.net_id, other.net_id],
+                );
+                return;
+            }
+        }
+    }
 }
 
 fn check_differential_pairs(
@@ -703,6 +868,7 @@ mod tests {
             footprints: vec![],
             net_classes: HashMap::new(),
             differential_pairs: vec![],
+            manufacturing_rules: None,
             nets: vec![],
             routes: vec![],
         }
@@ -1161,5 +1327,62 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "differential_skew")
         );
+    }
+
+    #[test]
+    fn reports_manufacturing_width_drill_ring_aspect_and_edge_rules() {
+        let mut board = base();
+        board.manufacturing_rules = Some(crate::ManufacturingRules {
+            minimum_track_width_nm: 300_000,
+            minimum_clearance_nm: 250_000,
+            minimum_drill_nm: 350_000,
+            minimum_annular_ring_nm: 200_000,
+            minimum_copper_to_edge_nm: 500_000,
+            board_thickness_nm: 1_600_000,
+            maximum_via_aspect_ratio: 4,
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: Point {
+                    x_nm: 100_000,
+                    y_nm: 1_000_000,
+                },
+                end: Point {
+                    x_nm: 5_000_000,
+                    y_nm: 1_000_000,
+                },
+                layer: Layer::Front,
+                width_nm: 200_000,
+            }],
+            vias: vec![Via {
+                position: Point {
+                    x_nm: 5_000_000,
+                    y_nm: 1_000_000,
+                },
+                diameter_nm: 600_000,
+                drill_nm: 300_000,
+                kind: crate::ViaKind::Through,
+                start_layer: Layer::Front,
+                end_layer: Layer::Back,
+            }],
+        });
+
+        let report = check_manufacturability(&board);
+        for rule in [
+            "dfm_track_width",
+            "dfm_drill",
+            "dfm_annular_ring",
+            "dfm_aspect_ratio",
+            "dfm_copper_to_edge",
+        ] {
+            assert!(
+                report
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == rule),
+                "missing {rule}"
+            );
+        }
     }
 }

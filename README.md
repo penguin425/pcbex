@@ -194,6 +194,14 @@ circle, capsule, polygon, and keepout bounding envelope. Exact geometry remains
 the final predicate, while distant board cells are no longer scanned once per
 obstacle. The Criterion suite includes a 100 mm board with 200 round obstacles.
 
+## Manufacturing checks
+
+Boards may define `manufacturing_rules` for minimum track width, copper
+clearance, drill, annular ring, copper-to-edge distance, board thickness, and
+maximum via aspect ratio. These checks are included in the normal board checker.
+`pcbex dfm board.json [--output report.json]` emits a machine-readable report
+and exits unsuccessfully when manufacturing violations are present.
+
 ## Planning and repair agent
 
 The dependency-free Python agent converts bounded natural-language requirements

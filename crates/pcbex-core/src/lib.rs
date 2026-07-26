@@ -220,6 +220,22 @@ pub struct DifferentialPair {
     pub min_coupled_percent: u8,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ManufacturingRules {
+    pub minimum_track_width_nm: Nm,
+    pub minimum_clearance_nm: Nm,
+    pub minimum_drill_nm: Nm,
+    pub minimum_annular_ring_nm: Nm,
+    pub minimum_copper_to_edge_nm: Nm,
+    pub board_thickness_nm: Nm,
+    #[serde(default = "default_maximum_via_aspect_ratio")]
+    pub maximum_via_aspect_ratio: u16,
+}
+
+fn default_maximum_via_aspect_ratio() -> u16 {
+    10
+}
+
 fn differential_gap_tolerance() -> Nm {
     100_000
 }
@@ -277,6 +293,8 @@ pub struct Board {
     pub net_classes: HashMap<String, NetClassRules>,
     #[serde(default)]
     pub differential_pairs: Vec<DifferentialPair>,
+    #[serde(default)]
+    pub manufacturing_rules: Option<ManufacturingRules>,
     #[serde(default)]
     pub nets: Vec<Net>,
     #[serde(default)]
@@ -1862,6 +1880,7 @@ mod tests {
             footprints: vec![],
             net_classes: HashMap::new(),
             differential_pairs: vec![],
+            manufacturing_rules: None,
             nets: vec![Net {
                 id: 1,
                 name: "N1".into(),
