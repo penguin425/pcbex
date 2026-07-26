@@ -9,6 +9,11 @@ movement, bend/via/congestion/proximity costs, clearance-inflated obstacles,
 route simplification, Steiner-style multi-terminal branching, and SVG
 inspection output.
 
+The core crate keeps geometry, checking, placement, schema/migration, and
+routing-quality analysis in separate modules. Stable root-level re-exports
+preserve the public API while keeping format contracts and reporting logic out
+of the routing engine.
+
 The requirement-by-requirement evidence is recorded in
 [`docs/COMPLETION_AUDIT.md`](docs/COMPLETION_AUDIT.md).
 
