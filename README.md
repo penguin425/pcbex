@@ -13,6 +13,8 @@ The core crate keeps geometry, checking, placement, schema/migration, and
 routing-quality analysis in separate modules. Stable root-level re-exports
 preserve the public API while keeping format contracts and reporting logic out
 of the routing engine.
+Normal DRC requires positive board width and height even when invoked directly,
+matching the router's geometry precondition.
 
 The requirement-by-requirement evidence is recorded in
 [`docs/COMPLETION_AUDIT.md`](docs/COMPLETION_AUDIT.md).
