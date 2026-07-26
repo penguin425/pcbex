@@ -287,6 +287,11 @@ Reports include per-net length, segments, arcs, vias, bends, used layers, board
 totals, unrouted count, and differential-pair skew/coupling. Baseline gates
 reject increases in total length, vias, bends, or unrouted nets.
 
+Length groups may also set `tuning_amplitude_nm`, `tuning_pitch_nm`, and
+`max_tuning_sections`. The tuner distributes the required delay across multiple
+legal straight sections, checking the whole board after every section, while
+the existing defaults retain single-section behavior.
+
 ## BGA escape routing
 
 `escape_groups` assigns dense package nets a fanout distance and target copper

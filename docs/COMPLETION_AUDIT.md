@@ -53,6 +53,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Return-path control | Per-signal/reference-net transition rules check maximum stitching-via distance and optional routing adds fully checked reference vias connected to existing copper | Two-layer signal transition regression detects the missing return path, inserts one legal GND stitch, and finishes DRC-clean |
 | Automatic rounded routing | Orthogonal corners are trimmed into tangent quarter-circle native arcs at the routing-grid radius, with whole-board acceptance checks and reporting | Right-angle regression verifies valid arc geometry, preserved connectivity, and a clean full-board check |
 | Stackup impedance constraints | Per-layer dielectric height/permittivity and per-net-class target/tolerance drive IPC-2141 single-ended estimates during normal DRC | Controlled-impedance regression accepts the calculated target and reports a deliberately shifted 50 Ω target |
+| Advanced length tuning | Length groups constrain meander amplitude, pitch, and up to 16 distributed tuning sections; each incremental section is whole-board checked | Three-section regression adds exactly 3 mm across separate legal spans and bus-skew regression remains clean |
 | KiCad placement I/O | Footprints, pad-net connections, locked state, origin-aware position/rotation write-back, and `place-kicad` CLI | Locked/rotated/non-zero-origin round-trip regression and CLI integration test |
 | Multilayer routing | `In1.Cu`–`In30.Cu` model/serde, KiCad layer-table and item I/O, all-layer through vias, and per-net layer constraints | Forced inner-layer core regression, four-layer importer test, and real-KiCad four-layer DRC/idempotence fixture |
 | Differential-pair rules and checking | Explicit pair model, KiCad net-class inference, differential width, skew/coupling/layer-via symmetry checks | Coupled/skew core regression and KiCad `_P`/`_N` inference test |
@@ -94,7 +95,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.36.0 exposes 80 Rust tests and 11 Python tests. The release workflow
+Version 1.37.0 exposes 81 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

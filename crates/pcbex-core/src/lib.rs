@@ -248,6 +248,16 @@ pub struct LengthGroup {
     pub name: String,
     pub net_ids: Vec<u32>,
     pub max_skew_nm: Nm,
+    #[serde(default)]
+    pub tuning_amplitude_nm: Option<Nm>,
+    #[serde(default)]
+    pub tuning_pitch_nm: Option<Nm>,
+    #[serde(default = "default_tuning_sections")]
+    pub max_tuning_sections: u8,
+}
+
+fn default_tuning_sections() -> u8 {
+    4
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1019,6 +1029,9 @@ impl<'a> Router<'a> {
             if group.name.is_empty()
                 || !length_group_names.insert(group.name.as_str())
                 || group.max_skew_nm < 0
+                || group.tuning_amplitude_nm.is_some_and(|value| value <= 0)
+                || group.tuning_pitch_nm.is_some_and(|value| value <= 0)
+                || !(1..=16).contains(&group.max_tuning_sections)
                 || members.len() < 2
                 || members.len() != group.net_ids.len()
                 || !members.iter().all(|net_id| net_ids.contains(net_id))
@@ -3362,11 +3375,16 @@ fn translate_point(point: Point, offset: Point) -> Point {
 }
 
 pub fn tune_route_lengths(board: &mut Board) -> Result<(), String> {
+    let defaults = TuningProfile {
+        amplitude_nm: None,
+        pitch_nm: None,
+        max_sections: 1,
+    };
     for route_index in 0..board.routes.len() {
         let net_id = board.routes[route_index].net_id;
         let (minimum, maximum) = board.length_limits_for_net(net_id);
         let Some(minimum) = minimum else { continue };
-        tune_route_to_minimum(board, route_index, minimum, maximum)?;
+        tune_route_to_minimum(board, route_index, minimum, maximum, defaults)?;
     }
     for group in board.length_groups.clone() {
         let target = board
@@ -3387,6 +3405,11 @@ pub fn tune_route_lengths(board: &mut Board) -> Result<(), String> {
                     route_index,
                     target - group.max_skew_nm,
                     board.length_limits_for_net(net_id).1,
+                    TuningProfile {
+                        amplitude_nm: group.tuning_amplitude_nm,
+                        pitch_nm: group.tuning_pitch_nm,
+                        max_sections: group.max_tuning_sections,
+                    },
                 )?;
             }
         }
@@ -3394,11 +3417,19 @@ pub fn tune_route_lengths(board: &mut Board) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct TuningProfile {
+    amplitude_nm: Option<Nm>,
+    pitch_nm: Option<Nm>,
+    max_sections: u8,
+}
+
 fn tune_route_to_minimum(
     board: &mut Board,
     route_index: usize,
     minimum: Nm,
     maximum: Option<Nm>,
+    profile: TuningProfile,
 ) -> Result<(), String> {
     let net_id = board.routes[route_index].net_id;
     let current = route_length_nm(&board.routes[route_index]);
@@ -3406,86 +3437,109 @@ fn tune_route_to_minimum(
         return Ok(());
     }
     let grid = board.rules_for_net(net_id).grid_nm;
-    let amplitude = ((minimum - current + 2 * grid - 1) / (2 * grid)) * grid;
-    let original = board.routes[route_index].clone();
-    let mut tuned = None;
-    for segment_index in (0..original.segments.len()).rev() {
-        let segment = &original.segments[segment_index];
-        let dx = segment.end.x_nm - segment.start.x_nm;
-        let dy = segment.end.y_nm - segment.start.y_nm;
-        if dx != 0 && dy != 0 {
-            continue;
+    let pitch = profile.pitch_nm.unwrap_or(2 * grid).max(grid);
+    for section in 0..profile.max_sections {
+        let current = route_length_nm(&board.routes[route_index]);
+        if current >= minimum {
+            break;
         }
-        let span = dx.abs().max(dy.abs());
-        if span < 4 * grid {
-            continue;
-        }
-        for direction in [1, -1] {
-            let mut candidate = original.clone();
-            let one = Point {
-                x_nm: segment.start.x_nm + dx / 3,
-                y_nm: segment.start.y_nm + dy / 3,
-            };
-            let two = Point {
-                x_nm: segment.start.x_nm + 2 * dx / 3,
-                y_nm: segment.start.y_nm + 2 * dy / 3,
-            };
-            let offset = if dx == 0 {
-                Point {
-                    x_nm: direction * amplitude,
-                    y_nm: 0,
+        let remaining_sections = Nm::from(profile.max_sections - section);
+        let distributed =
+            (minimum - current + 2 * remaining_sections - 1) / (2 * remaining_sections);
+        let amplitude = profile
+            .amplitude_nm
+            .unwrap_or(distributed)
+            .min((minimum - current + 1) / 2)
+            .max(grid);
+        let amplitude = ((amplitude + grid - 1) / grid) * grid;
+        let original = board.routes[route_index].clone();
+        let mut tuned = None;
+        for segment_index in (0..original.segments.len()).rev() {
+            let segment = &original.segments[segment_index];
+            let dx = segment.end.x_nm - segment.start.x_nm;
+            let dy = segment.end.y_nm - segment.start.y_nm;
+            if dx != 0 && dy != 0 {
+                continue;
+            }
+            let span = dx.abs().max(dy.abs());
+            if span < 2 * pitch {
+                continue;
+            }
+            for direction in [1, -1] {
+                let mut candidate = original.clone();
+                let one = Point {
+                    x_nm: segment.start.x_nm + dx / 2 - dx.signum() * pitch / 2,
+                    y_nm: segment.start.y_nm + dy / 2 - dy.signum() * pitch / 2,
+                };
+                let two = Point {
+                    x_nm: segment.start.x_nm + dx / 2 + dx.signum() * pitch / 2,
+                    y_nm: segment.start.y_nm + dy / 2 + dy.signum() * pitch / 2,
+                };
+                let offset = if dx == 0 {
+                    Point {
+                        x_nm: direction * amplitude,
+                        y_nm: 0,
+                    }
+                } else {
+                    Point {
+                        x_nm: 0,
+                        y_nm: direction * amplitude,
+                    }
+                };
+                let points = [
+                    segment.start,
+                    one,
+                    Point {
+                        x_nm: one.x_nm + offset.x_nm,
+                        y_nm: one.y_nm + offset.y_nm,
+                    },
+                    Point {
+                        x_nm: two.x_nm + offset.x_nm,
+                        y_nm: two.y_nm + offset.y_nm,
+                    },
+                    two,
+                    segment.end,
+                ];
+                let replacement = points
+                    .windows(2)
+                    .map(|points| Segment {
+                        start: points[0],
+                        end: points[1],
+                        layer: segment.layer,
+                        width_nm: segment.width_nm,
+                    })
+                    .collect::<Vec<_>>();
+                candidate
+                    .segments
+                    .splice(segment_index..=segment_index, replacement);
+                board.routes[route_index] = candidate.clone();
+                let check = crate::checking::check_board(board);
+                if check.violations.iter().all(|violation| {
+                    violation.rule == "trace_length" || violation.rule == "length_group_skew"
+                }) && maximum.is_none_or(|limit| route_length_nm(&candidate) <= limit)
+                {
+                    tuned = Some(candidate);
+                    break;
                 }
-            } else {
-                Point {
-                    x_nm: 0,
-                    y_nm: direction * amplitude,
-                }
-            };
-            let points = [
-                segment.start,
-                one,
-                Point {
-                    x_nm: one.x_nm + offset.x_nm,
-                    y_nm: one.y_nm + offset.y_nm,
-                },
-                Point {
-                    x_nm: two.x_nm + offset.x_nm,
-                    y_nm: two.y_nm + offset.y_nm,
-                },
-                two,
-                segment.end,
-            ];
-            let replacement = points
-                .windows(2)
-                .map(|points| Segment {
-                    start: points[0],
-                    end: points[1],
-                    layer: segment.layer,
-                    width_nm: segment.width_nm,
-                })
-                .collect::<Vec<_>>();
-            candidate
-                .segments
-                .splice(segment_index..=segment_index, replacement);
-            board.routes[route_index] = candidate.clone();
-            let check = crate::checking::check_board(board);
-            if check.violations.iter().all(|violation| {
-                (violation.rule == "trace_length" && !violation.net_ids.contains(&net_id))
-                    || violation.rule == "length_group_skew"
-            }) && maximum.is_none_or(|limit| route_length_nm(&candidate) <= limit)
-            {
-                tuned = Some(candidate);
+            }
+            if tuned.is_some() {
+                board.routes[route_index] = tuned.clone().unwrap();
                 break;
             }
         }
-        if tuned.is_some() {
+        if tuned.is_none() {
+            board.routes[route_index] = original;
             break;
         }
     }
-    board.routes[route_index] = tuned.ok_or_else(|| {
-        format!("unable to satisfy minimum length for net {net_id} with a legal meander")
-    })?;
-    Ok(())
+    if route_length_nm(&board.routes[route_index]) >= minimum {
+        Ok(())
+    } else {
+        Err(format!(
+            "unable to satisfy minimum length for net {net_id} with {} legal meander sections",
+            profile.max_sections
+        ))
+    }
 }
 
 pub fn route_length_nm(route: &Route) -> Nm {
@@ -4806,6 +4860,50 @@ mod tests {
     }
 
     #[test]
+    fn distributes_length_tuning_across_multiple_sections() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].terminals[0].position = Point {
+            x_nm: 1_000_000,
+            y_nm: 5_000_000,
+        };
+        board.nets[0].terminals[1].position = Point {
+            x_nm: 9_000_000,
+            y_nm: 5_000_000,
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: board.nets[0].terminals[0].position,
+                end: board.nets[0].terminals[1].position,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        tune_route_to_minimum(
+            &mut board,
+            0,
+            11_000_000,
+            Some(12_000_000),
+            TuningProfile {
+                amplitude_nm: Some(500_000),
+                pitch_nm: Some(1_000_000),
+                max_sections: 3,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(route_length_nm(&board.routes[0]), 11_000_000);
+        assert_eq!(board.routes[0].segments.len(), 13);
+        assert!(checking::check_board(&board).is_clean());
+    }
+
+    #[test]
     fn tunes_parallel_bus_members_to_the_group_skew() {
         let mut board = board();
         board.obstacles.clear();
@@ -4859,6 +4957,9 @@ mod tests {
             name: "DATA".into(),
             net_ids: vec![1, 2],
             max_skew_nm: 500_000,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
         });
 
         let (routed, report) = route_board(&board).unwrap();
