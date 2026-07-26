@@ -4551,6 +4551,30 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_inert_keepout_definitions() {
+        let mut invalid = board();
+        invalid.keepouts.push(Keepout {
+            polygon: vec![
+                Point { x_nm: 1, y_nm: 1 },
+                Point { x_nm: 3, y_nm: 1 },
+                Point { x_nm: 2, y_nm: 3 },
+            ],
+            layers: vec![Layer::Front],
+            net_id: None,
+            tracks_not_allowed: false,
+            vias_not_allowed: false,
+            zones_not_allowed: false,
+            footprints_not_allowed: false,
+            minimum_track_width_nm: None,
+            minimum_clearance_nm: None,
+        });
+        assert!(matches!(
+            Router::new(&invalid),
+            Err(message) if message == "keepout must be a simple polygon"
+        ));
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(

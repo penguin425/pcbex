@@ -217,6 +217,16 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
         }
     }
+    for keepout in &board.keepouts {
+        if !keepout_definition_is_valid(keepout) {
+            report.push(
+                "keepout_definition",
+                "keepout must have a simple non-degenerate polygon, at least one prohibition or local rule, positive minimum width, and non-negative minimum clearance"
+                    .into(),
+                keepout.net_id.into_iter().collect(),
+            );
+        }
+    }
     for layers in board
         .obstacles
         .iter()
@@ -1304,6 +1314,18 @@ fn layer_membership_is_valid(board: &Board, layers: &[crate::Layer]) -> bool {
             .iter()
             .all(|layer| board.copper_layers.contains(layer))
         && layers.iter().copied().collect::<HashSet<_>>().len() == layers.len()
+}
+
+fn keepout_definition_is_valid(keepout: &crate::Keepout) -> bool {
+    custom_pad_polygon_is_valid(&keepout.polygon)
+        && (keepout.tracks_not_allowed
+            || keepout.vias_not_allowed
+            || keepout.zones_not_allowed
+            || keepout.footprints_not_allowed
+            || keepout.minimum_track_width_nm.is_some()
+            || keepout.minimum_clearance_nm.is_some())
+        && keepout.minimum_track_width_nm.is_none_or(|value| value > 0)
+        && keepout.minimum_clearance_nm.is_none_or(|value| value >= 0)
 }
 
 fn via_geometry_is_valid(via: &crate::Via) -> bool {
@@ -3982,6 +4004,44 @@ mod tests {
                 .violations
                 .iter()
                 .filter(|violation| violation.rule == "polygon_obstacle")
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_keepout_definitions() {
+        let mut board = base();
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let valid_polygon = vec![point(1, 1), point(3, 1), point(2, 3)];
+        let keepout = |polygon,
+                       tracks_not_allowed,
+                       minimum_track_width_nm,
+                       minimum_clearance_nm| crate::Keepout {
+            polygon,
+            layers: vec![Layer::Front],
+            net_id: None,
+            tracks_not_allowed,
+            vias_not_allowed: false,
+            zones_not_allowed: false,
+            footprints_not_allowed: false,
+            minimum_track_width_nm,
+            minimum_clearance_nm,
+        };
+        board.keepouts = vec![
+            keepout(valid_polygon[..2].to_vec(), true, None, None),
+            keepout(valid_polygon.clone(), false, None, None),
+            keepout(valid_polygon.clone(), false, Some(0), None),
+            keepout(valid_polygon.clone(), false, None, Some(-1)),
+            keepout(valid_polygon, false, Some(1), Some(0)),
+        ];
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "keepout_definition")
                 .count(),
             4
         );

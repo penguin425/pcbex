@@ -31,6 +31,8 @@ Round and capsule obstacles must likewise have strictly positive diameters in
 both direct DRC and Router construction.
 Polygon obstacles must be simple, non-degenerate polygons before routing or
 clearance checks consume their edges.
+Keepouts additionally require at least one prohibition or local rule, positive
+minimum track widths, and non-negative minimum clearances.
 When an explicit board outline is supplied, it must be a simple,
 non-degenerate polygon; an empty outline retains the rectangular fallback.
 Every board cutout must likewise be a simple, non-degenerate polygon before
