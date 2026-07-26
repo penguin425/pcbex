@@ -76,6 +76,10 @@ For interactive repair, `shove_route` applies a grid-aligned offset only to a
 route's interior vertices, vias, teardrops, and zones while keeping terminal
 anchors fixed. The edit is atomic: boundary, angle, clearance, connectivity,
 and every other board check must pass or the original route is restored.
+During autorouting, a failed net now tries one- and two-grid local shoves of
+only the generated routes identified as blockers before escalating to rip-up.
+Each combined shove-and-route candidate is accepted only after full-board
+checking, and `RouteReport.shove_events` records successful recoveries.
 
 ## JSON model
 
