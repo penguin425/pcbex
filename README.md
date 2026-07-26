@@ -452,6 +452,8 @@ The net table itself requires unique non-zero identifiers and unique non-empty
 names, preventing ambiguous routing, rule lookup, and pad ownership.
 Every route must likewise reference a declared net; normal DRC reports unknown
 route ownership before applying connectivity, width, or clearance rules.
+Normal DRC also permits at most one route record per net, preventing map
+construction from silently hiding copper in duplicate records.
 
 ## Planning and repair agent
 
