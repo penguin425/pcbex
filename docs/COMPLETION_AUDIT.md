@@ -43,7 +43,8 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Exact rotated rectangular pads | Four-corner polygon rasterization, checking, SVG, and KiCad import | 30-degree coordinate regression and 35-degree real-KiCad E2E fixture |
 | Curved board outlines | Three-point `gr_arc` sampling with a 0.01 mm maximum chord deviation | Semicircle import regression and curved-board real-KiCad E2E fixture |
 | Board cutouts and multiple contours | Largest Edge.Cuts contour is the outer outline; enclosed contours are clearance-aware holes | Core routing/checking regression, importer classification test, and holed curved-board E2E fixture |
-| Property and fuzz testing | Geometry symmetry/translation properties plus KiCad parser and board-model libFuzzer targets | Property tests run on every PR; scheduled/manual fuzz workflow runs both targets |
+| Property and fuzz testing | Geometry symmetry/translation properties plus KiCad parser, migrated board-model, length-tuning, and BGA-escape libFuzzer targets | Property tests run on every PR; scheduled/manual fuzz workflow runs all four targets |
+| Schema compatibility gate | Draft 2020-12 schema has closed definitions for routing rules, net classes, length/escape/return-path constraints, and stackup; v1 migration is compared semantically with native v2 parsing | Migration regression rejects future versions/unknown fields and verifies every advanced constraint definition is closed |
 | Routing performance suite | Criterion scenarios for obstacle, 5/10-net, and board-cutout routing | Benchmark targets compile on every PR and retain local Criterion baselines |
 | Routing quality gates | Stable per-net, board-total, and differential-pair metrics with JSON/SARIF output, thresholds, and baseline regression comparison | Geometry-count regression plus CLI JSON/baseline smoke test |
 | Performance regression gate | Deterministic search-state budgets for 10 parallel nets and a 100 mm board with 200 obstacles | Dedicated `performance_budget` target runs on every PR |
@@ -95,7 +96,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.37.0 exposes 81 Rust tests and 11 Python tests. The release workflow
+Version 1.38.0 exposes 81 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

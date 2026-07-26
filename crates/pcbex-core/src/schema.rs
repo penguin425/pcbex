@@ -58,18 +58,23 @@ pub fn board_json_schema() -> serde_json::Value {
             "outline": {"type": "array", "items": {"$ref": "#/$defs/point"}},
             "cutouts": {"type": "array", "items": {"type": "array", "items": {"$ref": "#/$defs/point"}}},
             "copper_layers": {"type": "array", "items": {"type": "string"}},
-            "rules": {"type": "object"},
+            "rules": {"$ref": "#/$defs/rules"},
             "obstacles": {"type": "array"},
             "round_obstacles": {"type": "array"},
             "capsule_obstacles": {"type": "array"},
             "polygon_obstacles": {"type": "array"},
             "keepouts": {"type": "array"},
             "footprints": {"type": "array"},
-            "net_classes": {"type": "object"},
+            "net_classes": {
+                "type": "object",
+                "additionalProperties": {"$ref": "#/$defs/net_class"}
+            },
             "differential_pairs": {"type": "array"},
-            "length_groups": {"type": "array"},
-            "escape_groups": {"type": "array"},
+            "length_groups": {"type": "array", "items": {"$ref": "#/$defs/length_group"}},
+            "escape_groups": {"type": "array", "items": {"$ref": "#/$defs/escape_group"}},
             "manufacturing_rules": {"type": ["object", "null"]},
+            "return_path_rules": {"type": "array", "items": {"$ref": "#/$defs/return_path_rule"}},
+            "stackup": {"type": "array", "items": {"$ref": "#/$defs/stackup_layer"}},
             "via_strategy": {"enum": ["through_only", "auto"]},
             "nets": {"type": "array"},
             "routes": {"type": "array"}
@@ -82,6 +87,87 @@ pub fn board_json_schema() -> serde_json::Value {
                 "properties": {
                     "x_nm": {"type": "integer"},
                     "y_nm": {"type": "integer"}
+                }
+            },
+            "rules": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["grid_nm", "track_width_nm", "clearance_nm", "via_diameter_nm", "via_drill_nm"],
+                "properties": {
+                    "grid_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "track_width_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "clearance_nm": {"type": "integer", "minimum": 0},
+                    "via_diameter_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "via_drill_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "bend_cost": {"type": "integer", "minimum": 0},
+                    "via_cost": {"type": "integer", "minimum": 0}
+                }
+            },
+            "net_class": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["track_width_nm", "clearance_nm", "via_diameter_nm", "via_drill_nm"],
+                "properties": {
+                    "track_width_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "clearance_nm": {"type": "integer", "minimum": 0},
+                    "via_diameter_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "via_drill_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "layers": {"type": ["array", "null"], "items": {"type": "string"}},
+                    "differential_width_nm": {"type": ["integer", "null"]},
+                    "differential_gap_nm": {"type": ["integer", "null"]},
+                    "minimum_length_nm": {"type": ["integer", "null"]},
+                    "maximum_length_nm": {"type": ["integer", "null"]},
+                    "target_impedance_ohms": {"type": ["number", "null"], "exclusiveMinimum": 0},
+                    "impedance_tolerance_ohms": {"type": ["number", "null"], "minimum": 0}
+                }
+            },
+            "length_group": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "net_ids", "max_skew_nm"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "net_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+                    "max_skew_nm": {"type": "integer", "minimum": 0},
+                    "tuning_amplitude_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
+                    "tuning_pitch_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
+                    "max_tuning_sections": {"type": "integer", "minimum": 1, "maximum": 16}
+                }
+            },
+            "escape_group": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "net_ids", "fanout_distance_nm", "target_layer"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "net_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+                    "fanout_distance_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "target_layer": {"type": "string"},
+                    "direction": {"enum": ["radial", "rows", "columns", "four_way"]},
+                    "via_grid_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
+                    "max_rings": {"type": "integer", "minimum": 1, "maximum": 8}
+                }
+            },
+            "return_path_rule": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "signal_net_ids", "reference_net_id", "max_via_distance_nm"],
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "signal_net_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 0}},
+                    "reference_net_id": {"type": "integer", "minimum": 0},
+                    "max_via_distance_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "auto_stitch": {"type": "boolean"}
+                }
+            },
+            "stackup_layer": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["layer", "dielectric_height_nm", "dielectric_constant"],
+                "properties": {
+                    "layer": {"type": "string"},
+                    "dielectric_height_nm": {"type": "integer", "exclusiveMinimum": 0},
+                    "dielectric_constant": {"type": "number", "exclusiveMinimum": 1}
                 }
             }
         }
