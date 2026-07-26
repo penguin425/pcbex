@@ -257,6 +257,8 @@ layers the router may use.
 
 JSON boards may declare `differential_pairs` with positive/negative net IDs,
 nominal gap, gap tolerance, maximum skew, and minimum coupled percentage.
+Normal DRC rejects negative geometry constraints and coupled percentages above
+100 before evaluating routed pair geometry.
 The checker reports skew, layer/via asymmetry, and insufficient coupling.
 KiCad net classes containing `diff_pair_width` and `diff_pair_gap` automatically
 pair `_P`/`_N` or `+`/`-` nets and apply the differential trace width.
