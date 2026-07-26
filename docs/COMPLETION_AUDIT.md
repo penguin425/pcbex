@@ -49,6 +49,7 @@ out of scope.
 | Filled copper-zone interoperability | KiCad filled polygons become exact layer/net-owned copper and are preserved during route write-back | Filled GND-zone import regression |
 | Via types and layer ranges | Through, blind/buried, and microvia model; KiCad round-trip; range-aware connectivity/clearance | Blind and adjacent-layer microvia regression |
 | Extended pad shapes | Roundrect, trapezoid, and custom polygon model/import with rotated exact polygon obstacles | Three-shape KiCad geometry regression |
+| Practical placement constraints | Front/back side, allowed rotations, rectangular regions, and KiCad courtyard dimensions | Region optimization and back-side courtyard regressions |
 | KiCad end-to-end CI | KiCad 10 routing, DRC, second-pass idempotence, and retained diagnostics for three fixtures | Rectangular, non-rectangular, and polygon-keepout boards run on every PR |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
 

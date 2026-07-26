@@ -180,6 +180,13 @@ the board model. Rounded corners, trapezoid deltas, rotation, and custom
 `gr_poly` primitives are converted to polygon obstacles instead of rectangular
 bounding-box approximations.
 
+## Practical placement constraints
+
+Placement components carry front/back side and optional allowed 90-degree
+rotations. `region` constraints keep a complete component body inside a
+specified rectangle. KiCad placement derives component dimensions from
+`F.CrtYd`/`B.CrtYd` geometry when available instead of pad extents alone.
+
 ## Planning and repair agent
 
 The dependency-free Python agent converts bounded natural-language requirements

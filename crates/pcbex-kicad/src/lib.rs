@@ -3,7 +3,7 @@ use pcbex_core::{
     Obstacle, Pad, PadShape, Point, PolygonObstacle, RoundObstacle, Route, Rules, Segment,
     Terminal, Via, ViaKind,
     checking::check_board,
-    placement::{Component, Connection, PinRef, PlacementProblem},
+    placement::{BoardSide, Component, Connection, PinRef, PlacementProblem},
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
@@ -305,6 +305,16 @@ impl ImportedBoard {
                     .then(|| footprint_reference(values))
             })
             .collect();
+        let courtyards: HashMap<String, (i64, i64)> = top
+            .iter()
+            .filter_map(|item| {
+                let values = item.as_list()?;
+                if atom(values.first()) != Some("footprint") {
+                    return None;
+                }
+                courtyard_size(values).map(|size| (footprint_reference(values), size))
+            })
+            .collect();
         let mut components = Vec::with_capacity(self.board.footprints.len());
         let mut net_pins = HashMap::<u32, Vec<PinRef>>::new();
         for footprint in &self.board.footprints {
@@ -331,13 +341,27 @@ impl ImportedBoard {
                     });
                 }
             }
+            let (width_nm, height_nm) = courtyards.get(&footprint.reference).copied().unwrap_or((
+                (max_x - min_x).max(1_000_000),
+                (max_y - min_y).max(1_000_000),
+            ));
             components.push(Component {
                 reference: footprint.reference.clone(),
-                width_nm: (max_x - min_x).max(1_000_000),
-                height_nm: (max_y - min_y).max(1_000_000),
+                width_nm,
+                height_nm,
                 position: Some(footprint.position),
                 rotation_deg: footprint.rotation_deg.round().rem_euclid(360.0) as u16,
                 fixed: fixed.contains(&footprint.reference),
+                side: if footprint
+                    .pads
+                    .iter()
+                    .any(|pad| pad.layers.contains(&Layer::Back))
+                {
+                    BoardSide::Back
+                } else {
+                    BoardSide::Front
+                },
+                allowed_rotations: vec![0, 90, 180, 270],
                 anchors: HashMap::new(),
             });
         }
@@ -463,6 +487,41 @@ impl ImportedBoard {
             y_nm: point.y_nm + self.origin.y_nm,
         }
     }
+}
+
+fn courtyard_size(footprint: &[Sexp]) -> Option<(i64, i64)> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    for item in footprint {
+        let Some(values) = item.as_list() else {
+            continue;
+        };
+        if !matches!(atom(values.first()), Some("fp_rect") | Some("fp_line"))
+            || !matches!(
+                child_atom(values, "layer"),
+                Some("F.CrtYd") | Some("B.CrtYd")
+            )
+        {
+            continue;
+        }
+        for key in ["start", "end"] {
+            let Some(point) = child_values(values, key) else {
+                continue;
+            };
+            let (Some(x), Some(y)) = (number(point.get(1)), number(point.get(2))) else {
+                continue;
+            };
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    min_x
+        .is_finite()
+        .then(|| (nm(max_x - min_x).max(1), nm(max_y - min_y).max(1)))
 }
 
 fn footprint_is_locked(values: &[Sexp]) -> bool {
@@ -1862,5 +1921,25 @@ mod tests {
         assert_eq!(pads[2].custom_polygon.len(), 3);
         assert_eq!(imported.board.polygon_obstacles.len(), 3);
         assert_eq!(imported.board.polygon_obstacles[0].polygon.len(), 16);
+    }
+
+    #[test]
+    fn placement_uses_courtyard_and_board_side() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 30 30) (layer "Edge.Cuts"))
+          (footprint "U1" (layer "B.Cu") (at 10 10)
+            (property "Reference" "U1")
+            (fp_rect (start -3 -2) (end 3 2)
+              (stroke (width 0.05) (type default)) (fill none) (layer "B.CrtYd"))
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "B.Cu")))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+        let problem = imported.placement_problem(500_000).unwrap();
+        let component = &problem.components[0];
+        assert_eq!(component.width_nm, 6_000_000);
+        assert_eq!(component.height_nm, 4_000_000);
+        assert_eq!(component.side, BoardSide::Back);
+        assert_eq!(component.allowed_rotations, vec![0, 90, 180, 270]);
     }
 }
