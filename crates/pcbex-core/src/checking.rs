@@ -179,6 +179,16 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    for obstacle in &board.obstacles {
+        if obstacle.min.x_nm >= obstacle.max.x_nm || obstacle.min.y_nm >= obstacle.max.y_nm {
+            report.push(
+                "obstacle_geometry",
+                "rectangular obstacle minimum coordinates must be strictly below its maximum coordinates"
+                    .into(),
+                obstacle.net_id.into_iter().collect(),
+            );
+        }
+    }
     for layers in board
         .obstacles
         .iter()
@@ -3846,6 +3856,32 @@ mod tests {
                 .filter(|violation| violation.rule == "obstacle_layers")
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_rectangular_obstacle_geometry() {
+        let mut board = base();
+        let obstacle = |min: Point, max: Point| crate::Obstacle {
+            min,
+            max,
+            layers: vec![Layer::Front],
+            net_id: None,
+        };
+        board.obstacles = vec![
+            obstacle(Point { x_nm: 2, y_nm: 1 }, Point { x_nm: 1, y_nm: 2 }),
+            obstacle(Point { x_nm: 1, y_nm: 2 }, Point { x_nm: 2, y_nm: 2 }),
+            obstacle(Point { x_nm: 1, y_nm: 1 }, Point { x_nm: 2, y_nm: 2 }),
+        ];
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "obstacle_geometry")
+                .count(),
+            2
         );
     }
 
