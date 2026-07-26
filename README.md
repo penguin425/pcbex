@@ -189,6 +189,9 @@ Placement components carry front/back side and optional allowed 90-degree
 rotations. `region` constraints keep a complete component body inside a
 specified rectangle. KiCad placement derives component dimensions from
 `F.CrtYd`/`B.CrtYd` geometry when available instead of pad extents alone.
+Polygon courtyards are transformed with component rotation and side mirroring,
+so non-overlapping concave space is not rejected by bounding boxes. Side flips
+swap all footprint front/back layers atomically during KiCad write-back.
 
 ## Routing scalability
 

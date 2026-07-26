@@ -1,4 +1,4 @@
-use crate::{Nm, Point};
+use crate::{Nm, Point, geometry};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
@@ -29,6 +29,11 @@ pub struct Component {
     pub side: BoardSide,
     #[serde(default)]
     pub allowed_rotations: Vec<u16>,
+    #[serde(default)]
+    pub allow_side_flip: bool,
+    /// Local, unrotated courtyard polygon. Empty uses width/height.
+    #[serde(default)]
+    pub courtyard: Vec<Point>,
     /// Named pin/anchor offsets from the component origin.
     #[serde(default)]
     pub anchors: HashMap<String, Point>,
@@ -376,7 +381,7 @@ fn mutate(
     rng: &mut Rng,
 ) {
     let i = movable[rng.index(movable.len())];
-    match rng.next() % 4 {
+    match rng.next() % 5 {
         0 => {
             let allowed = &components[i].allowed_rotations;
             components[i].rotation_deg = if allowed.is_empty() {
@@ -397,6 +402,12 @@ fn mutate(
             let a = components[i].position;
             components[i].position = components[j].position;
             components[j].position = a;
+        }
+        2 if components[i].allow_side_flip => {
+            components[i].side = match components[i].side {
+                BoardSide::Front => BoardSide::Back,
+                BoardSide::Back => BoardSide::Front,
+            };
         }
         _ => {
             let radius = 1 + (rng.next() % 8) as i64;
@@ -432,9 +443,25 @@ fn score(
     }
     for (i, a) in components.iter().enumerate() {
         let ar = bounds(a);
-        out.boundary += outside(ar, problem.width_nm, problem.height_nm) / (unit * unit);
+        let polygon = courtyard_polygon(a);
+        out.boundary += polygon
+            .iter()
+            .map(|point| {
+                (-point.x_nm).max(0)
+                    + (-point.y_nm).max(0)
+                    + (point.x_nm - problem.width_nm).max(0)
+                    + (point.y_nm - problem.height_nm).max(0)
+            })
+            .sum::<i64>() as f64
+            / unit;
         for b in &components[i + 1..] {
-            out.overlap += intersection(ar, bounds(b)) / (unit * unit);
+            let bbox_overlap = intersection(ar, bounds(b));
+            if a.side == b.side
+                && bbox_overlap > 0.0
+                && polygons_intersect(&polygon, &courtyard_polygon(b))
+            {
+                out.overlap += bbox_overlap / (unit * unit);
+            }
         }
     }
     out.congestion = congestion(problem, components, index);
@@ -545,6 +572,15 @@ struct Rect {
     max_y: Nm,
 }
 fn bounds(c: &Component) -> Rect {
+    if !c.courtyard.is_empty() {
+        let polygon = courtyard_polygon(c);
+        return Rect {
+            min_x: polygon.iter().map(|point| point.x_nm).min().unwrap_or(0),
+            min_y: polygon.iter().map(|point| point.y_nm).min().unwrap_or(0),
+            max_x: polygon.iter().map(|point| point.x_nm).max().unwrap_or(0),
+            max_y: polygon.iter().map(|point| point.y_nm).max().unwrap_or(0),
+        };
+    }
     let p = c.position.unwrap_or_default();
     let (w, h) = if c.rotation_deg.is_multiple_of(180) {
         (c.width_nm, c.height_nm)
@@ -558,20 +594,97 @@ fn bounds(c: &Component) -> Rect {
         max_y: p.y_nm + h / 2,
     }
 }
+
+fn courtyard_polygon(component: &Component) -> Vec<Point> {
+    let local = if component.courtyard.len() >= 3 {
+        component.courtyard.clone()
+    } else {
+        let half_width = component.width_nm / 2;
+        let half_height = component.height_nm / 2;
+        vec![
+            Point {
+                x_nm: -half_width,
+                y_nm: -half_height,
+            },
+            Point {
+                x_nm: half_width,
+                y_nm: -half_height,
+            },
+            Point {
+                x_nm: half_width,
+                y_nm: half_height,
+            },
+            Point {
+                x_nm: -half_width,
+                y_nm: half_height,
+            },
+        ]
+    };
+    let center = center(component);
+    local
+        .into_iter()
+        .map(|mut point| {
+            if component.side == BoardSide::Back {
+                point.x_nm = -point.x_nm;
+            }
+            let rotated = rotate_point(point, component.rotation_deg);
+            Point {
+                x_nm: center.x_nm + rotated.x_nm,
+                y_nm: center.y_nm + rotated.y_nm,
+            }
+        })
+        .collect()
+}
+
+fn polygons_intersect(left: &[Point], right: &[Point]) -> bool {
+    left.iter()
+        .zip(left.iter().cycle().skip(1))
+        .take(left.len())
+        .any(|(a, b)| {
+            right
+                .iter()
+                .zip(right.iter().cycle().skip(1))
+                .take(right.len())
+                .any(|(c, d)| geometry::segments_within(*a, *b, *c, *d, 0))
+        })
+        || left
+            .first()
+            .is_some_and(|point| geometry::point_in_polygon(*point, right))
+        || right
+            .first()
+            .is_some_and(|point| geometry::point_in_polygon(*point, left))
+}
+
+fn rotate_point(point: Point, rotation_deg: u16) -> Point {
+    match rotation_deg % 360 {
+        90 => Point {
+            x_nm: -point.y_nm,
+            y_nm: point.x_nm,
+        },
+        180 => Point {
+            x_nm: -point.x_nm,
+            y_nm: -point.y_nm,
+        },
+        270 => Point {
+            x_nm: point.y_nm,
+            y_nm: -point.x_nm,
+        },
+        _ => point,
+    }
+}
 fn center(c: &Component) -> Point {
     c.position.unwrap_or_default()
 }
 fn pin_position(c: &Component, offset: Point) -> Point {
-    let (x, y) = match c.rotation_deg % 360 {
-        90 => (-offset.y_nm, offset.x_nm),
-        180 => (-offset.x_nm, -offset.y_nm),
-        270 => (offset.y_nm, -offset.x_nm),
-        _ => (offset.x_nm, offset.y_nm),
-    };
+    let mut offset = offset;
+    if c.side == BoardSide::Back {
+        offset.x_nm = -offset.x_nm;
+    }
+    let offset = rotate_point(offset, c.rotation_deg);
     let p = center(c);
     Point {
-        x_nm: p.x_nm + x,
-        y_nm: p.y_nm + y,
+        x_nm: p.x_nm + offset.x_nm,
+        y_nm: p.y_nm + offset.y_nm,
     }
 }
 fn component_name(reference: &str) -> &str {
@@ -598,12 +711,6 @@ fn intersection(a: Rect, b: Rect) -> f64 {
     let w = (a.max_x.min(b.max_x) - a.min_x.max(b.min_x)).max(0) as f64;
     let h = (a.max_y.min(b.max_y) - a.min_y.max(b.min_y)).max(0) as f64;
     w * h
-}
-fn outside(r: Rect, width: Nm, height: Nm) -> f64 {
-    let area = (r.max_x - r.min_x).max(0) as f64 * (r.max_y - r.min_y).max(0) as f64;
-    let inside_w = (r.max_x.min(width) - r.min_x.max(0)).max(0) as f64;
-    let inside_h = (r.max_y.min(height) - r.min_y.max(0)).max(0) as f64;
-    area - inside_w * inside_h
 }
 fn bin(value: Nm, extent: Nm, count: usize) -> usize {
     ((value.clamp(0, extent) as i128 * count as i128 / extent as i128) as usize).min(count - 1)
@@ -673,6 +780,8 @@ mod tests {
             fixed: false,
             side: BoardSide::Front,
             allowed_rotations: vec![],
+            allow_side_flip: false,
+            courtyard: vec![],
             anchors: HashMap::new(),
         }
     }
@@ -827,6 +936,81 @@ mod tests {
         );
         assert!(
             result.final_score.constraint_violation < result.initial_score.constraint_violation
+        );
+    }
+
+    #[test]
+    fn polygon_courtyards_avoid_bbox_false_overlap_and_respect_side() {
+        let mut left = component(
+            "U1",
+            Some(Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            }),
+        );
+        left.courtyard = vec![
+            Point { x_nm: 0, y_nm: 0 },
+            Point {
+                x_nm: 4_000_000,
+                y_nm: 0,
+            },
+            Point {
+                x_nm: 0,
+                y_nm: 4_000_000,
+            },
+        ];
+        let mut right = component(
+            "U2",
+            Some(Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            }),
+        );
+        right.courtyard = vec![
+            Point {
+                x_nm: 4_000_000,
+                y_nm: 4_000_000,
+            },
+            Point {
+                x_nm: 4_000_000,
+                y_nm: 1_000_000,
+            },
+            Point {
+                x_nm: 1_000_000,
+                y_nm: 4_000_000,
+            },
+        ];
+        let mut problem = PlacementProblem {
+            width_nm: 20_000_000,
+            height_nm: 20_000_000,
+            grid_nm: 500_000,
+            components: vec![left, right],
+            connections: vec![],
+            constraints: vec![],
+        };
+
+        assert_eq!(
+            evaluate(&problem, &problem.components, &ScoreWeights::default())
+                .unwrap()
+                .overlap,
+            0.0
+        );
+        problem.components[1].courtyard[2] = Point {
+            x_nm: 500_000,
+            y_nm: 500_000,
+        };
+        assert!(
+            evaluate(&problem, &problem.components, &ScoreWeights::default())
+                .unwrap()
+                .overlap
+                > 0.0
+        );
+        problem.components[1].side = BoardSide::Back;
+        assert_eq!(
+            evaluate(&problem, &problem.components, &ScoreWeights::default())
+                .unwrap()
+                .overlap,
+            0.0
         );
     }
 }
