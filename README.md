@@ -100,6 +100,9 @@ libFuzzer targets exercise arbitrary KiCad input and serialized board models.
 Criterion benchmarks cover obstacle, multi-net, and board-cutout routing
 scenarios. Every pull request also enforces deterministic search and
 rasterization operation budgets; see `docs/BENCHMARKS.md`.
+The generated summary in `docs/COMPLETION_AUDIT.md` is kept current with
+`python3 scripts/update-completion-audit.py`; CI rejects stale versions or test
+totals.
 Fully connected existing nets are preserved as locked routes; incomplete copper
 remains an obstacle and is not mistaken for a completed route. Generated tracks
 and through vias are appended at board level without duplicating locked routes,

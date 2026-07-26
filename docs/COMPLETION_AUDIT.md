@@ -56,6 +56,7 @@ out of scope.
 | Spatially bounded rasterization | Conservative per-shape cell windows followed by exact predicates | Window regression and 100 mm/200-obstacle Criterion scenario |
 | Configurable DFM checks | Width, actual copper clearance, drill, annular ring, aspect ratio, and copper-to-edge checks with JSON CLI report | Multi-rule manufacturing regression and `dfm` command |
 | Extended DFM and SARIF | Exact circle/oval/custom Via-in-pad, drill spacing, acute junctions, and SARIF 2.1.0 output | Multi-violation geometry and SARIF result-count regression |
+| Self-updating completion audit | Version and discovered Rust/Python test totals generated between protected markers | `update-completion-audit.py --check` runs on every PR |
 | KiCad end-to-end CI | KiCad 10 routing, DRC, second-pass idempotence, and retained diagnostics for three fixtures | Rectangular, non-rectangular, and polygon-keepout boards run on every PR |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
 
@@ -74,6 +75,8 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
   --output-dir /tmp/pcbex-complete-mfg
 ```
 
-At audit time all 33 Rust tests and all 11 Python tests passed, the release build
-completed, KiCad DRC reported zero violations and zero unconnected pads, and
-all expected manufacturing layers plus the drill file were generated.
+<!-- completion-audit:start -->
+Version 1.13.0 exposes 63 Rust tests and 11 Python tests. The release workflow
+also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
+and build-provenance attestations.
+<!-- completion-audit:end -->
