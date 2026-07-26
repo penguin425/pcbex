@@ -394,6 +394,12 @@ reverse-solve a trace width from the imported stackup. Add
 the configured width range and emits the selected width and estimated impedance
 as JSON, using the same microstrip or embedded model as DRC.
 
+`pcbex impedance-report board.json [--output impedance.json]` audits every
+routed segment and differential-pair member. Its JSON includes layer, width,
+estimate, target deviation/pass state, allowed and observed via-transition
+steps, and a total count of segments whose stackup geometry could not be
+evaluated.
+
 ## Manufacturing checks
 
 Boards may define `manufacturing_rules` for minimum track width, copper

@@ -4,10 +4,12 @@ use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 
 pub mod checking;
 mod geometry;
+pub mod impedance;
 pub mod placement;
 pub mod quality;
 pub mod schema;
 
+pub use impedance::{ImpedanceReport, impedance_report};
 pub use quality::{DifferentialQuality, NetQuality, RoutingQuality, routing_quality};
 pub use schema::{board_json_schema, migrate_board_json, parse_board_json};
 
@@ -5054,6 +5056,44 @@ mod tests {
         assert!(symmetric > 0.0);
         assert!(asymmetric > 0.0);
         assert!((symmetric - asymmetric).abs() > 0.1);
+    }
+
+    #[test]
+    fn reports_board_wide_impedance_geometry() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.stackup.push(StackupLayer {
+            layer: Layer::Front,
+            dielectric_height_nm: 200_000,
+            dielectric_constant: 4.2,
+            copper_thickness_nm: 35_000,
+            reference_layer: Some(Layer::Back),
+            secondary_reference_layer: None,
+            secondary_dielectric_height_nm: None,
+            secondary_dielectric_constant: None,
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: board.nets[0].terminals[0].position,
+                end: board.nets[0].terminals[1].position,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        let report = impedance_report(&board);
+        assert_eq!(report.nets.len(), 1);
+        assert_eq!(report.invalid_geometry_count, 0);
+        assert!(
+            report.nets[0].segments[0]
+                .estimated_ohms
+                .is_some_and(|value| value > 0.0)
+        );
     }
 
     #[test]

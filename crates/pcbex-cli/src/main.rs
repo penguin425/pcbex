@@ -4,8 +4,8 @@ use clap_complete::{Shell, generate};
 use pcbex_core::checking::{check_board, check_manufacturability, check_report_to_sarif};
 use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{
-    Board, RoutingQuality, Rules, board_json_schema, migrate_board_json, parse_board_json,
-    render_svg, repair_routes, repairable_net_ids, route_board, routing_quality,
+    Board, RoutingQuality, Rules, board_json_schema, impedance_report, migrate_board_json,
+    parse_board_json, render_svg, repair_routes, repairable_net_ids, route_board, routing_quality,
     solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{apply_custom_design_rules, apply_project_net_settings, import as import_kicad};
@@ -147,6 +147,12 @@ enum Command {
         minimum_width_mm: f64,
         #[arg(long, default_value_t = 5.0)]
         maximum_width_mm: f64,
+    },
+    /// Report per-segment single-ended and differential impedance as JSON.
+    ImpedanceReport {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     Render {
         input: PathBuf,
@@ -548,6 +554,14 @@ fn main() -> Result<()> {
                 }))?
             );
         }
+        Command::ImpedanceReport { input, output } => {
+            let report = serde_json::to_string_pretty(&impedance_report(&read(&input)?))?;
+            if let Some(path) = output {
+                fs::write(path, report)?;
+            } else {
+                println!("{report}");
+            }
+        }
         Command::Render { input, output } => fs::write(output, render_svg(&read(&input)?))?,
         Command::Place {
             input,
@@ -756,6 +770,26 @@ mod tests {
                 differential_gap_mm: Some(0.15),
                 ..
             } if layer == "In1.Cu"
+        ));
+    }
+
+    #[test]
+    fn parses_impedance_report_output() {
+        let cli = Cli::try_parse_from([
+            "pcbex",
+            "impedance-report",
+            "board.json",
+            "--output",
+            "report.json",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::ImpedanceReport {
+                input,
+                output: Some(output)
+            } if input.as_os_str() == "board.json" && output.as_os_str() == "report.json"
         ));
     }
 }
