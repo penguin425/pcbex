@@ -487,6 +487,20 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![pair.positive_net_id, pair.negative_net_id],
             );
         }
+        if pair.gap_nm < 0
+            || pair.gap_tolerance_nm < 0
+            || pair.max_skew_nm < 0
+            || pair.min_coupled_percent > 100
+        {
+            report.push(
+                "differential_pair_constraints",
+                format!(
+                    "differential pair {} must use non-negative gap, gap tolerance, and skew values and a coupled percentage no greater than 100",
+                    pair.name
+                ),
+                vec![pair.positive_net_id, pair.negative_net_id],
+            );
+        }
     }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
@@ -5333,6 +5347,61 @@ mod tests {
                 .filter(|violation| violation.rule == "differential_pair_definition")
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_differential_pair_constraints() {
+        let make_board = |gap_nm, gap_tolerance_nm, max_skew_nm, min_coupled_percent| {
+            let mut board = base();
+            board.nets = (1..=2)
+                .map(|id| Net {
+                    id,
+                    name: format!("N{id}"),
+                    terminals: vec![],
+                    class: None,
+                    priority: 0,
+                })
+                .collect();
+            board.differential_pairs.push(DifferentialPair {
+                name: "USB".into(),
+                positive_net_id: 1,
+                negative_net_id: 2,
+                gap_nm,
+                gap_tolerance_nm,
+                max_skew_nm,
+                min_coupled_percent,
+                target_differential_impedance_ohms: None,
+                differential_impedance_tolerance_ohms: None,
+                maximum_differential_impedance_step_ohms: None,
+                minimum_length_nm: None,
+                tuning_amplitude_nm: None,
+                tuning_pitch_nm: None,
+                max_tuning_sections: 1,
+            });
+            board
+        };
+
+        for board in [
+            make_board(-1, 0, 0, 0),
+            make_board(0, -1, 0, 0),
+            make_board(0, 0, -1, 0),
+            make_board(0, 0, 0, 101),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "differential_pair_constraints")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&make_board(100_000, 50_000, 250_000, 100))
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "differential_pair_constraints")
         );
     }
 

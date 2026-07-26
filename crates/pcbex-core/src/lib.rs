@@ -4697,6 +4697,46 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_invalid_differential_pair_constraints() {
+        let pair = |gap_nm, gap_tolerance_nm, max_skew_nm, min_coupled_percent| DifferentialPair {
+            name: "USB".into(),
+            positive_net_id: 1,
+            negative_net_id: 2,
+            gap_nm,
+            gap_tolerance_nm,
+            max_skew_nm,
+            min_coupled_percent,
+            target_differential_impedance_ohms: None,
+            differential_impedance_tolerance_ohms: None,
+            maximum_differential_impedance_step_ohms: None,
+            minimum_length_nm: None,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
+        };
+        for invalid_pair in [
+            pair(-1, 0, 0, 0),
+            pair(0, -1, 0, 0),
+            pair(0, 0, -1, 0),
+            pair(0, 0, 0, 101),
+        ] {
+            let mut invalid = board();
+            invalid.nets.push(Net {
+                id: 2,
+                name: "N2".into(),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            });
+            invalid.differential_pairs.push(invalid_pair);
+            assert!(matches!(
+                Router::new(&invalid),
+                Err(message) if message == "differential pair USB is invalid"
+            ));
+        }
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(
