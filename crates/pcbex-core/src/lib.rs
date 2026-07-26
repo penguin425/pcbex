@@ -459,6 +459,20 @@ pub struct Teardrop {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CopperZone {
+    pub polygon: Vec<Point>,
+    pub layer: Layer,
+    #[serde(default)]
+    pub clearance_nm: Nm,
+    #[serde(default = "zone_minimum_thickness")]
+    pub minimum_thickness_nm: Nm,
+}
+
+fn zone_minimum_thickness() -> Nm {
+    250_000
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Via {
     pub position: Point,
     pub diameter_nm: Nm,
@@ -519,6 +533,8 @@ pub struct Route {
     pub vias: Vec<Via>,
     #[serde(default)]
     pub teardrops: Vec<Teardrop>,
+    #[serde(default)]
+    pub zones: Vec<CopperZone>,
 }
 
 impl Route {
@@ -1175,6 +1191,7 @@ impl<'a> Router<'a> {
                     arcs: vec![],
                     vias: vec![],
                     teardrops: vec![],
+                    zones: vec![],
                 },
                 0,
             ));
@@ -1185,6 +1202,7 @@ impl<'a> Router<'a> {
             arcs: vec![],
             vias: vec![],
             teardrops: vec![],
+            zones: vec![],
         };
         let rules = self.board.rules_for_net(net.id);
         let mut expanded = 0;
@@ -1847,6 +1865,11 @@ fn translate_route(route: &Route, offset: Point) -> Route {
             *point = translate_point(*point, offset);
         }
     }
+    for zone in &mut translated.zones {
+        for point in &mut zone.polygon {
+            *point = translate_point(*point, offset);
+        }
+    }
     translated
 }
 
@@ -2486,6 +2509,7 @@ mod tests {
             net_id: 1,
             arcs: vec![],
             teardrops: vec![],
+            zones: vec![],
             segments: vec![Segment {
                 start: b.nets[0].terminals[0].position,
                 end: b.nets[0].terminals[1].position,
@@ -2548,6 +2572,7 @@ mod tests {
                 net_id: 1,
                 arcs: vec![],
                 teardrops: vec![],
+                zones: vec![],
                 segments: vec![],
                 vias: vec![],
             },
@@ -2555,6 +2580,7 @@ mod tests {
                 net_id: 1,
                 arcs: vec![],
                 teardrops: vec![],
+                zones: vec![],
                 segments: vec![],
                 vias: vec![],
             },

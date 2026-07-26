@@ -112,6 +112,9 @@ native pad/via teardrop zones from explicit polygon geometry.
 Matched differential-pair terminals are autorouted as a coupled translation
 when the resulting pair passes connectivity, clearance, skew, and coupling
 checks; otherwise the independently routed fallback is retained.
+Net-owned polygonal copper zones can be supplied in route JSON and are emitted
+as native KiCad zones with clearance and minimum-thickness settings. Both
+unfilled outlines and filled zone polygons are imported as owned copper.
 Use `--drc` to run `kicad-cli pcb drc` on the result when KiCad is installed.
 After DRC passes, generate Gerber and Excellon drill files with:
 

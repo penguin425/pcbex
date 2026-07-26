@@ -1,7 +1,7 @@
 use pcbex_core::{
-    Board, CapsuleObstacle, DifferentialPair, Footprint, Keepout, Layer, Net, NetClassRules,
-    Obstacle, Pad, PadShape, Point, PolygonObstacle, RoundObstacle, Route, RouteArc, Rules,
-    Segment, Terminal, Via, ViaKind,
+    Board, CapsuleObstacle, CopperZone, DifferentialPair, Footprint, Keepout, Layer, Net,
+    NetClassRules, Obstacle, Pad, PadShape, Point, PolygonObstacle, RoundObstacle, Route, RouteArc,
+    Rules, Segment, Terminal, Via, ViaKind,
     checking::check_board,
     placement::{BoardSide, Component, Connection, PinRef, PlacementProblem},
 };
@@ -100,7 +100,12 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
             ),
             Some("zone") => {
                 import_keepout(xs, min, &mut keepouts, &copper_layers);
-                import_copper_zone(xs, min, &mut footprint_geometry.polygon_obstacles);
+                import_copper_zone(
+                    xs,
+                    min,
+                    &mut footprint_geometry.polygon_obstacles,
+                    &mut route_candidates,
+                );
             }
             _ => {}
         }
@@ -157,7 +162,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         .collect();
     board
         .routes
-        .retain(|route| !incomplete.contains(&route.net_id));
+        .retain(|route| !incomplete.contains(&route.net_id) || !route.zones.is_empty());
     let existing_route_net_ids = board.routes.iter().map(|route| route.net_id).collect();
     Ok(ImportedBoard {
         board,
@@ -525,6 +530,44 @@ impl ImportedBoard {
                 )
                 .map_err(|e| e.to_string())?;
                 for point in &teardrop.polygon {
+                    let point = self.absolute(*point);
+                    write!(
+                        generated,
+                        " (xy {:.6} {:.6})",
+                        mm(point.x_nm),
+                        mm(point.y_nm)
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                writeln!(
+                    generated,
+                    ")) (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.3)))"
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            for zone in &route.zones {
+                if zone.polygon.len() < 3 || zone.clearance_nm < 0 || zone.minimum_thickness_nm <= 0
+                {
+                    return Err("copper zone has invalid geometry or dimensions".into());
+                }
+                let net_name = self
+                    .board
+                    .nets
+                    .iter()
+                    .find(|net| net.id == route.net_id)
+                    .map(|net| net.name.as_str())
+                    .unwrap_or("");
+                write!(
+                    generated,
+                    "  (zone (net {}) (net_name \"{}\") (layer \"{}\") (hatch edge 0.5) (connect_pads (clearance {:.6})) (min_thickness {:.6}) (polygon (pts",
+                    route.net_id,
+                    net_name,
+                    layer_name(zone.layer),
+                    mm(zone.clearance_nm),
+                    mm(zone.minimum_thickness_nm)
+                )
+                .map_err(|e| e.to_string())?;
+                for point in &zone.polygon {
                     let point = self.absolute(*point);
                     write!(
                         generated,
@@ -1098,6 +1141,7 @@ fn import_segment(
                 arcs: Vec::new(),
                 vias: Vec::new(),
                 teardrops: Vec::new(),
+                zones: Vec::new(),
             })
             .segments
             .push(Segment {
@@ -1153,6 +1197,7 @@ fn import_route_arc(
                 arcs: Vec::new(),
                 vias: Vec::new(),
                 teardrops: Vec::new(),
+                zones: Vec::new(),
             })
             .arcs
             .push(RouteArc {
@@ -1220,6 +1265,7 @@ fn import_via(
                 arcs: Vec::new(),
                 vias: Vec::new(),
                 teardrops: Vec::new(),
+                zones: Vec::new(),
             })
             .vias
             .push(Via {
@@ -1291,8 +1337,13 @@ fn import_keepout(
     });
 }
 
-fn import_copper_zone(xs: &[Sexp], origin: Point, polygon_obstacles: &mut Vec<PolygonObstacle>) {
-    if child_values(xs, "keepout").is_some() {
+fn import_copper_zone(
+    xs: &[Sexp],
+    origin: Point,
+    polygon_obstacles: &mut Vec<PolygonObstacle>,
+    routes: &mut HashMap<u32, Route>,
+) {
+    if child_values(xs, "keepout").is_some() || child_values(xs, "teardrop").is_some() {
         return;
     }
     let Some(net_id) = child_values(xs, "net").and_then(|values| number_u32(values.get(1))) else {
@@ -1302,6 +1353,45 @@ fn import_copper_zone(xs: &[Sexp], origin: Point, polygon_obstacles: &mut Vec<Po
         return;
     }
     let zone_layer = child_atom(xs, "layer").and_then(parse_layer);
+    let outline = child_values(xs, "polygon")
+        .and_then(|polygon| child_values(polygon, "pts"))
+        .map(|values| import_polygon_points(values, origin))
+        .unwrap_or_default();
+    if let Some(layer) = zone_layer
+        && outline.len() >= 3
+    {
+        polygon_obstacles.push(PolygonObstacle {
+            polygon: outline.clone(),
+            layers: vec![layer],
+            net_id: Some(net_id),
+        });
+        let clearance_nm = child_values(xs, "connect_pads")
+            .and_then(|connect| child_values(connect, "clearance"))
+            .and_then(|values| number(values.get(1)))
+            .map(nm)
+            .unwrap_or(0);
+        let minimum_thickness_nm = child_values(xs, "min_thickness")
+            .and_then(|values| number(values.get(1)))
+            .map(nm)
+            .unwrap_or(250_000);
+        routes
+            .entry(net_id)
+            .or_insert_with(|| Route {
+                net_id,
+                segments: Vec::new(),
+                arcs: Vec::new(),
+                vias: Vec::new(),
+                teardrops: Vec::new(),
+                zones: Vec::new(),
+            })
+            .zones
+            .push(CopperZone {
+                polygon: outline,
+                layer,
+                clearance_nm,
+                minimum_thickness_nm,
+            });
+    }
     for child in xs {
         let Some(filled) = child.as_list() else {
             continue;
@@ -1318,20 +1408,7 @@ fn import_copper_zone(xs: &[Sexp], origin: Point, polygon_obstacles: &mut Vec<Po
         let Some(values) = child_values(filled, "pts") else {
             continue;
         };
-        let polygon: Vec<_> = values
-            .iter()
-            .skip(1)
-            .filter_map(|value| {
-                let xy = value.as_list()?;
-                if atom(xy.first()) != Some("xy") {
-                    return None;
-                }
-                Some(relative(
-                    point_mm(number(xy.get(1))?, number(xy.get(2))?),
-                    origin,
-                ))
-            })
-            .collect();
+        let polygon = import_polygon_points(values, origin);
         if polygon.len() >= 3 {
             polygon_obstacles.push(PolygonObstacle {
                 polygon,
@@ -1340,6 +1417,23 @@ fn import_copper_zone(xs: &[Sexp], origin: Point, polygon_obstacles: &mut Vec<Po
             });
         }
     }
+}
+
+fn import_polygon_points(values: &[Sexp], origin: Point) -> Vec<Point> {
+    values
+        .iter()
+        .skip(1)
+        .filter_map(|value| {
+            let xy = value.as_list()?;
+            if atom(xy.first()) != Some("xy") {
+                return None;
+            }
+            Some(relative(
+                point_mm(number(xy.get(1))?, number(xy.get(2))?),
+                origin,
+            ))
+        })
+        .collect()
 }
 
 fn rect_obstacle(
@@ -1790,6 +1884,7 @@ mod tests {
                 net_id: 1,
                 arcs: vec![],
                 teardrops: vec![],
+                zones: vec![],
                 segments: vec![pcbex_core::Segment {
                     start: Point { x_nm: 0, y_nm: 0 },
                     end: Point {
@@ -1852,6 +1947,7 @@ mod tests {
                     ],
                     layer: Layer::Front,
                 }],
+                zones: vec![],
             }])
             .unwrap();
 
@@ -1866,6 +1962,58 @@ mod tests {
                 y_nm: 18_000_000
             }
         );
+    }
+
+    #[test]
+    fn writes_and_reimports_native_copper_zones() {
+        let imported = import(PCB, rules()).unwrap();
+        let polygon = vec![
+            Point {
+                x_nm: 2_000_000,
+                y_nm: 2_000_000,
+            },
+            Point {
+                x_nm: 28_000_000,
+                y_nm: 2_000_000,
+            },
+            Point {
+                x_nm: 28_000_000,
+                y_nm: 28_000_000,
+            },
+            Point {
+                x_nm: 2_000_000,
+                y_nm: 28_000_000,
+            },
+        ];
+        let output = imported
+            .write_routes(&[Route {
+                net_id: 1,
+                segments: vec![],
+                arcs: vec![],
+                vias: vec![],
+                teardrops: vec![],
+                zones: vec![CopperZone {
+                    polygon: polygon.clone(),
+                    layer: Layer::Front,
+                    clearance_nm: 400_000,
+                    minimum_thickness_nm: 250_000,
+                }],
+            }])
+            .unwrap();
+
+        assert!(output.contains("(net_name \"VCC\")"));
+        assert!(output.contains("(connect_pads (clearance 0.400000))"));
+        assert!(output.contains("(min_thickness 0.250000)"));
+        let round_trip = import(&output, rules()).unwrap();
+        let zone = &round_trip.board.routes[0].zones[0];
+        assert_eq!(zone.polygon, polygon);
+        assert_eq!(zone.clearance_nm, 400_000);
+        assert_eq!(zone.minimum_thickness_nm, 250_000);
+        assert!(round_trip.board.polygon_obstacles.iter().any(|obstacle| {
+            obstacle.net_id == Some(1)
+                && obstacle.layers == [Layer::Front]
+                && obstacle.polygon == polygon
+        }));
     }
 
     #[test]
