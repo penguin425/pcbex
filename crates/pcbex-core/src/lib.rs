@@ -539,26 +539,97 @@ pub struct Route {
 
 impl Route {
     pub fn linearized_arcs(&self) -> Self {
+        const ARC_DRC_DEVIATION_NM: Nm = 1_000;
         let mut route = self.clone();
         for arc in &self.arcs {
-            route.segments.extend([
-                Segment {
-                    start: arc.start,
-                    end: arc.mid,
-                    layer: arc.layer,
-                    width_nm: arc.width_nm,
-                },
-                Segment {
-                    start: arc.mid,
-                    end: arc.end,
-                    layer: arc.layer,
-                    width_nm: arc.width_nm,
-                },
-            ]);
+            route
+                .segments
+                .extend(
+                    arc_polyline(arc, ARC_DRC_DEVIATION_NM)
+                        .windows(2)
+                        .map(|points| Segment {
+                            start: points[0],
+                            end: points[1],
+                            layer: arc.layer,
+                            width_nm: arc.width_nm + 2 * ARC_DRC_DEVIATION_NM,
+                        }),
+                );
         }
         route.arcs.clear();
         route
     }
+}
+
+fn arc_geometry(arc: &RouteArc) -> Option<(f64, f64, f64, f64)> {
+    let (ax, ay) = (arc.start.x_nm as f64, arc.start.y_nm as f64);
+    let (bx, by) = (arc.mid.x_nm as f64, arc.mid.y_nm as f64);
+    let (cx, cy) = (arc.end.x_nm as f64, arc.end.y_nm as f64);
+    let determinant = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if determinant.abs() < 1.0 {
+        return None;
+    }
+    let a2 = ax * ax + ay * ay;
+    let b2 = bx * bx + by * by;
+    let c2 = cx * cx + cy * cy;
+    let center_x = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / determinant;
+    let center_y = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / determinant;
+    let start = (ay - center_y).atan2(ax - center_x);
+    let middle = (by - center_y).atan2(bx - center_x);
+    let end = (cy - center_y).atan2(cx - center_x);
+    let ccw = (end - start).rem_euclid(std::f64::consts::TAU);
+    let middle_ccw = (middle - start).rem_euclid(std::f64::consts::TAU);
+    let sweep = if middle_ccw <= ccw {
+        ccw
+    } else {
+        ccw - std::f64::consts::TAU
+    };
+    Some((
+        center_x,
+        center_y,
+        (ax - center_x).hypot(ay - center_y),
+        sweep,
+    ))
+}
+
+pub fn arc_is_valid(arc: &RouteArc) -> bool {
+    arc_geometry(arc).is_some()
+}
+
+pub fn arc_length_nm(arc: &RouteArc) -> Nm {
+    arc_geometry(arc)
+        .map(|(_, _, radius, sweep)| (radius * sweep.abs()).round() as Nm)
+        .unwrap_or_else(|| {
+            let first = (arc.mid.x_nm - arc.start.x_nm) as f64;
+            let first_y = (arc.mid.y_nm - arc.start.y_nm) as f64;
+            let second = (arc.end.x_nm - arc.mid.x_nm) as f64;
+            let second_y = (arc.end.y_nm - arc.mid.y_nm) as f64;
+            (first.hypot(first_y) + second.hypot(second_y)).round() as Nm
+        })
+}
+
+pub fn arc_polyline(arc: &RouteArc, maximum_deviation_nm: Nm) -> Vec<Point> {
+    let Some((center_x, center_y, radius, sweep)) = arc_geometry(arc) else {
+        return vec![arc.start, arc.mid, arc.end];
+    };
+    let deviation = maximum_deviation_nm.max(1) as f64;
+    let maximum_step = if deviation >= radius {
+        std::f64::consts::PI
+    } else {
+        2.0 * (1.0 - deviation / radius).clamp(-1.0, 1.0).acos()
+    };
+    let steps = (sweep.abs() / maximum_step).ceil().clamp(1.0, 65_536.0) as usize;
+    let start_angle = (arc.start.y_nm as f64 - center_y).atan2(arc.start.x_nm as f64 - center_x);
+    let mut points = Vec::with_capacity(steps + 1);
+    for index in 0..=steps {
+        let angle = start_angle + sweep * index as f64 / steps as f64;
+        points.push(Point {
+            x_nm: (center_x + radius * angle.cos()).round() as Nm,
+            y_nm: (center_y + radius * angle.sin()).round() as Nm,
+        });
+    }
+    points[0] = arc.start;
+    points[steps] = arc.end;
+    points
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -2185,7 +2256,7 @@ pub fn tune_route_lengths(board: &mut Board) -> Result<(), String> {
 }
 
 pub fn route_length_nm(route: &Route) -> Nm {
-    route
+    let segment_length: Nm = route
         .segments
         .iter()
         .map(|segment| {
@@ -2193,7 +2264,8 @@ pub fn route_length_nm(route: &Route) -> Nm {
             let dy = (segment.end.y_nm - segment.start.y_nm) as f64;
             dx.hypot(dy).round() as Nm
         })
-        .sum()
+        .sum();
+    segment_length + route.arcs.iter().map(arc_length_nm).sum::<Nm>()
 }
 
 pub fn render_svg(board: &Board) -> String {
@@ -2298,6 +2370,28 @@ pub fn render_svg(board: &Board) -> String {
                 "#48e"
             };
             s.push_str(&format!(r##"<line x1="{}" y1="{}" x2="{}" y2="{}" stroke="{color}" stroke-width="{}" stroke-linecap="round"/>"##,x.start.x_nm as f64/scale,x.start.y_nm as f64/scale,x.end.x_nm as f64/scale,x.end.y_nm as f64/scale,x.width_nm as f64/scale));
+        }
+        for arc in &r.arcs {
+            let color = if arc.layer == Layer::Front {
+                "#e44"
+            } else {
+                "#48e"
+            };
+            let points = arc_polyline(arc, 10_000)
+                .iter()
+                .map(|point| {
+                    format!(
+                        "{},{}",
+                        point.x_nm as f64 / scale,
+                        point.y_nm as f64 / scale
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            s.push_str(&format!(
+                r##"<polyline points="{points}" fill="none" stroke="{color}" stroke-width="{}" stroke-linecap="round" stroke-linejoin="round"/>"##,
+                arc.width_nm as f64 / scale
+            ));
         }
         for v in &r.vias {
             s.push_str(&format!(
@@ -3265,6 +3359,57 @@ mod tests {
                         && negative.start.x_nm == positive.start.x_nm
                         && negative.end.x_nm == positive.end.x_nm
                 })
+        );
+    }
+
+    #[test]
+    fn route_arcs_use_true_length_and_curved_drc_geometry() {
+        let arc = RouteArc {
+            start: Point {
+                x_nm: 1_000_000,
+                y_nm: 5_000_000,
+            },
+            mid: Point {
+                x_nm: 5_000_000,
+                y_nm: 1_000_000,
+            },
+            end: Point {
+                x_nm: 9_000_000,
+                y_nm: 5_000_000,
+            },
+            layer: Layer::Front,
+            width_nm: 250_000,
+        };
+        let route = Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![arc],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        };
+        assert!((route_length_nm(&route) - 12_566_371).abs() <= 1);
+
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].terminals[0].position = route.arcs[0].start;
+        board.nets[0].terminals[1].position = route.arcs[0].end;
+        board.routes = vec![route];
+        board.round_obstacles.push(RoundObstacle {
+            center: Point {
+                x_nm: 5_000_000,
+                y_nm: 1_000_000,
+            },
+            diameter_nm: 500_000,
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
+        let report = crate::checking::check_board(&board);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "clearance")
         );
     }
 }

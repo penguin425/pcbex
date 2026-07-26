@@ -27,9 +27,54 @@ impl CheckReport {
 
 pub fn check_board(board: &Board) -> CheckReport {
     if board.routes.iter().any(|route| !route.arcs.is_empty()) {
+        let arc_net_ids: HashSet<_> = board
+            .routes
+            .iter()
+            .filter(|route| !route.arcs.is_empty())
+            .map(|route| route.net_id)
+            .collect();
         let mut linearized = board.clone();
         linearized.routes = board.routes.iter().map(Route::linearized_arcs).collect();
-        return check_board(&linearized);
+        let mut report = check_board(&linearized);
+        report.violations.retain(|violation| {
+            violation.rule != "track_angle"
+                || !violation.net_ids.iter().any(|id| arc_net_ids.contains(id))
+        });
+        for route in board
+            .routes
+            .iter()
+            .filter(|route| arc_net_ids.contains(&route.net_id))
+        {
+            let rules = board.rules_for_net(route.net_id);
+            for segment in &route.segments {
+                let dx = (segment.end.x_nm - segment.start.x_nm).abs();
+                let dy = (segment.end.y_nm - segment.start.y_nm).abs();
+                if dx != 0 && dy != 0 && dx != dy {
+                    report.push(
+                        "track_angle",
+                        "track is not horizontal, vertical, or 45 degrees".into(),
+                        vec![route.net_id],
+                    );
+                }
+            }
+            for arc in &route.arcs {
+                if arc.width_nm < rules.track_width_nm {
+                    report.push(
+                        "track_width",
+                        "arc is narrower than the configured minimum".into(),
+                        vec![route.net_id],
+                    );
+                }
+                if !crate::arc_is_valid(arc) {
+                    report.push(
+                        "arc_geometry",
+                        "arc start, midpoint, and end must define a curve".into(),
+                        vec![route.net_id],
+                    );
+                }
+            }
+        }
+        return report;
     }
     let mut report = CheckReport::default();
     let routes: HashMap<u32, &Route> = board.routes.iter().map(|r| (r.net_id, r)).collect();

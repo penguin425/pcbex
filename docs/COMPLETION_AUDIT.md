@@ -59,6 +59,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Configurable DFM checks | Width, actual copper clearance, drill, annular ring, aspect ratio, and copper-to-edge checks with JSON CLI report | Multi-rule manufacturing regression and `dfm` command |
 | Extended DFM and SARIF | Exact circle/oval/custom Via-in-pad, drill spacing, acute junctions, and SARIF 2.1.0 output | Multi-violation geometry and SARIF result-count regression |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
+| Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
 | Self-updating completion audit | Version and discovered Rust/Python test totals generated between protected markers | `update-completion-audit.py --check` runs on every PR |
 | KiCad end-to-end CI | KiCad 10 routing, DRC, second-pass idempotence, and retained diagnostics for three fixtures | Rectangular, non-rectangular, and polygon-keepout boards run on every PR |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
@@ -79,7 +80,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.17.0 exposes 66 Rust tests and 11 Python tests. The release workflow
+Version 1.18.0 exposes 67 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

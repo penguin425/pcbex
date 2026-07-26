@@ -109,6 +109,9 @@ and through vias are appended at board level without duplicating locked routes,
 while preserving the source document.
 The route model also preserves KiCad three-point copper arcs and can emit
 native pad/via teardrop zones from explicit polygon geometry.
+Arc length is calculated from the circumcircle and sweep angle. Connectivity,
+clearance, and boundary checks use a conservative adaptive curve envelope with
+1 µm maximum chord deviation, and SVG output renders the complete curve.
 Matched two-terminal differential pairs use a simultaneous A* search that
 evaluates both track positions for every move. The resulting pair is accepted
 only when connectivity, clearance, skew, and coupling checks pass; more general
