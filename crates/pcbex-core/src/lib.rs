@@ -675,8 +675,8 @@ impl<'a> Router<'a> {
         for y in 0..=max_y {
             for x in 0..=max_x {
                 let point = Point {
-                    x_nm: x * g,
-                    y_nm: y * g,
+                    x_nm: x as Nm * g,
+                    y_nm: y as Nm * g,
                 };
                 if !self.board.point_inside_board(point, edge_envelope) {
                     self.blocked.extend(
@@ -716,18 +716,28 @@ impl<'a> Router<'a> {
         }
         for obstacle in &self.board.round_obstacles {
             let distance_twice = obstacle.diameter_nm + maximum_diameter + 2 * maximum_clearance;
+            let radius = (distance_twice + 1) / 2;
+            let (min_x, max_x, min_y, max_y) = cell_window(
+                obstacle.center.x_nm - radius,
+                obstacle.center.x_nm + radius,
+                obstacle.center.y_nm - radius,
+                obstacle.center.y_nm + radius,
+                g,
+                self.board.width_nm,
+                self.board.height_nm,
+            );
             for layer in &obstacle.layers {
                 let layer = layer_index(*layer);
-                for y in 0..=max_y {
-                    for x in 0..=max_x {
+                for y in min_y..=max_y {
+                    for x in min_x..=max_x {
                         let point = Point {
-                            x_nm: x * g,
-                            y_nm: y * g,
+                            x_nm: x as Nm * g,
+                            y_nm: y as Nm * g,
                         };
                         if !geometry::points_within(point, obstacle.center, distance_twice) {
                             continue;
                         }
-                        let cell = (x as i32, y as i32, layer);
+                        let cell = (x, y, layer);
                         if let Some(net_id) = obstacle.net_id {
                             if self
                                 .owned
@@ -745,13 +755,23 @@ impl<'a> Router<'a> {
         }
         for obstacle in &self.board.capsule_obstacles {
             let distance_twice = obstacle.diameter_nm + maximum_diameter + 2 * maximum_clearance;
+            let radius = (distance_twice + 1) / 2;
+            let (min_x, max_x, min_y, max_y) = cell_window(
+                obstacle.start.x_nm.min(obstacle.end.x_nm) - radius,
+                obstacle.start.x_nm.max(obstacle.end.x_nm) + radius,
+                obstacle.start.y_nm.min(obstacle.end.y_nm) - radius,
+                obstacle.start.y_nm.max(obstacle.end.y_nm) + radius,
+                g,
+                self.board.width_nm,
+                self.board.height_nm,
+            );
             for layer in &obstacle.layers {
                 let layer = layer_index(*layer);
-                for y in 0..=max_y {
-                    for x in 0..=max_x {
+                for y in min_y..=max_y {
+                    for x in min_x..=max_x {
                         let point = Point {
-                            x_nm: x * g,
-                            y_nm: y * g,
+                            x_nm: x as Nm * g,
+                            y_nm: y as Nm * g,
                         };
                         if !geometry::point_segment_within(
                             point,
@@ -761,7 +781,7 @@ impl<'a> Router<'a> {
                         ) {
                             continue;
                         }
-                        let cell = (x as i32, y as i32, layer);
+                        let cell = (x, y, layer);
                         if let Some(net_id) = obstacle.net_id {
                             if self
                                 .owned
@@ -779,13 +799,27 @@ impl<'a> Router<'a> {
         }
         let keepout_distance_twice = maximum_diameter + 2 * maximum_clearance;
         for obstacle in &self.board.polygon_obstacles {
+            let Some((min_x_nm, max_x_nm, min_y_nm, max_y_nm)) = polygon_bounds(&obstacle.polygon)
+            else {
+                continue;
+            };
+            let radius = (keepout_distance_twice + 1) / 2;
+            let (min_x, max_x, min_y, max_y) = cell_window(
+                min_x_nm - radius,
+                max_x_nm + radius,
+                min_y_nm - radius,
+                max_y_nm + radius,
+                g,
+                self.board.width_nm,
+                self.board.height_nm,
+            );
             for layer in &obstacle.layers {
                 let layer = layer_index(*layer);
-                for y in 0..=max_y {
-                    for x in 0..=max_x {
+                for y in min_y..=max_y {
+                    for x in min_x..=max_x {
                         let point = Point {
-                            x_nm: x * g,
-                            y_nm: y * g,
+                            x_nm: x as Nm * g,
+                            y_nm: y as Nm * g,
                         };
                         if geometry::point_in_polygon(point, &obstacle.polygon)
                             || geometry::point_polygon_closer_than(
@@ -794,7 +828,7 @@ impl<'a> Router<'a> {
                                 keepout_distance_twice,
                             )
                         {
-                            let cell = (x as i32, y as i32, layer);
+                            let cell = (x, y, layer);
                             if let Some(net_id) = obstacle.net_id {
                                 if self
                                     .owned
@@ -812,13 +846,27 @@ impl<'a> Router<'a> {
             }
         }
         for keepout in &self.board.keepouts {
+            let Some((min_x_nm, max_x_nm, min_y_nm, max_y_nm)) = polygon_bounds(&keepout.polygon)
+            else {
+                continue;
+            };
+            let radius = (keepout_distance_twice + 1) / 2;
+            let (min_x, max_x, min_y, max_y) = cell_window(
+                min_x_nm - radius,
+                max_x_nm + radius,
+                min_y_nm - radius,
+                max_y_nm + radius,
+                g,
+                self.board.width_nm,
+                self.board.height_nm,
+            );
             for layer in &keepout.layers {
                 let layer = layer_index(*layer);
-                for y in 0..=max_y {
-                    for x in 0..=max_x {
+                for y in min_y..=max_y {
+                    for x in min_x..=max_x {
                         let point = Point {
-                            x_nm: x * g,
-                            y_nm: y * g,
+                            x_nm: x as Nm * g,
+                            y_nm: y as Nm * g,
                         };
                         if geometry::point_in_polygon(point, &keepout.polygon)
                             || geometry::point_polygon_closer_than(
@@ -827,7 +875,7 @@ impl<'a> Router<'a> {
                                 keepout_distance_twice,
                             )
                         {
-                            let cell = (x as i32, y as i32, layer);
+                            let cell = (x, y, layer);
                             if let Some(net_id) = keepout.net_id {
                                 if self
                                     .owned
@@ -1368,6 +1416,32 @@ fn raster_line_cells(mut x: Nm, mut y: Nm, end_x: Nm, end_y: Nm) -> Vec<(Nm, Nm)
     cells
 }
 
+fn polygon_bounds(polygon: &[Point]) -> Option<(Nm, Nm, Nm, Nm)> {
+    Some((
+        polygon.iter().map(|point| point.x_nm).min()?,
+        polygon.iter().map(|point| point.x_nm).max()?,
+        polygon.iter().map(|point| point.y_nm).min()?,
+        polygon.iter().map(|point| point.y_nm).max()?,
+    ))
+}
+
+fn cell_window(
+    min_x_nm: Nm,
+    max_x_nm: Nm,
+    min_y_nm: Nm,
+    max_y_nm: Nm,
+    grid_nm: Nm,
+    board_width_nm: Nm,
+    board_height_nm: Nm,
+) -> (i32, i32, i32, i32) {
+    (
+        (min_x_nm.max(0) / grid_nm) as i32,
+        (max_x_nm.min(board_width_nm) / grid_nm) as i32,
+        (min_y_nm.max(0) / grid_nm) as i32,
+        (max_y_nm.min(board_height_nm) / grid_nm) as i32,
+    )
+}
+
 fn heuristic(x: i32, y: i32, gx: i32, gy: i32) -> u64 {
     let dx = (x - gx).unsigned_abs() as u64;
     let dy = (y - gy).unsigned_abs() as u64;
@@ -1812,6 +1886,16 @@ mod tests {
             }],
             routes: vec![],
         }
+    }
+
+    #[test]
+    fn spatial_window_clamps_to_the_board() {
+        assert_eq!(
+            cell_window(
+                -1_000_000, 2_100_000, 8_000_000, 12_000_000, 500_000, 10_000_000, 10_000_000,
+            ),
+            (0, 4, 16, 20)
+        );
     }
 
     #[test]
