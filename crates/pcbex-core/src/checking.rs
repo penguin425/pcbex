@@ -1820,6 +1820,10 @@ mod tests {
             gap_tolerance_nm: 50_000,
             max_skew_nm: 100_000,
             min_coupled_percent: 90,
+            minimum_length_nm: None,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
         });
         assert!(check_board(&board).is_clean());
 
