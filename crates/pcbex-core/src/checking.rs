@@ -467,6 +467,27 @@ pub fn check_board(board: &Board) -> CheckReport {
             }
         }
     }
+    let mut seen_pair_names = HashSet::new();
+    let mut paired_net_ids = HashSet::new();
+    for pair in &board.differential_pairs {
+        let name_is_valid =
+            !pair.name.trim().is_empty() && seen_pair_names.insert(pair.name.as_str());
+        let members_are_valid = pair.positive_net_id != pair.negative_net_id
+            && known_net_ids.contains(&pair.positive_net_id)
+            && known_net_ids.contains(&pair.negative_net_id);
+        let membership_is_unique = paired_net_ids.insert(pair.positive_net_id)
+            && paired_net_ids.insert(pair.negative_net_id);
+        if !name_is_valid || !members_are_valid || !membership_is_unique {
+            report.push(
+                "differential_pair_definition",
+                format!(
+                    "differential pair {} must have a unique non-empty name and two distinct declared nets that belong to no other pair",
+                    pair.name
+                ),
+                vec![pair.positive_net_id, pair.negative_net_id],
+            );
+        }
+    }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
             if !pad_geometry_is_valid(pad) {
@@ -5265,6 +5286,53 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "net_class_name")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_differential_pair_identities() {
+        let mut board = base();
+        board.nets = (1..=7)
+            .map(|id| Net {
+                id,
+                name: format!("N{id}"),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            })
+            .collect();
+        let pair = |name: &str, positive_net_id, negative_net_id| DifferentialPair {
+            name: name.into(),
+            positive_net_id,
+            negative_net_id,
+            gap_nm: 100_000,
+            gap_tolerance_nm: 0,
+            max_skew_nm: 0,
+            min_coupled_percent: 0,
+            target_differential_impedance_ohms: None,
+            differential_impedance_tolerance_ohms: None,
+            maximum_differential_impedance_step_ohms: None,
+            minimum_length_nm: None,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
+        };
+        board.differential_pairs = vec![
+            pair("valid", 1, 2),
+            pair("", 3, 4),
+            pair("duplicate", 5, 6),
+            pair("duplicate", 7, 99),
+            pair("self", 3, 3),
+            pair("reused", 1, 4),
+        ];
+
+        assert_eq!(
+            check_board(&board)
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "differential_pair_definition")
+                .count(),
+            4
         );
     }
 
