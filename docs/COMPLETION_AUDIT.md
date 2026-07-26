@@ -3,8 +3,8 @@
 This audit maps the supplied `pcbex` design and subsequent extensions to
 executable evidence. The project began with the deliberately bounded,
 rectangular two-layer MVP and now supports polygonal multilayer signal boards.
-Coupled differential-pair autorouting and copper-zone generation remain out of
-scope.
+Coupled differential-pair autorouting and native zone-fill generation remain
+out of scope.
 
 | Requirement | Implementation | Evidence |
 | --- | --- | --- |
@@ -46,6 +46,7 @@ scope.
 | Multilayer routing | `In1.Cu`–`In30.Cu` model/serde, KiCad layer-table and item I/O, all-layer through vias, and per-net layer constraints | Forced inner-layer core regression, four-layer importer test, and real-KiCad four-layer DRC/idempotence fixture |
 | Differential-pair rules and checking | Explicit pair model, KiCad net-class inference, differential width, skew/coupling/layer-via symmetry checks | Coupled/skew core regression and KiCad `_P`/`_N` inference test |
 | Length constraints and meander tuning | Net-class minimum/maximum length checks and deterministic legal orthogonal detours | Meander regression verifies the interval and a clean full-board check |
+| Filled copper-zone interoperability | KiCad filled polygons become exact layer/net-owned copper and are preserved during route write-back | Filled GND-zone import regression |
 | KiCad end-to-end CI | KiCad 10 routing, DRC, second-pass idempotence, and retained diagnostics for three fixtures | Rectangular, non-rectangular, and polygon-keepout boards run on every PR |
 | Bounded repair and score comparison | Iteration/item limits and non-regression acceptance | Bounded executor test |
 

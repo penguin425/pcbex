@@ -159,6 +159,13 @@ reports routes outside that interval. After routing, pcbex deterministically
 adds an orthogonal meander to short routes and accepts it only when the complete
 board remains free of boundary, obstacle, connectivity, and clearance errors.
 
+## Copper zones
+
+Filled KiCad copper-zone polygons are imported as exact, layer-specific,
+net-owned copper geometry. They block foreign nets with the normal clearance
+while remaining enterable by their owning net. Existing zone definitions and
+fills are preserved when routed tracks are written back to the board.
+
 ## Planning and repair agent
 
 The dependency-free Python agent converts bounded natural-language requirements
