@@ -435,6 +435,9 @@ a curved corner are rejected even when their bounding boxes still fit.
 KiCad trapezoid `rect_delta` values are also retained. Plated-hole containment
 requires the complete hole capsule to remain at least its radius inside every
 sloped edge of the resulting convex pad polygon.
+Custom plated pads use their imported polygon directly: both hole-capsule
+endpoints must be inside, and the centerline must remain more than the drill
+radius from every boundary edge, including concave boundaries.
 
 ## Planning and repair agent
 

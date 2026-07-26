@@ -91,6 +91,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Exact plated-hole containment | Circular and oval pads validate the complete offset hole capsule against their curved boundary; rectangular pads validate capsule extents | Diagonal-offset circle rejection and valid rotated oval-slot containment regressions |
 | Roundrect plated-hole containment | KiCad roundrect ratios are retained as corner radii and the complete hole capsule is tested against the radius-eroded curved boundary | 0.25-ratio import assertion and corner-offset hole rejection regression |
 | Trapezoid plated-hole containment | KiCad `rect_delta` geometry is retained and each hole-capsule endpoint must clear every convex sloped edge by the drill radius | Delta import assertions and bounding-box false-negative rejection regression |
+| Custom-polygon plated-hole containment | Complete circular/oval hole capsules require endpoint membership and exact radius clearance from every imported custom-pad polygon edge | Triangular custom-pad bounding-box false-negative regression |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -114,7 +115,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.62.0 exposes 108 Rust tests and 11 Python tests. The release workflow
+Version 1.63.0 exposes 109 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
