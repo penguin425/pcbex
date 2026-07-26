@@ -363,6 +363,17 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![net.id],
             );
         }
+        if net
+            .class
+            .as_ref()
+            .is_some_and(|class| !board.net_classes.contains_key(class))
+        {
+            report.push(
+                "net_class",
+                format!("net {} references an undeclared net class", net.id),
+                vec![net.id],
+            );
+        }
         for terminal in &net.terminals {
             if !layer_membership_is_valid(board, &terminal.layers) {
                 report.push(
@@ -4235,6 +4246,49 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_unknown_net_class_references() {
+        let mut board = base();
+        board.net_classes.insert(
+            "declared".into(),
+            crate::NetClassRules {
+                track_width_nm: 250_000,
+                clearance_nm: 200_000,
+                via_diameter_nm: 600_000,
+                via_drill_nm: 300_000,
+                layers: None,
+                differential_width_nm: None,
+                differential_gap_nm: None,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
+            },
+        );
+        let net = |id, class: Option<&str>| Net {
+            id,
+            name: format!("N{id}"),
+            terminals: vec![],
+            class: class.map(str::to_owned),
+            priority: 0,
+        };
+        board.nets = vec![
+            net(1, None),
+            net(2, Some("declared")),
+            net(3, Some("missing")),
+        ];
+
+        let report = check_board(&board);
+        let violations = report
+            .violations
+            .iter()
+            .filter(|violation| violation.rule == "net_class")
+            .collect::<Vec<_>>();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].net_ids, vec![3]);
     }
 
     #[test]
