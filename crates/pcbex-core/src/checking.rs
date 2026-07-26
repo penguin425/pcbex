@@ -153,6 +153,13 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    if !copper_layer_table_is_valid(board) {
+        report.push(
+            "copper_layers",
+            "board copper layers must be non-empty, unique, and supported".into(),
+            vec![],
+        );
+    }
     let known_net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
     let mut seen_net_ids = HashSet::new();
     let mut seen_net_names = HashSet::new();
@@ -1095,6 +1102,23 @@ fn custom_pad_contains_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
 
 fn route_arc_geometry_is_valid(board: &Board, arc: &crate::RouteArc) -> bool {
     arc.width_nm > 0 && board.copper_layers.contains(&arc.layer) && crate::arc_is_valid(arc)
+}
+
+fn copper_layer_table_is_valid(board: &Board) -> bool {
+    !board.copper_layers.is_empty()
+        && board.copper_layers.iter().all(|layer| {
+            matches!(
+                layer,
+                crate::Layer::Front | crate::Layer::Back | crate::Layer::Inner(1..=30)
+            )
+        })
+        && board
+            .copper_layers
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>()
+            .len()
+            == board.copper_layers.len()
 }
 
 fn via_geometry_is_valid(via: &crate::Via) -> bool {
@@ -4218,6 +4242,35 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "board_dimensions")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_copper_layer_tables() {
+        let mut empty = base();
+        empty.copper_layers.clear();
+        let mut duplicate = base();
+        duplicate.copper_layers.push(Layer::Front);
+        let mut unsupported = base();
+        unsupported.copper_layers = vec![Layer::Front, Layer::Inner(31), Layer::Back];
+        let valid = base();
+
+        for board in [&empty, &duplicate, &unsupported] {
+            let report = check_board(board);
+            assert_eq!(
+                report
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "copper_layers")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&valid)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "copper_layers")
         );
     }
 }

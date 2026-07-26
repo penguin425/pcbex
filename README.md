@@ -15,6 +15,8 @@ preserve the public API while keeping format contracts and reporting logic out
 of the routing engine.
 Normal DRC requires positive board width and height even when invoked directly,
 matching the router's geometry precondition.
+The copper-layer table must also be non-empty, duplicate-free, and limited to
+the supported front, back, and first 30 internal copper layers.
 
 The requirement-by-requirement evidence is recorded in
 [`docs/COMPLETION_AUDIT.md`](docs/COMPLETION_AUDIT.md).
