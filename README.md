@@ -432,6 +432,9 @@ leave insufficient copper while retaining valid offset slots.
 KiCad roundrect corner ratios are retained as physical radii. Plated-hole
 containment erodes the rounded rectangle by the drill radius, so holes entering
 a curved corner are rejected even when their bounding boxes still fit.
+KiCad trapezoid `rect_delta` values are also retained. Plated-hole containment
+requires the complete hole capsule to remain at least its radius inside every
+sloped edge of the resulting convex pad polygon.
 
 ## Planning and repair agent
 

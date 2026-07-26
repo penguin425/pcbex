@@ -191,6 +191,10 @@ pub struct Pad {
     #[serde(default)]
     pub roundrect_radius_nm: Nm,
     #[serde(default)]
+    pub trapezoid_delta_x_nm: Nm,
+    #[serde(default)]
+    pub trapezoid_delta_y_nm: Nm,
+    #[serde(default)]
     pub drill_width_nm: Option<Nm>,
     #[serde(default)]
     pub drill_height_nm: Option<Nm>,
@@ -6919,6 +6923,8 @@ mod tests {
                 shape: PadShape::Rect,
                 custom_polygon: vec![],
                 roundrect_radius_nm: 0,
+                trapezoid_delta_x_nm: 0,
+                trapezoid_delta_y_nm: 0,
                 drill_width_nm: None,
                 drill_height_nm: None,
                 drill_offset_x_nm: 0,

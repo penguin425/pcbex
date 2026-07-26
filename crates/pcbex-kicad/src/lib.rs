@@ -1343,6 +1343,16 @@ fn import_footprint(
             } else {
                 0
             },
+            trapezoid_delta_x_nm: if shape == PadShape::Trapezoid {
+                nm(rect_delta.0)
+            } else {
+                0
+            },
+            trapezoid_delta_y_nm: if shape == PadShape::Trapezoid {
+                nm(rect_delta.1)
+            } else {
+                0
+            },
             drill_width_nm: drill.map(|(width, _, _, _)| nm(width)),
             drill_height_nm: drill.map(|(_, height, _, _)| nm(height)),
             drill_offset_x_nm: drill.map(|(_, _, x, _)| nm(x)).unwrap_or(0),
@@ -2977,6 +2987,8 @@ mod tests {
         assert_eq!(pads[0].shape, PadShape::RoundRect);
         assert_eq!(pads[0].roundrect_radius_nm, 250_000);
         assert_eq!(pads[1].shape, PadShape::Trapezoid);
+        assert_eq!(pads[1].trapezoid_delta_x_nm, 400_000);
+        assert_eq!(pads[1].trapezoid_delta_y_nm, 0);
         assert_eq!(pads[2].shape, PadShape::Custom);
         assert_eq!(pads[2].custom_polygon.len(), 3);
         assert_eq!(imported.board.polygon_obstacles.len(), 3);

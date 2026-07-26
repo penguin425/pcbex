@@ -908,6 +908,21 @@ fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
                 point_inside_roundrect(*x, *y, half_width, half_height, eroded_corner)
             })
         }
+        PadShape::Trapezoid => {
+            let half_width = pad_width_nm / 2.0;
+            let half_height = pad_height_nm / 2.0;
+            let delta_x = pad.trapezoid_delta_x_nm as f64;
+            let delta_y = pad.trapezoid_delta_y_nm as f64;
+            let polygon = [
+                (-half_width - delta_x / 2.0, -half_height - delta_y / 2.0),
+                (half_width + delta_x / 2.0, -half_height + delta_y / 2.0),
+                (half_width - delta_x / 2.0, half_height + delta_y / 2.0),
+                (-half_width + delta_x / 2.0, half_height - delta_y / 2.0),
+            ];
+            endpoints
+                .iter()
+                .all(|point| disk_inside_convex_polygon(*point, radius, &polygon))
+        }
         _ => endpoints.iter().all(|(x, y)| {
             x.abs() + radius < pad_width_nm / 2.0 && y.abs() + radius < pad_height_nm / 2.0
         }),
@@ -932,6 +947,31 @@ fn point_inside_roundrect(
         return true;
     }
     (x - inner_x).hypot(y - inner_y) < corner_radius
+}
+
+fn disk_inside_convex_polygon(point: (f64, f64), radius: f64, polygon: &[(f64, f64)]) -> bool {
+    let signed_area_twice: f64 = polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
+        .map(|(&(ax, ay), &(bx, by))| ax * by - bx * ay)
+        .sum();
+    if signed_area_twice == 0.0 {
+        return false;
+    }
+    let orientation = signed_area_twice.signum();
+    polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
+        .all(|(&(ax, ay), &(bx, by))| {
+            let edge_x = bx - ax;
+            let edge_y = by - ay;
+            let edge_length = edge_x.hypot(edge_y);
+            edge_length > 0.0
+                && orientation * (edge_x * (point.1 - ay) - edge_y * (point.0 - ax)) / edge_length
+                    > radius
+        })
 }
 
 fn drilled_pad_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> DrilledHole {
@@ -2653,6 +2693,8 @@ mod tests {
                 shape: PadShape::Circle,
                 custom_polygon: vec![],
                 roundrect_radius_nm: 0,
+                trapezoid_delta_x_nm: 0,
+                trapezoid_delta_y_nm: 0,
                 drill_width_nm: Some(200_000),
                 drill_height_nm: Some(200_000),
                 drill_offset_x_nm: 0,
@@ -2789,6 +2831,8 @@ mod tests {
                     shape: PadShape::Circle,
                     custom_polygon: vec![],
                     roundrect_radius_nm: 0,
+                    trapezoid_delta_x_nm: 0,
+                    trapezoid_delta_y_nm: 0,
                     drill_width_nm: Some(300_000),
                     drill_height_nm: Some(300_000),
                     drill_offset_x_nm: 0,
@@ -2811,6 +2855,8 @@ mod tests {
                     shape: PadShape::Oval,
                     custom_polygon: vec![],
                     roundrect_radius_nm: 0,
+                    trapezoid_delta_x_nm: 0,
+                    trapezoid_delta_y_nm: 0,
                     drill_width_nm: Some(700_000),
                     drill_height_nm: Some(300_000),
                     drill_offset_x_nm: 0,
@@ -2874,6 +2920,8 @@ mod tests {
                     shape: PadShape::Circle,
                     custom_polygon: vec![],
                     roundrect_radius_nm: 0,
+                    trapezoid_delta_x_nm: 0,
+                    trapezoid_delta_y_nm: 0,
                     drill_width_nm: Some(600_000),
                     drill_height_nm: Some(300_000),
                     drill_offset_x_nm: 0,
@@ -2896,6 +2944,8 @@ mod tests {
                     shape: PadShape::Circle,
                     custom_polygon: vec![],
                     roundrect_radius_nm: 0,
+                    trapezoid_delta_x_nm: 0,
+                    trapezoid_delta_y_nm: 0,
                     drill_width_nm: Some(300_000),
                     drill_height_nm: None,
                     drill_offset_x_nm: 0,
@@ -2934,6 +2984,8 @@ mod tests {
             shape: PadShape::Oval,
             custom_polygon: vec![],
             roundrect_radius_nm: 0,
+            trapezoid_delta_x_nm: 0,
+            trapezoid_delta_y_nm: 0,
             drill_width_nm: Some(800_000),
             drill_height_nm: Some(400_000),
             drill_offset_x_nm: 300_000,
@@ -2986,6 +3038,8 @@ mod tests {
                 shape: PadShape::Circle,
                 custom_polygon: vec![],
                 roundrect_radius_nm: 0,
+                trapezoid_delta_x_nm: 0,
+                trapezoid_delta_y_nm: 0,
                 drill_width_nm: Some(200_000),
                 drill_height_nm: Some(200_000),
                 drill_offset_x_nm: 350_000,
@@ -3019,10 +3073,42 @@ mod tests {
             shape: PadShape::RoundRect,
             custom_polygon: vec![],
             roundrect_radius_nm: 250_000,
+            trapezoid_delta_x_nm: 0,
+            trapezoid_delta_y_nm: 0,
             drill_width_nm: Some(200_000),
             drill_height_nm: Some(200_000),
             drill_offset_x_nm: 875_000,
             drill_offset_y_nm: 375_000,
+            plated: true,
+            layers: vec![Layer::Front, Layer::Back],
+            net_id: Some(1),
+        };
+
+        assert!(!drill_fits_pad(&pad, 200_000, 200_000));
+    }
+
+    #[test]
+    fn trapezoid_hole_containment_respects_sloped_edges() {
+        let pad = Pad {
+            number: "1".into(),
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            width_nm: 2_000_000,
+            height_nm: 1_000_000,
+            source_width_nm: 2_000_000,
+            source_height_nm: 1_000_000,
+            rotation_deg: 0.0,
+            shape: PadShape::Trapezoid,
+            custom_polygon: vec![],
+            roundrect_radius_nm: 0,
+            trapezoid_delta_x_nm: 400_000,
+            trapezoid_delta_y_nm: 0,
+            drill_width_nm: Some(200_000),
+            drill_height_nm: Some(200_000),
+            drill_offset_x_nm: 800_000,
+            drill_offset_y_nm: 350_000,
             plated: true,
             layers: vec![Layer::Front, Layer::Back],
             net_id: Some(1),
