@@ -25,9 +25,21 @@ pub struct Component {
     pub rotation_deg: u16,
     #[serde(default)]
     pub fixed: bool,
+    #[serde(default)]
+    pub side: BoardSide,
+    #[serde(default)]
+    pub allowed_rotations: Vec<u16>,
     /// Named pin/anchor offsets from the component origin.
     #[serde(default)]
     pub anchors: HashMap<String, Point>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardSide {
+    #[default]
+    Front,
+    Back,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -62,6 +74,11 @@ pub enum PlacementConstraint {
     KeepTogether {
         components: Vec<String>,
         max_span_nm: Nm,
+    },
+    Region {
+        subject: String,
+        min: Point,
+        max: Point,
     },
 }
 
@@ -239,12 +256,14 @@ fn validate(problem: &PlacementProblem, options: &PlacementOptions) -> Result<()
     if problem.components.is_empty() {
         return Err("placement requires at least one component".into());
     }
-    if problem
-        .components
-        .iter()
-        .any(|c| c.width_nm <= 0 || c.height_nm <= 0)
-    {
-        return Err("component dimensions must be positive".into());
+    if problem.components.iter().any(|c| {
+        c.width_nm <= 0
+            || c.height_nm <= 0
+            || c.allowed_rotations
+                .iter()
+                .any(|rotation| *rotation >= 360 || !rotation.is_multiple_of(90))
+    }) {
+        return Err("component dimensions or allowed rotations are invalid".into());
     }
     let mut refs: Vec<_> = problem
         .components
@@ -286,6 +305,7 @@ fn validate_references(
             PlacementConstraint::KeepTogether { components, .. } => {
                 components.iter().map(String::as_str).collect()
             }
+            PlacementConstraint::Region { subject, .. } => vec![subject],
         };
         for name in names {
             if !index.contains_key(component_name(name)) {
@@ -357,7 +377,18 @@ fn mutate(
 ) {
     let i = movable[rng.index(movable.len())];
     match rng.next() % 4 {
-        0 => components[i].rotation_deg = (components[i].rotation_deg + 90) % 360,
+        0 => {
+            let allowed = &components[i].allowed_rotations;
+            components[i].rotation_deg = if allowed.is_empty() {
+                (components[i].rotation_deg + 90) % 360
+            } else {
+                let current = allowed
+                    .iter()
+                    .position(|rotation| *rotation == components[i].rotation_deg)
+                    .unwrap_or(0);
+                allowed[(current + 1) % allowed.len()] % 360
+            };
+        }
         1 if movable.len() > 1 => {
             let mut j = movable[rng.index(movable.len())];
             if j == i {
@@ -494,6 +525,13 @@ fn constraint_penalty(
                         - points.iter().map(|p| p.y_nm).min().unwrap();
                     (span - max_span_nm).max(0) as f64 / unit
                 }
+            }
+            PlacementConstraint::Region { subject, min, max } => {
+                let bounds = bounds(&components[index[subject.as_str()]]);
+                (min.x_nm - bounds.min_x).max(0) as f64 / unit
+                    + (min.y_nm - bounds.min_y).max(0) as f64 / unit
+                    + (bounds.max_x - max.x_nm).max(0) as f64 / unit
+                    + (bounds.max_y - max.y_nm).max(0) as f64 / unit
             }
         })
         .sum()
@@ -633,6 +671,8 @@ mod tests {
             position,
             rotation_deg: 0,
             fixed: false,
+            side: BoardSide::Front,
+            allowed_rotations: vec![],
             anchors: HashMap::new(),
         }
     }
@@ -748,5 +788,45 @@ mod tests {
         };
         let result = place(&p, &PlacementOptions::default()).unwrap();
         assert_eq!(result.final_score.constraint_violation, 0.0);
+    }
+
+    #[test]
+    fn region_and_allowed_rotations_are_enforced() {
+        let mut part = component(
+            "U1",
+            Some(Point {
+                x_nm: 1_000_000,
+                y_nm: 1_000_000,
+            }),
+        );
+        part.allowed_rotations = vec![90, 270];
+        part.rotation_deg = 90;
+        let problem = PlacementProblem {
+            width_nm: 10_000_000,
+            height_nm: 10_000_000,
+            grid_nm: 500_000,
+            components: vec![part],
+            connections: vec![],
+            constraints: vec![PlacementConstraint::Region {
+                subject: "U1".into(),
+                min: Point {
+                    x_nm: 4_000_000,
+                    y_nm: 4_000_000,
+                },
+                max: Point {
+                    x_nm: 8_000_000,
+                    y_nm: 8_000_000,
+                },
+            }],
+        };
+        let result = place(&problem, &PlacementOptions::default()).unwrap();
+        assert!(
+            result.components[0]
+                .allowed_rotations
+                .contains(&result.components[0].rotation_deg)
+        );
+        assert!(
+            result.final_score.constraint_violation < result.initial_score.constraint_violation
+        );
     }
 }
