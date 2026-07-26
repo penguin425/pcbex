@@ -524,7 +524,7 @@ impl ImportedBoard {
                 }
                 write!(
                     generated,
-                    "  (zone (net {}) (net_name \"\") (layer \"{}\") (hatch edge 0.5) (teardrop (type padvia)) (polygon (pts",
+                    "  (zone (net {}) (net_name \"\") (layer \"{}\") (hatch edge 0.5) (attr (teardrop (type padvia))) (polygon (pts",
                     route.net_id,
                     layer_name(teardrop.layer)
                 )
@@ -1343,7 +1343,11 @@ fn import_copper_zone(
     polygon_obstacles: &mut Vec<PolygonObstacle>,
     routes: &mut HashMap<u32, Route>,
 ) {
-    if child_values(xs, "keepout").is_some() || child_values(xs, "teardrop").is_some() {
+    if child_values(xs, "keepout").is_some()
+        || child_values(xs, "attr")
+            .and_then(|attr| child_values(attr, "teardrop"))
+            .is_some()
+    {
         return;
     }
     let Some(net_id) = child_values(xs, "net").and_then(|values| number_u32(values.get(1))) else {
@@ -1952,7 +1956,7 @@ mod tests {
             .unwrap();
 
         assert!(output.contains("(arc (start 15.000000 26.000000)"));
-        assert!(output.contains("(teardrop (type padvia))"));
+        assert!(output.contains("(attr (teardrop (type padvia)))"));
         let round_trip = import(&output, rules()).unwrap();
         assert_eq!(round_trip.board.routes[0].arcs.len(), 1);
         assert_eq!(
