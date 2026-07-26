@@ -307,14 +307,32 @@ impl ImportedBoard {
                     .then(|| footprint_reference(values))
             })
             .collect();
-        let courtyards: HashMap<String, (i64, i64)> = top
+        let courtyards: HashMap<String, Vec<Point>> = top
             .iter()
             .filter_map(|item| {
                 let values = item.as_list()?;
                 if atom(values.first()) != Some("footprint") {
                     return None;
                 }
-                courtyard_size(values).map(|size| (footprint_reference(values), size))
+                courtyard_polygon_local(values)
+                    .map(|polygon| (footprint_reference(values), polygon))
+            })
+            .collect();
+        let sides: HashMap<String, BoardSide> = top
+            .iter()
+            .filter_map(|item| {
+                let values = item.as_list()?;
+                if atom(values.first()) != Some("footprint") {
+                    return None;
+                }
+                Some((
+                    footprint_reference(values),
+                    if child_atom(values, "layer").is_some_and(|layer| layer.starts_with("B.")) {
+                        BoardSide::Back
+                    } else {
+                        BoardSide::Front
+                    },
+                ))
             })
             .collect();
         let mut components = Vec::with_capacity(self.board.footprints.len());
@@ -343,7 +361,11 @@ impl ImportedBoard {
                     });
                 }
             }
-            let (width_nm, height_nm) = courtyards.get(&footprint.reference).copied().unwrap_or((
+            let courtyard = courtyards
+                .get(&footprint.reference)
+                .cloned()
+                .unwrap_or_default();
+            let (width_nm, height_nm) = polygon_size(&courtyard).unwrap_or((
                 (max_x - min_x).max(1_000_000),
                 (max_y - min_y).max(1_000_000),
             ));
@@ -354,16 +376,13 @@ impl ImportedBoard {
                 position: Some(footprint.position),
                 rotation_deg: footprint.rotation_deg.round().rem_euclid(360.0) as u16,
                 fixed: fixed.contains(&footprint.reference),
-                side: if footprint
-                    .pads
-                    .iter()
-                    .any(|pad| pad.layers.contains(&Layer::Back))
-                {
-                    BoardSide::Back
-                } else {
-                    BoardSide::Front
-                },
+                side: sides
+                    .get(&footprint.reference)
+                    .copied()
+                    .unwrap_or(BoardSide::Front),
                 allowed_rotations: vec![0, 90, 180, 270],
+                allow_side_flip: true,
+                courtyard,
                 anchors: HashMap::new(),
             });
         }
@@ -413,16 +432,26 @@ impl ImportedBoard {
             let absolute = self.absolute(position);
             let (at_start, at_end) = direct_child_list_span(&self.source[start..end], "at")?
                 .ok_or_else(|| format!("footprint {reference} has no at field"))?;
-            replacements.push((
-                start + at_start,
-                start + at_end,
-                format!(
+            let mut replacement = self.source[start..end].to_string();
+            replacement.replace_range(
+                at_start..at_end,
+                &format!(
                     "(at {:.6} {:.6} {})",
                     mm(absolute.x_nm),
                     mm(absolute.y_nm),
                     component.rotation_deg
                 ),
-            ));
+            );
+            let source_side =
+                if child_atom(values, "layer").is_some_and(|layer| layer.starts_with("B.")) {
+                    BoardSide::Back
+                } else {
+                    BoardSide::Front
+                };
+            if source_side != component.side {
+                replacement = swap_front_back_layers(&replacement);
+            }
+            replacements.push((start, end, replacement));
         }
         if replaced.len() != components.len() {
             let missing = by_reference
@@ -491,7 +520,44 @@ impl ImportedBoard {
     }
 }
 
-fn courtyard_size(footprint: &[Sexp]) -> Option<(i64, i64)> {
+fn swap_front_back_layers(source: &str) -> String {
+    source
+        .replace("\"F.", "\"__PCBEX_SIDE__.")
+        .replace("\"B.", "\"F.")
+        .replace("\"__PCBEX_SIDE__.", "\"B.")
+}
+
+fn courtyard_polygon_local(footprint: &[Sexp]) -> Option<Vec<Point>> {
+    for item in footprint {
+        let Some(values) = item.as_list() else {
+            continue;
+        };
+        if atom(values.first()) != Some("fp_poly")
+            || !matches!(
+                child_atom(values, "layer"),
+                Some("F.CrtYd") | Some("B.CrtYd")
+            )
+        {
+            continue;
+        }
+        let Some(points) = child_values(values, "pts") else {
+            continue;
+        };
+        let polygon: Vec<_> = points
+            .iter()
+            .skip(1)
+            .filter_map(|point| {
+                let xy = point.as_list()?;
+                if atom(xy.first()) != Some("xy") {
+                    return None;
+                }
+                Some(point_mm(number(xy.get(1))?, number(xy.get(2))?))
+            })
+            .collect();
+        if polygon.len() >= 3 {
+            return Some(polygon);
+        }
+    }
     let mut min_x = f64::INFINITY;
     let mut min_y = f64::INFINITY;
     let mut max_x = f64::NEG_INFINITY;
@@ -521,9 +587,23 @@ fn courtyard_size(footprint: &[Sexp]) -> Option<(i64, i64)> {
             max_y = max_y.max(y);
         }
     }
-    min_x
-        .is_finite()
-        .then(|| (nm(max_x - min_x).max(1), nm(max_y - min_y).max(1)))
+    min_x.is_finite().then(|| {
+        vec![
+            point_mm(min_x, min_y),
+            point_mm(max_x, min_y),
+            point_mm(max_x, max_y),
+            point_mm(min_x, max_y),
+        ]
+    })
+}
+
+fn polygon_size(polygon: &[Point]) -> Option<(i64, i64)> {
+    Some((
+        polygon.iter().map(|point| point.x_nm).max()?
+            - polygon.iter().map(|point| point.x_nm).min()?,
+        polygon.iter().map(|point| point.y_nm).max()?
+            - polygon.iter().map(|point| point.y_nm).min()?,
+    ))
 }
 
 fn footprint_is_locked(values: &[Sexp]) -> bool {
@@ -1756,8 +1836,10 @@ mod tests {
         let mut placed = problem.components;
         placed[1].position = Some(point_mm(20.0, 10.0));
         placed[1].rotation_deg = 180;
+        placed[1].side = BoardSide::Back;
         let output = imported.write_placements(&placed).unwrap();
         assert!(output.contains("(at 30.000000 30.000000 180)"));
+        assert!(output.contains("(layer \"B.Cu\")"));
         assert!(output.contains("(at 15.000000 25.000000 90)"));
         let round_trip = import(&output, rules()).unwrap();
         assert_eq!(
@@ -1765,6 +1847,10 @@ mod tests {
             point_mm(20.0, 10.0)
         );
         assert_eq!(round_trip.board.footprints[1].rotation_deg, 180.0);
+        assert_eq!(
+            round_trip.placement_problem(500_000).unwrap().components[1].side,
+            BoardSide::Back
+        );
     }
 
     #[test]
@@ -1943,5 +2029,6 @@ mod tests {
         assert_eq!(component.height_nm, 4_000_000);
         assert_eq!(component.side, BoardSide::Back);
         assert_eq!(component.allowed_rotations, vec![0, 90, 180, 270]);
+        assert_eq!(component.courtyard.len(), 4);
     }
 }
