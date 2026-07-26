@@ -31,6 +31,8 @@ jobs:
         run: cargo build --workspace --release --locked
       - name: Compile routing benchmarks
         run: cargo bench -p pcbex-core --bench routing --no-run --locked
+      - name: Enforce deterministic routing performance budgets
+        run: cargo test -p pcbex-core --test performance_budget --locked -- --nocapture
 
   python:
     name: Python

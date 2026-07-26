@@ -42,6 +42,7 @@ out of scope.
 | Board cutouts and multiple contours | Largest Edge.Cuts contour is the outer outline; enclosed contours are clearance-aware holes | Core routing/checking regression, importer classification test, and holed curved-board E2E fixture |
 | Property and fuzz testing | Geometry symmetry/translation properties plus KiCad parser and board-model libFuzzer targets | Property tests run on every PR; scheduled/manual fuzz workflow runs both targets |
 | Routing performance suite | Criterion scenarios for obstacle, 5/10-net, and board-cutout routing | Benchmark targets compile on every PR and retain local Criterion baselines |
+| Performance regression gate | Deterministic search-state budgets for 10 parallel nets and a 100 mm board with 200 obstacles | Dedicated `performance_budget` target runs on every PR |
 | KiCad placement I/O | Footprints, pad-net connections, locked state, origin-aware position/rotation write-back, and `place-kicad` CLI | Locked/rotated/non-zero-origin round-trip regression and CLI integration test |
 | Multilayer routing | `In1.Cu`–`In30.Cu` model/serde, KiCad layer-table and item I/O, all-layer through vias, and per-net layer constraints | Forced inner-layer core regression, four-layer importer test, and real-KiCad four-layer DRC/idempotence fixture |
 | Differential-pair rules and checking | Explicit pair model, KiCad net-class inference, differential width, skew/coupling/layer-via symmetry checks | Coupled/skew core regression and KiCad `_P`/`_N` inference test |
