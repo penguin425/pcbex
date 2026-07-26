@@ -109,6 +109,22 @@ pub fn check_board(board: &Board) -> CheckReport {
     }
     let mut report = CheckReport::default();
     let known_net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
+    let mut seen_net_ids = HashSet::new();
+    let mut seen_net_names = HashSet::new();
+    for net in &board.nets {
+        let id_is_unique = seen_net_ids.insert(net.id);
+        let name_is_unique = seen_net_names.insert(net.name.as_str());
+        if net.id == 0 || net.name.trim().is_empty() || !id_is_unique || !name_is_unique {
+            report.push(
+                "net_table",
+                format!(
+                    "net {} must have a unique non-zero ID and unique non-empty name",
+                    net.id
+                ),
+                vec![net.id],
+            );
+        }
+    }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
             if !pad_geometry_is_valid(pad) {
@@ -3524,5 +3540,34 @@ mod tests {
             .collect();
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].net_ids, vec![99]);
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_net_table_identities() {
+        let mut board = base();
+        let net = |id, name: &str| Net {
+            id,
+            name: name.into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        };
+        board.nets = vec![
+            net(1, "signal"),
+            net(0, "ground"),
+            net(2, " "),
+            net(1, "other"),
+            net(3, "signal"),
+        ];
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "net_table")
+                .count(),
+            4
+        );
     }
 }
