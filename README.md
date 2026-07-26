@@ -290,10 +290,13 @@ reject increases in total length, vias, bends, or unrouted nets.
 ## BGA escape routing
 
 `escape_groups` assigns dense package nets a fanout distance and target copper
-layer. Before global routing, pcbex creates deterministic radial dog-bone
-tracks and stackup-aware vias from each first terminal, routes from the escaped
-inner-layer locations, then restores the original pad terminals. The completed
-board, including every fanout stub, must pass the normal full-board checker.
+layer. Four-way, radial, row, and column strategies classify package pads from
+their group centroid. Via locations may snap to an absolute grid and search up
+to eight outward rings; blocked candidates rotate through the remaining
+directions. Before global routing, pcbex creates checked dog-bone tracks and
+stackup-aware vias from each first terminal, routes from the escaped inner-layer
+locations, then restores the original pad terminals. The completed board,
+including every fanout stub, must pass the normal full-board checker.
 
 ## Manufacturing checks
 
