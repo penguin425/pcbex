@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 
 pub mod checking;
 mod geometry;
@@ -309,6 +309,7 @@ pub struct Board {
     #[serde(default)]
     pub footprints: Vec<Footprint>,
     #[serde(default)]
+    #[serde(serialize_with = "serialize_net_classes")]
     pub net_classes: HashMap<String, NetClassRules>,
     #[serde(default)]
     pub differential_pairs: Vec<DifferentialPair>,
@@ -325,6 +326,19 @@ pub struct Board {
 pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 fn legacy_schema_version() -> u32 {
     1
+}
+
+fn serialize_net_classes<S>(
+    classes: &HashMap<String, NetClassRules>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    classes
+        .iter()
+        .collect::<BTreeMap<_, _>>()
+        .serialize(serializer)
 }
 
 pub fn migrate_board_json(source: &str) -> Result<serde_json::Value, String> {

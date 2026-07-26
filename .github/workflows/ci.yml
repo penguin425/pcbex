@@ -33,6 +33,8 @@ jobs:
         run: cargo bench -p pcbex-core --bench routing --no-run --locked
       - name: Enforce deterministic routing performance budgets
         run: cargo test -p pcbex-core --test performance_budget --locked -- --nocapture
+      - name: Run practical routing regression corpus
+        run: scripts/regression-corpus.sh target/release/pcbex build/regression-corpus
       - name: Verify completion audit is current
         run: python3 scripts/update-completion-audit.py --check
 

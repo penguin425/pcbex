@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "width_nm": 30000000,
+  "height_nm": 18000000,
+  "copper_layers": ["F.Cu", "B.Cu"],
+  "rules": {
+    "grid_nm": 250000,
+    "track_width_nm": 250000,
+    "clearance_nm": 200000,
+    "via_diameter_nm": 600000,
+    "via_drill_nm": 300000,
+    "bend_cost": 5,
+    "via_cost": 20
+  },
+  "round_obstacles": [
+    {
+      "center": {"x_nm": 15000000, "y_nm": 9500000},
+      "diameter_nm": 1500000,
+      "layers": ["F.Cu"],
+      "net_id": null
+    }
+  ],
+  "differential_pairs": [
+    {
+      "name": "USB_HS",
+      "positive_net_id": 1,
+      "negative_net_id": 2,
+      "gap_nm": 750000,
+      "gap_tolerance_nm": 50000,
+      "max_skew_nm": 0,
+      "min_coupled_percent": 100
+    }
+  ],
+  "nets": [
+    {
+      "id": 1,
+      "name": "USB_D+",
+      "priority": 10,
+      "terminals": [
+        {"position": {"x_nm": 2000000, "y_nm": 8500000}, "layers": ["F.Cu"]},
+        {"position": {"x_nm": 28000000, "y_nm": 8500000}, "layers": ["F.Cu"]}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "USB_D-",
+      "priority": 10,
+      "terminals": [
+        {"position": {"x_nm": 2000000, "y_nm": 9500000}, "layers": ["F.Cu"]},
+        {"position": {"x_nm": 28000000, "y_nm": 9500000}, "layers": ["F.Cu"]}
+      ]
+    }
+  ]
+}

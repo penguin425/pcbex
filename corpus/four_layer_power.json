@@ -1,0 +1,71 @@
+{
+  "schema_version": 2,
+  "width_nm": 40000000,
+  "height_nm": 30000000,
+  "copper_layers": ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"],
+  "rules": {
+    "grid_nm": 500000,
+    "track_width_nm": 300000,
+    "clearance_nm": 250000,
+    "via_diameter_nm": 700000,
+    "via_drill_nm": 350000,
+    "bend_cost": 5,
+    "via_cost": 20
+  },
+  "via_strategy": "auto",
+  "net_classes": {
+    "Power": {
+      "track_width_nm": 800000,
+      "clearance_nm": 400000,
+      "via_diameter_nm": 1000000,
+      "via_drill_nm": 500000,
+      "layers": ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"]
+    },
+    "Inner": {
+      "track_width_nm": 300000,
+      "clearance_nm": 250000,
+      "via_diameter_nm": 700000,
+      "via_drill_nm": 350000,
+      "layers": ["In1.Cu"]
+    }
+  },
+  "obstacles": [
+    {
+      "min": {"x_nm": 17000000, "y_nm": 4000000},
+      "max": {"x_nm": 23000000, "y_nm": 26000000},
+      "layers": ["F.Cu", "B.Cu"],
+      "net_id": null
+    }
+  ],
+  "nets": [
+    {
+      "id": 1,
+      "name": "VBUS",
+      "class": "Power",
+      "priority": 20,
+      "terminals": [
+        {"position": {"x_nm": 3000000, "y_nm": 6000000}, "layers": ["F.Cu"]},
+        {"position": {"x_nm": 37000000, "y_nm": 6000000}, "layers": ["B.Cu"]}
+      ]
+    },
+    {
+      "id": 2,
+      "name": "CLK_INNER",
+      "class": "Inner",
+      "priority": 10,
+      "terminals": [
+        {"position": {"x_nm": 3000000, "y_nm": 15000000}, "layers": ["In1.Cu"]},
+        {"position": {"x_nm": 37000000, "y_nm": 15000000}, "layers": ["In1.Cu"]}
+      ]
+    },
+    {
+      "id": 3,
+      "name": "SENSE",
+      "priority": 0,
+      "terminals": [
+        {"position": {"x_nm": 3000000, "y_nm": 24000000}, "layers": ["F.Cu"]},
+        {"position": {"x_nm": 37000000, "y_nm": 24000000}, "layers": ["F.Cu"]}
+      ]
+    }
+  ]
+}

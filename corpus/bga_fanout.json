@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "width_nm": 50000000,
+  "height_nm": 50000000,
+  "copper_layers": ["F.Cu", "In1.Cu", "In2.Cu", "B.Cu"],
+  "rules": {
+    "grid_nm": 250000,
+    "track_width_nm": 200000,
+    "clearance_nm": 150000,
+    "via_diameter_nm": 500000,
+    "via_drill_nm": 250000,
+    "bend_cost": 8,
+    "via_cost": 25
+  },
+  "via_strategy": "auto",
+  "round_obstacles": [
+    {"center": {"x_nm": 24000000, "y_nm": 24000000}, "diameter_nm": 500000, "layers": ["F.Cu"], "net_id": 1},
+    {"center": {"x_nm": 25000000, "y_nm": 24000000}, "diameter_nm": 500000, "layers": ["F.Cu"], "net_id": 2},
+    {"center": {"x_nm": 26000000, "y_nm": 24000000}, "diameter_nm": 500000, "layers": ["F.Cu"], "net_id": 3},
+    {"center": {"x_nm": 24000000, "y_nm": 25000000}, "diameter_nm": 500000, "layers": ["F.Cu"], "net_id": 4},
+    {"center": {"x_nm": 26000000, "y_nm": 25000000}, "diameter_nm": 500000, "layers": ["F.Cu"], "net_id": 5},
+    {"center": {"x_nm": 24000000, "y_nm": 26000000}, "diameter_nm": 500000, "layers": ["F.Cu"], "net_id": 6},
+    {"center": {"x_nm": 25000000, "y_nm": 26000000}, "diameter_nm": 500000, "layers": ["F.Cu"], "net_id": 7},
+    {"center": {"x_nm": 26000000, "y_nm": 26000000}, "diameter_nm": 500000, "layers": ["F.Cu"], "net_id": 8}
+  ],
+  "nets": [
+    {"id": 1, "name": "BGA_A1", "priority": 8, "terminals": [{"position": {"x_nm": 24000000, "y_nm": 24000000}, "layers": ["F.Cu"]}, {"position": {"x_nm": 3000000, "y_nm": 5000000}, "layers": ["F.Cu"]}]},
+    {"id": 2, "name": "BGA_A2", "priority": 7, "terminals": [{"position": {"x_nm": 25000000, "y_nm": 24000000}, "layers": ["F.Cu"]}, {"position": {"x_nm": 10000000, "y_nm": 3000000}, "layers": ["F.Cu"]}]},
+    {"id": 3, "name": "BGA_A3", "priority": 6, "terminals": [{"position": {"x_nm": 26000000, "y_nm": 24000000}, "layers": ["F.Cu"]}, {"position": {"x_nm": 20000000, "y_nm": 3000000}, "layers": ["F.Cu"]}]},
+    {"id": 4, "name": "BGA_B1", "priority": 5, "terminals": [{"position": {"x_nm": 24000000, "y_nm": 25000000}, "layers": ["F.Cu"]}, {"position": {"x_nm": 3000000, "y_nm": 25000000}, "layers": ["F.Cu"]}]},
+    {"id": 5, "name": "BGA_B3", "priority": 4, "terminals": [{"position": {"x_nm": 26000000, "y_nm": 25000000}, "layers": ["F.Cu"]}, {"position": {"x_nm": 47000000, "y_nm": 25000000}, "layers": ["F.Cu"]}]},
+    {"id": 6, "name": "BGA_C1", "priority": 3, "terminals": [{"position": {"x_nm": 24000000, "y_nm": 26000000}, "layers": ["F.Cu"]}, {"position": {"x_nm": 20000000, "y_nm": 47000000}, "layers": ["F.Cu"]}]},
+    {"id": 7, "name": "BGA_C2", "priority": 2, "terminals": [{"position": {"x_nm": 25000000, "y_nm": 26000000}, "layers": ["F.Cu"]}, {"position": {"x_nm": 30000000, "y_nm": 47000000}, "layers": ["F.Cu"]}]},
+    {"id": 8, "name": "BGA_C3", "priority": 1, "terminals": [{"position": {"x_nm": 26000000, "y_nm": 26000000}, "layers": ["F.Cu"]}, {"position": {"x_nm": 45000000, "y_nm": 45000000}, "layers": ["F.Cu"]}]}
+  ]
+}
