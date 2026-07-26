@@ -167,6 +167,15 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    for cutout in &board.cutouts {
+        if !custom_pad_polygon_is_valid(cutout) {
+            report.push(
+                "board_cutout",
+                "board cutout must be a simple non-degenerate polygon".into(),
+                vec![],
+            );
+        }
+    }
     let known_net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
     let mut seen_net_ids = HashSet::new();
     let mut seen_net_names = HashSet::new();
@@ -4325,5 +4334,43 @@ mod tests {
                     .any(|violation| violation.rule == "board_outline")
             );
         }
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_board_cutout_topology() {
+        let mut board = base();
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let valid = vec![
+            point(2_000_000, 2_000_000),
+            point(4_000_000, 2_000_000),
+            point(4_000_000, 4_000_000),
+            point(2_000_000, 4_000_000),
+        ];
+        board.cutouts = vec![
+            valid[..2].to_vec(),
+            vec![valid[0], valid[0], valid[2]],
+            vec![
+                point(2_000_000, 2_000_000),
+                point(3_000_000, 2_000_000),
+                point(4_000_000, 2_000_000),
+            ],
+            vec![
+                point(2_000_000, 2_000_000),
+                point(4_000_000, 4_000_000),
+                point(2_000_000, 4_000_000),
+                point(4_000_000, 2_000_000),
+            ],
+            valid,
+        ];
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "board_cutout")
+                .count(),
+            4
+        );
     }
 }

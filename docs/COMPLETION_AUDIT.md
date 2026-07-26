@@ -110,6 +110,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Board dimension validation | Normal DRC independently requires positive board width and height, matching the routing precondition | Zero-width, negative-height, and valid-board regressions |
 | Copper-layer table validation | Normal DRC independently requires a non-empty, duplicate-free table containing only supported front/back/internal copper layers | Empty, duplicate, unsupported `Inner(31)`, and valid-stackup regressions |
 | Board outline validation | Normal DRC requires an explicit outline to be a simple non-degenerate polygon while preserving the empty-outline rectangular fallback | Insufficient-point, repeated-edge, zero-area, self-crossing, fallback, and valid-outline regressions |
+| Board cutout topology validation | Normal DRC requires every cutout to be a simple non-degenerate polygon before board-boundary and copper-edge checks consume it | Insufficient-point, repeated-edge, zero-area, self-crossing, and valid-cutout regressions |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -133,7 +134,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.81.0 exposes 127 Rust tests and 11 Python tests. The release workflow
+Version 1.82.0 exposes 128 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
