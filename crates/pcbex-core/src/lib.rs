@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 
 pub mod checking;
 mod geometry;
@@ -466,9 +466,26 @@ pub struct CopperZone {
     pub clearance_nm: Nm,
     #[serde(default = "zone_minimum_thickness")]
     pub minimum_thickness_nm: Nm,
+    #[serde(default = "zone_thermal_relief")]
+    pub thermal_relief: bool,
+    #[serde(default = "zone_thermal_gap")]
+    pub thermal_gap_nm: Nm,
+    #[serde(default = "zone_thermal_spoke_width")]
+    pub thermal_spoke_width_nm: Nm,
+    #[serde(default)]
+    pub filled_polygons: Vec<Vec<Point>>,
 }
 
 fn zone_minimum_thickness() -> Nm {
+    250_000
+}
+fn zone_thermal_relief() -> bool {
+    true
+}
+fn zone_thermal_gap() -> Nm {
+    200_000
+}
+fn zone_thermal_spoke_width() -> Nm {
     250_000
 }
 
@@ -2067,11 +2084,229 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     tune_route_lengths(&mut out)?;
     couple_differential_pairs(&mut out, &mut report);
     report.generated_teardrops = generate_route_teardrops(&mut out);
+    fill_copper_zones(&mut out);
     report.expanded_states += paired_expanded;
     report.coupled_differential_pairs.extend(coupled);
     report.coupled_differential_pairs.sort();
     report.coupled_differential_pairs.dedup();
     Ok((out, report))
+}
+
+pub fn fill_copper_zones(board: &mut Board) -> usize {
+    let snapshot = board.clone();
+    let grid = board.rules.grid_nm;
+    let mut total_cells = 0;
+    for route in &mut board.routes {
+        for zone in &mut route.zones {
+            zone.filled_polygons.clear();
+            let Some((min_x, max_x, min_y, max_y)) = polygon_bounds(&zone.polygon) else {
+                continue;
+            };
+            let mut cells = HashSet::new();
+            for y in (min_y / grid)..=(max_y / grid) {
+                for x in (min_x / grid)..=(max_x / grid) {
+                    let center = Point {
+                        x_nm: x * grid,
+                        y_nm: y * grid,
+                    };
+                    let half = grid / 2;
+                    let corners = [
+                        Point {
+                            x_nm: center.x_nm - half,
+                            y_nm: center.y_nm - half,
+                        },
+                        Point {
+                            x_nm: center.x_nm + half,
+                            y_nm: center.y_nm - half,
+                        },
+                        Point {
+                            x_nm: center.x_nm + half,
+                            y_nm: center.y_nm + half,
+                        },
+                        Point {
+                            x_nm: center.x_nm - half,
+                            y_nm: center.y_nm + half,
+                        },
+                    ];
+                    if corners
+                        .iter()
+                        .all(|point| geometry::point_in_polygon(*point, &zone.polygon))
+                        && !zone_cell_blocked(&snapshot, route.net_id, zone, center, &corners)
+                    {
+                        cells.insert((x, y));
+                    }
+                }
+            }
+            cells = connected_zone_cells(&snapshot, route.net_id, cells, grid);
+            total_cells += cells.len();
+            zone.filled_polygons = cells
+                .into_iter()
+                .map(|(x, y)| {
+                    let center_x = x * grid;
+                    let center_y = y * grid;
+                    let half = grid / 2;
+                    vec![
+                        Point {
+                            x_nm: center_x - half,
+                            y_nm: center_y - half,
+                        },
+                        Point {
+                            x_nm: center_x + half,
+                            y_nm: center_y - half,
+                        },
+                        Point {
+                            x_nm: center_x + half,
+                            y_nm: center_y + half,
+                        },
+                        Point {
+                            x_nm: center_x - half,
+                            y_nm: center_y + half,
+                        },
+                    ]
+                })
+                .collect();
+        }
+    }
+    total_cells
+}
+
+fn zone_cell_blocked(
+    board: &Board,
+    net_id: u32,
+    zone: &CopperZone,
+    center: Point,
+    corners: &[Point; 4],
+) -> bool {
+    if corners
+        .iter()
+        .any(|point| !board.point_inside_board(*point, 0))
+    {
+        return true;
+    }
+    let clearance_twice = 2 * zone.clearance_nm;
+    if board.keepouts.iter().any(|keepout| {
+        keepout.layers.contains(&zone.layer)
+            && keepout.net_id != Some(net_id)
+            && corners.iter().any(|point| {
+                geometry::point_in_polygon(*point, &keepout.polygon)
+                    || geometry::point_polygon_closer_than(
+                        *point,
+                        &keepout.polygon,
+                        clearance_twice,
+                    )
+            })
+    }) {
+        return true;
+    }
+    if board.obstacles.iter().any(|obstacle| {
+        obstacle.layers.contains(&zone.layer)
+            && obstacle.net_id != Some(net_id)
+            && corners.iter().any(|point| {
+                geometry::point_rect_closer_than(
+                    *point,
+                    obstacle.min,
+                    obstacle.max,
+                    clearance_twice,
+                )
+            })
+    }) {
+        return true;
+    }
+    if board.round_obstacles.iter().any(|obstacle| {
+        obstacle.layers.contains(&zone.layer)
+            && obstacle.net_id != Some(net_id)
+            && corners.iter().any(|point| {
+                geometry::points_closer_than(
+                    *point,
+                    obstacle.center,
+                    obstacle.diameter_nm + clearance_twice,
+                )
+            })
+    }) {
+        return true;
+    }
+    if board.routes.iter().any(|route| {
+        route.net_id != net_id
+            && route.segments.iter().any(|segment| {
+                segment.layer == zone.layer
+                    && corners.iter().any(|point| {
+                        geometry::point_segment_closer_than(
+                            *point,
+                            segment.start,
+                            segment.end,
+                            segment.width_nm + clearance_twice,
+                        )
+                    })
+            })
+    }) {
+        return true;
+    }
+    if zone.thermal_relief {
+        for pad in board
+            .footprints
+            .iter()
+            .flat_map(|footprint| &footprint.pads)
+            .filter(|pad| pad.net_id == Some(net_id) && pad.layers.contains(&zone.layer))
+        {
+            let half_width = pad.width_nm / 2 + zone.thermal_gap_nm;
+            let half_height = pad.height_nm / 2 + zone.thermal_gap_nm;
+            let dx = (center.x_nm - pad.position.x_nm).abs();
+            let dy = (center.y_nm - pad.position.y_nm).abs();
+            if dx <= half_width
+                && dy <= half_height
+                && dx > zone.thermal_spoke_width_nm / 2
+                && dy > zone.thermal_spoke_width_nm / 2
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn connected_zone_cells(
+    board: &Board,
+    net_id: u32,
+    cells: HashSet<(Nm, Nm)>,
+    grid: Nm,
+) -> HashSet<(Nm, Nm)> {
+    if cells.is_empty() {
+        return cells;
+    }
+    let seeds: Vec<_> = board
+        .nets
+        .iter()
+        .find(|net| net.id == net_id)
+        .into_iter()
+        .flat_map(|net| &net.terminals)
+        .map(|terminal| {
+            (
+                nearest_grid(terminal.position.x_nm, grid),
+                nearest_grid(terminal.position.y_nm, grid),
+            )
+        })
+        .filter(|cell| cells.contains(cell))
+        .collect();
+    let start = seeds
+        .first()
+        .copied()
+        .unwrap_or_else(|| *cells.iter().next().unwrap());
+    let mut connected = HashSet::new();
+    let mut queue = VecDeque::from([start]);
+    while let Some(cell) = queue.pop_front() {
+        if !cells.contains(&cell) || !connected.insert(cell) {
+            continue;
+        }
+        for neighbor in [
+            (cell.0 + 1, cell.1),
+            (cell.0 - 1, cell.1),
+            (cell.0, cell.1 + 1),
+            (cell.0, cell.1 - 1),
+        ] {
+            queue.push_back(neighbor);
+        }
+    }
+    connected
 }
 
 pub fn generate_route_teardrops(board: &mut Board) -> usize {
@@ -3533,5 +3768,107 @@ mod tests {
         assert_eq!(board.routes[0].teardrops[0].layer, Layer::Front);
         assert!(checking::check_board(&board).is_clean());
         assert_eq!(generate_route_teardrops(&mut board), 0);
+    }
+
+    #[test]
+    fn fills_zones_with_clearance_thermals_and_island_removal() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.keepouts.push(Keepout {
+            polygon: vec![
+                Point {
+                    x_nm: 4_500_000,
+                    y_nm: 1_000_000,
+                },
+                Point {
+                    x_nm: 5_500_000,
+                    y_nm: 1_000_000,
+                },
+                Point {
+                    x_nm: 5_500_000,
+                    y_nm: 9_000_000,
+                },
+                Point {
+                    x_nm: 4_500_000,
+                    y_nm: 9_000_000,
+                },
+            ],
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
+        board.nets[0].terminals[0].position = Point {
+            x_nm: 2_000_000,
+            y_nm: 5_000_000,
+        };
+        board.footprints.push(Footprint {
+            reference: "U1".into(),
+            position: board.nets[0].terminals[0].position,
+            rotation_deg: 0.0,
+            pads: vec![Pad {
+                number: "1".into(),
+                position: board.nets[0].terminals[0].position,
+                width_nm: 1_000_000,
+                height_nm: 1_000_000,
+                source_width_nm: 1_000_000,
+                source_height_nm: 1_000_000,
+                rotation_deg: 0.0,
+                shape: PadShape::Rect,
+                custom_polygon: vec![],
+                layers: vec![Layer::Front],
+                net_id: Some(1),
+            }],
+        });
+        board.routes = vec![Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![CopperZone {
+                polygon: vec![
+                    Point {
+                        x_nm: 1_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    Point {
+                        x_nm: 9_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    Point {
+                        x_nm: 9_000_000,
+                        y_nm: 9_000_000,
+                    },
+                    Point {
+                        x_nm: 1_000_000,
+                        y_nm: 9_000_000,
+                    },
+                ],
+                layer: Layer::Front,
+                clearance_nm: 250_000,
+                minimum_thickness_nm: 250_000,
+                thermal_relief: true,
+                thermal_gap_nm: 250_000,
+                thermal_spoke_width_nm: 250_000,
+                filled_polygons: vec![],
+            }],
+        }];
+
+        let count = fill_copper_zones(&mut board);
+        assert!(count > 50, "filled cells: {count}");
+        let fills = &board.routes[0].zones[0].filled_polygons;
+        assert!(fills.iter().all(|polygon| {
+            polygon.iter().map(|point| point.x_nm).sum::<Nm>() / (polygon.len() as Nm) < 4_500_000
+        }));
+        let centers: HashSet<_> = fills
+            .iter()
+            .map(|polygon| {
+                (
+                    polygon.iter().map(|point| point.x_nm).sum::<Nm>() / 4,
+                    polygon.iter().map(|point| point.y_nm).sum::<Nm>() / 4,
+                )
+            })
+            .collect();
+        assert!(centers.contains(&(2_000_000, 5_000_000)));
+        assert!(!centers.contains(&(2_500_000, 5_500_000)));
     }
 }

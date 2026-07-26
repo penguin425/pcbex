@@ -122,6 +122,9 @@ terminal arrangements retain the independently routed fallback.
 Net-owned polygonal copper zones can be supplied in route JSON and are emitted
 as native KiCad zones with clearance and minimum-thickness settings. Both
 unfilled outlines and filled zone polygons are imported as owned copper.
+The internal zone filler rasterizes conservative grid cells, removes clearance
+conflicts, creates cross-shaped pad thermal reliefs, and discards islands not
+connected to the owning net before exporting explicit filled polygons.
 Use `--drc` to run `kicad-cli pcb drc` on the result when KiCad is installed.
 After DRC passes, generate Gerber and Excellon drill files with:
 

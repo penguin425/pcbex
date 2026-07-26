@@ -26,11 +26,14 @@ impl CheckReport {
 }
 
 pub fn check_board(board: &Board) -> CheckReport {
-    if board
-        .routes
-        .iter()
-        .any(|route| !route.arcs.is_empty() || !route.teardrops.is_empty())
-    {
+    if board.routes.iter().any(|route| {
+        !route.arcs.is_empty()
+            || !route.teardrops.is_empty()
+            || route
+                .zones
+                .iter()
+                .any(|zone| !zone.filled_polygons.is_empty())
+    }) {
         let arc_net_ids: HashSet<_> = board
             .routes
             .iter()
@@ -47,6 +50,15 @@ pub fn check_board(board: &Board) -> CheckReport {
                     layers: vec![teardrop.layer],
                     net_id: Some(route.net_id),
                 });
+            }
+            for zone in &mut route.zones {
+                for polygon in zone.filled_polygons.drain(..) {
+                    teardrop_obstacles.push(crate::PolygonObstacle {
+                        polygon,
+                        layers: vec![zone.layer],
+                        net_id: Some(route.net_id),
+                    });
+                }
             }
         }
         linearized.polygon_obstacles.extend(teardrop_obstacles);

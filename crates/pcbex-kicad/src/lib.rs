@@ -577,11 +577,33 @@ impl ImportedBoard {
                     )
                     .map_err(|e| e.to_string())?;
                 }
-                writeln!(
+                write!(
                     generated,
-                    ")) (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.3)))"
+                    ")) (fill yes (thermal_gap {:.6}) (thermal_bridge_width {:.6}))",
+                    mm(zone.thermal_gap_nm),
+                    mm(zone.thermal_spoke_width_nm)
                 )
                 .map_err(|e| e.to_string())?;
+                for polygon in &zone.filled_polygons {
+                    write!(
+                        generated,
+                        " (filled_polygon (layer \"{}\") (pts",
+                        layer_name(zone.layer)
+                    )
+                    .map_err(|e| e.to_string())?;
+                    for point in polygon {
+                        let point = self.absolute(*point);
+                        write!(
+                            generated,
+                            " (xy {:.6} {:.6})",
+                            mm(point.x_nm),
+                            mm(point.y_nm)
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                    write!(generated, "))").map_err(|e| e.to_string())?;
+                }
+                writeln!(generated, ")").map_err(|e| e.to_string())?;
             }
         }
         if generated.is_empty() {
@@ -1378,6 +1400,17 @@ fn import_copper_zone(
             .and_then(|values| number(values.get(1)))
             .map(nm)
             .unwrap_or(250_000);
+        let fill = child_values(xs, "fill");
+        let thermal_gap_nm = fill
+            .and_then(|values| child_values(values, "thermal_gap"))
+            .and_then(|values| number(values.get(1)))
+            .map(nm)
+            .unwrap_or(200_000);
+        let thermal_spoke_width_nm = fill
+            .and_then(|values| child_values(values, "thermal_bridge_width"))
+            .and_then(|values| number(values.get(1)))
+            .map(nm)
+            .unwrap_or(250_000);
         routes
             .entry(net_id)
             .or_insert_with(|| Route {
@@ -1394,6 +1427,10 @@ fn import_copper_zone(
                 layer,
                 clearance_nm,
                 minimum_thickness_nm,
+                thermal_relief: true,
+                thermal_gap_nm,
+                thermal_spoke_width_nm,
+                filled_polygons: Vec::new(),
             });
     }
     for child in xs {
@@ -1414,6 +1451,11 @@ fn import_copper_zone(
         };
         let polygon = import_polygon_points(values, origin);
         if polygon.len() >= 3 {
+            if let Some(route) = routes.get_mut(&net_id)
+                && let Some(zone) = route.zones.iter_mut().find(|zone| zone.layer == layer)
+            {
+                zone.filled_polygons.push(polygon.clone());
+            }
             polygon_obstacles.push(PolygonObstacle {
                 polygon,
                 layers: vec![layer],
@@ -2001,6 +2043,10 @@ mod tests {
                     layer: Layer::Front,
                     clearance_nm: 400_000,
                     minimum_thickness_nm: 250_000,
+                    thermal_relief: true,
+                    thermal_gap_nm: 200_000,
+                    thermal_spoke_width_nm: 250_000,
+                    filled_polygons: vec![polygon.clone()],
                 }],
             }])
             .unwrap();
@@ -2013,6 +2059,8 @@ mod tests {
         assert_eq!(zone.polygon, polygon);
         assert_eq!(zone.clearance_nm, 400_000);
         assert_eq!(zone.minimum_thickness_nm, 250_000);
+        assert_eq!(zone.filled_polygons.len(), 1);
+        assert_eq!(zone.filled_polygons[0], polygon);
         assert!(round_trip.board.polygon_obstacles.iter().any(|obstacle| {
             obstacle.net_id == Some(1)
                 && obstacle.layers == [Layer::Front]
