@@ -46,6 +46,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Multilayer routing | `In1.Cu`–`In30.Cu` model/serde, KiCad layer-table and item I/O, all-layer through vias, and per-net layer constraints | Forced inner-layer core regression, four-layer importer test, and real-KiCad four-layer DRC/idempotence fixture |
 | Differential-pair rules and checking | Explicit pair model, KiCad net-class inference, differential width, skew/coupling/layer-via symmetry checks | Coupled/skew core regression and KiCad `_P`/`_N` inference test |
 | Coupled differential-pair autorouting | Pair-terminal correspondence, full-route translation, and accept-only-on-clean fallback | 100%-coupled, zero-skew autorouting regression |
+| Simultaneous differential-pair search | Pair-state A* validates both offset tracks at every step before committing either route | One-sided obstacle regression requires a joint detour while retaining 100% coupling |
 | Length constraints and meander tuning | Net-class minimum/maximum length checks and deterministic legal orthogonal detours | Meander regression verifies the interval and a clean full-board check |
 | Filled copper-zone interoperability | KiCad filled polygons become exact layer/net-owned copper and are preserved during route write-back | Filled GND-zone import regression |
 | Native copper-zone generation | Net-owned polygon model with layer, clearance, and minimum thickness; native KiCad zone output and outline/fill import | Zone syntax, parameter, polygon, and owned-obstacle round-trip regression |
@@ -78,7 +79,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.16.0 exposes 66 Rust tests and 11 Python tests. The release workflow
+Version 1.17.0 exposes 66 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
