@@ -169,6 +169,23 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    if explicit_outline_is_valid
+        && !board.outline.is_empty()
+        && board.width_nm > 0
+        && board.height_nm > 0
+        && board.outline.iter().any(|point| {
+            point.x_nm < 0
+                || point.y_nm < 0
+                || point.x_nm > board.width_nm
+                || point.y_nm > board.height_nm
+        })
+    {
+        report.push(
+            "board_outline_bounds",
+            "explicit board outline must remain inside the declared board dimensions".into(),
+            vec![],
+        );
+    }
     let effective_outline = explicit_outline_is_valid.then(|| board.effective_outline());
     for cutout in &board.cutouts {
         let topology_is_valid = custom_pad_polygon_is_valid(cutout);
@@ -4418,6 +4435,43 @@ mod tests {
                 .filter(|violation| violation.rule == "board_cutout_bounds")
                 .count(),
             1
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_explicit_board_outlines_outside_dimensions() {
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let outline = |minimum, maximum| {
+            vec![
+                point(minimum, minimum),
+                point(maximum, minimum),
+                point(maximum, maximum),
+                point(minimum, maximum),
+            ]
+        };
+        let mut negative = base();
+        negative.outline = outline(-1, 9_000_000);
+        let mut oversized = base();
+        oversized.outline = outline(1_000_000, 10_000_001);
+        let mut valid = base();
+        valid.outline = outline(0, 10_000_000);
+
+        for board in [&negative, &oversized] {
+            let report = check_board(board);
+            assert_eq!(
+                report
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "board_outline_bounds")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&valid)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "board_outline_bounds")
         );
     }
 }

@@ -23,6 +23,8 @@ Every board cutout must likewise be a simple, non-degenerate polygon before
 boundary and copper-edge checks consume it.
 Valid cutouts must additionally keep every vertex inside the effective board
 outline, including the rectangular fallback.
+Explicit board-outline vertices must remain within the declared board width
+and height, matching the router's coordinate-domain precondition.
 
 The requirement-by-requirement evidence is recorded in
 [`docs/COMPLETION_AUDIT.md`](docs/COMPLETION_AUDIT.md).
