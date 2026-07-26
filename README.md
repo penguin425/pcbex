@@ -21,6 +21,8 @@ Base routing rules require a positive track width and via drill, non-negative
 clearance, and a via diameter larger than the drill in both DRC and routing.
 The copper-layer table must also be non-empty, duplicate-free, and limited to
 the supported front, back, and first 30 internal copper layers.
+Every net terminal must reference a non-empty, duplicate-free subset of that
+declared copper stackup before connectivity checks or routing consume it.
 Rectangular, round, capsule, polygon, and keepout obstacles must each reference
 a non-empty, duplicate-free subset of that declared copper stackup.
 When those objects carry optional net ownership, the identifier must resolve to

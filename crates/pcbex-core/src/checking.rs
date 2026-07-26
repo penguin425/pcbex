@@ -363,6 +363,18 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![net.id],
             );
         }
+        for terminal in &net.terminals {
+            if !layer_membership_is_valid(board, &terminal.layers) {
+                report.push(
+                    "terminal_layers",
+                    format!(
+                        "net {} terminal must use unique layers from the board copper stackup",
+                        net.id
+                    ),
+                    vec![net.id],
+                );
+            }
+        }
     }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
@@ -4191,6 +4203,37 @@ mod tests {
                 .filter(|violation| violation.rule == "net_table")
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_terminal_layer_membership() {
+        let mut board = base();
+        let terminal = |layers| Terminal {
+            position: Point { x_nm: 1, y_nm: 1 },
+            layers,
+        };
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![
+                terminal(vec![]),
+                terminal(vec![Layer::Front, Layer::Front]),
+                terminal(vec![Layer::Inner(1)]),
+                terminal(vec![Layer::Front, Layer::Back]),
+            ],
+            class: None,
+            priority: 0,
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "terminal_layers")
+                .count(),
+            3
         );
     }
 
