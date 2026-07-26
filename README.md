@@ -441,6 +441,9 @@ radius from every boundary edge, including concave boundaries.
 The normal board checker also rejects custom pad polygons with fewer than three
 vertices, degenerate edges or area, or non-adjacent self-intersections before
 routing and hole checks consume their geometry.
+All pad shapes require positive dimensions and a finite rotation. Roundrect
+radii must fit the source pad, and trapezoid deltas must leave a non-degenerate
+shape.
 
 ## Planning and repair agent
 
