@@ -56,6 +56,26 @@ pub fn check_board(board: &Board) -> CheckReport {
         }
         for via in &route.vias {
             let rules = board.rules_for_net(route.net_id);
+            let start = board
+                .copper_layers
+                .iter()
+                .position(|layer| *layer == via.start_layer);
+            let end = board
+                .copper_layers
+                .iter()
+                .position(|layer| *layer == via.end_layer);
+            if start.is_none()
+                || end.is_none()
+                || start == end
+                || (via.kind == crate::ViaKind::Micro
+                    && start.zip(end).is_some_and(|(a, b)| a.abs_diff(b) != 1))
+            {
+                report.push(
+                    "via_layers",
+                    "via has an invalid layer range for its type".into(),
+                    vec![route.net_id],
+                );
+            }
             if via.diameter_nm <= via.drill_nm || via.drill_nm <= 0 {
                 report.push(
                     "via_size",
@@ -81,6 +101,9 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if obstacle.net_id == Some(route.net_id) {
                     continue;
                 }
+                if !obstacle.layers.iter().any(|layer| via.spans_layer(*layer)) {
+                    continue;
+                }
                 let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
                 if point_rect_closer_than(via.position, obstacle.min, obstacle.max, required_twice)
                 {
@@ -96,6 +119,9 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if obstacle.net_id == Some(route.net_id) {
                     continue;
                 }
+                if !obstacle.layers.iter().any(|layer| via.spans_layer(*layer)) {
+                    continue;
+                }
                 let required_twice =
                     via.diameter_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
                 if points_closer_than(via.position, obstacle.center, required_twice) {
@@ -109,6 +135,9 @@ pub fn check_board(board: &Board) -> CheckReport {
             }
             for obstacle in &board.capsule_obstacles {
                 if obstacle.net_id == Some(route.net_id) {
+                    continue;
+                }
+                if !obstacle.layers.iter().any(|layer| via.spans_layer(*layer)) {
                     continue;
                 }
                 let required_twice =
@@ -131,6 +160,9 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if obstacle.net_id == Some(route.net_id) {
                     continue;
                 }
+                if !obstacle.layers.iter().any(|layer| via.spans_layer(*layer)) {
+                    continue;
+                }
                 let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
                 if point_in_polygon(via.position, &obstacle.polygon)
                     || point_polygon_closer_than(via.position, &obstacle.polygon, required_twice)
@@ -145,6 +177,9 @@ pub fn check_board(board: &Board) -> CheckReport {
             }
             for keepout in &board.keepouts {
                 if keepout.net_id == Some(route.net_id) {
+                    continue;
+                }
+                if !keepout.layers.iter().any(|layer| via.spans_layer(*layer)) {
                     continue;
                 }
                 let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
@@ -439,7 +474,9 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
         }
         for via in &b.vias {
             let required_twice = sa.width_nm + via.diameter_nm + 2 * clearance;
-            if point_segment_closer_than(via.position, sa.start, sa.end, required_twice) {
+            if via.spans_layer(sa.layer)
+                && point_segment_closer_than(via.position, sa.start, sa.end, required_twice)
+            {
                 report.push(
                     "clearance",
                     "track and via from different nets violate clearance".into(),
@@ -452,7 +489,9 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
     for via in &a.vias {
         for sb in &b.segments {
             let required_twice = sb.width_nm + via.diameter_nm + 2 * clearance;
-            if point_segment_closer_than(via.position, sb.start, sb.end, required_twice) {
+            if via.spans_layer(sb.layer)
+                && point_segment_closer_than(via.position, sb.start, sb.end, required_twice)
+            {
                 report.push(
                     "clearance",
                     "via and track from different nets violate clearance".into(),
@@ -463,7 +502,9 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
         }
         for other in &b.vias {
             let required_twice = via.diameter_nm + other.diameter_nm + 2 * clearance;
-            if points_closer_than(via.position, other.position, required_twice) {
+            if via.shares_layer_with(other)
+                && points_closer_than(via.position, other.position, required_twice)
+            {
                 report.push(
                     "clearance",
                     "vias from different nets violate clearance".into(),
@@ -495,12 +536,14 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
             }
         }
         for (via_index, via) in route.vias.iter().enumerate() {
-            if point_segment_within(
-                via.position,
-                segment.start,
-                segment.end,
-                segment.width_nm + via.diameter_nm,
-            ) {
+            if via.spans_layer(segment.layer)
+                && point_segment_within(
+                    via.position,
+                    segment.start,
+                    segment.end,
+                    segment.width_nm + via.diameter_nm,
+                )
+            {
                 components.union(index, segment_count + via_index);
             }
         }
@@ -539,7 +582,8 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
                     .iter()
                     .enumerate()
                     .filter(|(_, via)| {
-                        points_within(via.position, terminal.position, via.diameter_nm)
+                        terminal.layers.iter().any(|layer| via.spans_layer(*layer))
+                            && points_within(via.position, terminal.position, via.diameter_nm)
                     })
                     .map(|(index, _)| segment_count + index),
             )
@@ -1045,6 +1089,9 @@ mod tests {
                 position: middle,
                 diameter_nm: 600_000,
                 drill_nm: 300_000,
+                kind: crate::ViaKind::Through,
+                start_layer: Layer::Front,
+                end_layer: Layer::Back,
             }],
         });
 

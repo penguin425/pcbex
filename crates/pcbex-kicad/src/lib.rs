@@ -1,7 +1,7 @@
 use pcbex_core::{
     Board, CapsuleObstacle, DifferentialPair, Footprint, Keepout, Layer, Net, NetClassRules,
     Obstacle, Pad, PadShape, Point, PolygonObstacle, RoundObstacle, Route, Rules, Segment,
-    Terminal, Via,
+    Terminal, Via, ViaKind,
     checking::check_board,
     placement::{Component, Connection, PinRef, PlacementProblem},
 };
@@ -433,10 +433,16 @@ impl ImportedBoard {
             }
             for via in &route.vias {
                 let at = self.absolute(via.position);
+                let kind = match via.kind {
+                    ViaKind::Through => "",
+                    ViaKind::BlindBuried => " blind",
+                    ViaKind::Micro => " micro",
+                };
                 writeln!(
                     generated,
-                    "  (via (at {:.6} {:.6}) (size {:.6}) (drill {:.6}) (layers \"F.Cu\" \"B.Cu\") (net {}))",
-                    mm(at.x_nm), mm(at.y_nm), mm(via.diameter_nm), mm(via.drill_nm), route.net_id
+                    "  (via{kind} (at {:.6} {:.6}) (size {:.6}) (drill {:.6}) (layers \"{}\" \"{}\") (net {}))",
+                    mm(at.x_nm), mm(at.y_nm), mm(via.diameter_nm), mm(via.drill_nm),
+                    layer_name(via.start_layer), layer_name(via.end_layer), route.net_id
                 ).map_err(|e| e.to_string())?;
             }
         }
@@ -914,13 +920,31 @@ fn import_via(
         .map(nm)
         .unwrap_or(rules.via_drill_nm);
     let net_id = child_values(xs, "net").and_then(|v| number_u32(v.get(1)));
-    obstacles.push(rect_obstacle(
-        at,
-        size,
-        size,
-        copper_layers.to_vec(),
-        net_id,
-    ));
+    let kind = if xs.iter().any(|value| atom(Some(value)) == Some("micro")) {
+        ViaKind::Micro
+    } else if xs.iter().any(|value| atom(Some(value)) == Some("blind")) {
+        ViaKind::BlindBuried
+    } else {
+        ViaKind::Through
+    };
+    let declared_layers: Vec<_> = child_values(xs, "layers")
+        .into_iter()
+        .flat_map(|values| values.iter().skip(1))
+        .filter_map(|value| atom(Some(value)).and_then(parse_layer))
+        .collect();
+    let start_layer = declared_layers.first().copied().unwrap_or(Layer::Front);
+    let end_layer = declared_layers.last().copied().unwrap_or(Layer::Back);
+    let via_layers: Vec<_> = copper_layers
+        .iter()
+        .copied()
+        .filter(|layer| {
+            let index = layer.index();
+            let first = start_layer.index().min(end_layer.index());
+            let last = start_layer.index().max(end_layer.index());
+            (first..=last).contains(&index)
+        })
+        .collect();
+    obstacles.push(rect_obstacle(at, size, size, via_layers, net_id));
     if let Some(net_id) = net_id.filter(|id| *id != 0) {
         routes
             .entry(net_id)
@@ -934,6 +958,9 @@ fn import_via(
                 position: at,
                 diameter_nm: size,
                 drill_nm: drill,
+                kind,
+                start_layer,
+                end_layer,
             });
     }
 }
@@ -1677,5 +1704,36 @@ mod tests {
         assert_eq!(zone.layers, vec![Layer::Front]);
         assert_eq!(zone.polygon.len(), 4);
         assert_eq!(zone.polygon[0], point_mm(1.0, 1.0));
+    }
+
+    #[test]
+    fn round_trips_blind_and_micro_via_layer_ranges() {
+        let pcb = r#"(kicad_pcb
+          (layers
+            (0 "F.Cu" signal) (2 "In1.Cu" signal)
+            (4 "In2.Cu" signal) (31 "B.Cu" signal)
+            (44 "Edge.Cuts" user))
+          (net 1 "SIGNAL")
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (via blind (at 4 4) (size 0.6) (drill 0.3)
+            (layers "F.Cu" "In2.Cu") (net 1))
+          (via micro (at 6 4) (size 0.3) (drill 0.1)
+            (layers "F.Cu" "In1.Cu") (net 1))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+        let vias = &imported.board.routes[0].vias;
+        assert_eq!(vias[0].kind, ViaKind::BlindBuried);
+        assert_eq!(vias[0].start_layer, Layer::Front);
+        assert_eq!(vias[0].end_layer, Layer::Inner(2));
+        assert_eq!(vias[1].kind, ViaKind::Micro);
+        assert_eq!(vias[1].end_layer, Layer::Inner(1));
+
+        let mut generated = imported.board.routes[0].clone();
+        generated.net_id = 2;
+        let output = imported.write_routes(&[generated]).unwrap();
+        assert!(output.contains("(via blind"));
+        assert!(output.contains("(layers \"F.Cu\" \"In2.Cu\")"));
+        assert!(output.contains("(via micro"));
     }
 }
