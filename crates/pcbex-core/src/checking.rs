@@ -272,6 +272,14 @@ pub fn check_board(board: &Board) -> CheckReport {
         }
         for via in &route.vias {
             let rules = board.rules_for_net(route.net_id);
+            if !via_geometry_is_valid(via) {
+                report.push(
+                    "via_geometry",
+                    "via diameter must exceed its positive drill".into(),
+                    vec![route.net_id],
+                );
+                continue;
+            }
             let start = board
                 .copper_layers
                 .iter()
@@ -289,13 +297,6 @@ pub fn check_board(board: &Board) -> CheckReport {
                 report.push(
                     "via_layers",
                     "via has an invalid layer range for its type".into(),
-                    vec![route.net_id],
-                );
-            }
-            if via.diameter_nm <= via.drill_nm || via.drill_nm <= 0 {
-                report.push(
-                    "via_size",
-                    "via diameter must exceed its positive drill".into(),
                     vec![route.net_id],
                 );
             }
@@ -1047,6 +1048,10 @@ fn custom_pad_contains_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
 
 fn route_arc_geometry_is_valid(board: &Board, arc: &crate::RouteArc) -> bool {
     arc.width_nm > 0 && board.copper_layers.contains(&arc.layer) && crate::arc_is_valid(arc)
+}
+
+fn via_geometry_is_valid(via: &crate::Via) -> bool {
+    via.drill_nm > 0 && via.diameter_nm > via.drill_nm
 }
 
 fn custom_pad_polygon_is_valid(polygon: &[Point]) -> bool {
@@ -3775,6 +3780,59 @@ mod tests {
                 .filter(|violation| violation.rule == "arc_geometry")
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_via_geometry_before_derived_checks() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let via = |diameter_nm, drill_nm| Via {
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            diameter_nm,
+            drill_nm,
+            kind: crate::ViaKind::Through,
+            start_layer: Layer::Front,
+            end_layer: Layer::Back,
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![
+                via(0, 0),
+                via(600_000, 0),
+                via(300_000, 300_000),
+                via(300_000, 400_000),
+                via(600_000, 300_000),
+            ],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "via_geometry")
+                .count(),
+            4
+        );
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "via_size")
         );
     }
 }

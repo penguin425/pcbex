@@ -458,6 +458,8 @@ Track segments require distinct endpoints, a positive width, and a layer from
 the declared copper stackup before angle, boundary, or clearance evaluation.
 Route arcs similarly require positive width, a declared copper layer, and three
 points defining a curve; malformed arcs are rejected before DRC linearization.
+Vias require a positive drill diameter and a larger outer diameter before
+layer-range, board-edge, minimum-size, or copper-clearance evaluation.
 
 ## Planning and repair agent
 
