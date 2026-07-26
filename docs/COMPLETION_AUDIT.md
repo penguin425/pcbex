@@ -112,6 +112,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Board outline validation | Normal DRC requires an explicit outline to be a simple non-degenerate polygon while preserving the empty-outline rectangular fallback | Insufficient-point, repeated-edge, zero-area, self-crossing, fallback, and valid-outline regressions |
 | Board cutout topology validation | Normal DRC requires every cutout to be a simple non-degenerate polygon before board-boundary and copper-edge checks consume it | Insufficient-point, repeated-edge, zero-area, self-crossing, and valid-cutout regressions |
 | Board cutout containment validation | Normal DRC requires every topologically valid cutout vertex to remain inside the effective explicit or rectangular board outline | Inside and partially outside cutout regressions |
+| Board outline bounds validation | Normal DRC requires every topologically valid explicit-outline vertex to remain within the declared board width and height | Negative-coordinate, oversized-coordinate, and boundary-inclusive valid regressions |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -135,7 +136,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.83.0 exposes 129 Rust tests and 11 Python tests. The release workflow
+Version 1.84.0 exposes 130 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
