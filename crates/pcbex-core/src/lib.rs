@@ -192,6 +192,10 @@ pub struct Pad {
     pub drill_width_nm: Option<Nm>,
     #[serde(default)]
     pub drill_height_nm: Option<Nm>,
+    #[serde(default)]
+    pub drill_offset_x_nm: Nm,
+    #[serde(default)]
+    pub drill_offset_y_nm: Nm,
     #[serde(default = "plated_pad")]
     pub plated: bool,
     pub layers: Vec<Layer>,
@@ -6914,6 +6918,8 @@ mod tests {
                 custom_polygon: vec![],
                 drill_width_nm: None,
                 drill_height_nm: None,
+                drill_offset_x_nm: 0,
+                drill_offset_y_nm: 0,
                 plated: true,
                 layers: vec![Layer::Front],
                 net_id: Some(1),

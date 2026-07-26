@@ -1309,15 +1309,24 @@ fn import_footprint(
         let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
         let net_id = child_values(pad, "net").and_then(|values| number_u32(values.get(1)));
         let drill = child_values(pad, "drill").and_then(|values| {
-            if atom(values.get(1)) == Some("oval") {
-                Some((
+            let (width, height) = if atom(values.get(1)) == Some("oval") {
+                (
                     number(values.get(2))?,
                     number(values.get(3)).or_else(|| number(values.get(2)))?,
-                ))
+                )
             } else {
                 let width = number(values.get(1))?;
-                Some((width, number(values.get(2)).unwrap_or(width)))
-            }
+                (width, number(values.get(2)).unwrap_or(width))
+            };
+            let offset = child_values(values, "offset")
+                .map(|offset| {
+                    (
+                        number(offset.get(1)).unwrap_or(0.0),
+                        number(offset.get(2)).unwrap_or(0.0),
+                    )
+                })
+                .unwrap_or((0.0, 0.0));
+            Some((width, height, offset.0, offset.1))
         });
         model.pads.push(Pad {
             number: atom(pad.get(1)).unwrap_or("").to_string(),
@@ -1329,8 +1338,10 @@ fn import_footprint(
             rotation_deg: angle + pad_angle,
             shape,
             custom_polygon: custom_polygon.clone(),
-            drill_width_nm: drill.map(|(width, _)| nm(width)),
-            drill_height_nm: drill.map(|(_, height)| nm(height)),
+            drill_width_nm: drill.map(|(width, _, _, _)| nm(width)),
+            drill_height_nm: drill.map(|(_, height, _, _)| nm(height)),
+            drill_offset_x_nm: drill.map(|(_, _, x, _)| nm(x)).unwrap_or(0),
+            drill_offset_y_nm: drill.map(|(_, _, _, y)| nm(y)).unwrap_or(0),
             plated: atom(pad.get(2)) != Some("np_thru_hole"),
             layers: layers.clone(),
             net_id,
@@ -2308,12 +2319,15 @@ mod tests {
           (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
           (footprint "MountingHole" (layer "F.Cu") (at 10 10 90)
             (pad "" np_thru_hole oval (at 0 0 30) (size 3 2)
-              (drill oval 1.2 0.8) (layers "*.Cu" "*.Mask"))))"#;
+              (drill oval 1.2 0.8 (offset 0.3 -0.2))
+              (layers "*.Cu" "*.Mask"))))"#;
 
         let imported = import(source, rules()).unwrap();
         let pad = &imported.board.footprints[0].pads[0];
         assert_eq!(pad.drill_width_nm, Some(1_200_000));
         assert_eq!(pad.drill_height_nm, Some(800_000));
+        assert_eq!(pad.drill_offset_x_nm, 300_000);
+        assert_eq!(pad.drill_offset_y_nm, -200_000);
         assert!(!pad.plated);
         assert_eq!(pad.rotation_deg, 120.0);
     }

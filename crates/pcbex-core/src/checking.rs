@@ -111,7 +111,18 @@ pub fn check_board(board: &Board) -> CheckReport {
     for footprint in &board.footprints {
         for pad in &footprint.pads {
             match (pad.drill_width_nm, pad.drill_height_nm) {
-                (None, None) => {}
+                (None, None) => {
+                    if pad.drill_offset_x_nm != 0 || pad.drill_offset_y_nm != 0 {
+                        report.push(
+                            "component_hole",
+                            format!(
+                                "{} pad {} has a drill offset without a drill",
+                                footprint.reference, pad.number
+                            ),
+                            pad.net_id.into_iter().collect(),
+                        );
+                    }
+                }
                 (Some(width_nm), Some(height_nm)) if width_nm > 0 && height_nm > 0 => {
                     let pad_width_nm = if pad.source_width_nm > 0 {
                         pad.source_width_nm
@@ -123,7 +134,14 @@ pub fn check_board(board: &Board) -> CheckReport {
                     } else {
                         pad.height_nm
                     };
-                    if pad.plated && (width_nm >= pad_width_nm || height_nm >= pad_height_nm) {
+                    let occupied_width =
+                        i128::from(width_nm) + 2 * i128::from(pad.drill_offset_x_nm).abs();
+                    let occupied_height =
+                        i128::from(height_nm) + 2 * i128::from(pad.drill_offset_y_nm).abs();
+                    if pad.plated
+                        && (occupied_width >= i128::from(pad_width_nm)
+                            || occupied_height >= i128::from(pad_height_nm))
+                    {
                         report.push(
                             "component_hole",
                             format!(
@@ -848,16 +866,27 @@ fn drilled_pad_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> DrilledHole {
         pad.rotation_deg + 90.0
     };
     let radians = angle_deg.to_radians();
+    let pad_radians = pad.rotation_deg.to_radians();
+    let center = Point {
+        x_nm: pad.position.x_nm
+            + (pad_radians.cos() * pad.drill_offset_x_nm as f64
+                - pad_radians.sin() * pad.drill_offset_y_nm as f64)
+                .round() as i64,
+        y_nm: pad.position.y_nm
+            + (pad_radians.sin() * pad.drill_offset_x_nm as f64
+                + pad_radians.cos() * pad.drill_offset_y_nm as f64)
+                .round() as i64,
+    };
     let half_dx = (radians.cos() * centerline_nm as f64 / 2.0).round() as i64;
     let half_dy = (radians.sin() * centerline_nm as f64 / 2.0).round() as i64;
     DrilledHole {
         start: Point {
-            x_nm: pad.position.x_nm - half_dx,
-            y_nm: pad.position.y_nm - half_dy,
+            x_nm: center.x_nm - half_dx,
+            y_nm: center.y_nm - half_dy,
         },
         end: Point {
-            x_nm: pad.position.x_nm + half_dx,
-            y_nm: pad.position.y_nm + half_dy,
+            x_nm: center.x_nm + half_dx,
+            y_nm: center.y_nm + half_dy,
         },
         diameter_nm,
         net_id: pad.net_id,
@@ -2548,6 +2577,8 @@ mod tests {
                 custom_polygon: vec![],
                 drill_width_nm: Some(200_000),
                 drill_height_nm: Some(200_000),
+                drill_offset_x_nm: 0,
+                drill_offset_y_nm: 0,
                 plated: true,
                 layers: vec![Layer::Front],
                 net_id: Some(1),
@@ -2681,6 +2712,8 @@ mod tests {
                     custom_polygon: vec![],
                     drill_width_nm: Some(300_000),
                     drill_height_nm: Some(300_000),
+                    drill_offset_x_nm: 0,
+                    drill_offset_y_nm: 0,
                     plated: true,
                     layers: vec![Layer::Front, Layer::Back],
                     net_id: Some(1),
@@ -2700,6 +2733,8 @@ mod tests {
                     custom_polygon: vec![],
                     drill_width_nm: Some(700_000),
                     drill_height_nm: Some(300_000),
+                    drill_offset_x_nm: 0,
+                    drill_offset_y_nm: 0,
                     plated: false,
                     layers: vec![Layer::Front, Layer::Back],
                     net_id: None,
@@ -2760,6 +2795,8 @@ mod tests {
                     custom_polygon: vec![],
                     drill_width_nm: Some(600_000),
                     drill_height_nm: Some(300_000),
+                    drill_offset_x_nm: 0,
+                    drill_offset_y_nm: 0,
                     plated: true,
                     layers: vec![Layer::Front, Layer::Back],
                     net_id: Some(1),
@@ -2779,6 +2816,8 @@ mod tests {
                     custom_polygon: vec![],
                     drill_width_nm: Some(300_000),
                     drill_height_nm: None,
+                    drill_offset_x_nm: 0,
+                    drill_offset_y_nm: 0,
                     plated: false,
                     layers: vec![Layer::Front, Layer::Back],
                     net_id: None,
@@ -2795,5 +2834,47 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[test]
+    fn rotated_drill_offsets_move_the_exact_hole_capsule() {
+        let pad = Pad {
+            number: "1".into(),
+            position: Point {
+                x_nm: 2_000_000,
+                y_nm: 3_000_000,
+            },
+            width_nm: 2_000_000,
+            height_nm: 2_000_000,
+            source_width_nm: 2_000_000,
+            source_height_nm: 2_000_000,
+            rotation_deg: 90.0,
+            shape: PadShape::Oval,
+            custom_polygon: vec![],
+            drill_width_nm: Some(800_000),
+            drill_height_nm: Some(400_000),
+            drill_offset_x_nm: 300_000,
+            drill_offset_y_nm: -100_000,
+            plated: true,
+            layers: vec![Layer::Front, Layer::Back],
+            net_id: Some(1),
+        };
+
+        let hole = drilled_pad_hole(&pad, 800_000, 400_000);
+        assert_eq!(
+            hole.start,
+            Point {
+                x_nm: 2_100_000,
+                y_nm: 3_100_000
+            }
+        );
+        assert_eq!(
+            hole.end,
+            Point {
+                x_nm: 2_100_000,
+                y_nm: 3_500_000
+            }
+        );
+        assert_eq!(hole.diameter_nm, 400_000);
     }
 }
