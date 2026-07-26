@@ -227,6 +227,13 @@ pub struct DifferentialPair {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LengthGroup {
+    pub name: String,
+    pub net_ids: Vec<u32>,
+    pub max_skew_nm: Nm,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ManufacturingRules {
     pub minimum_track_width_nm: Nm,
     pub minimum_clearance_nm: Nm,
@@ -313,6 +320,8 @@ pub struct Board {
     pub net_classes: HashMap<String, NetClassRules>,
     #[serde(default)]
     pub differential_pairs: Vec<DifferentialPair>,
+    #[serde(default)]
+    pub length_groups: Vec<LengthGroup>,
     #[serde(default)]
     pub manufacturing_rules: Option<ManufacturingRules>,
     #[serde(default)]
@@ -408,6 +417,7 @@ pub fn board_json_schema() -> serde_json::Value {
             "footprints": {"type": "array"},
             "net_classes": {"type": "object"},
             "differential_pairs": {"type": "array"},
+            "length_groups": {"type": "array"},
             "manufacturing_rules": {"type": ["object", "null"]},
             "via_strategy": {"enum": ["through_only", "auto"]},
             "nets": {"type": "array"},
@@ -976,6 +986,19 @@ impl<'a> Router<'a> {
                 || !paired_net_ids.insert(pair.negative_net_id)
             {
                 return Err(format!("differential pair {} is invalid", pair.name));
+            }
+        }
+        let mut length_group_names = HashSet::new();
+        for group in &board.length_groups {
+            let members: HashSet<_> = group.net_ids.iter().copied().collect();
+            if group.name.is_empty()
+                || !length_group_names.insert(group.name.as_str())
+                || group.max_skew_nm < 0
+                || members.len() < 2
+                || members.len() != group.net_ids.len()
+                || !members.iter().all(|net_id| net_ids.contains(net_id))
+            {
+                return Err(format!("length group {} is invalid", group.name));
             }
         }
         let mut route_net_ids = HashSet::new();
@@ -2674,90 +2697,125 @@ pub fn tune_route_lengths(board: &mut Board) -> Result<(), String> {
         let net_id = board.routes[route_index].net_id;
         let (minimum, maximum) = board.length_limits_for_net(net_id);
         let Some(minimum) = minimum else { continue };
-        let current = route_length_nm(&board.routes[route_index]);
-        if current >= minimum {
+        tune_route_to_minimum(board, route_index, minimum, maximum)?;
+    }
+    for group in board.length_groups.clone() {
+        let target = board
+            .routes
+            .iter()
+            .filter(|route| group.net_ids.contains(&route.net_id))
+            .map(route_length_nm)
+            .max();
+        let Some(target) = target else { continue };
+        for net_id in group.net_ids {
+            let Some(route_index) = board.routes.iter().position(|route| route.net_id == net_id)
+            else {
+                continue;
+            };
+            if route_length_nm(&board.routes[route_index]) + group.max_skew_nm < target {
+                tune_route_to_minimum(
+                    board,
+                    route_index,
+                    target - group.max_skew_nm,
+                    board.length_limits_for_net(net_id).1,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn tune_route_to_minimum(
+    board: &mut Board,
+    route_index: usize,
+    minimum: Nm,
+    maximum: Option<Nm>,
+) -> Result<(), String> {
+    let net_id = board.routes[route_index].net_id;
+    let current = route_length_nm(&board.routes[route_index]);
+    if current >= minimum {
+        return Ok(());
+    }
+    let grid = board.rules_for_net(net_id).grid_nm;
+    let amplitude = ((minimum - current + 2 * grid - 1) / (2 * grid)) * grid;
+    let original = board.routes[route_index].clone();
+    let mut tuned = None;
+    for segment_index in (0..original.segments.len()).rev() {
+        let segment = &original.segments[segment_index];
+        let dx = segment.end.x_nm - segment.start.x_nm;
+        let dy = segment.end.y_nm - segment.start.y_nm;
+        if dx != 0 && dy != 0 {
             continue;
         }
-        let grid = board.rules_for_net(net_id).grid_nm;
-        let amplitude = ((minimum - current + 2 * grid - 1) / (2 * grid)) * grid;
-        let original = board.routes[route_index].clone();
-        let mut tuned = None;
-        for segment_index in (0..original.segments.len()).rev() {
-            let segment = &original.segments[segment_index];
-            let dx = segment.end.x_nm - segment.start.x_nm;
-            let dy = segment.end.y_nm - segment.start.y_nm;
-            if dx != 0 && dy != 0 {
-                continue;
-            }
-            let span = dx.abs().max(dy.abs());
-            if span < 4 * grid {
-                continue;
-            }
-            for direction in [1, -1] {
-                let mut candidate = original.clone();
-                let one = Point {
-                    x_nm: segment.start.x_nm + dx / 3,
-                    y_nm: segment.start.y_nm + dy / 3,
-                };
-                let two = Point {
-                    x_nm: segment.start.x_nm + 2 * dx / 3,
-                    y_nm: segment.start.y_nm + 2 * dy / 3,
-                };
-                let offset = if dx == 0 {
-                    Point {
-                        x_nm: direction * amplitude,
-                        y_nm: 0,
-                    }
-                } else {
-                    Point {
-                        x_nm: 0,
-                        y_nm: direction * amplitude,
-                    }
-                };
-                let points = [
-                    segment.start,
-                    one,
-                    Point {
-                        x_nm: one.x_nm + offset.x_nm,
-                        y_nm: one.y_nm + offset.y_nm,
-                    },
-                    Point {
-                        x_nm: two.x_nm + offset.x_nm,
-                        y_nm: two.y_nm + offset.y_nm,
-                    },
-                    two,
-                    segment.end,
-                ];
-                let replacement = points
-                    .windows(2)
-                    .map(|points| Segment {
-                        start: points[0],
-                        end: points[1],
-                        layer: segment.layer,
-                        width_nm: segment.width_nm,
-                    })
-                    .collect::<Vec<_>>();
-                candidate
-                    .segments
-                    .splice(segment_index..=segment_index, replacement);
-                board.routes[route_index] = candidate.clone();
-                let check = crate::checking::check_board(board);
-                if check.violations.iter().all(|violation| {
-                    violation.rule == "trace_length" && !violation.net_ids.contains(&net_id)
-                }) && maximum.is_none_or(|limit| route_length_nm(&candidate) <= limit)
-                {
-                    tuned = Some(candidate);
-                    break;
+        let span = dx.abs().max(dy.abs());
+        if span < 4 * grid {
+            continue;
+        }
+        for direction in [1, -1] {
+            let mut candidate = original.clone();
+            let one = Point {
+                x_nm: segment.start.x_nm + dx / 3,
+                y_nm: segment.start.y_nm + dy / 3,
+            };
+            let two = Point {
+                x_nm: segment.start.x_nm + 2 * dx / 3,
+                y_nm: segment.start.y_nm + 2 * dy / 3,
+            };
+            let offset = if dx == 0 {
+                Point {
+                    x_nm: direction * amplitude,
+                    y_nm: 0,
                 }
-            }
-            if tuned.is_some() {
+            } else {
+                Point {
+                    x_nm: 0,
+                    y_nm: direction * amplitude,
+                }
+            };
+            let points = [
+                segment.start,
+                one,
+                Point {
+                    x_nm: one.x_nm + offset.x_nm,
+                    y_nm: one.y_nm + offset.y_nm,
+                },
+                Point {
+                    x_nm: two.x_nm + offset.x_nm,
+                    y_nm: two.y_nm + offset.y_nm,
+                },
+                two,
+                segment.end,
+            ];
+            let replacement = points
+                .windows(2)
+                .map(|points| Segment {
+                    start: points[0],
+                    end: points[1],
+                    layer: segment.layer,
+                    width_nm: segment.width_nm,
+                })
+                .collect::<Vec<_>>();
+            candidate
+                .segments
+                .splice(segment_index..=segment_index, replacement);
+            board.routes[route_index] = candidate.clone();
+            let check = crate::checking::check_board(board);
+            if check.violations.iter().all(|violation| {
+                (violation.rule == "trace_length" && !violation.net_ids.contains(&net_id))
+                    || violation.rule == "length_group_skew"
+            }) && maximum.is_none_or(|limit| route_length_nm(&candidate) <= limit)
+            {
+                tuned = Some(candidate);
                 break;
             }
         }
-        board.routes[route_index] = tuned.ok_or_else(|| {
-            format!("unable to satisfy minimum length for net {net_id} with a legal meander")
-        })?;
+        if tuned.is_some() {
+            break;
+        }
     }
+    board.routes[route_index] = tuned.ok_or_else(|| {
+        format!("unable to satisfy minimum length for net {net_id} with a legal meander")
+    })?;
     Ok(())
 }
 
@@ -2951,6 +3009,7 @@ mod tests {
             footprints: vec![],
             net_classes: HashMap::new(),
             differential_pairs: vec![],
+            length_groups: vec![],
             manufacturing_rules: None,
             via_strategy: ViaStrategy::ThroughOnly,
             nets: vec![Net {
@@ -3822,6 +3881,80 @@ mod tests {
         assert!(crate::checking::check_board(&routed).is_clean());
         assert!((10_000_000..=11_000_000).contains(&route_length_nm(&routed.routes[0])));
         assert!(routed.routes[0].segments.len() >= 5);
+    }
+
+    #[test]
+    fn tunes_parallel_bus_members_to_the_group_skew() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets = vec![
+            Net {
+                id: 1,
+                name: "D0".into(),
+                class: None,
+                priority: 0,
+                terminals: vec![
+                    Terminal {
+                        position: Point {
+                            x_nm: 1_000_000,
+                            y_nm: 3_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                    Terminal {
+                        position: Point {
+                            x_nm: 5_000_000,
+                            y_nm: 3_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                ],
+            },
+            Net {
+                id: 2,
+                name: "D1".into(),
+                class: None,
+                priority: 0,
+                terminals: vec![
+                    Terminal {
+                        position: Point {
+                            x_nm: 1_000_000,
+                            y_nm: 7_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                    Terminal {
+                        position: Point {
+                            x_nm: 9_000_000,
+                            y_nm: 7_000_000,
+                        },
+                        layers: vec![Layer::Front],
+                    },
+                ],
+            },
+        ];
+        board.length_groups.push(LengthGroup {
+            name: "DATA".into(),
+            net_ids: vec![1, 2],
+            max_skew_nm: 500_000,
+        });
+
+        let (routed, report) = route_board(&board).unwrap();
+        let lengths: Vec<_> = routed.routes.iter().map(route_length_nm).collect();
+
+        assert!(report.unrouted.is_empty());
+        assert!(crate::checking::check_board(&routed).is_clean());
+        assert!(lengths.iter().max().unwrap() - lengths.iter().min().unwrap() <= 500_000);
+        assert!(
+            routed
+                .routes
+                .iter()
+                .find(|route| route.net_id == 1)
+                .unwrap()
+                .segments
+                .len()
+                >= 5
+        );
     }
 
     #[test]

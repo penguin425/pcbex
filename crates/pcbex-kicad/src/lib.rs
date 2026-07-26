@@ -145,6 +145,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         footprints: footprint_geometry.footprints,
         net_classes,
         differential_pairs,
+        length_groups: vec![],
         manufacturing_rules: None,
         via_strategy: pcbex_core::ViaStrategy::ThroughOnly,
         nets,
