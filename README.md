@@ -291,7 +291,9 @@ obstacle. The Criterion suite includes a 100 mm board with 200 round obstacles.
 CI also routes an anonymized practical corpus covering a USB differential pair,
 a four-layer power/inner-signal board, and an eight-net BGA fanout. Each fixture
 has a deterministic search budget and must remain clean and byte-idempotent;
-see `docs/REGRESSION_CORPUS.md`.
+see `docs/REGRESSION_CORPUS.md`. A reproducible generator also creates a
+100-net, six-layer backplane; CI checks full routing, DRC, byte-idempotence, and
+a 100,000-state ceiling.
 
 Independent first-pass A* candidates are explored concurrently by up to eight
 workers. Results are validated and committed in the original deterministic net
