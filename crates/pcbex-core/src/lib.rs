@@ -245,6 +245,14 @@ pub struct DifferentialPair {
     pub max_skew_nm: Nm,
     #[serde(default = "differential_min_coupled_percent")]
     pub min_coupled_percent: u8,
+    #[serde(default)]
+    pub minimum_length_nm: Option<Nm>,
+    #[serde(default)]
+    pub tuning_amplitude_nm: Option<Nm>,
+    #[serde(default)]
+    pub tuning_pitch_nm: Option<Nm>,
+    #[serde(default = "default_tuning_sections")]
+    pub max_tuning_sections: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1044,6 +1052,10 @@ impl<'a> Router<'a> {
                 || pair.gap_tolerance_nm < 0
                 || pair.max_skew_nm < 0
                 || pair.min_coupled_percent > 100
+                || pair.minimum_length_nm.is_some_and(|value| value <= 0)
+                || pair.tuning_amplitude_nm.is_some_and(|value| value <= 0)
+                || pair.tuning_pitch_nm.is_some_and(|value| value <= 0)
+                || !(1..=16).contains(&pair.max_tuning_sections)
                 || !paired_net_ids.insert(pair.positive_net_id)
                 || !paired_net_ids.insert(pair.negative_net_id)
             {
@@ -2401,8 +2413,9 @@ pub fn route_board_with_workers(
     let (routes, mut report) = Router::new(&seeded)?.route_all_with_workers(worker_limit);
     let mut out = seeded;
     out.routes = routes;
-    tune_route_lengths(&mut out)?;
     couple_differential_pairs(&mut out, &mut report);
+    tune_differential_pairs_synchronously(&mut out)?;
+    tune_route_lengths(&mut out)?;
     for stub in escape_stubs {
         let route = out
             .routes
@@ -3419,6 +3432,139 @@ fn translate_point(point: Point, offset: Point) -> Point {
         x_nm: point.x_nm + offset.x_nm,
         y_nm: point.y_nm + offset.y_nm,
     }
+}
+
+pub fn tune_differential_pairs_synchronously(board: &mut Board) -> Result<(), String> {
+    for pair in board.differential_pairs.clone() {
+        let Some(minimum) = pair.minimum_length_nm else {
+            continue;
+        };
+        let (Some(positive_index), Some(negative_index)) = (
+            board
+                .routes
+                .iter()
+                .position(|route| route.net_id == pair.positive_net_id),
+            board
+                .routes
+                .iter()
+                .position(|route| route.net_id == pair.negative_net_id),
+        ) else {
+            continue;
+        };
+        let (Some(positive_net), Some(negative_net)) = (
+            board.nets.iter().find(|net| net.id == pair.positive_net_id),
+            board.nets.iter().find(|net| net.id == pair.negative_net_id),
+        ) else {
+            continue;
+        };
+        let (Some(positive_terminal), Some(negative_terminal)) = (
+            positive_net.terminals.first(),
+            negative_net.terminals.first(),
+        ) else {
+            continue;
+        };
+        let offset = Point {
+            x_nm: negative_terminal.position.x_nm - positive_terminal.position.x_nm,
+            y_nm: negative_terminal.position.y_nm - positive_terminal.position.y_nm,
+        };
+        let grid = board.rules_for_net(pair.positive_net_id).grid_nm;
+        let pitch = pair.tuning_pitch_nm.unwrap_or(2 * grid).max(grid);
+        for section in 0..pair.max_tuning_sections {
+            let current = route_length_nm(&board.routes[positive_index]);
+            if current >= minimum {
+                break;
+            }
+            let remaining = Nm::from(pair.max_tuning_sections - section);
+            let distributed = (minimum - current + 2 * remaining - 1) / (2 * remaining);
+            let amplitude = pair
+                .tuning_amplitude_nm
+                .unwrap_or(distributed)
+                .min((minimum - current + 1) / 2)
+                .max(grid);
+            let amplitude = ((amplitude + grid - 1) / grid) * grid;
+            let original_positive = board.routes[positive_index].clone();
+            let original_negative = board.routes[negative_index].clone();
+            let mut accepted = false;
+            for segment_index in (0..original_positive.segments.len()).rev() {
+                let segment = &original_positive.segments[segment_index];
+                let dx = segment.end.x_nm - segment.start.x_nm;
+                let dy = segment.end.y_nm - segment.start.y_nm;
+                if (dx != 0 && dy != 0) || dx.abs().max(dy.abs()) < 2 * pitch {
+                    continue;
+                }
+                for direction in [1, -1] {
+                    let one = Point {
+                        x_nm: segment.start.x_nm + dx / 2 - dx.signum() * pitch / 2,
+                        y_nm: segment.start.y_nm + dy / 2 - dy.signum() * pitch / 2,
+                    };
+                    let two = Point {
+                        x_nm: segment.start.x_nm + dx / 2 + dx.signum() * pitch / 2,
+                        y_nm: segment.start.y_nm + dy / 2 + dy.signum() * pitch / 2,
+                    };
+                    let meander_offset = if dx == 0 {
+                        Point {
+                            x_nm: direction * amplitude,
+                            y_nm: 0,
+                        }
+                    } else {
+                        Point {
+                            x_nm: 0,
+                            y_nm: direction * amplitude,
+                        }
+                    };
+                    let points = [
+                        segment.start,
+                        one,
+                        translate_point(one, meander_offset),
+                        translate_point(two, meander_offset),
+                        two,
+                        segment.end,
+                    ];
+                    let replacement = points
+                        .windows(2)
+                        .map(|points| Segment {
+                            start: points[0],
+                            end: points[1],
+                            layer: segment.layer,
+                            width_nm: segment.width_nm,
+                        })
+                        .collect::<Vec<_>>();
+                    let mut candidate = original_positive.clone();
+                    candidate
+                        .segments
+                        .splice(segment_index..=segment_index, replacement);
+                    let mut translated = translate_route(&candidate, offset);
+                    translated.net_id = pair.negative_net_id;
+                    board.routes[positive_index] = candidate;
+                    board.routes[negative_index] = translated;
+                    let check = crate::checking::check_board(board);
+                    if check.violations.iter().all(|violation| {
+                        violation.rule == "trace_length" || violation.rule == "length_group_skew"
+                    }) {
+                        accepted = true;
+                        break;
+                    }
+                }
+                if accepted {
+                    break;
+                }
+            }
+            if !accepted {
+                board.routes[positive_index] = original_positive;
+                board.routes[negative_index] = original_negative;
+                break;
+            }
+        }
+        if route_length_nm(&board.routes[positive_index]) < minimum
+            || route_length_nm(&board.routes[negative_index]) < minimum
+        {
+            return Err(format!(
+                "unable to synchronously tune differential pair {} to {minimum} nm",
+                pair.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub fn tune_route_lengths(board: &mut Board) -> Result<(), String> {
@@ -5559,6 +5705,10 @@ mod tests {
             gap_tolerance_nm: 50_000,
             max_skew_nm: 0,
             min_coupled_percent: 100,
+            minimum_length_nm: None,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
         }];
 
         let (routed, report) = route_board(&board).unwrap();
@@ -5590,6 +5740,131 @@ mod tests {
                         && negative.end.x_nm == positive.end.x_nm
                 })
         );
+    }
+
+    #[test]
+    fn tunes_differential_pair_with_synchronous_meanders() {
+        let mut board = board();
+        board.obstacles.clear();
+        let terminals = |y_nm| {
+            vec![
+                Terminal {
+                    position: Point {
+                        x_nm: 1_000_000,
+                        y_nm,
+                    },
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: Point {
+                        x_nm: 9_000_000,
+                        y_nm,
+                    },
+                    layers: vec![Layer::Front],
+                },
+            ]
+        };
+        board.nets = vec![
+            Net {
+                id: 1,
+                name: "CLK+".into(),
+                class: None,
+                priority: 0,
+                terminals: terminals(3_000_000),
+            },
+            Net {
+                id: 2,
+                name: "CLK-".into(),
+                class: None,
+                priority: 0,
+                terminals: terminals(4_000_000),
+            },
+        ];
+        board.routes = vec![
+            Route {
+                net_id: 1,
+                segments: vec![Segment {
+                    start: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 3_000_000,
+                    },
+                    end: Point {
+                        x_nm: 9_000_000,
+                        y_nm: 3_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                }],
+                arcs: vec![],
+                vias: vec![],
+                teardrops: vec![],
+                zones: vec![],
+            },
+            Route {
+                net_id: 2,
+                segments: vec![Segment {
+                    start: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 4_000_000,
+                    },
+                    end: Point {
+                        x_nm: 9_000_000,
+                        y_nm: 4_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                }],
+                arcs: vec![],
+                vias: vec![],
+                teardrops: vec![],
+                zones: vec![],
+            },
+        ];
+        board.differential_pairs = vec![DifferentialPair {
+            name: "CLK".into(),
+            positive_net_id: 1,
+            negative_net_id: 2,
+            gap_nm: 750_000,
+            gap_tolerance_nm: 100_000,
+            max_skew_nm: 0,
+            min_coupled_percent: 70,
+            minimum_length_nm: Some(9_000_000),
+            tuning_amplitude_nm: Some(500_000),
+            tuning_pitch_nm: Some(1_000_000),
+            max_tuning_sections: 1,
+        }];
+
+        tune_differential_pairs_synchronously(&mut board).unwrap();
+
+        assert_eq!(route_length_nm(&board.routes[0]), 9_000_000);
+        assert_eq!(
+            route_length_nm(&board.routes[0]),
+            route_length_nm(&board.routes[1])
+        );
+        assert_eq!(board.routes[0].segments.len(), 5);
+        assert!(
+            board.routes[0]
+                .segments
+                .iter()
+                .zip(&board.routes[1].segments)
+                .all(|(positive, negative)| {
+                    translate_point(
+                        positive.start,
+                        Point {
+                            x_nm: 0,
+                            y_nm: 1_000_000,
+                        },
+                    ) == negative.start
+                        && translate_point(
+                            positive.end,
+                            Point {
+                                x_nm: 0,
+                                y_nm: 1_000_000,
+                            },
+                        ) == negative.end
+                })
+        );
+        assert!(crate::checking::check_board(&board).is_clean());
     }
 
     #[test]

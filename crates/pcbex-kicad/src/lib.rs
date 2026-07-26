@@ -536,6 +536,10 @@ fn infer_differential_pairs(
                 gap_tolerance_nm: 100_000,
                 max_skew_nm: 500_000,
                 min_coupled_percent: 80,
+                minimum_length_nm: None,
+                tuning_amplitude_nm: None,
+                tuning_pitch_nm: None,
+                max_tuning_sections: 1,
             })
         })
         .collect();

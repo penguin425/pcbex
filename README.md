@@ -214,6 +214,10 @@ nominal gap, gap tolerance, maximum skew, and minimum coupled percentage.
 The checker reports skew, layer/via asymmetry, and insufficient coupling.
 KiCad net classes containing `diff_pair_width` and `diff_pair_gap` automatically
 pair `_P`/`_N` or `+`/`-` nets and apply the differential trace width.
+Pairs may additionally set `minimum_length_nm`, `tuning_amplitude_nm`,
+`tuning_pitch_nm`, and `max_tuning_sections`. The router adds each meander to
+both members in one transaction, retaining equal length and accepting only
+whole-board DRC-clean geometry.
 
 ## Length constraints and tuning
 
