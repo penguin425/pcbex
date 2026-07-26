@@ -23,6 +23,8 @@ The copper-layer table must also be non-empty, duplicate-free, and limited to
 the supported front, back, and first 30 internal copper layers.
 Rectangular, round, capsule, polygon, and keepout obstacles must each reference
 a non-empty, duplicate-free subset of that declared copper stackup.
+When those objects carry optional net ownership, the identifier must resolve to
+the board net table.
 When an explicit board outline is supplied, it must be a simple,
 non-degenerate polygon; an empty outline retains the rectangular fallback.
 Every board cutout must likewise be a simple, non-degenerate polygon before
