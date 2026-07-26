@@ -244,6 +244,18 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
         }
         for segment in &route.segments {
+            if segment.start == segment.end
+                || segment.width_nm <= 0
+                || !board.copper_layers.contains(&segment.layer)
+            {
+                report.push(
+                    "segment_geometry",
+                    "track segment must have distinct endpoints, positive width, and a declared copper layer"
+                        .into(),
+                    vec![route.net_id],
+                );
+                continue;
+            }
             check_segment(board, route.net_id, segment, &mut report);
         }
         for via in &route.vias {
@@ -3646,5 +3658,54 @@ mod tests {
             .collect();
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].net_ids, vec![1]);
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_segment_geometry() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let segment = |start: Point, end: Point, layer: Layer, width_nm| Segment {
+            start,
+            end,
+            layer,
+            width_nm,
+        };
+        let start = Point {
+            x_nm: 1_000_000,
+            y_nm: 1_000_000,
+        };
+        let end = Point {
+            x_nm: 2_000_000,
+            y_nm: 1_000_000,
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![
+                segment(start, start, Layer::Front, 250_000),
+                segment(start, end, Layer::Front, 0),
+                segment(start, end, Layer::Inner(1), 250_000),
+                segment(start, end, Layer::Front, 250_000),
+            ],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "segment_geometry")
+                .count(),
+            3
+        );
     }
 }

@@ -454,6 +454,8 @@ Every route must likewise reference a declared net; normal DRC reports unknown
 route ownership before applying connectivity, width, or clearance rules.
 Normal DRC also permits at most one route record per net, preventing map
 construction from silently hiding copper in duplicate records.
+Track segments require distinct endpoints, a positive width, and a layer from
+the declared copper stackup before angle, boundary, or clearance evaluation.
 
 ## Planning and repair agent
 
