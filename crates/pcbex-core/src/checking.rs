@@ -108,6 +108,43 @@ pub fn check_board(board: &Board) -> CheckReport {
         return report;
     }
     let mut report = CheckReport::default();
+    for footprint in &board.footprints {
+        for pad in &footprint.pads {
+            match (pad.drill_width_nm, pad.drill_height_nm) {
+                (None, None) => {}
+                (Some(width_nm), Some(height_nm)) if width_nm > 0 && height_nm > 0 => {
+                    let pad_width_nm = if pad.source_width_nm > 0 {
+                        pad.source_width_nm
+                    } else {
+                        pad.width_nm
+                    };
+                    let pad_height_nm = if pad.source_height_nm > 0 {
+                        pad.source_height_nm
+                    } else {
+                        pad.height_nm
+                    };
+                    if pad.plated && (width_nm >= pad_width_nm || height_nm >= pad_height_nm) {
+                        report.push(
+                            "component_hole",
+                            format!(
+                                "{} pad {} plated drill must fit inside the pad",
+                                footprint.reference, pad.number
+                            ),
+                            pad.net_id.into_iter().collect(),
+                        );
+                    }
+                }
+                _ => report.push(
+                    "component_hole",
+                    format!(
+                        "{} pad {} drill must have two positive dimensions",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                ),
+            }
+        }
+    }
     let routes: HashMap<u32, &Route> = board.routes.iter().map(|r| (r.net_id, r)).collect();
     for net in &board.nets {
         let Some(route) = routes.get(&net.id) else {
@@ -2694,6 +2731,69 @@ mod tests {
                 .count(),
             1,
             "NPTH pads must not require an annular ring"
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_component_hole_models_without_dfm_rules() {
+        let mut board = base();
+        board.footprints.push(crate::Footprint {
+            reference: "J1".into(),
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            rotation_deg: 0.0,
+            pads: vec![
+                Pad {
+                    number: "1".into(),
+                    position: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 5_000_000,
+                    },
+                    width_nm: 600_000,
+                    height_nm: 600_000,
+                    source_width_nm: 600_000,
+                    source_height_nm: 600_000,
+                    rotation_deg: 0.0,
+                    shape: PadShape::Circle,
+                    custom_polygon: vec![],
+                    drill_width_nm: Some(600_000),
+                    drill_height_nm: Some(300_000),
+                    plated: true,
+                    layers: vec![Layer::Front, Layer::Back],
+                    net_id: Some(1),
+                },
+                Pad {
+                    number: "2".into(),
+                    position: Point {
+                        x_nm: 7_000_000,
+                        y_nm: 5_000_000,
+                    },
+                    width_nm: 800_000,
+                    height_nm: 800_000,
+                    source_width_nm: 800_000,
+                    source_height_nm: 800_000,
+                    rotation_deg: 0.0,
+                    shape: PadShape::Circle,
+                    custom_polygon: vec![],
+                    drill_width_nm: Some(300_000),
+                    drill_height_nm: None,
+                    plated: false,
+                    layers: vec![Layer::Front, Layer::Back],
+                    net_id: None,
+                },
+            ],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "component_hole")
+                .count(),
+            2
         );
     }
 }

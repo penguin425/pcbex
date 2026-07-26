@@ -420,6 +420,9 @@ KiCad PTH and NPTH pad drill dimensions are retained, including rotated oval
 holes. Component and mounting holes participate in minimum-drill, aspect-ratio,
 board-edge, and exact hole-to-hole spacing checks alongside vias. Plated holes
 also enforce the minimum annular ring, while NPTH mounting holes do not.
+The normal board checker rejects incomplete or non-positive component drills
+even without manufacturing rules, and requires every plated drill to fit
+strictly inside its pad.
 
 ## Planning and repair agent
 
