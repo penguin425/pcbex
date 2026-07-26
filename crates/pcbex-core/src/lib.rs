@@ -772,6 +772,8 @@ pub struct RouteReport {
     pub coupled_differential_pairs: Vec<String>,
     #[serde(default)]
     pub generated_teardrops: usize,
+    #[serde(default)]
+    pub optimized_segments: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -2191,6 +2193,18 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     out.routes = routes;
     tune_route_lengths(&mut out)?;
     couple_differential_pairs(&mut out, &mut report);
+    let mutable_net_ids: HashSet<u32> = report
+        .routed
+        .iter()
+        .chain(&report.rerouted)
+        .filter_map(|name| {
+            out.nets
+                .iter()
+                .find(|net| net.name == *name)
+                .map(|net| net.id)
+        })
+        .collect();
+    report.optimized_segments = optimize_routes(&mut out, &mutable_net_ids);
     report.generated_teardrops = generate_route_teardrops(&mut out);
     fill_copper_zones(&mut out);
     report.expanded_states += paired_expanded;
@@ -2198,6 +2212,75 @@ pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     report.coupled_differential_pairs.sort();
     report.coupled_differential_pairs.dedup();
     Ok((out, report))
+}
+
+/// Deterministically replace legal contiguous track detours with shorter direct
+/// H/V/45-degree segments. Each candidate is accepted only after a complete
+/// board check, so connectivity, clearance, length, and differential-pair
+/// constraints remain authoritative.
+pub fn optimize_routes(board: &mut Board, net_ids: &HashSet<u32>) -> usize {
+    let mut removed = 0;
+    for route_index in 0..board.routes.len() {
+        if !net_ids.contains(&board.routes[route_index].net_id) {
+            continue;
+        }
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let segment_count = board.routes[route_index].segments.len();
+            'candidate: for start in 0..segment_count {
+                for end in ((start + 1)..segment_count).rev() {
+                    let chain = &board.routes[route_index].segments[start..=end];
+                    if !chain.windows(2).all(|pair| pair[0].end == pair[1].start)
+                        || !chain.iter().all(|segment| {
+                            segment.layer == chain[0].layer && segment.width_nm == chain[0].width_nm
+                        })
+                    {
+                        continue;
+                    }
+                    let direct = Segment {
+                        start: chain[0].start,
+                        end: chain[chain.len() - 1].end,
+                        layer: chain[0].layer,
+                        width_nm: chain[0].width_nm,
+                    };
+                    let dx = (direct.end.x_nm - direct.start.x_nm).abs();
+                    let dy = (direct.end.y_nm - direct.start.y_nm).abs();
+                    if direct.start == direct.end || (dx != 0 && dy != 0 && dx != dy) {
+                        continue;
+                    }
+                    let old_length: Nm = chain
+                        .iter()
+                        .map(|segment| {
+                            let dx = (segment.end.x_nm - segment.start.x_nm) as f64;
+                            let dy = (segment.end.y_nm - segment.start.y_nm) as f64;
+                            dx.hypot(dy).round() as Nm
+                        })
+                        .sum();
+                    let direct_length = {
+                        let dx = (direct.end.x_nm - direct.start.x_nm) as f64;
+                        let dy = (direct.end.y_nm - direct.start.y_nm) as f64;
+                        dx.hypot(dy).round() as Nm
+                    };
+                    if direct_length > old_length {
+                        continue;
+                    }
+                    let mut candidate = board.clone();
+                    candidate.routes[route_index]
+                        .segments
+                        .splice(start..=end, [direct]);
+                    if checking::check_board(&candidate).is_clean() {
+                        let count = end - start;
+                        *board = candidate;
+                        removed += count;
+                        changed = true;
+                        break 'candidate;
+                    }
+                }
+            }
+        }
+    }
+    removed
 }
 
 pub fn fill_copper_zones(board: &mut Board) -> usize {
@@ -4022,5 +4105,71 @@ mod tests {
             .collect();
         assert!(centers.contains(&(2_000_000, 5_000_000)));
         assert!(!centers.contains(&(2_500_000, 5_500_000)));
+    }
+
+    #[test]
+    fn post_optimizer_shortens_only_checked_mutable_routes() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].terminals[1].position = Point {
+            x_nm: 5_000_000,
+            y_nm: 5_000_000,
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![
+                Segment {
+                    start: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    end: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 3_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+                Segment {
+                    start: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 3_000_000,
+                    },
+                    end: Point {
+                        x_nm: 3_000_000,
+                        y_nm: 5_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+                Segment {
+                    start: Point {
+                        x_nm: 3_000_000,
+                        y_nm: 5_000_000,
+                    },
+                    end: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 5_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+            ],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+        let original = board.clone();
+
+        assert_eq!(optimize_routes(&mut board, &HashSet::new()), 0);
+        assert_eq!(board.routes[0].segments, original.routes[0].segments);
+        assert_eq!(optimize_routes(&mut board, &HashSet::from([1])), 2);
+        assert_eq!(board.routes[0].segments.len(), 1);
+        assert_eq!(
+            board.routes[0].segments[0].end,
+            board.nets[0].terminals[1].position
+        );
+        assert!(checking::check_board(&board).is_clean());
     }
 }
