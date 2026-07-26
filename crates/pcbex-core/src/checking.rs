@@ -110,6 +110,16 @@ pub fn check_board(board: &Board) -> CheckReport {
     let mut report = CheckReport::default();
     for footprint in &board.footprints {
         for pad in &footprint.pads {
+            if pad.shape == PadShape::Custom && !custom_pad_polygon_is_valid(&pad.custom_polygon) {
+                report.push(
+                    "pad_geometry",
+                    format!(
+                        "{} pad {} custom polygon must be simple and non-degenerate",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                );
+            }
             match (pad.drill_width_nm, pad.drill_height_nm) {
                 (None, None) => {
                     if pad.drill_offset_x_nm != 0 || pad.drill_offset_y_nm != 0 {
@@ -946,6 +956,48 @@ fn custom_pad_contains_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
         .zip(pad.custom_polygon.iter().copied().cycle().skip(1))
         .take(pad.custom_polygon.len())
         .all(|(start, end)| !segments_within(hole.start, hole.end, start, end, hole.diameter_nm))
+}
+
+fn custom_pad_polygon_is_valid(polygon: &[Point]) -> bool {
+    if polygon.len() < 3 {
+        return false;
+    }
+    let edges: Vec<_> = polygon
+        .iter()
+        .copied()
+        .zip(polygon.iter().copied().cycle().skip(1))
+        .take(polygon.len())
+        .collect();
+    if edges.iter().any(|(start, end)| start == end) {
+        return false;
+    }
+
+    let mut signed_area_twice = 0_i128;
+    for (start, end) in &edges {
+        let cross = i128::from(start.x_nm) * i128::from(end.y_nm)
+            - i128::from(end.x_nm) * i128::from(start.y_nm);
+        let Some(area) = signed_area_twice.checked_add(cross) else {
+            return false;
+        };
+        signed_area_twice = area;
+    }
+    if signed_area_twice == 0 {
+        return false;
+    }
+
+    for first in 0..edges.len() {
+        for second in (first + 1)..edges.len() {
+            if second == first + 1 || (first == 0 && second == edges.len() - 1) {
+                continue;
+            }
+            let (first_start, first_end) = edges[first];
+            let (second_start, second_end) = edges[second];
+            if segments_within(first_start, first_end, second_start, second_end, 0) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn point_inside_roundrect(
@@ -3177,5 +3229,90 @@ mod tests {
         };
 
         assert!(!drill_fits_pad(&pad, 200_000, 200_000));
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_custom_pad_topology() {
+        let mut board = base();
+        let pad = |number: &str, custom_polygon: Vec<Point>| Pad {
+            number: number.into(),
+            position: Point { x_nm: 0, y_nm: 0 },
+            width_nm: 2_000_000,
+            height_nm: 2_000_000,
+            source_width_nm: 2_000_000,
+            source_height_nm: 2_000_000,
+            rotation_deg: 0.0,
+            shape: PadShape::Custom,
+            custom_polygon,
+            roundrect_radius_nm: 0,
+            trapezoid_delta_x_nm: 0,
+            trapezoid_delta_y_nm: 0,
+            drill_width_nm: None,
+            drill_height_nm: None,
+            drill_offset_x_nm: 0,
+            drill_offset_y_nm: 0,
+            plated: false,
+            layers: vec![Layer::Front],
+            net_id: None,
+        };
+        board.footprints.push(crate::Footprint {
+            reference: "U1".into(),
+            position: Point { x_nm: 0, y_nm: 0 },
+            rotation_deg: 0.0,
+            pads: vec![
+                pad(
+                    "1",
+                    vec![
+                        Point { x_nm: 0, y_nm: 0 },
+                        Point {
+                            x_nm: 1_000_000,
+                            y_nm: 0,
+                        },
+                    ],
+                ),
+                pad(
+                    "2",
+                    vec![
+                        Point { x_nm: 0, y_nm: 0 },
+                        Point {
+                            x_nm: 1_000_000,
+                            y_nm: 0,
+                        },
+                        Point {
+                            x_nm: 2_000_000,
+                            y_nm: 0,
+                        },
+                    ],
+                ),
+                pad(
+                    "3",
+                    vec![
+                        Point { x_nm: 0, y_nm: 0 },
+                        Point {
+                            x_nm: 1_000_000,
+                            y_nm: 1_000_000,
+                        },
+                        Point {
+                            x_nm: 0,
+                            y_nm: 1_000_000,
+                        },
+                        Point {
+                            x_nm: 1_000_000,
+                            y_nm: 0,
+                        },
+                    ],
+                ),
+            ],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "pad_geometry")
+                .count(),
+            3
+        );
     }
 }
