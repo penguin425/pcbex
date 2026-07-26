@@ -782,8 +782,25 @@ fn import_footprint(
         let shape = match atom(pad.get(3)) {
             Some("circle") => PadShape::Circle,
             Some("oval") => PadShape::Oval,
+            Some("roundrect") => PadShape::RoundRect,
+            Some("trapezoid") => PadShape::Trapezoid,
+            Some("custom") => PadShape::Custom,
             _ => PadShape::Rect,
         };
+        let roundrect_ratio = child_values(pad, "roundrect_rratio")
+            .and_then(|values| number(values.get(1)))
+            .unwrap_or(0.25)
+            .clamp(0.0, 0.5);
+        let rect_delta = child_values(pad, "rect_delta")
+            .map(|values| {
+                (
+                    number(values.get(1)).unwrap_or(0.0),
+                    number(values.get(2)).unwrap_or(0.0),
+                )
+            })
+            .unwrap_or((0.0, 0.0));
+        let custom_polygon =
+            custom_pad_polygon(pad, position, angle + pad_angle).unwrap_or_default();
         let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
         let net_id = child_values(pad, "net").and_then(|values| number_u32(values.get(1)));
         model.pads.push(Pad {
@@ -792,6 +809,7 @@ fn import_footprint(
             width_nm: nm(bbox_width),
             height_nm: nm(bbox_height),
             shape,
+            custom_polygon: custom_polygon.clone(),
             layers: layers.clone(),
             net_id,
         });
@@ -805,6 +823,9 @@ fn import_footprint(
             });
             add_pad_obstacle(
                 shape,
+                roundrect_ratio,
+                rect_delta,
+                &custom_polygon,
                 position,
                 width,
                 height,
@@ -819,6 +840,9 @@ fn import_footprint(
         }
         add_pad_obstacle(
             shape,
+            roundrect_ratio,
+            rect_delta,
+            &custom_polygon,
             position,
             width,
             height,
@@ -1098,6 +1122,9 @@ fn rect_obstacle(
 #[allow(clippy::too_many_arguments)]
 fn add_pad_obstacle(
     shape: PadShape,
+    roundrect_ratio: f64,
+    rect_delta: (f64, f64),
+    custom_polygon: &[Point],
     center: Point,
     width_mm: f64,
     height_mm: f64,
@@ -1137,24 +1164,69 @@ fn add_pad_obstacle(
                 net_id,
             });
         }
-        PadShape::Rect => {
+        PadShape::Rect | PadShape::RoundRect | PadShape::Trapezoid | PadShape::Custom => {
             let half_width = width_mm / 2.0;
             let half_height = height_mm / 2.0;
-            let polygon = [
-                (-half_width, -half_height),
-                (half_width, -half_height),
-                (half_width, half_height),
-                (-half_width, half_height),
-            ]
-            .into_iter()
-            .map(|(x, y)| {
-                let (x, y) = rotate(x, y, rotation_deg);
-                Point {
-                    x_nm: center.x_nm + nm(x),
-                    y_nm: center.y_nm + nm(y),
+            let local_polygon = match shape {
+                PadShape::RoundRect => {
+                    let radius = width_mm.min(height_mm) * roundrect_ratio;
+                    let mut points = Vec::with_capacity(16);
+                    for (cx, cy, start) in [
+                        (half_width - radius, half_height - radius, 0.0),
+                        (-half_width + radius, half_height - radius, 90.0),
+                        (-half_width + radius, -half_height + radius, 180.0),
+                        (half_width - radius, -half_height + radius, 270.0),
+                    ] {
+                        for step in 0..4 {
+                            let angle = (start + step as f64 * 30.0_f64).to_radians();
+                            points.push((cx + radius * angle.cos(), cy + radius * angle.sin()));
+                        }
+                    }
+                    points
                 }
-            })
-            .collect();
+                PadShape::Trapezoid => vec![
+                    (
+                        -half_width - rect_delta.0 / 2.0,
+                        -half_height - rect_delta.1 / 2.0,
+                    ),
+                    (
+                        half_width + rect_delta.0 / 2.0,
+                        -half_height + rect_delta.1 / 2.0,
+                    ),
+                    (
+                        half_width - rect_delta.0 / 2.0,
+                        half_height + rect_delta.1 / 2.0,
+                    ),
+                    (
+                        -half_width + rect_delta.0 / 2.0,
+                        half_height - rect_delta.1 / 2.0,
+                    ),
+                ],
+                PadShape::Custom if custom_polygon.len() >= 3 => {
+                    polygon_obstacles.push(PolygonObstacle {
+                        polygon: custom_polygon.to_vec(),
+                        layers,
+                        net_id,
+                    });
+                    return;
+                }
+                _ => vec![
+                    (-half_width, -half_height),
+                    (half_width, -half_height),
+                    (half_width, half_height),
+                    (-half_width, half_height),
+                ],
+            };
+            let polygon = local_polygon
+                .into_iter()
+                .map(|(x, y)| {
+                    let (x, y) = rotate(x, y, rotation_deg);
+                    Point {
+                        x_nm: center.x_nm + nm(x),
+                        y_nm: center.y_nm + nm(y),
+                    }
+                })
+                .collect();
             polygon_obstacles.push(PolygonObstacle {
                 polygon,
                 layers,
@@ -1162,6 +1234,36 @@ fn add_pad_obstacle(
             });
         }
     }
+}
+
+fn custom_pad_polygon(pad: &[Sexp], center: Point, rotation_deg: f64) -> Option<Vec<Point>> {
+    let primitives = child_values(pad, "primitives")?;
+    for primitive in primitives.iter().skip(1) {
+        let values = primitive.as_list()?;
+        if atom(values.first()) != Some("gr_poly") {
+            continue;
+        }
+        let points = child_values(values, "pts")?;
+        let polygon: Vec<_> = points
+            .iter()
+            .skip(1)
+            .filter_map(|point| {
+                let xy = point.as_list()?;
+                if atom(xy.first()) != Some("xy") {
+                    return None;
+                }
+                let (x, y) = rotate(number(xy.get(1))?, number(xy.get(2))?, rotation_deg);
+                Some(Point {
+                    x_nm: center.x_nm + nm(x),
+                    y_nm: center.y_nm + nm(y),
+                })
+            })
+            .collect();
+        if polygon.len() >= 3 {
+            return Some(polygon);
+        }
+    }
+    None
 }
 
 fn rotate(x: f64, y: f64, degrees: f64) -> (f64, f64) {
@@ -1735,5 +1837,30 @@ mod tests {
         assert!(output.contains("(via blind"));
         assert!(output.contains("(layers \"F.Cu\" \"In2.Cu\")"));
         assert!(output.contains("(via micro"));
+    }
+
+    #[test]
+    fn imports_roundrect_trapezoid_and_custom_pad_geometry() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (footprint "U1" (layer "F.Cu") (at 10 10)
+            (pad "1" smd roundrect (at -4 0) (size 2 1) (layers "F.Cu")
+              (roundrect_rratio 0.25))
+            (pad "2" smd trapezoid (at 0 0) (size 2 1) (rect_delta 0.4 0)
+              (layers "F.Cu"))
+            (pad "3" smd custom (at 4 0) (size 1 1) (layers "F.Cu")
+              (primitives
+                (gr_poly (pts (xy -1 -0.5) (xy 1 -0.5) (xy 0 1))
+                  (width 0) (fill yes)))))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+        let pads = &imported.board.footprints[0].pads;
+        assert_eq!(pads[0].shape, PadShape::RoundRect);
+        assert_eq!(pads[1].shape, PadShape::Trapezoid);
+        assert_eq!(pads[2].shape, PadShape::Custom);
+        assert_eq!(pads[2].custom_polygon.len(), 3);
+        assert_eq!(imported.board.polygon_obstacles.len(), 3);
+        assert_eq!(imported.board.polygon_obstacles[0].polygon.len(), 16);
     }
 }
