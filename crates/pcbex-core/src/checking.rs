@@ -54,6 +54,7 @@ pub fn check_board(board: &Board) -> CheckReport {
             .collect();
         let mut teardrop_obstacles = Vec::new();
         let mut invalid_teardrop_net_ids = Vec::new();
+        let mut invalid_zone_fill_net_ids = Vec::new();
         for route in &mut linearized.routes {
             for teardrop in route.teardrops.drain(..) {
                 if teardrop_geometry_is_valid(board, &teardrop) {
@@ -68,11 +69,15 @@ pub fn check_board(board: &Board) -> CheckReport {
             }
             for zone in &mut route.zones {
                 for polygon in zone.filled_polygons.drain(..) {
-                    teardrop_obstacles.push(crate::PolygonObstacle {
-                        polygon,
-                        layers: vec![zone.layer],
-                        net_id: Some(route.net_id),
-                    });
+                    if zone_fill_geometry_is_valid(board, zone.layer, &polygon) {
+                        teardrop_obstacles.push(crate::PolygonObstacle {
+                            polygon,
+                            layers: vec![zone.layer],
+                            net_id: Some(route.net_id),
+                        });
+                    } else {
+                        invalid_zone_fill_net_ids.push(route.net_id);
+                    }
                 }
             }
         }
@@ -82,6 +87,14 @@ pub fn check_board(board: &Board) -> CheckReport {
             report.push(
                 "teardrop_geometry",
                 "teardrop must be a simple non-degenerate polygon on a declared copper layer"
+                    .into(),
+                vec![net_id],
+            );
+        }
+        for net_id in invalid_zone_fill_net_ids {
+            report.push(
+                "zone_fill_geometry",
+                "filled zone must be a simple non-degenerate polygon on a declared copper layer"
                     .into(),
                 vec![net_id],
             );
@@ -1073,6 +1086,10 @@ fn via_layer_range_is_valid(via: &crate::Via, start: Option<usize>, end: Option<
 
 fn teardrop_geometry_is_valid(board: &Board, teardrop: &crate::Teardrop) -> bool {
     board.copper_layers.contains(&teardrop.layer) && custom_pad_polygon_is_valid(&teardrop.polygon)
+}
+
+fn zone_fill_geometry_is_valid(board: &Board, layer: crate::Layer, polygon: &[Point]) -> bool {
+    board.copper_layers.contains(&layer) && custom_pad_polygon_is_valid(polygon)
 }
 
 fn custom_pad_polygon_is_valid(polygon: &[Point]) -> bool {
@@ -3950,6 +3967,67 @@ mod tests {
                 .violations
                 .iter()
                 .filter(|violation| violation.rule == "teardrop_geometry")
+                .count(),
+            4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_zone_fill_geometry_before_obstacle_conversion() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "ground".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let valid = vec![
+            point(1_000_000, 1_000_000),
+            point(2_000_000, 1_000_000),
+            point(1_500_000, 2_000_000),
+        ];
+        let zone = |layer, filled_polygons| crate::CopperZone {
+            polygon: valid.clone(),
+            layer,
+            clearance_nm: 200_000,
+            minimum_thickness_nm: 250_000,
+            thermal_relief: true,
+            thermal_gap_nm: 200_000,
+            thermal_spoke_width_nm: 250_000,
+            filled_polygons,
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![
+                zone(
+                    Layer::Front,
+                    vec![
+                        valid[..2].to_vec(),
+                        vec![valid[0], valid[0], valid[2]],
+                        vec![
+                            point(1_000_000, 1_000_000),
+                            point(2_000_000, 1_000_000),
+                            point(3_000_000, 1_000_000),
+                        ],
+                        valid.clone(),
+                    ],
+                ),
+                zone(Layer::Inner(1), vec![valid.clone()]),
+            ],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "zone_fill_geometry")
                 .count(),
             4
         );

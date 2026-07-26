@@ -464,6 +464,8 @@ Via endpoints must also belong to distinct declared copper layers, and
 microvias may span only adjacent layers, before further physical checks.
 Teardrops must form simple, non-degenerate polygons on declared copper layers
 before normal DRC converts them into net-owned copper obstacles.
+Filled zone contours have the same topology and layer requirements before
+their copper participates in clearance and return-plane calculations.
 
 ## Planning and repair agent
 
