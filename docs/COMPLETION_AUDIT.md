@@ -100,6 +100,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Route net-reference validation | Normal DRC rejects route net identifiers absent from the board net table before connectivity, width, or clearance checks consume the route | Declared and undeclared empty-route regression |
 | Duplicate route validation | Normal DRC permits at most one route record per net so route indexing cannot silently hide additional copper | Two-route single-net regression with one explicit duplicate violation |
 | Track segment geometry validation | Normal DRC requires distinct endpoints, positive width, and a declared copper layer before angle, boundary, or clearance evaluation | Zero-length, zero-width, unknown-layer, and valid segment regressions |
+| Route arc geometry validation | Normal DRC requires positive width, a declared copper layer, and three points defining a curve; invalid arcs are excluded from DRC linearization | Zero-width, unknown-layer, repeated-point, collinear, and valid arc regressions |
 | KiCad route arcs and teardrops | Three-point copper-arc import/export with checker linearization and native pad/via teardrop zones | Arc coordinate round-trip and teardrop syntax regression |
 | Automatic teardrop generation | Via/track junction taper geometry with boundary, foreign-copper, and duplicate rejection | Clean four-point taper and second-pass idempotence regression |
 | Precise route-arc geometry | Analytical circumcircle/sweep length plus conservative 1 µm adaptive DRC envelope and curved SVG output | Semicircle length and midpoint-only collision regression |
@@ -123,7 +124,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.71.0 exposes 117 Rust tests and 11 Python tests. The release workflow
+Version 1.72.0 exposes 118 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

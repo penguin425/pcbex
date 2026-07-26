@@ -456,6 +456,8 @@ Normal DRC also permits at most one route record per net, preventing map
 construction from silently hiding copper in duplicate records.
 Track segments require distinct endpoints, a positive width, and a layer from
 the declared copper stackup before angle, boundary, or clearance evaluation.
+Route arcs similarly require positive width, a declared copper layer, and three
+points defining a curve; malformed arcs are rejected before DRC linearization.
 
 ## Planning and repair agent
 
