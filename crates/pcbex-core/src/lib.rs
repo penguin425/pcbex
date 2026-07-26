@@ -746,6 +746,8 @@ pub struct RouteReport {
     #[serde(default)]
     pub optimized_segments: usize,
     #[serde(default)]
+    pub rounded_corners: usize,
+    #[serde(default)]
     pub escaped_nets: usize,
     #[serde(default)]
     pub parallel_candidates: usize,
@@ -2330,6 +2332,7 @@ pub fn route_board_with_workers(
         })
         .collect();
     report.optimized_segments = optimize_routes(&mut out, &mutable_net_ids);
+    report.rounded_corners = round_route_corners(&mut out, &mutable_net_ids, board.rules.grid_nm);
     report.generated_teardrops = generate_route_teardrops(&mut out);
     fill_copper_zones(&mut out);
     report.expanded_states += paired_expanded;
@@ -2739,6 +2742,116 @@ fn escape_candidate_is_legal(board: &Board, stubs: &[Route], candidate: &Route) 
                     "unconnected" | "disconnected_route" | "orphan_copper"
                 )
         })
+}
+
+/// Replace legal orthogonal track corners with tangent quarter-circle arcs.
+/// Every replacement is accepted only when the complete board remains clean.
+pub fn round_route_corners(
+    board: &mut Board,
+    net_ids: &HashSet<u32>,
+    requested_radius_nm: Nm,
+) -> usize {
+    if requested_radius_nm <= 0 {
+        return 0;
+    }
+    let mut rounded = 0;
+    for route_index in 0..board.routes.len() {
+        if !net_ids.contains(&board.routes[route_index].net_id) {
+            continue;
+        }
+        let mut segment_index = 0;
+        while segment_index + 1 < board.routes[route_index].segments.len() {
+            let first = &board.routes[route_index].segments[segment_index];
+            let second = &board.routes[route_index].segments[segment_index + 1];
+            let Some((arc, first_end, second_start)) =
+                rounded_corner(first, second, requested_radius_nm)
+            else {
+                segment_index += 1;
+                continue;
+            };
+            let mut candidate = board.clone();
+            candidate.routes[route_index].segments[segment_index].end = first_end;
+            candidate.routes[route_index].segments[segment_index + 1].start = second_start;
+            candidate.routes[route_index].arcs.push(arc);
+            if checking::check_board(&candidate).is_clean() {
+                *board = candidate;
+                rounded += 1;
+                segment_index += 2;
+            } else {
+                segment_index += 1;
+            }
+        }
+    }
+    rounded
+}
+
+fn rounded_corner(
+    first: &Segment,
+    second: &Segment,
+    requested_radius_nm: Nm,
+) -> Option<(RouteArc, Point, Point)> {
+    if first.layer != second.layer || first.width_nm != second.width_nm || first.end != second.start
+    {
+        return None;
+    }
+    let corner = first.end;
+    let incoming = (
+        corner.x_nm - first.start.x_nm,
+        corner.y_nm - first.start.y_nm,
+    );
+    let outgoing = (second.end.x_nm - corner.x_nm, second.end.y_nm - corner.y_nm);
+    let incoming_axis = (incoming.0 == 0) != (incoming.1 == 0);
+    let outgoing_axis = (outgoing.0 == 0) != (outgoing.1 == 0);
+    if !incoming_axis
+        || !outgoing_axis
+        || i128::from(incoming.0) * i128::from(outgoing.0)
+            + i128::from(incoming.1) * i128::from(outgoing.1)
+            != 0
+    {
+        return None;
+    }
+    let first_length = incoming.0.abs() + incoming.1.abs();
+    let second_length = outgoing.0.abs() + outgoing.1.abs();
+    let radius = requested_radius_nm
+        .min(first_length / 2)
+        .min(second_length / 2);
+    if radius <= 0 {
+        return None;
+    }
+    let incoming_unit = (incoming.0.signum(), incoming.1.signum());
+    let outgoing_unit = (outgoing.0.signum(), outgoing.1.signum());
+    let start = Point {
+        x_nm: corner.x_nm - incoming_unit.0 * radius,
+        y_nm: corner.y_nm - incoming_unit.1 * radius,
+    };
+    let end = Point {
+        x_nm: corner.x_nm + outgoing_unit.0 * radius,
+        y_nm: corner.y_nm + outgoing_unit.1 * radius,
+    };
+    let center = Point {
+        x_nm: start.x_nm + outgoing_unit.0 * radius,
+        y_nm: start.y_nm + outgoing_unit.1 * radius,
+    };
+    let diagonal = radius as f64 / 2.0_f64.sqrt();
+    let mid = Point {
+        x_nm: (center.x_nm as f64
+            + f64::from((incoming_unit.0 - outgoing_unit.0) as i32) * diagonal)
+            .round() as Nm,
+        y_nm: (center.y_nm as f64
+            + f64::from((incoming_unit.1 - outgoing_unit.1) as i32) * diagonal)
+            .round() as Nm,
+    };
+    Some((
+        RouteArc {
+            start,
+            mid,
+            end,
+            layer: first.layer,
+            width_nm: first.width_nm,
+        },
+        start,
+        end,
+    ))
 }
 
 /// Deterministically replace legal contiguous track detours with shorter direct
@@ -3696,6 +3809,57 @@ mod tests {
         assert_eq!(stitch_return_paths(&mut board), 1);
         assert!(checking::check_board(&board).is_clean());
         assert_eq!(board.routes[1].vias.len(), 1);
+    }
+
+    #[test]
+    fn automatically_rounds_a_checked_right_angle() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].terminals[1].position = Point {
+            x_nm: 5_000_000,
+            y_nm: 5_000_000,
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![
+                Segment {
+                    start: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    end: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+                Segment {
+                    start: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 1_000_000,
+                    },
+                    end: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 5_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                },
+            ],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        assert_eq!(
+            round_route_corners(&mut board, &HashSet::from([1]), 500_000),
+            1
+        );
+        assert_eq!(board.routes[0].arcs.len(), 1);
+        assert!(arc_is_valid(&board.routes[0].arcs[0]));
+        assert!(checking::check_board(&board).is_clean());
     }
 
     #[test]
