@@ -835,6 +835,8 @@ pub struct RouteReport {
     pub reroute_passes: usize,
     pub ripup_events: usize,
     #[serde(default)]
+    pub shove_events: usize,
+    #[serde(default)]
     pub coupled_differential_pairs: Vec<String>,
     #[serde(default)]
     pub generated_teardrops: usize,
@@ -1449,6 +1451,7 @@ impl<'a> Router<'a> {
         let mut accepted = Vec::<Route>::new();
         let mut ripped_ids = HashSet::<u32>::new();
         let mut ripup_events = 0;
+        let mut shove_events = 0;
         let mut best_routes = self.board.routes.clone();
         let mut best_report = RouteReport {
             preserved: preserved.clone(),
@@ -1484,6 +1487,7 @@ impl<'a> Router<'a> {
             });
             let mut blockers = HashSet::new();
             let mut failed_ids = HashSet::new();
+            let mut failed_blockers = HashMap::<u32, HashSet<u32>>::new();
             let initial_results = if attempt == 0 && attempt_nets.len() > 1 {
                 parallel_candidates += attempt_nets.len();
                 let worker_count = worker_limit.max(1).min(attempt_nets.len()).min(8);
@@ -1520,7 +1524,7 @@ impl<'a> Router<'a> {
             };
             let mut validation = self.board.clone();
             validation.routes.extend(accepted.iter().cloned());
-            for (net, initial_result) in attempt_nets.into_iter().zip(initial_results) {
+            for (net, initial_result) in attempt_nets.iter().copied().zip(initial_results) {
                 let mut result = initial_result.unwrap_or_else(|| self.route_net(net));
                 if attempt == 0
                     && let Ok((candidate, _)) = &result
@@ -1545,9 +1549,31 @@ impl<'a> Router<'a> {
                     }
                     Err(failure) => {
                         total_expanded += failure.expanded;
-                        blockers.extend(failure.blockers);
+                        blockers.extend(failure.blockers.iter().copied());
+                        failed_blockers.insert(net.id, failure.blockers);
                         failed_ids.insert(net.id);
                     }
+                }
+            }
+            for net in &attempt_nets {
+                if !failed_ids.contains(&net.id) {
+                    continue;
+                }
+                let Some(net_blockers) = failed_blockers.get(&net.id) else {
+                    continue;
+                };
+                if let Some((blocker_id, shoved, routed, expanded)) =
+                    try_automatic_shove(self.board, &accepted, net, net_blockers)
+                {
+                    total_expanded += expanded;
+                    if let Some(route) =
+                        accepted.iter_mut().find(|route| route.net_id == blocker_id)
+                    {
+                        *route = shoved;
+                    }
+                    accepted.push(routed);
+                    failed_ids.remove(&net.id);
+                    shove_events += 1;
                 }
             }
             let mut routes = self.board.routes.clone();
@@ -1570,6 +1596,7 @@ impl<'a> Router<'a> {
                     .map(|net| net.name.clone())
                     .collect(),
                 ripup_events,
+                shove_events,
                 parallel_candidates,
                 parallel_fallbacks,
                 parallel_workers,
@@ -1599,6 +1626,7 @@ impl<'a> Router<'a> {
                     .map(|net| net.name.clone())
                     .collect();
                 best_report.ripup_events = ripup_events;
+                best_report.shove_events = shove_events;
                 return (best_routes, best_report);
             }
             for (&cell, owner) in &self.occupied_by {
@@ -1624,6 +1652,7 @@ impl<'a> Router<'a> {
             .map(|net| net.name.clone())
             .collect();
         best_report.ripup_events = ripup_events;
+        best_report.shove_events = shove_events;
         (best_routes, best_report)
     }
 
@@ -2282,6 +2311,77 @@ fn steiner_root_index(net: &Net, rules: &Rules) -> usize {
         .map(|(index, _)| index)
         .unwrap_or(0)
 }
+fn try_automatic_shove(
+    board: &Board,
+    accepted: &[Route],
+    failed_net: &Net,
+    blockers: &HashSet<u32>,
+) -> Option<(u32, Route, Route, usize)> {
+    let grid = board.rules_for_net(failed_net.id).grid_nm;
+    for distance in 1..=2 {
+        for offset in [
+            Point {
+                x_nm: distance * grid,
+                y_nm: 0,
+            },
+            Point {
+                x_nm: -distance * grid,
+                y_nm: 0,
+            },
+            Point {
+                x_nm: 0,
+                y_nm: distance * grid,
+            },
+            Point {
+                x_nm: 0,
+                y_nm: -distance * grid,
+            },
+        ] {
+            for blocker_id in blockers {
+                let Some(blocker_index) = accepted
+                    .iter()
+                    .position(|route| route.net_id == *blocker_id)
+                else {
+                    continue;
+                };
+                let Ok(shoved) = shoved_route_candidate(board, &accepted[blocker_index], offset)
+                else {
+                    continue;
+                };
+                let mut candidate = board.clone();
+                candidate.routes.extend(accepted.iter().cloned());
+                let Some(route_index) = candidate
+                    .routes
+                    .iter()
+                    .position(|route| route.net_id == *blocker_id)
+                else {
+                    continue;
+                };
+                candidate.routes[route_index] = shoved.clone();
+                let Ok(router) = Router::new(&candidate) else {
+                    continue;
+                };
+                let Ok((routed, expanded)) = router.route_net(failed_net) else {
+                    continue;
+                };
+                candidate.routes.push(routed.clone());
+                let invalid =
+                    checking::check_board(&candidate)
+                        .violations
+                        .iter()
+                        .any(|violation| {
+                            violation.net_ids.contains(&failed_net.id)
+                                || violation.net_ids.contains(blocker_id)
+                        });
+                if !invalid {
+                    return Some((*blocker_id, shoved, routed, expanded));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn append_path(route: &mut Route, nodes: &[Node], rules: &Rules, board: &Board) {
     if nodes.len() < 2 {
         return;
@@ -3482,21 +3582,41 @@ pub fn shove_route(board: &mut Board, net_id: u32, offset: Point) -> Result<(), 
     if offset == Point::default() || offset.x_nm % grid != 0 || offset.y_nm % grid != 0 {
         return Err("shove offset must be a non-zero grid multiple".into());
     }
-    let terminals: HashSet<Point> = board
-        .nets
-        .iter()
-        .find(|net| net.id == net_id)
-        .ok_or_else(|| format!("unknown net {net_id}"))?
-        .terminals
-        .iter()
-        .map(|terminal| terminal.position)
-        .collect();
     let route_index = board
         .routes
         .iter()
         .position(|route| route.net_id == net_id)
         .ok_or_else(|| format!("net {net_id} has no route"))?;
-    let mut candidate = board.routes[route_index].clone();
+    let candidate = shoved_route_candidate(board, &board.routes[route_index], offset)?;
+    let original = std::mem::replace(&mut board.routes[route_index], candidate);
+    let report = checking::check_board(board);
+    if report.is_clean() {
+        Ok(())
+    } else {
+        board.routes[route_index] = original;
+        Err(format!(
+            "shove for net {net_id} rejected by board rules: {}",
+            report
+                .violations
+                .iter()
+                .map(|violation| violation.rule.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+}
+
+fn shoved_route_candidate(board: &Board, route: &Route, offset: Point) -> Result<Route, String> {
+    let terminals: HashSet<Point> = board
+        .nets
+        .iter()
+        .find(|net| net.id == route.net_id)
+        .ok_or_else(|| format!("unknown net {}", route.net_id))?
+        .terminals
+        .iter()
+        .map(|terminal| terminal.position)
+        .collect();
+    let mut candidate = route.clone();
     let move_point = |point| {
         if terminals.contains(&point) {
             point
@@ -3526,26 +3646,40 @@ pub fn shove_route(board: &mut Board, net_id: u32, offset: Point) -> Result<(), 
             *point = move_point(*point);
         }
     }
-    if candidate == board.routes[route_index] {
-        return Err(format!(
-            "route for net {net_id} has no movable interior geometry"
-        ));
+    if candidate == *route && route.segments.len() == 1 {
+        let segment = &route.segments[0];
+        let dx = segment.end.x_nm - segment.start.x_nm;
+        let dy = segment.end.y_nm - segment.start.y_nm;
+        let perpendicular = (dx == 0 && offset.y_nm == 0) || (dy == 0 && offset.x_nm == 0);
+        let shoulder = offset.x_nm.abs().max(offset.y_nm.abs());
+        let span = dx.abs().max(dy.abs());
+        if perpendicular && shoulder > 0 && span > 2 * shoulder {
+            let one = Point {
+                x_nm: segment.start.x_nm + dx.signum() * shoulder + offset.x_nm,
+                y_nm: segment.start.y_nm + dy.signum() * shoulder + offset.y_nm,
+            };
+            let two = Point {
+                x_nm: segment.end.x_nm - dx.signum() * shoulder + offset.x_nm,
+                y_nm: segment.end.y_nm - dy.signum() * shoulder + offset.y_nm,
+            };
+            candidate.segments = [segment.start, one, two, segment.end]
+                .windows(2)
+                .map(|points| Segment {
+                    start: points[0],
+                    end: points[1],
+                    layer: segment.layer,
+                    width_nm: segment.width_nm,
+                })
+                .collect();
+        }
     }
-    let original = std::mem::replace(&mut board.routes[route_index], candidate);
-    let report = checking::check_board(board);
-    if report.is_clean() {
-        Ok(())
-    } else {
-        board.routes[route_index] = original;
+    if candidate == *route {
         Err(format!(
-            "shove for net {net_id} rejected by board rules: {}",
-            report
-                .violations
-                .iter()
-                .map(|violation| violation.rule.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
+            "route for net {} has no movable interior geometry",
+            route.net_id
         ))
+    } else {
+        Ok(candidate)
     }
 }
 
@@ -5174,6 +5308,67 @@ mod tests {
         assert!(report.unrouted.is_empty());
         let check = crate::checking::check_board(&routed);
         assert!(check.is_clean(), "{:?}", check.violations);
+    }
+
+    #[test]
+    fn automatic_shove_moves_a_blocker_before_routing_the_failed_net() {
+        let mut b = board();
+        b.obstacles.clear();
+        b.copper_layers = vec![Layer::Front];
+        let terminals = |start_x, end_x, y_nm| {
+            vec![
+                Terminal {
+                    position: Point {
+                        x_nm: start_x,
+                        y_nm,
+                    },
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: Point { x_nm: end_x, y_nm },
+                    layers: vec![Layer::Front],
+                },
+            ]
+        };
+        b.nets = vec![
+            Net {
+                id: 1,
+                name: "blocker".into(),
+                class: None,
+                priority: 1,
+                terminals: terminals(3_000_000, 7_000_000, 5_000_000),
+            },
+            Net {
+                id: 2,
+                name: "target".into(),
+                class: None,
+                priority: 0,
+                terminals: terminals(1_000_000, 9_000_000, 6_000_000),
+            },
+        ];
+        let accepted = vec![Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: b.nets[0].terminals[0].position,
+                end: b.nets[0].terminals[1].position,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        }];
+
+        let (blocker_id, shoved, routed, _) =
+            try_automatic_shove(&b, &accepted, &b.nets[1], &HashSet::from([1]))
+                .expect("a legal shove should make room for the target");
+
+        assert_eq!(blocker_id, 1);
+        assert!(shoved.segments.len() > accepted[0].segments.len());
+        let mut checked = b;
+        checked.routes = vec![shoved, routed];
+        assert!(checking::check_board(&checked).is_clean());
     }
 
     #[test]

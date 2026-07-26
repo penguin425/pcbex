@@ -210,12 +210,13 @@ fn main() -> Result<()> {
                 fs::write(path, render_svg(&board))?;
             }
             eprintln!(
-                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; escaped nets: {}; return vias: {}; optimized segments: {}; rounded corners: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
+                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; shoves: {}; escaped nets: {}; return vias: {}; optimized segments: {}; rounded corners: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
                 report.preserved.len(),
                 report.routed.len(),
                 report.rerouted.len(),
                 report.unrouted.len(),
                 report.ripup_events,
+                report.shove_events,
                 report.escaped_nets,
                 report.generated_return_vias,
                 report.optimized_segments,
@@ -407,12 +408,13 @@ fn main() -> Result<()> {
                 )?;
             }
             eprintln!(
-                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; escaped nets: {}; return vias: {}; optimized segments: {}; rounded corners: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
+                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; shoves: {}; escaped nets: {}; return vias: {}; optimized segments: {}; rounded corners: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
                 report.preserved.len(),
                 report.routed.len(),
                 report.rerouted.len(),
                 report.unrouted.len(),
                 report.ripup_events,
+                report.shove_events,
                 report.escaped_nets,
                 report.generated_return_vias,
                 report.optimized_segments,
