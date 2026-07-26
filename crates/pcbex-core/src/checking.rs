@@ -281,10 +281,70 @@ pub fn check_board(board: &Board) -> CheckReport {
     check_differential_pairs(board, &routes, &mut report);
     check_length_groups(board, &routes, &mut report);
     check_return_paths(board, &routes, &mut report);
+    check_impedance(board, &routes, &mut report);
     report
         .violations
         .extend(check_manufacturability(board).violations);
     report
+}
+
+fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
+    for net in &board.nets {
+        let Some(class) = net
+            .class
+            .as_ref()
+            .and_then(|class| board.net_classes.get(class))
+        else {
+            continue;
+        };
+        let (Some(target), Some(tolerance), Some(route)) = (
+            class.target_impedance_ohms,
+            class.impedance_tolerance_ohms,
+            routes.get(&net.id),
+        ) else {
+            continue;
+        };
+        for segment in &route.segments {
+            let Some(stackup) = board
+                .stackup
+                .iter()
+                .find(|entry| entry.layer == segment.layer)
+            else {
+                report.push(
+                    "impedance_stackup",
+                    format!(
+                        "net {} has no stackup entry for {:?}",
+                        net.name, segment.layer
+                    ),
+                    vec![net.id],
+                );
+                break;
+            };
+            let Some(estimated) = crate::estimated_impedance_ohms(
+                segment.width_nm,
+                stackup.dielectric_height_nm,
+                stackup.dielectric_constant,
+            ) else {
+                report.push(
+                    "impedance_stackup",
+                    format!("net {} has an invalid impedance geometry", net.name),
+                    vec![net.id],
+                );
+                break;
+            };
+            if (estimated - target).abs() > tolerance {
+                report.push(
+                    "impedance",
+                    format!(
+                        "net {} estimates {:.2} Ω, outside {:.2} ± {:.2} Ω",
+                        net.name, estimated, target, tolerance
+                    ),
+                    vec![net.id],
+                );
+                break;
+            }
+        }
+    }
 }
 
 fn check_return_paths(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
@@ -1169,6 +1229,7 @@ mod tests {
             escape_groups: vec![],
             manufacturing_rules: None,
             return_path_rules: vec![],
+            stackup: vec![],
             via_strategy: crate::ViaStrategy::ThroughOnly,
             nets: vec![],
             routes: vec![],

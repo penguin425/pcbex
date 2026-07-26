@@ -215,6 +215,18 @@ pub struct NetClassRules {
     pub minimum_length_nm: Option<Nm>,
     #[serde(default)]
     pub maximum_length_nm: Option<Nm>,
+    #[serde(default)]
+    pub target_impedance_ohms: Option<f64>,
+    #[serde(default)]
+    pub impedance_tolerance_ohms: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackupLayer {
+    pub layer: Layer,
+    pub dielectric_height_nm: Nm,
+    pub dielectric_constant: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -372,6 +384,8 @@ pub struct Board {
     pub manufacturing_rules: Option<ManufacturingRules>,
     #[serde(default)]
     pub return_path_rules: Vec<ReturnPathRule>,
+    #[serde(default)]
+    pub stackup: Vec<StackupLayer>,
     #[serde(default)]
     pub via_strategy: ViaStrategy,
     #[serde(default)]
@@ -703,6 +717,24 @@ pub fn arc_length_nm(arc: &RouteArc) -> Nm {
         })
 }
 
+/// Estimate single-ended microstrip impedance with the IPC-2141 equation.
+pub fn estimated_impedance_ohms(
+    width_nm: Nm,
+    dielectric_height_nm: Nm,
+    dielectric_constant: f64,
+) -> Option<f64> {
+    if width_nm <= 0 || dielectric_height_nm <= 0 || dielectric_constant <= 1.0 {
+        return None;
+    }
+    let width = width_nm as f64;
+    let height = dielectric_height_nm as f64;
+    let argument = 5.98 * height / (0.8 * width);
+    if argument <= 1.0 {
+        return None;
+    }
+    Some(87.0 / (dielectric_constant + 1.41).sqrt() * argument.ln())
+}
+
 pub fn arc_polyline(arc: &RouteArc, maximum_deviation_nm: Nm) -> Vec<Point> {
     let Some((center_x, center_y, radius, sweep)) = arc_geometry(arc) else {
         return vec![arc.start, arc.mid, arc.end];
@@ -944,6 +976,26 @@ impl<'a> Router<'a> {
             {
                 return Err(format!("net class {name} references undeclared layers"));
             }
+            if rules.target_impedance_ohms.is_some() != rules.impedance_tolerance_ohms.is_some()
+                || rules
+                    .target_impedance_ohms
+                    .is_some_and(|value| !value.is_finite() || value <= 0.0)
+                || rules
+                    .impedance_tolerance_ohms
+                    .is_some_and(|value| !value.is_finite() || value < 0.0)
+            {
+                return Err(format!("net class {name} has invalid impedance limits"));
+            }
+        }
+        let mut stackup_layers = HashSet::new();
+        if board.stackup.iter().any(|entry| {
+            !stackup_layers.insert(entry.layer)
+                || !board.copper_layers.contains(&entry.layer)
+                || entry.dielectric_height_nm <= 0
+                || !entry.dielectric_constant.is_finite()
+                || entry.dielectric_constant <= 1.0
+        }) {
+            return Err("stackup has invalid or duplicate layer entries".into());
         }
         let net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
         let mut paired_net_ids = HashSet::new();
@@ -3630,6 +3682,7 @@ mod tests {
             escape_groups: vec![],
             manufacturing_rules: None,
             return_path_rules: vec![],
+            stackup: vec![],
             via_strategy: ViaStrategy::ThroughOnly,
             nets: vec![Net {
                 id: 1,
@@ -3860,6 +3913,61 @@ mod tests {
         assert_eq!(board.routes[0].arcs.len(), 1);
         assert!(arc_is_valid(&board.routes[0].arcs[0]));
         assert!(checking::check_board(&board).is_clean());
+    }
+
+    #[test]
+    fn checks_stackup_impedance_against_net_class_target() {
+        let mut board = board();
+        board.obstacles.clear();
+        board.nets[0].class = Some("Controlled".into());
+        let estimated = estimated_impedance_ohms(250_000, 200_000, 4.0).unwrap();
+        board.net_classes.insert(
+            "Controlled".into(),
+            NetClassRules {
+                track_width_nm: 250_000,
+                clearance_nm: 200_000,
+                via_diameter_nm: 600_000,
+                via_drill_nm: 300_000,
+                layers: Some(vec![Layer::Front]),
+                differential_width_nm: None,
+                differential_gap_nm: None,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
+                target_impedance_ohms: Some(estimated),
+                impedance_tolerance_ohms: Some(1.0),
+            },
+        );
+        board.stackup.push(StackupLayer {
+            layer: Layer::Front,
+            dielectric_height_nm: 200_000,
+            dielectric_constant: 4.0,
+        });
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: board.nets[0].terminals[0].position,
+                end: board.nets[0].terminals[1].position,
+                layer: Layer::Front,
+                width_nm: 250_000,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        assert!(checking::check_board(&board).is_clean());
+        board
+            .net_classes
+            .get_mut("Controlled")
+            .unwrap()
+            .target_impedance_ohms = Some(50.0);
+        assert!(
+            checking::check_board(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "impedance")
+        );
     }
 
     #[test]
@@ -4207,6 +4315,8 @@ mod tests {
                 differential_gap_nm: None,
                 minimum_length_nm: None,
                 maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
             },
         );
         let (routed, report) = route_board(&b).unwrap();
@@ -4363,6 +4473,8 @@ mod tests {
                 differential_gap_nm: None,
                 minimum_length_nm: None,
                 maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
             },
         );
         b.nets = vec![
@@ -4570,6 +4682,8 @@ mod tests {
                 differential_gap_nm: None,
                 minimum_length_nm: None,
                 maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
             },
         );
         b.nets[0].terminals = vec![
@@ -4625,6 +4739,8 @@ mod tests {
                 differential_gap_nm: None,
                 minimum_length_nm: None,
                 maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
             },
         );
         board.nets[0].terminals = vec![
@@ -4676,6 +4792,8 @@ mod tests {
                 differential_gap_nm: None,
                 minimum_length_nm: Some(10_000_000),
                 maximum_length_nm: Some(11_000_000),
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
             },
         );
 
