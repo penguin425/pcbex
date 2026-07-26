@@ -120,6 +120,22 @@ pub fn check_board(board: &Board) -> CheckReport {
                     pad.net_id.into_iter().collect(),
                 );
             }
+            let pad_layers: HashSet<_> = pad.layers.iter().copied().collect();
+            if pad.layers.is_empty()
+                || pad_layers.len() != pad.layers.len()
+                || pad_layers
+                    .iter()
+                    .any(|layer| !board.copper_layers.contains(layer))
+            {
+                report.push(
+                    "pad_layers",
+                    format!(
+                        "{} pad {} must use unique layers from the board copper stackup",
+                        footprint.reference, pad.number
+                    ),
+                    pad.net_id.into_iter().collect(),
+                );
+            }
             match (pad.drill_width_nm, pad.drill_height_nm) {
                 (None, None) => {
                     if pad.drill_offset_x_nm != 0 || pad.drill_offset_y_nm != 0 {
@@ -3398,6 +3414,53 @@ mod tests {
                 .filter(|violation| violation.rule == "pad_geometry")
                 .count(),
             4
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_pad_layer_membership() {
+        let mut board = base();
+        let pad = |number: &str, layers: Vec<Layer>| Pad {
+            number: number.into(),
+            position: Point { x_nm: 0, y_nm: 0 },
+            width_nm: 1_000_000,
+            height_nm: 1_000_000,
+            source_width_nm: 1_000_000,
+            source_height_nm: 1_000_000,
+            rotation_deg: 0.0,
+            shape: PadShape::Rect,
+            custom_polygon: vec![],
+            roundrect_radius_nm: 0,
+            trapezoid_delta_x_nm: 0,
+            trapezoid_delta_y_nm: 0,
+            drill_width_nm: None,
+            drill_height_nm: None,
+            drill_offset_x_nm: 0,
+            drill_offset_y_nm: 0,
+            plated: false,
+            layers,
+            net_id: None,
+        };
+        board.footprints.push(crate::Footprint {
+            reference: "U3".into(),
+            position: Point { x_nm: 0, y_nm: 0 },
+            rotation_deg: 0.0,
+            pads: vec![
+                pad("1", vec![]),
+                pad("2", vec![Layer::Front, Layer::Front]),
+                pad("3", vec![Layer::Inner(1)]),
+                pad("4", vec![Layer::Front, Layer::Back]),
+            ],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "pad_layers")
+                .count(),
+            3
         );
     }
 }
