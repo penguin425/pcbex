@@ -179,6 +179,44 @@ pub fn check_board(board: &Board) -> CheckReport {
             vec![],
         );
     }
+    for layers in board
+        .obstacles
+        .iter()
+        .map(|obstacle| obstacle.layers.as_slice())
+        .chain(
+            board
+                .round_obstacles
+                .iter()
+                .map(|obstacle| obstacle.layers.as_slice()),
+        )
+        .chain(
+            board
+                .capsule_obstacles
+                .iter()
+                .map(|obstacle| obstacle.layers.as_slice()),
+        )
+        .chain(
+            board
+                .polygon_obstacles
+                .iter()
+                .map(|obstacle| obstacle.layers.as_slice()),
+        )
+        .chain(
+            board
+                .keepouts
+                .iter()
+                .map(|keepout| keepout.layers.as_slice()),
+        )
+    {
+        if !layer_membership_is_valid(board, layers) {
+            report.push(
+                "obstacle_layers",
+                "obstacles and keepouts must use unique layers from the board copper stackup"
+                    .into(),
+                vec![],
+            );
+        }
+    }
     let explicit_outline_is_valid =
         board.outline.is_empty() || custom_pad_polygon_is_valid(&board.outline);
     if !explicit_outline_is_valid {
@@ -1188,6 +1226,14 @@ fn copper_layer_table_is_valid(board: &Board) -> bool {
             .collect::<HashSet<_>>()
             .len()
             == board.copper_layers.len()
+}
+
+fn layer_membership_is_valid(board: &Board, layers: &[crate::Layer]) -> bool {
+    !layers.is_empty()
+        && layers
+            .iter()
+            .all(|layer| board.copper_layers.contains(layer))
+        && layers.iter().copied().collect::<HashSet<_>>().len() == layers.len()
 }
 
 fn via_geometry_is_valid(via: &crate::Via) -> bool {
@@ -3709,6 +3755,65 @@ mod tests {
                 .filter(|violation| violation.rule == "pad_layers")
                 .count(),
             3
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_obstacle_layer_membership() {
+        let mut board = base();
+        let point = Point { x_nm: 1, y_nm: 1 };
+        board.obstacles.push(crate::Obstacle {
+            min: point,
+            max: Point { x_nm: 2, y_nm: 2 },
+            layers: vec![],
+            net_id: None,
+        });
+        board.round_obstacles.push(RoundObstacle {
+            center: point,
+            diameter_nm: 1,
+            layers: vec![Layer::Front, Layer::Front],
+            net_id: None,
+        });
+        board.capsule_obstacles.push(CapsuleObstacle {
+            start: point,
+            end: Point { x_nm: 2, y_nm: 2 },
+            diameter_nm: 1,
+            layers: vec![Layer::Inner(1)],
+            net_id: None,
+        });
+        board.polygon_obstacles.push(crate::PolygonObstacle {
+            polygon: vec![
+                point,
+                Point { x_nm: 2, y_nm: 1 },
+                Point { x_nm: 1, y_nm: 2 },
+            ],
+            layers: vec![Layer::Back],
+            net_id: None,
+        });
+        board.keepouts.push(crate::Keepout {
+            polygon: vec![
+                point,
+                Point { x_nm: 2, y_nm: 1 },
+                Point { x_nm: 1, y_nm: 2 },
+            ],
+            layers: vec![Layer::Inner(2)],
+            net_id: None,
+            tracks_not_allowed: true,
+            vias_not_allowed: true,
+            zones_not_allowed: true,
+            footprints_not_allowed: false,
+            minimum_track_width_nm: None,
+            minimum_clearance_nm: None,
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "obstacle_layers")
+                .count(),
+            4
         );
     }
 
