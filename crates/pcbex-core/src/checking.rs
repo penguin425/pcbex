@@ -189,6 +189,25 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
         }
     }
+    for (kind, diameter_nm, net_id) in board
+        .round_obstacles
+        .iter()
+        .map(|obstacle| ("round", obstacle.diameter_nm, obstacle.net_id))
+        .chain(
+            board
+                .capsule_obstacles
+                .iter()
+                .map(|obstacle| ("capsule", obstacle.diameter_nm, obstacle.net_id)),
+        )
+    {
+        if diameter_nm <= 0 {
+            report.push(
+                "obstacle_diameter",
+                format!("{kind} obstacle diameter must be positive"),
+                net_id.into_iter().collect(),
+            );
+        }
+    }
     for layers in board
         .obstacles
         .iter()
@@ -3880,6 +3899,52 @@ mod tests {
                 .violations
                 .iter()
                 .filter(|violation| violation.rule == "obstacle_geometry")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_non_positive_curved_obstacle_diameters() {
+        let mut board = base();
+        let point = Point { x_nm: 1, y_nm: 1 };
+        board.round_obstacles = vec![
+            RoundObstacle {
+                center: point,
+                diameter_nm: 0,
+                layers: vec![Layer::Front],
+                net_id: None,
+            },
+            RoundObstacle {
+                center: point,
+                diameter_nm: 1,
+                layers: vec![Layer::Front],
+                net_id: None,
+            },
+        ];
+        board.capsule_obstacles = vec![
+            CapsuleObstacle {
+                start: point,
+                end: Point { x_nm: 2, y_nm: 2 },
+                diameter_nm: -1,
+                layers: vec![Layer::Front],
+                net_id: None,
+            },
+            CapsuleObstacle {
+                start: point,
+                end: Point { x_nm: 2, y_nm: 2 },
+                diameter_nm: 1,
+                layers: vec![Layer::Front],
+                net_id: None,
+            },
+        ];
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "obstacle_diameter")
                 .count(),
             2
         );

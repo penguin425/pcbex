@@ -4505,6 +4505,34 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_non_positive_curved_obstacle_diameters() {
+        let mut invalid_round = board();
+        invalid_round.round_obstacles.push(RoundObstacle {
+            center: Point { x_nm: 1, y_nm: 1 },
+            diameter_nm: 0,
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
+        assert!(matches!(
+            Router::new(&invalid_round),
+            Err(message) if message == "round obstacle diameter must be positive"
+        ));
+
+        let mut invalid_capsule = board();
+        invalid_capsule.capsule_obstacles.push(CapsuleObstacle {
+            start: Point { x_nm: 1, y_nm: 1 },
+            end: Point { x_nm: 2, y_nm: 2 },
+            diameter_nm: -1,
+            layers: vec![Layer::Front],
+            net_id: None,
+        });
+        assert!(matches!(
+            Router::new(&invalid_capsule),
+            Err(message) if message == "capsule obstacle diameter must be positive"
+        ));
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(
