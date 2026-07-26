@@ -41,7 +41,17 @@ pub fn check_board(board: &Board) -> CheckReport {
             .map(|route| route.net_id)
             .collect();
         let mut linearized = board.clone();
-        linearized.routes = board.routes.iter().map(Route::linearized_arcs).collect();
+        linearized.routes = board
+            .routes
+            .iter()
+            .map(|route| {
+                let mut valid_arcs = route.clone();
+                valid_arcs
+                    .arcs
+                    .retain(|arc| route_arc_geometry_is_valid(board, arc));
+                valid_arcs.linearized_arcs()
+            })
+            .collect();
         let mut teardrop_obstacles = Vec::new();
         for route in &mut linearized.routes {
             for teardrop in route.teardrops.drain(..) {
@@ -85,17 +95,19 @@ pub fn check_board(board: &Board) -> CheckReport {
                 }
             }
             for arc in &route.arcs {
+                if !route_arc_geometry_is_valid(board, arc) {
+                    report.push(
+                        "arc_geometry",
+                        "arc must have positive width, a declared copper layer, and three points defining a curve"
+                            .into(),
+                        vec![route.net_id],
+                    );
+                    continue;
+                }
                 if arc.width_nm < rules.track_width_nm {
                     report.push(
                         "track_width",
                         "arc is narrower than the configured minimum".into(),
-                        vec![route.net_id],
-                    );
-                }
-                if !crate::arc_is_valid(arc) {
-                    report.push(
-                        "arc_geometry",
-                        "arc start, midpoint, and end must define a curve".into(),
                         vec![route.net_id],
                     );
                 }
@@ -1031,6 +1043,10 @@ fn custom_pad_contains_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
         .zip(pad.custom_polygon.iter().copied().cycle().skip(1))
         .take(pad.custom_polygon.len())
         .all(|(start, end)| !segments_within(hole.start, hole.end, start, end, hole.diameter_nm))
+}
+
+fn route_arc_geometry_is_valid(board: &Board, arc: &crate::RouteArc) -> bool {
+    arc.width_nm > 0 && board.copper_layers.contains(&arc.layer) && crate::arc_is_valid(arc)
 }
 
 fn custom_pad_polygon_is_valid(polygon: &[Point]) -> bool {
@@ -3706,6 +3722,59 @@ mod tests {
                 .filter(|violation| violation.rule == "segment_geometry")
                 .count(),
             3
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_arc_geometry_before_linearization() {
+        let mut board = base();
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let arc = |start, mid, end, layer, width_nm| crate::RouteArc {
+            start,
+            mid,
+            end,
+            layer,
+            width_nm,
+        };
+        let start = point(1_000_000, 2_000_000);
+        let mid = point(2_000_000, 1_000_000);
+        let end = point(3_000_000, 2_000_000);
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![
+                arc(start, mid, end, Layer::Front, 0),
+                arc(start, mid, end, Layer::Inner(1), 250_000),
+                arc(start, start, end, Layer::Front, 250_000),
+                arc(
+                    start,
+                    point(2_000_000, 2_000_000),
+                    end,
+                    Layer::Front,
+                    250_000,
+                ),
+                arc(start, mid, end, Layer::Front, 250_000),
+            ],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "arc_geometry")
+                .count(),
+            4
         );
     }
 }
