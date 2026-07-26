@@ -444,6 +444,21 @@ pub struct Segment {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RouteArc {
+    pub start: Point,
+    pub mid: Point,
+    pub end: Point,
+    pub layer: Layer,
+    pub width_nm: Nm,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Teardrop {
+    pub polygon: Vec<Point>,
+    pub layer: Layer,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Via {
     pub position: Point,
     pub diameter_nm: Nm,
@@ -499,7 +514,35 @@ impl Via {
 pub struct Route {
     pub net_id: u32,
     pub segments: Vec<Segment>,
+    #[serde(default)]
+    pub arcs: Vec<RouteArc>,
     pub vias: Vec<Via>,
+    #[serde(default)]
+    pub teardrops: Vec<Teardrop>,
+}
+
+impl Route {
+    pub fn linearized_arcs(&self) -> Self {
+        let mut route = self.clone();
+        for arc in &self.arcs {
+            route.segments.extend([
+                Segment {
+                    start: arc.start,
+                    end: arc.mid,
+                    layer: arc.layer,
+                    width_nm: arc.width_nm,
+                },
+                Segment {
+                    start: arc.mid,
+                    end: arc.end,
+                    layer: arc.layer,
+                    width_nm: arc.width_nm,
+                },
+            ]);
+        }
+        route.arcs.clear();
+        route
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1127,7 +1170,9 @@ impl<'a> Router<'a> {
                 Route {
                     net_id: net.id,
                     segments: vec![],
+                    arcs: vec![],
                     vias: vec![],
+                    teardrops: vec![],
                 },
                 0,
             ));
@@ -1135,7 +1180,9 @@ impl<'a> Router<'a> {
         let mut route = Route {
             net_id: net.id,
             segments: vec![],
+            arcs: vec![],
             vias: vec![],
+            teardrops: vec![],
         };
         let rules = self.board.rules_for_net(net.id);
         let mut expanded = 0;
@@ -2347,6 +2394,8 @@ mod tests {
         b.obstacles.clear();
         let existing = Route {
             net_id: 1,
+            arcs: vec![],
+            teardrops: vec![],
             segments: vec![Segment {
                 start: b.nets[0].terminals[0].position,
                 end: b.nets[0].terminals[1].position,
@@ -2407,11 +2456,15 @@ mod tests {
         b.routes = vec![
             Route {
                 net_id: 1,
+                arcs: vec![],
+                teardrops: vec![],
                 segments: vec![],
                 vias: vec![],
             },
             Route {
                 net_id: 1,
+                arcs: vec![],
+                teardrops: vec![],
                 segments: vec![],
                 vias: vec![],
             },

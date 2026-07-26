@@ -26,6 +26,11 @@ impl CheckReport {
 }
 
 pub fn check_board(board: &Board) -> CheckReport {
+    if board.routes.iter().any(|route| !route.arcs.is_empty()) {
+        let mut linearized = board.clone();
+        linearized.routes = board.routes.iter().map(Route::linearized_arcs).collect();
+        return check_board(&linearized);
+    }
     let mut report = CheckReport::default();
     let routes: HashMap<u32, &Route> = board.routes.iter().map(|r| (r.net_id, r)).collect();
     for net in &board.nets {
@@ -1070,6 +1075,8 @@ mod tests {
             });
             b.routes.push(Route {
                 net_id: id,
+                arcs: vec![],
+                teardrops: vec![],
                 segments: vec![Segment {
                     start: a,
                     end: z,
@@ -1125,6 +1132,8 @@ mod tests {
         });
         board.routes.push(Route {
             net_id: 1,
+            arcs: vec![],
+            teardrops: vec![],
             segments: vec![Segment {
                 start,
                 end,
@@ -1198,6 +1207,8 @@ mod tests {
         });
         board.routes.push(Route {
             net_id: 1,
+            arcs: vec![],
+            teardrops: vec![],
             segments: vec![Segment {
                 start,
                 end,
@@ -1258,6 +1269,8 @@ mod tests {
         });
         board.routes.push(Route {
             net_id: 1,
+            arcs: vec![],
+            teardrops: vec![],
             segments: vec![
                 Segment {
                     start,
@@ -1325,6 +1338,8 @@ mod tests {
         });
         board.routes.push(Route {
             net_id: 1,
+            arcs: vec![],
+            teardrops: vec![],
             segments: vec![
                 Segment {
                     start,
@@ -1389,6 +1404,8 @@ mod tests {
         });
         board.routes.push(Route {
             net_id: 1,
+            arcs: vec![],
+            teardrops: vec![],
             segments: vec![
                 Segment {
                     start,
@@ -1450,6 +1467,8 @@ mod tests {
             });
             board.routes.push(Route {
                 net_id: id,
+                arcs: vec![],
+                teardrops: vec![],
                 segments: vec![Segment {
                     start,
                     end,
@@ -1522,6 +1541,8 @@ mod tests {
         });
         board.routes.push(Route {
             net_id: 1,
+            arcs: vec![],
+            teardrops: vec![],
             segments: vec![
                 Segment {
                     start: Point {
@@ -1562,6 +1583,8 @@ mod tests {
         });
         board.routes.push(Route {
             net_id: 2,
+            arcs: vec![],
+            teardrops: vec![],
             segments: vec![],
             vias: vec![Via {
                 position: Point {

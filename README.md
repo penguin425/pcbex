@@ -107,6 +107,8 @@ Fully connected existing nets are preserved as locked routes; incomplete copper
 remains an obstacle and is not mistaken for a completed route. Generated tracks
 and through vias are appended at board level without duplicating locked routes,
 while preserving the source document.
+The route model also preserves KiCad three-point copper arcs and can emit
+native pad/via teardrop zones from explicit polygon geometry.
 Use `--drc` to run `kicad-cli pcb drc` on the result when KiCad is installed.
 After DRC passes, generate Gerber and Excellon drill files with:
 
