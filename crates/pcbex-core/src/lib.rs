@@ -244,6 +244,26 @@ pub struct EscapeGroup {
     pub net_ids: Vec<u32>,
     pub fanout_distance_nm: Nm,
     pub target_layer: Layer,
+    #[serde(default)]
+    pub direction: EscapeDirection,
+    #[serde(default)]
+    pub via_grid_nm: Option<Nm>,
+    #[serde(default = "default_escape_rings")]
+    pub max_rings: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EscapeDirection {
+    Radial,
+    Rows,
+    Columns,
+    #[default]
+    FourWay,
+}
+
+fn default_escape_rings() -> u8 {
+    3
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -940,6 +960,8 @@ impl<'a> Router<'a> {
             if group.name.is_empty()
                 || group.net_ids.is_empty()
                 || group.fanout_distance_nm <= 0
+                || group.via_grid_nm.is_some_and(|grid| grid <= 0)
+                || !(1..=8).contains(&group.max_rings)
                 || group.target_layer == Layer::Front
                 || !board.copper_layers.contains(&group.target_layer)
                 || group.net_ids.iter().any(|net_id| {
@@ -953,6 +975,7 @@ impl<'a> Router<'a> {
                                 net.terminals.is_empty()
                                     || !net.terminals[0].layers.contains(&Layer::Front)
                             })
+                        || board.routes.iter().any(|route| route.net_id == *net_id)
                 })
             {
                 return Err(format!("escape group {} is invalid", group.name));
@@ -2377,20 +2400,6 @@ fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> 
                 .position(|net| net.id == *net_id)
                 .ok_or_else(|| format!("unknown escaped net {net_id}"))?;
             let original = adjusted.nets[net_index].terminals[0].position;
-            let mut dx = (original.x_nm - centroid.x_nm).signum();
-            let dy = (original.y_nm - centroid.y_nm).signum();
-            if dx == 0 && dy == 0 {
-                dx = if net_id % 2 == 0 { -1 } else { 1 };
-            }
-            let escape = Point {
-                x_nm: original.x_nm + dx * group.fanout_distance_nm,
-                y_nm: original.y_nm + dy * group.fanout_distance_nm,
-            };
-            if !adjusted.point_inside_board(escape, adjusted.rules.via_diameter_nm) {
-                return Err(format!(
-                    "escape point for net {net_id} is outside the board"
-                ));
-            }
             let rules = adjusted.rules_for_net(*net_id);
             let kind = if group.target_layer.index() == 1 {
                 ViaKind::Micro
@@ -2399,26 +2408,53 @@ fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> 
             } else {
                 ViaKind::BlindBuried
             };
-            stubs.push(Route {
-                net_id: *net_id,
-                segments: vec![Segment {
-                    start: original,
-                    end: escape,
-                    layer: Layer::Front,
-                    width_nm: rules.track_width_nm,
-                }],
-                arcs: vec![],
-                vias: vec![Via {
-                    position: escape,
-                    diameter_nm: rules.via_diameter_nm,
-                    drill_nm: rules.via_drill_nm,
-                    kind,
-                    start_layer: Layer::Front,
-                    end_layer: group.target_layer,
-                }],
-                teardrops: vec![],
-                zones: vec![],
-            });
+            let primary = escape_primary_direction(original, centroid, group.direction, *net_id);
+            let directions = escape_direction_candidates(primary);
+            let mut selected = None;
+            'rings: for ring in 1..=group.max_rings {
+                for (dx, dy) in &directions {
+                    let distance = group.fanout_distance_nm * Nm::from(ring);
+                    let mut escape = Point {
+                        x_nm: original.x_nm + dx * distance,
+                        y_nm: original.y_nm + dy * distance,
+                    };
+                    if let Some(grid) = group.via_grid_nm {
+                        escape.x_nm = snap_to_grid(escape.x_nm, grid);
+                        escape.y_nm = snap_to_grid(escape.y_nm, grid);
+                    }
+                    if escape == original
+                        || !adjusted.point_inside_board(escape, rules.via_diameter_nm)
+                    {
+                        continue;
+                    }
+                    let candidate = Route {
+                        net_id: *net_id,
+                        segments: escape_stub_segments(original, escape, rules.track_width_nm),
+                        arcs: vec![],
+                        vias: vec![Via {
+                            position: escape,
+                            diameter_nm: rules.via_diameter_nm,
+                            drill_nm: rules.via_drill_nm,
+                            kind,
+                            start_layer: Layer::Front,
+                            end_layer: group.target_layer,
+                        }],
+                        teardrops: vec![],
+                        zones: vec![],
+                    };
+                    if escape_candidate_is_legal(&adjusted, &stubs, &candidate) {
+                        selected = Some((escape, candidate));
+                        break 'rings;
+                    }
+                }
+            }
+            let Some((escape, stub)) = selected else {
+                return Err(format!(
+                    "unable to place a legal BGA escape via for net {net_id} in {} rings",
+                    group.max_rings
+                ));
+            };
+            stubs.push(stub);
             let terminal = &mut adjusted.nets[net_index].terminals[0];
             terminal.position = escape;
             terminal.layers = vec![group.target_layer];
@@ -2426,6 +2462,84 @@ fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> 
     }
     adjusted.escape_groups.clear();
     Ok((adjusted, stubs))
+}
+
+fn escape_primary_direction(
+    point: Point,
+    centroid: Point,
+    strategy: EscapeDirection,
+    net_id: u32,
+) -> (Nm, Nm) {
+    let mut dx = (point.x_nm - centroid.x_nm).signum();
+    let dy = (point.y_nm - centroid.y_nm).signum();
+    if dx == 0 && dy == 0 {
+        dx = if net_id.is_multiple_of(2) { -1 } else { 1 };
+    }
+    match strategy {
+        EscapeDirection::Radial => (dx, dy),
+        EscapeDirection::Rows => (if dx == 0 { 1 } else { dx }, 0),
+        EscapeDirection::Columns => (0, if dy == 0 { 1 } else { dy }),
+        EscapeDirection::FourWay => {
+            if (point.x_nm - centroid.x_nm).abs() >= (point.y_nm - centroid.y_nm).abs() {
+                (if dx == 0 { 1 } else { dx }, 0)
+            } else {
+                (0, if dy == 0 { 1 } else { dy })
+            }
+        }
+    }
+}
+
+fn escape_direction_candidates(primary: (Nm, Nm)) -> Vec<(Nm, Nm)> {
+    let axes = [(1, 0), (0, 1), (-1, 0), (0, -1)];
+    let mut directions = vec![primary];
+    directions.extend(axes.into_iter().filter(|direction| *direction != primary));
+    directions
+}
+
+fn snap_to_grid(value: Nm, grid: Nm) -> Nm {
+    ((value as f64 / grid as f64).round() as Nm) * grid
+}
+
+fn escape_stub_segments(start: Point, end: Point, width_nm: Nm) -> Vec<Segment> {
+    let dx = (end.x_nm - start.x_nm).abs();
+    let dy = (end.y_nm - start.y_nm).abs();
+    let points = if dx == 0 || dy == 0 || dx == dy {
+        vec![start, end]
+    } else {
+        vec![
+            start,
+            Point {
+                x_nm: end.x_nm,
+                y_nm: start.y_nm,
+            },
+            end,
+        ]
+    };
+    points
+        .windows(2)
+        .map(|points| Segment {
+            start: points[0],
+            end: points[1],
+            layer: Layer::Front,
+            width_nm,
+        })
+        .collect()
+}
+
+fn escape_candidate_is_legal(board: &Board, stubs: &[Route], candidate: &Route) -> bool {
+    let mut validation = board.clone();
+    validation.routes.extend_from_slice(stubs);
+    validation.routes.push(candidate.clone());
+    checking::check_board(&validation)
+        .violations
+        .iter()
+        .all(|violation| {
+            !violation.net_ids.contains(&candidate.net_id)
+                || matches!(
+                    violation.rule.as_str(),
+                    "unconnected" | "disconnected_route" | "orphan_copper"
+                )
+        })
 }
 
 /// Deterministically replace legal contiguous track detours with shorter direct
@@ -4161,6 +4275,23 @@ mod tests {
         let mut board = board();
         board.obstacles.clear();
         board.copper_layers = vec![Layer::Front, Layer::Inner(1), Layer::Back];
+        board.round_obstacles = [
+            (3_000_000, 3_000_000),
+            (4_000_000, 4_000_000),
+            (5_000_000, 3_000_000),
+            (4_000_000, 2_000_000),
+            (7_000_000, 3_000_000),
+            (6_000_000, 4_000_000),
+            (6_000_000, 2_000_000),
+        ]
+        .into_iter()
+        .map(|(x_nm, y_nm)| RoundObstacle {
+            center: Point { x_nm, y_nm },
+            diameter_nm: 200_000,
+            layers: vec![Layer::Inner(1)],
+            net_id: None,
+        })
+        .collect();
         board.nets = vec![
             Net {
                 id: 1,
@@ -4212,6 +4343,9 @@ mod tests {
             net_ids: vec![1, 2],
             fanout_distance_nm: 1_000_000,
             target_layer: Layer::Inner(1),
+            direction: EscapeDirection::FourWay,
+            via_grid_nm: Some(500_000),
+            max_rings: 3,
         });
 
         let (routed, report) = route_board(&board).unwrap();
@@ -4237,6 +4371,16 @@ mod tests {
                     .segments
                     .iter()
                     .any(|segment| segment.layer == Layer::Inner(1))
+            );
+            let via = route
+                .vias
+                .iter()
+                .find(|via| via.kind == ViaKind::Micro)
+                .unwrap();
+            assert!(
+                (via.position.x_nm - 5_000_000).abs() >= 3_000_000,
+                "ring-one candidates should be blocked: {:?}",
+                via.position
             );
         }
     }
