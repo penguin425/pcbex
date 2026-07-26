@@ -288,17 +288,13 @@ pub fn check_board(board: &Board) -> CheckReport {
                 .copper_layers
                 .iter()
                 .position(|layer| *layer == via.end_layer);
-            if start.is_none()
-                || end.is_none()
-                || start == end
-                || (via.kind == crate::ViaKind::Micro
-                    && start.zip(end).is_some_and(|(a, b)| a.abs_diff(b) != 1))
-            {
+            if !via_layer_range_is_valid(via, start, end) {
                 report.push(
                     "via_layers",
                     "via has an invalid layer range for its type".into(),
                     vec![route.net_id],
                 );
+                continue;
             }
             if via.diameter_nm < rules.via_diameter_nm || via.drill_nm < rules.via_drill_nm {
                 report.push(
@@ -1052,6 +1048,14 @@ fn route_arc_geometry_is_valid(board: &Board, arc: &crate::RouteArc) -> bool {
 
 fn via_geometry_is_valid(via: &crate::Via) -> bool {
     via.drill_nm > 0 && via.diameter_nm > via.drill_nm
+}
+
+fn via_layer_range_is_valid(via: &crate::Via, start: Option<usize>, end: Option<usize>) -> bool {
+    start.is_some()
+        && end.is_some()
+        && start != end
+        && (via.kind != crate::ViaKind::Micro
+            || start.zip(end).is_some_and(|(a, b)| a.abs_diff(b) == 1))
 }
 
 fn custom_pad_polygon_is_valid(polygon: &[Point]) -> bool {
@@ -3833,6 +3837,54 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "via_size")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_via_layer_ranges_before_derived_checks() {
+        let mut board = base();
+        board.copper_layers = vec![Layer::Front, Layer::Inner(1), Layer::Back];
+        board.nets.push(Net {
+            id: 1,
+            name: "signal".into(),
+            terminals: vec![],
+            class: None,
+            priority: 0,
+        });
+        let via = |kind, start_layer, end_layer| Via {
+            position: Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            },
+            diameter_nm: 600_000,
+            drill_nm: 300_000,
+            kind,
+            start_layer,
+            end_layer,
+        };
+        board.routes.push(Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![
+                via(crate::ViaKind::Through, Layer::Inner(2), Layer::Back),
+                via(crate::ViaKind::Through, Layer::Front, Layer::Front),
+                via(crate::ViaKind::Micro, Layer::Front, Layer::Back),
+                via(crate::ViaKind::Micro, Layer::Front, Layer::Inner(1)),
+                via(crate::ViaKind::Through, Layer::Front, Layer::Back),
+            ],
+            teardrops: vec![],
+            zones: vec![],
+        });
+
+        let report = check_board(&board);
+        assert_eq!(
+            report
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "via_layers")
+                .count(),
+            3
         );
     }
 }
