@@ -247,6 +247,12 @@ pub struct StackupLayer {
     pub copper_thickness_nm: Nm,
     #[serde(default)]
     pub reference_layer: Option<Layer>,
+    #[serde(default)]
+    pub secondary_reference_layer: Option<Layer>,
+    #[serde(default)]
+    pub secondary_dielectric_height_nm: Option<Nm>,
+    #[serde(default)]
+    pub secondary_dielectric_constant: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -808,6 +814,70 @@ pub fn estimated_impedance_with_copper_ohms(
     Some(87.0 / (dielectric_constant + 1.41).sqrt() * argument.ln())
 }
 
+/// Estimate impedance for a trace embedded between two reference planes.
+///
+/// The symmetric case is stripline. Unequal dielectric heights or constants
+/// model an asymmetric embedded microstrip using a height-weighted effective
+/// dielectric constant.
+pub fn estimated_embedded_impedance_ohms(
+    width_nm: Nm,
+    first_dielectric_height_nm: Nm,
+    second_dielectric_height_nm: Nm,
+    copper_thickness_nm: Nm,
+    first_dielectric_constant: f64,
+    second_dielectric_constant: f64,
+) -> Option<f64> {
+    if width_nm <= 0
+        || first_dielectric_height_nm <= 0
+        || second_dielectric_height_nm <= 0
+        || copper_thickness_nm < 0
+        || first_dielectric_constant <= 1.0
+        || second_dielectric_constant <= 1.0
+        || !first_dielectric_constant.is_finite()
+        || !second_dielectric_constant.is_finite()
+    {
+        return None;
+    }
+    let width = width_nm as f64;
+    let thickness = copper_thickness_nm as f64;
+    let first_height = first_dielectric_height_nm as f64;
+    let second_height = second_dielectric_height_nm as f64;
+    let plane_separation = first_height + thickness + second_height;
+    let dielectric_constant = (first_dielectric_constant * first_height
+        + second_dielectric_constant * second_height)
+        / (first_height + second_height);
+    let argument =
+        4.0 * plane_separation / (0.67 * std::f64::consts::PI * (0.8 * width + thickness));
+    if argument <= 1.0 {
+        return None;
+    }
+    Some(60.0 / dielectric_constant.sqrt() * argument.ln())
+}
+
+/// Estimate impedance using the geometry encoded by a stackup entry.
+pub fn estimated_stackup_impedance_ohms(width_nm: Nm, stackup: &StackupLayer) -> Option<f64> {
+    match (
+        stackup.secondary_dielectric_height_nm,
+        stackup.secondary_dielectric_constant,
+    ) {
+        (Some(height), Some(dielectric_constant)) => estimated_embedded_impedance_ohms(
+            width_nm,
+            stackup.dielectric_height_nm,
+            height,
+            stackup.copper_thickness_nm,
+            stackup.dielectric_constant,
+            dielectric_constant,
+        ),
+        (None, None) => estimated_impedance_with_copper_ohms(
+            width_nm,
+            stackup.dielectric_height_nm,
+            stackup.copper_thickness_nm,
+            stackup.dielectric_constant,
+        ),
+        _ => None,
+    }
+}
+
 /// Estimate edge-coupled differential microstrip impedance.
 ///
 /// Uses the IPC-2141 single-ended estimate and the common exponential
@@ -829,6 +899,25 @@ pub fn estimated_differential_impedance_ohms(
         dielectric_constant,
     )?;
     let normalized_gap = gap_nm as f64 / dielectric_height_nm as f64;
+    Some(2.0 * single * (1.0 - 0.48 * (-0.96 * normalized_gap).exp()))
+}
+
+/// Estimate edge-coupled differential impedance using a stackup entry.
+pub fn estimated_stackup_differential_impedance_ohms(
+    width_nm: Nm,
+    gap_nm: Nm,
+    stackup: &StackupLayer,
+) -> Option<f64> {
+    if gap_nm < 0 {
+        return None;
+    }
+    let single = estimated_stackup_impedance_ohms(width_nm, stackup)?;
+    let coupling_height = stackup
+        .secondary_dielectric_height_nm
+        .map_or(stackup.dielectric_height_nm, |height| {
+            height.min(stackup.dielectric_height_nm)
+        });
+    let normalized_gap = gap_nm as f64 / coupling_height as f64;
     Some(2.0 * single * (1.0 - 0.48 * (-0.96 * normalized_gap).exp()))
 }
 
@@ -1105,6 +1194,22 @@ impl<'a> Router<'a> {
                 || entry.reference_layer.is_some_and(|layer| {
                     !board.copper_layers.contains(&layer) || layer == entry.layer
                 })
+                || entry.secondary_reference_layer.is_some()
+                    != entry.secondary_dielectric_height_nm.is_some()
+                || entry.secondary_reference_layer.is_some()
+                    != entry.secondary_dielectric_constant.is_some()
+                || entry.secondary_reference_layer.is_some() && entry.reference_layer.is_none()
+                || entry.secondary_reference_layer.is_some_and(|layer| {
+                    !board.copper_layers.contains(&layer)
+                        || layer == entry.layer
+                        || Some(layer) == entry.reference_layer
+                })
+                || entry
+                    .secondary_dielectric_height_nm
+                    .is_some_and(|height| height <= 0)
+                || entry
+                    .secondary_dielectric_constant
+                    .is_some_and(|value| !value.is_finite() || value <= 1.0)
         }) {
             return Err("stackup has invalid or duplicate layer entries".into());
         }
@@ -4537,6 +4642,9 @@ mod tests {
             dielectric_constant: 4.2,
             copper_thickness_nm: 35_000,
             reference_layer: Some(Layer::Back),
+            secondary_reference_layer: None,
+            secondary_dielectric_height_nm: None,
+            secondary_dielectric_constant: None,
         });
         let plane = CopperZone {
             polygon: vec![
@@ -4756,6 +4864,9 @@ mod tests {
             dielectric_constant: 4.0,
             copper_thickness_nm: 0,
             reference_layer: Some(Layer::Back),
+            secondary_reference_layer: None,
+            secondary_dielectric_height_nm: None,
+            secondary_dielectric_constant: None,
         });
         board.routes.push(Route {
             net_id: 1,
@@ -4783,6 +4894,18 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "impedance")
         );
+    }
+
+    #[test]
+    fn estimates_symmetric_and_asymmetric_embedded_impedance() {
+        let symmetric =
+            estimated_embedded_impedance_ohms(150_000, 200_000, 200_000, 35_000, 4.2, 4.2).unwrap();
+        let asymmetric =
+            estimated_embedded_impedance_ohms(150_000, 100_000, 300_000, 35_000, 3.5, 4.5).unwrap();
+
+        assert!(symmetric > 0.0);
+        assert!(asymmetric > 0.0);
+        assert!((symmetric - asymmetric).abs() > 0.1);
     }
 
     #[test]

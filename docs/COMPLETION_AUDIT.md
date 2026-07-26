@@ -57,7 +57,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | BGA escape routing | Deterministic radial/row/column/four-way dog-bone stubs, optional via-grid snapping, multi-ring collision fallback, stackup-aware fanout vias, and inner-layer continuation before global routing | Two-net BGA regression blocks every first-ring site, checks grid-aligned second-ring microvias, front stubs, inner tracks, and full-board cleanliness |
 | Return-path control | Per-signal/reference-net transition rules check maximum stitching-via distance, sample stackup-selected reference fills for split-plane/slot crossings, and add fully checked Zone-connected or track-connected reference vias | Filled-plane gap regression detects a slot; two-layer transitions insert legal direct-to-Zone and track-connected GND stitches and finish DRC-clean |
 | Automatic rounded routing | Orthogonal corners are trimmed into tangent quarter-circle native arcs at the routing-grid radius, with whole-board acceptance checks and reporting | Right-angle regression verifies valid arc geometry, preserved connectivity, and a clean full-board check |
-| Stackup impedance constraints | KiCad stackup import captures copper thickness, adjacent dielectric height/permittivity, and nearest reference layer; per-net-class target/tolerance drives IPC-2141 single-ended estimates during normal DRC | Four-layer import verifies reference selection and physical dimensions; controlled-impedance regression accepts the calculated target and reports a deliberately shifted 50 Ω target |
+| Stackup impedance constraints | KiCad stackup import captures copper thickness plus dielectric height/permittivity and reference planes on both sides; DRC selects microstrip or symmetric/asymmetric embedded geometry | Four-layer import verifies both references and physical dimensions; controlled-impedance regression checks shifted targets; embedded estimators cover symmetric and asymmetric geometry |
 | Advanced length tuning | Length groups constrain meander amplitude, pitch, and up to 16 distributed tuning sections; each incremental section is whole-board checked | Three-section regression adds exactly 3 mm across separate legal spans and bus-skew regression remains clean |
 | KiCad placement I/O | Footprints, pad-net connections, locked state, origin-aware position/rotation write-back, and `place-kicad` CLI | Locked/rotated/non-zero-origin round-trip regression and CLI integration test |
 | Multilayer routing | `In1.Cu`–`In30.Cu` model/serde, KiCad layer-table and item I/O, all-layer through vias, and per-net layer constraints | Forced inner-layer core regression, four-layer importer test, and real-KiCad four-layer DRC/idempotence fixture |
@@ -102,7 +102,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.49.0 exposes 91 Rust tests and 11 Python tests. The release workflow
+Version 1.50.0 exposes 92 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

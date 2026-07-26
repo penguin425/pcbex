@@ -2067,17 +2067,24 @@ fn import_stackup(top: &[Sexp], copper_layers: &[Layer]) -> Result<Vec<StackupLa
                 reference_layer,
             ));
         }
-        let Some((height, dielectric_constant, reference_layer)) =
-            candidates.into_iter().min_by_key(|candidate| candidate.0)
+        candidates.sort_by_key(|candidate| candidate.0);
+        let Some((height, dielectric_constant, reference_layer)) = candidates.first().copied()
         else {
             continue;
         };
+        let secondary = candidates
+            .iter()
+            .copied()
+            .find(|candidate| candidate.2 != reference_layer);
         imported.push(StackupLayer {
             layer,
             dielectric_height_nm: height,
             dielectric_constant,
             copper_thickness_nm: entry.thickness_nm,
             reference_layer: Some(reference_layer),
+            secondary_reference_layer: secondary.map(|candidate| candidate.2),
+            secondary_dielectric_height_nm: secondary.map(|candidate| candidate.0),
+            secondary_dielectric_constant: secondary.map(|candidate| candidate.1),
         });
     }
     imported.sort_by_key(|entry| entry.layer.index());
@@ -2651,6 +2658,16 @@ mod tests {
                 .reference_layer,
             Some(Layer::Back)
         );
+        let inner = imported
+            .board
+            .stackup
+            .iter()
+            .find(|entry| entry.layer == Layer::Inner(1))
+            .unwrap();
+        assert_eq!(inner.reference_layer, Some(Layer::Front));
+        assert_eq!(inner.secondary_reference_layer, Some(Layer::Inner(2)));
+        assert_eq!(inner.secondary_dielectric_height_nm, Some(800_000));
+        assert_eq!(inner.secondary_dielectric_constant, Some(4.4));
     }
 
     #[test]
