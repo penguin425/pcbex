@@ -1,7 +1,7 @@
 use pcbex_core::{
     Board, CapsuleObstacle, DifferentialPair, Footprint, Keepout, Layer, Net, NetClassRules,
-    Obstacle, Pad, PadShape, Point, PolygonObstacle, RoundObstacle, Route, Rules, Segment,
-    Terminal, Via, ViaKind,
+    Obstacle, Pad, PadShape, Point, PolygonObstacle, RoundObstacle, Route, RouteArc, Rules,
+    Segment, Terminal, Via, ViaKind,
     checking::check_board,
     placement::{BoardSide, Component, Connection, PinRef, PlacementProblem},
 };
@@ -89,6 +89,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
             Some("segment") => {
                 import_segment(xs, min, &rules, &mut obstacles, &mut route_candidates)
             }
+            Some("arc") => import_route_arc(xs, min, &rules, &mut obstacles, &mut route_candidates),
             Some("via") => import_via(
                 xs,
                 min,
@@ -486,6 +487,18 @@ impl ImportedBoard {
                     mm(segment.width_nm), layer_name(segment.layer), route.net_id
                 ).map_err(|e| e.to_string())?;
             }
+            for arc in &route.arcs {
+                let start = self.absolute(arc.start);
+                let mid = self.absolute(arc.mid);
+                let end = self.absolute(arc.end);
+                writeln!(
+                    generated,
+                    "  (arc (start {:.6} {:.6}) (mid {:.6} {:.6}) (end {:.6} {:.6}) (width {:.6}) (layer \"{}\") (net {}))",
+                    mm(start.x_nm), mm(start.y_nm), mm(mid.x_nm), mm(mid.y_nm),
+                    mm(end.x_nm), mm(end.y_nm), mm(arc.width_nm), layer_name(arc.layer),
+                    route.net_id
+                ).map_err(|e| e.to_string())?;
+            }
             for via in &route.vias {
                 let at = self.absolute(via.position);
                 let kind = match via.kind {
@@ -499,6 +512,33 @@ impl ImportedBoard {
                     mm(at.x_nm), mm(at.y_nm), mm(via.diameter_nm), mm(via.drill_nm),
                     layer_name(via.start_layer), layer_name(via.end_layer), route.net_id
                 ).map_err(|e| e.to_string())?;
+            }
+            for teardrop in &route.teardrops {
+                if teardrop.polygon.len() < 3 {
+                    return Err("teardrop polygon must contain at least three points".into());
+                }
+                write!(
+                    generated,
+                    "  (zone (net {}) (net_name \"\") (layer \"{}\") (hatch edge 0.5) (teardrop (type padvia)) (polygon (pts",
+                    route.net_id,
+                    layer_name(teardrop.layer)
+                )
+                .map_err(|e| e.to_string())?;
+                for point in &teardrop.polygon {
+                    let point = self.absolute(*point);
+                    write!(
+                        generated,
+                        " (xy {:.6} {:.6})",
+                        mm(point.x_nm),
+                        mm(point.y_nm)
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                writeln!(
+                    generated,
+                    ")) (fill yes (thermal_gap 0.3) (thermal_bridge_width 0.3)))"
+                )
+                .map_err(|e| e.to_string())?;
             }
         }
         if generated.is_empty() {
@@ -1055,12 +1095,70 @@ fn import_segment(
             .or_insert_with(|| Route {
                 net_id,
                 segments: Vec::new(),
+                arcs: Vec::new(),
                 vias: Vec::new(),
+                teardrops: Vec::new(),
             })
             .segments
             .push(Segment {
                 start: a,
                 end: b,
+                layer,
+                width_nm: width,
+            });
+    }
+}
+
+fn import_route_arc(
+    xs: &[Sexp],
+    origin: Point,
+    rules: &Rules,
+    obstacles: &mut Vec<Obstacle>,
+    routes: &mut HashMap<u32, Route>,
+) {
+    let (Some(start), Some(mid), Some(end), Some(layer)) = (
+        child_point(xs, "start"),
+        child_point(xs, "mid"),
+        child_point(xs, "end"),
+        child_atom(xs, "layer").and_then(parse_layer),
+    ) else {
+        return;
+    };
+    let start = relative(start, origin);
+    let mid = relative(mid, origin);
+    let end = relative(end, origin);
+    let width = child_values(xs, "width")
+        .and_then(|values| number(values.get(1)))
+        .map(nm)
+        .unwrap_or(rules.track_width_nm);
+    let net_id = child_values(xs, "net").and_then(|values| number_u32(values.get(1)));
+    obstacles.push(Obstacle {
+        min: Point {
+            x_nm: start.x_nm.min(mid.x_nm).min(end.x_nm) - width / 2,
+            y_nm: start.y_nm.min(mid.y_nm).min(end.y_nm) - width / 2,
+        },
+        max: Point {
+            x_nm: start.x_nm.max(mid.x_nm).max(end.x_nm) + width / 2,
+            y_nm: start.y_nm.max(mid.y_nm).max(end.y_nm) + width / 2,
+        },
+        layers: vec![layer],
+        net_id,
+    });
+    if let Some(net_id) = net_id.filter(|id| *id != 0) {
+        routes
+            .entry(net_id)
+            .or_insert_with(|| Route {
+                net_id,
+                segments: Vec::new(),
+                arcs: Vec::new(),
+                vias: Vec::new(),
+                teardrops: Vec::new(),
+            })
+            .arcs
+            .push(RouteArc {
+                start,
+                mid,
+                end,
                 layer,
                 width_nm: width,
             });
@@ -1119,7 +1217,9 @@ fn import_via(
             .or_insert_with(|| Route {
                 net_id,
                 segments: Vec::new(),
+                arcs: Vec::new(),
                 vias: Vec::new(),
+                teardrops: Vec::new(),
             })
             .vias
             .push(Via {
@@ -1688,6 +1788,8 @@ mod tests {
         let output = b
             .write_routes(&[Route {
                 net_id: 1,
+                arcs: vec![],
+                teardrops: vec![],
                 segments: vec![pcbex_core::Segment {
                     start: Point { x_nm: 0, y_nm: 0 },
                     end: Point {
@@ -1707,6 +1809,63 @@ mod tests {
                 .is_some_and(|xs| atom(xs.first()) == Some("segment"))
         }));
         assert!(parse(&output).is_ok());
+    }
+
+    #[test]
+    fn round_trips_route_arcs_and_writes_native_teardrops() {
+        let imported = import(PCB, rules()).unwrap();
+        let output = imported
+            .write_routes(&[Route {
+                net_id: 1,
+                segments: vec![],
+                arcs: vec![RouteArc {
+                    start: Point {
+                        x_nm: 5_000_000,
+                        y_nm: 6_000_000,
+                    },
+                    mid: Point {
+                        x_nm: 15_000_000,
+                        y_nm: 18_000_000,
+                    },
+                    end: Point {
+                        x_nm: 25_000_000,
+                        y_nm: 25_000_000,
+                    },
+                    layer: Layer::Front,
+                    width_nm: 800_000,
+                }],
+                vias: vec![],
+                teardrops: vec![pcbex_core::Teardrop {
+                    polygon: vec![
+                        Point {
+                            x_nm: 4_500_000,
+                            y_nm: 5_500_000,
+                        },
+                        Point {
+                            x_nm: 6_500_000,
+                            y_nm: 6_000_000,
+                        },
+                        Point {
+                            x_nm: 4_500_000,
+                            y_nm: 6_500_000,
+                        },
+                    ],
+                    layer: Layer::Front,
+                }],
+            }])
+            .unwrap();
+
+        assert!(output.contains("(arc (start 15.000000 26.000000)"));
+        assert!(output.contains("(teardrop (type padvia))"));
+        let round_trip = import(&output, rules()).unwrap();
+        assert_eq!(round_trip.board.routes[0].arcs.len(), 1);
+        assert_eq!(
+            round_trip.board.routes[0].arcs[0].mid,
+            Point {
+                x_nm: 15_000_000,
+                y_nm: 18_000_000
+            }
+        );
     }
 
     #[test]
