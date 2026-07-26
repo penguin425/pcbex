@@ -382,6 +382,43 @@ pub struct Via {
     pub position: Point,
     pub diameter_nm: Nm,
     pub drill_nm: Nm,
+    #[serde(default)]
+    pub kind: ViaKind,
+    #[serde(default = "front_layer")]
+    pub start_layer: Layer,
+    #[serde(default = "back_layer")]
+    pub end_layer: Layer,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViaKind {
+    #[default]
+    Through,
+    BlindBuried,
+    Micro,
+}
+
+fn front_layer() -> Layer {
+    Layer::Front
+}
+
+fn back_layer() -> Layer {
+    Layer::Back
+}
+
+impl Via {
+    pub fn spans_layer(&self, layer: Layer) -> bool {
+        let first = self.start_layer.index().min(self.end_layer.index());
+        let last = self.start_layer.index().max(self.end_layer.index());
+        (first..=last).contains(&layer.index())
+    }
+
+    pub fn shares_layer_with(&self, other: &Self) -> bool {
+        self.spans_layer(other.start_layer)
+            || self.spans_layer(other.end_layer)
+            || other.spans_layer(self.start_layer)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1400,6 +1437,9 @@ fn append_path(route: &mut Route, nodes: &[Node], rules: &Rules) {
                 },
                 diameter_nm: rules.via_diameter_nm,
                 drill_nm: rules.via_drill_nm,
+                kind: ViaKind::Through,
+                start_layer: Layer::Front,
+                end_layer: Layer::Back,
             });
             start = pair[1];
             last = pair[1];

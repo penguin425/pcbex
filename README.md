@@ -166,6 +166,13 @@ net-owned copper geometry. They block foreign nets with the normal clearance
 while remaining enterable by their owning net. Existing zone definitions and
 fills are preserved when routed tracks are written back to the board.
 
+## Via types and layer ranges
+
+Vias carry an explicit `through`, `blind_buried`, or `micro` kind plus start and
+end copper layers. KiCad blind/buried and microvias retain their ranges during
+import and write-back. Connectivity and clearance checks only consider layers
+actually spanned by the via, and microvias are restricted to adjacent layers.
+
 ## Planning and repair agent
 
 The dependency-free Python agent converts bounded natural-language requirements
