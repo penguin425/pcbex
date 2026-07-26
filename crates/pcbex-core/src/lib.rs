@@ -191,6 +191,34 @@ pub struct NetClassRules {
     pub via_drill_nm: Nm,
     #[serde(default)]
     pub layers: Option<Vec<Layer>>,
+    #[serde(default)]
+    pub differential_width_nm: Option<Nm>,
+    #[serde(default)]
+    pub differential_gap_nm: Option<Nm>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DifferentialPair {
+    pub name: String,
+    pub positive_net_id: u32,
+    pub negative_net_id: u32,
+    pub gap_nm: Nm,
+    #[serde(default = "differential_gap_tolerance")]
+    pub gap_tolerance_nm: Nm,
+    #[serde(default = "differential_max_skew")]
+    pub max_skew_nm: Nm,
+    #[serde(default = "differential_min_coupled_percent")]
+    pub min_coupled_percent: u8,
+}
+
+fn differential_gap_tolerance() -> Nm {
+    100_000
+}
+fn differential_max_skew() -> Nm {
+    500_000
+}
+fn differential_min_coupled_percent() -> u8 {
+    80
 }
 
 impl NetClassRules {
@@ -239,6 +267,8 @@ pub struct Board {
     #[serde(default)]
     pub net_classes: HashMap<String, NetClassRules>,
     #[serde(default)]
+    pub differential_pairs: Vec<DifferentialPair>,
+    #[serde(default)]
     pub nets: Vec<Net>,
     #[serde(default)]
     pub routes: Vec<Route>,
@@ -277,15 +307,25 @@ impl Board {
     }
 
     pub fn rules_for_net(&self, net_id: u32) -> Rules {
-        self.nets
+        let class = self
+            .nets
             .iter()
             .find(|net| net.id == net_id)
             .and_then(|net| net.class.as_ref())
-            .and_then(|class| self.net_classes.get(class))
-            .map_or_else(
-                || self.rules.clone(),
-                |rules| rules.merged_with(&self.rules),
-            )
+            .and_then(|class| self.net_classes.get(class));
+        let Some(class) = class else {
+            return self.rules.clone();
+        };
+        let mut rules = class.merged_with(&self.rules);
+        if self
+            .differential_pairs
+            .iter()
+            .any(|pair| pair.positive_net_id == net_id || pair.negative_net_id == net_id)
+            && let Some(width) = class.differential_width_nm
+        {
+            rules.track_width_nm = width;
+        }
+        rules
     }
 
     pub fn layers_for_net(&self, net_id: u32) -> Option<&[Layer]> {
@@ -522,6 +562,22 @@ impl<'a> Router<'a> {
                 .is_some_and(|layers| !known_layers(layers))
             {
                 return Err(format!("net class {name} references undeclared layers"));
+            }
+        }
+        let net_ids: HashSet<_> = board.nets.iter().map(|net| net.id).collect();
+        let mut paired_net_ids = HashSet::new();
+        for pair in &board.differential_pairs {
+            if pair.positive_net_id == pair.negative_net_id
+                || !net_ids.contains(&pair.positive_net_id)
+                || !net_ids.contains(&pair.negative_net_id)
+                || pair.gap_nm < 0
+                || pair.gap_tolerance_nm < 0
+                || pair.max_skew_nm < 0
+                || pair.min_coupled_percent > 100
+                || !paired_net_ids.insert(pair.positive_net_id)
+                || !paired_net_ids.insert(pair.negative_net_id)
+            {
+                return Err(format!("differential pair {} is invalid", pair.name));
             }
         }
         let mut route_net_ids = HashSet::new();
@@ -1558,6 +1614,7 @@ mod tests {
             keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),
+            differential_pairs: vec![],
             nets: vec![Net {
                 id: 1,
                 name: "N1".into(),
@@ -1866,6 +1923,8 @@ mod tests {
                 via_diameter_nm: 1_000_000,
                 via_drill_nm: 500_000,
                 layers: Some(vec![Layer::Back]),
+                differential_width_nm: None,
+                differential_gap_nm: None,
             },
         );
         let (routed, report) = route_board(&b).unwrap();
@@ -2009,6 +2068,8 @@ mod tests {
                 via_diameter_nm: 600_000,
                 via_drill_nm: 300_000,
                 layers: Some(vec![Layer::Front]),
+                differential_width_nm: None,
+                differential_gap_nm: None,
             },
         );
         b.nets = vec![
@@ -2212,6 +2273,8 @@ mod tests {
                 via_diameter_nm: 600_000,
                 via_drill_nm: 300_000,
                 layers: Some(vec![Layer::Front]),
+                differential_width_nm: None,
+                differential_gap_nm: None,
             },
         );
         b.nets[0].terminals = vec![
@@ -2263,6 +2326,8 @@ mod tests {
                 via_diameter_nm: 600_000,
                 via_drill_nm: 300_000,
                 layers: Some(vec![Layer::Front]),
+                differential_width_nm: None,
+                differential_gap_nm: None,
             },
         );
         board.nets[0].terminals = vec![

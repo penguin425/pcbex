@@ -1,6 +1,7 @@
 use pcbex_core::{
-    Board, CapsuleObstacle, Footprint, Keepout, Layer, Net, NetClassRules, Obstacle, Pad, PadShape,
-    Point, PolygonObstacle, RoundObstacle, Route, Rules, Segment, Terminal, Via,
+    Board, CapsuleObstacle, DifferentialPair, Footprint, Keepout, Layer, Net, NetClassRules,
+    Obstacle, Pad, PadShape, Point, PolygonObstacle, RoundObstacle, Route, Rules, Segment,
+    Terminal, Via,
     checking::check_board,
     placement::{Component, Connection, PinRef, PlacementProblem},
 };
@@ -105,6 +106,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         .filter(|n| !n.terminals.is_empty())
         .collect();
     nets.sort_by_key(|n| n.id);
+    let differential_pairs = infer_differential_pairs(&nets, &net_classes);
     let mut routes: Vec<_> = route_candidates.into_values().collect();
     routes.sort_by_key(|route| route.net_id);
     let mut board = Board {
@@ -132,6 +134,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         keepouts,
         footprints: footprint_geometry.footprints,
         net_classes,
+        differential_pairs,
         nets,
         routes,
     };
@@ -191,6 +194,11 @@ fn import_net_classes(
                     .map(nm)
                     .unwrap_or(fallback)
             };
+            let optional_dimension = |key: &str| {
+                child_values(values, key)
+                    .and_then(|value| number(value.get(1)))
+                    .map(nm)
+            };
             classes.insert(
                 name.to_string(),
                 NetClassRules {
@@ -199,6 +207,8 @@ fn import_net_classes(
                     via_diameter_nm: dimension("via_dia", defaults.via_diameter_nm),
                     via_drill_nm: dimension("via_drill", defaults.via_drill_nm),
                     layers: None,
+                    differential_width_nm: optional_dimension("diff_pair_width"),
+                    differential_gap_nm: optional_dimension("diff_pair_gap"),
                 },
             );
             for child in values {
@@ -216,6 +226,59 @@ fn import_net_classes(
         }
     }
     classes
+}
+
+fn infer_differential_pairs(
+    nets: &[Net],
+    classes: &HashMap<String, NetClassRules>,
+) -> Vec<DifferentialPair> {
+    let mut candidates = HashMap::<(String, String), (Option<u32>, Option<u32>)>::new();
+    for net in nets {
+        let Some(class_name) = net.class.as_ref() else {
+            continue;
+        };
+        let Some(class) = classes.get(class_name) else {
+            continue;
+        };
+        if class.differential_gap_nm.is_none() || class.differential_width_nm.is_none() {
+            continue;
+        }
+        let polarity = [("_P", true), ("_N", false), ("+", true), ("-", false)]
+            .into_iter()
+            .find_map(|(suffix, positive)| {
+                net.name
+                    .strip_suffix(suffix)
+                    .map(|base| (base.to_string(), positive))
+            });
+        let Some((base, positive)) = polarity else {
+            continue;
+        };
+        let entry = candidates
+            .entry((class_name.clone(), base))
+            .or_insert((None, None));
+        if positive {
+            entry.0 = Some(net.id);
+        } else {
+            entry.1 = Some(net.id);
+        }
+    }
+    let mut pairs: Vec<_> = candidates
+        .into_iter()
+        .filter_map(|((class_name, base), (positive, negative))| {
+            let class = classes.get(&class_name)?;
+            Some(DifferentialPair {
+                name: base,
+                positive_net_id: positive?,
+                negative_net_id: negative?,
+                gap_nm: class.differential_gap_nm?,
+                gap_tolerance_nm: 100_000,
+                max_skew_nm: 500_000,
+                min_coupled_percent: 80,
+            })
+        })
+        .collect();
+    pairs.sort_by(|left, right| left.name.cmp(&right.name));
+    pairs
 }
 
 impl ImportedBoard {
@@ -1481,6 +1544,37 @@ mod tests {
                 .layers
                 .contains(&Layer::Inner(1))
         );
+    }
+
+    #[test]
+    fn infers_differential_pair_from_kicad_net_class() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "USB_P")
+          (net 2 "USB_N")
+          (setup
+            (net_class "USB" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)
+              (diff_pair_width 0.18)
+              (diff_pair_gap 0.22)
+              (add_net "USB_P")
+              (add_net "USB_N")))
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (property "Reference" "J1")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "USB_P")))
+          (footprint "N" (layer "F.Cu") (at 2 3)
+            (property "Reference" "J2")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "USB_N")))
+        )"#;
+        let imported = import(pcb, rules()).unwrap();
+        assert_eq!(imported.board.differential_pairs.len(), 1);
+        let pair = &imported.board.differential_pairs[0];
+        assert_eq!(pair.name, "USB");
+        assert_eq!(pair.gap_nm, 220_000);
+        assert_eq!(imported.board.rules_for_net(1).track_width_nm, 180_000);
     }
 
     #[test]

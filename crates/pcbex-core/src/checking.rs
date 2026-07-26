@@ -155,7 +155,106 @@ pub fn check_board(board: &Board) -> CheckReport {
             check_route_clearance(board, a, b, &mut report);
         }
     }
+    check_differential_pairs(board, &routes, &mut report);
     report
+}
+
+fn check_differential_pairs(
+    board: &Board,
+    routes: &HashMap<u32, &Route>,
+    report: &mut CheckReport,
+) {
+    for pair in &board.differential_pairs {
+        let (Some(positive), Some(negative)) = (
+            routes.get(&pair.positive_net_id),
+            routes.get(&pair.negative_net_id),
+        ) else {
+            continue;
+        };
+        let positive_length = route_length(positive);
+        let negative_length = route_length(negative);
+        if (positive_length - negative_length).abs() > pair.max_skew_nm {
+            report.push(
+                "differential_skew",
+                format!("differential pair {} exceeds maximum skew", pair.name),
+                vec![pair.positive_net_id, pair.negative_net_id],
+            );
+        }
+        let positive_layers: HashSet<_> = positive
+            .segments
+            .iter()
+            .map(|segment| segment.layer)
+            .collect();
+        let negative_layers: HashSet<_> = negative
+            .segments
+            .iter()
+            .map(|segment| segment.layer)
+            .collect();
+        if positive_layers != negative_layers || positive.vias.len() != negative.vias.len() {
+            report.push(
+                "differential_symmetry",
+                format!(
+                    "differential pair {} uses asymmetric layers or vias",
+                    pair.name
+                ),
+                vec![pair.positive_net_id, pair.negative_net_id],
+            );
+        }
+        let positive_coupling = coupled_percent(positive, negative, pair);
+        let negative_coupling = coupled_percent(negative, positive, pair);
+        if positive_coupling.min(negative_coupling) < pair.min_coupled_percent {
+            report.push(
+                "differential_coupling",
+                format!(
+                    "differential pair {} is coupled for less than {}%",
+                    pair.name, pair.min_coupled_percent
+                ),
+                vec![pair.positive_net_id, pair.negative_net_id],
+            );
+        }
+    }
+}
+
+fn route_length(route: &Route) -> i64 {
+    route
+        .segments
+        .iter()
+        .map(|segment| {
+            let dx = (segment.end.x_nm - segment.start.x_nm) as f64;
+            let dy = (segment.end.y_nm - segment.start.y_nm) as f64;
+            dx.hypot(dy).round() as i64
+        })
+        .sum()
+}
+
+fn coupled_percent(route: &Route, partner: &Route, pair: &crate::DifferentialPair) -> u8 {
+    let total = route_length(route);
+    if total == 0 {
+        return 0;
+    }
+    let coupled: i64 = route
+        .segments
+        .iter()
+        .filter(|segment| {
+            partner.segments.iter().any(|other| {
+                if segment.layer != other.layer {
+                    return false;
+                }
+                let maximum_twice = segment.width_nm
+                    + other.width_nm
+                    + 2 * (pair.gap_nm + pair.gap_tolerance_nm)
+                    + 1;
+                point_segment_closer_than(segment.start, other.start, other.end, maximum_twice)
+                    && point_segment_closer_than(segment.end, other.start, other.end, maximum_twice)
+            })
+        })
+        .map(|segment| {
+            let dx = (segment.end.x_nm - segment.start.x_nm) as f64;
+            let dy = (segment.end.y_nm - segment.start.y_nm) as f64;
+            dx.hypot(dy).round() as i64
+        })
+        .sum();
+    ((coupled as i128 * 100 / total as i128).clamp(0, 100)) as u8
 }
 
 impl CheckReport {
@@ -530,7 +629,9 @@ impl DisjointSet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CapsuleObstacle, Layer, Point, RoundObstacle, Rules, Terminal, Via};
+    use crate::{
+        CapsuleObstacle, DifferentialPair, Layer, Point, RoundObstacle, Rules, Terminal, Via,
+    };
     fn base() -> Board {
         Board {
             width_nm: 10_000_000,
@@ -554,6 +655,7 @@ mod tests {
             keepouts: vec![],
             footprints: vec![],
             net_classes: HashMap::new(),
+            differential_pairs: vec![],
             nets: vec![],
             routes: vec![],
         }
@@ -948,5 +1050,66 @@ mod tests {
             violation.rule.as_str(),
             "unconnected" | "disconnected_route" | "orphan_copper"
         )));
+    }
+
+    #[test]
+    fn checks_differential_pair_coupling_and_skew() {
+        let mut board = base();
+        for (id, name, y_nm, end_x) in [
+            (1, "USB_P", 4_000_000, 9_000_000),
+            (2, "USB_N", 4_600_000, 9_000_000),
+        ] {
+            let start = Point {
+                x_nm: 1_000_000,
+                y_nm,
+            };
+            let end = Point { x_nm: end_x, y_nm };
+            board.nets.push(Net {
+                id,
+                name: name.into(),
+                terminals: vec![
+                    Terminal {
+                        position: start,
+                        layers: vec![Layer::Front],
+                    },
+                    Terminal {
+                        position: end,
+                        layers: vec![Layer::Front],
+                    },
+                ],
+                class: None,
+                priority: 0,
+            });
+            board.routes.push(Route {
+                net_id: id,
+                segments: vec![Segment {
+                    start,
+                    end,
+                    layer: Layer::Front,
+                    width_nm: 250_000,
+                }],
+                vias: vec![],
+            });
+        }
+        board.differential_pairs.push(DifferentialPair {
+            name: "USB".into(),
+            positive_net_id: 1,
+            negative_net_id: 2,
+            gap_nm: 350_000,
+            gap_tolerance_nm: 50_000,
+            max_skew_nm: 100_000,
+            min_coupled_percent: 90,
+        });
+        assert!(check_board(&board).is_clean());
+
+        board.routes[1].segments[0].end.x_nm = 8_000_000;
+        board.nets[1].terminals[1].position.x_nm = 8_000_000;
+        let report = check_board(&board);
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "differential_skew")
+        );
     }
 }
