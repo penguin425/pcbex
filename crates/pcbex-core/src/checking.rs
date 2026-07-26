@@ -199,6 +199,21 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![],
             );
         }
+        if rules.minimum_length_nm.is_some_and(|value| value <= 0)
+            || rules.maximum_length_nm.is_some_and(|value| value <= 0)
+            || matches!(
+                (rules.minimum_length_nm, rules.maximum_length_nm),
+                (Some(minimum), Some(maximum)) if minimum > maximum
+            )
+        {
+            report.push(
+                "net_class_length_limits",
+                format!(
+                    "net class {name} length limits must be positive and minimum must not exceed maximum"
+                ),
+                vec![],
+            );
+        }
     }
     if !copper_layer_table_is_valid(board) {
         report.push(
@@ -5007,6 +5022,59 @@ mod tests {
                     .violations
                     .iter()
                     .any(|violation| violation.rule == "net_class_layers")
+            );
+        }
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_net_class_length_limits() {
+        let with_limits = |name: &str, minimum_length_nm, maximum_length_nm| {
+            let mut board = base();
+            board.net_classes.insert(
+                name.into(),
+                crate::NetClassRules {
+                    track_width_nm: 250_000,
+                    clearance_nm: 200_000,
+                    via_diameter_nm: 600_000,
+                    via_drill_nm: 300_000,
+                    layers: None,
+                    differential_width_nm: None,
+                    differential_gap_nm: None,
+                    minimum_length_nm,
+                    maximum_length_nm,
+                    target_impedance_ohms: None,
+                    impedance_tolerance_ohms: None,
+                    maximum_impedance_step_ohms: None,
+                },
+            );
+            board
+        };
+
+        for board in [
+            with_limits("zero-minimum", Some(0), None),
+            with_limits("negative-maximum", None, Some(-1)),
+            with_limits("reversed", Some(2_000_000), Some(1_000_000)),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "net_class_length_limits")
+                    .count(),
+                1
+            );
+        }
+        for board in [
+            with_limits("unbounded", None, None),
+            with_limits("minimum-only", Some(1), None),
+            with_limits("maximum-only", None, Some(1)),
+            with_limits("bounded", Some(1), Some(2)),
+        ] {
+            assert!(
+                !check_board(&board)
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == "net_class_length_limits")
             );
         }
     }

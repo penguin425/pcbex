@@ -421,6 +421,8 @@ dimensions are validated even when no net currently uses the class.
 When a net class restricts routing layers, its `layers` value must be a
 non-empty, duplicate-free subset of the board copper stackup. Omitting
 `layers` keeps the class unrestricted.
+Optional `minimum_length_nm` and `maximum_length_nm` values must be positive,
+and a bounded range must place the minimum at or below the maximum.
 
 Set `maximum_impedance_step_ohms` on a net class to limit discontinuity where
 connected segments change layers through a via. This check is independent of
