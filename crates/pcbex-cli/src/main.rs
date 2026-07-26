@@ -4,7 +4,8 @@ use clap_complete::{Shell, generate};
 use pcbex_core::checking::{check_board, check_manufacturability, check_report_to_sarif};
 use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{
-    Board, Rules, board_json_schema, migrate_board_json, parse_board_json, render_svg, route_board,
+    Board, Rules, board_json_schema, migrate_board_json, parse_board_json, render_svg,
+    repair_routes, repairable_net_ids, route_board,
 };
 use pcbex_kicad::{apply_project_net_settings, import as import_kicad};
 use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
@@ -48,6 +49,17 @@ enum Command {
         svg: Option<PathBuf>,
         #[arg(long)]
         allow_unrouted: bool,
+    },
+    /// Reroute only violating or explicitly selected nets; keep all others locked.
+    Repair {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Net ID to repair. Repeat for multiple nets; omit to use checker violations.
+        #[arg(long = "net-id")]
+        net_ids: Vec<u32>,
+        #[arg(long)]
+        svg: Option<PathBuf>,
     },
     /// Route a placed KiCad board across its declared copper layers.
     RouteKicad {
@@ -187,6 +199,30 @@ fn main() -> Result<()> {
                 bail!("unrouted nets: {}", report.unrouted.join(", "))
             }
             ensure_clean(&board)?;
+        }
+        Command::Repair {
+            input,
+            output,
+            net_ids,
+            svg,
+        } => {
+            let board = read(&input)?;
+            let selected = if net_ids.is_empty() {
+                repairable_net_ids(&board)
+            } else {
+                net_ids.into_iter().collect()
+            };
+            let (repaired, report) =
+                repair_routes(&board, &selected).map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&repaired)?)?;
+            if let Some(path) = svg {
+                fs::write(path, render_svg(&repaired))?;
+            }
+            eprintln!(
+                "repaired: {}; locked: {}",
+                report.rerouted.join(", "),
+                report.preserved.join(", ")
+            );
         }
         Command::RouteKicad {
             input,

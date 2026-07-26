@@ -23,6 +23,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Exact geometry predicates | Integer point/segment/rectangle distance comparisons and inclusive segment intersection | Collinear overlap, endpoint contact, half-unit, and exact-clearance tests |
 | Multi-terminal routing | Central-root selection and cheapest terminal-to-tree A* branching | Five-terminal cross costs 320 versus 512 for input-order chaining |
 | Selective rip-up/reroute | Failed-search blocker attribution, conflict-only rip-up, failed-net-first retry, via reservation | Crossing regression reroutes only the flexible blocker; static blockage stops after one pass |
+| Explicit local route repair | Checker-derived or user-selected net rip-up with byte-locked unrelated routes and owned-zone preservation | Obstacle violation regression reroutes one net while proving the other route is unchanged |
 | KiCad input/output | Rectangular outline, rotated pads, footprints, tracks, vias, keepouts; board-level track/via output | Four `pcbex-kicad` tests |
 | Headless KiCad validation | `route-kicad --drc` | KiCad 10.0.5: 0 violations, 0 unconnected pads |
 | Manufacturing output | `fabricate` DRC gate plus Gerber/Excellon export | F/B copper, mask, silkscreen, Edge.Cuts, drill, job file generated |
@@ -86,7 +87,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.26.0 exposes 75 Rust tests and 11 Python tests. The release workflow
+Version 1.27.0 exposes 76 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
