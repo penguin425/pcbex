@@ -541,6 +541,7 @@ fn infer_differential_pairs(
                 min_coupled_percent: 80,
                 target_differential_impedance_ohms: None,
                 differential_impedance_tolerance_ohms: None,
+                maximum_differential_impedance_step_ohms: None,
                 minimum_length_nm: None,
                 tuning_amplitude_nm: None,
                 tuning_pitch_nm: None,

@@ -153,6 +153,7 @@ pub fn board_json_schema() -> serde_json::Value {
                     "min_coupled_percent": {"type": "integer", "minimum": 0, "maximum": 100},
                     "target_differential_impedance_ohms": {"type": ["number", "null"], "exclusiveMinimum": 0},
                     "differential_impedance_tolerance_ohms": {"type": ["number", "null"], "minimum": 0},
+                    "maximum_differential_impedance_step_ohms": {"type": ["number", "null"], "minimum": 0},
                     "minimum_length_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
                     "tuning_amplitude_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
                     "tuning_pitch_nm": {"type": ["integer", "null"], "exclusiveMinimum": 0},
