@@ -691,7 +691,7 @@ fn route_length(route: &Route) -> i64 {
     route_length_nm(route)
 }
 
-fn coupled_percent(route: &Route, partner: &Route, pair: &crate::DifferentialPair) -> u8 {
+pub fn coupled_percent(route: &Route, partner: &Route, pair: &crate::DifferentialPair) -> u8 {
     let total = route_length(route);
     if total == 0 {
         return 0;

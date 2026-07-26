@@ -43,6 +43,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Board cutouts and multiple contours | Largest Edge.Cuts contour is the outer outline; enclosed contours are clearance-aware holes | Core routing/checking regression, importer classification test, and holed curved-board E2E fixture |
 | Property and fuzz testing | Geometry symmetry/translation properties plus KiCad parser and board-model libFuzzer targets | Property tests run on every PR; scheduled/manual fuzz workflow runs both targets |
 | Routing performance suite | Criterion scenarios for obstacle, 5/10-net, and board-cutout routing | Benchmark targets compile on every PR and retain local Criterion baselines |
+| Routing quality gates | Stable per-net, board-total, and differential-pair metrics with JSON/SARIF output, thresholds, and baseline regression comparison | Geometry-count regression plus CLI JSON/baseline smoke test |
 | Performance regression gate | Deterministic search-state budgets for 10 parallel nets and a 100 mm board with 200 obstacles | Dedicated `performance_budget` target runs on every PR |
 | Practical board regression corpus | Anonymized USB differential, four-layer power/inner-signal, and eight-net BGA fanout topologies | Clean, byte-idempotent routing with per-fixture search budgets on every PR |
 | BGA escape routing | Deterministic radial dog-bone stubs, stackup-aware fanout vias, and inner-layer continuation before global routing | Two-net BGA regression checks microvias, front stubs, inner tracks, and full-board cleanliness |
@@ -87,7 +88,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.27.0 exposes 76 Rust tests and 11 Python tests. The release workflow
+Version 1.28.0 exposes 77 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

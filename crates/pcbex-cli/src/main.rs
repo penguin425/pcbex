@@ -4,8 +4,8 @@ use clap_complete::{Shell, generate};
 use pcbex_core::checking::{check_board, check_manufacturability, check_report_to_sarif};
 use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{
-    Board, Rules, board_json_schema, migrate_board_json, parse_board_json, render_svg,
-    repair_routes, repairable_net_ids, route_board,
+    Board, RoutingQuality, Rules, board_json_schema, migrate_board_json, parse_board_json,
+    render_svg, repair_routes, repairable_net_ids, route_board, routing_quality,
 };
 use pcbex_kicad::{apply_project_net_settings, import as import_kicad};
 use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
@@ -19,6 +19,12 @@ struct Cli {
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ReportFormat {
+    Json,
+    Sarif,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum QualityFormat {
     Json,
     Sarif,
 }
@@ -60,6 +66,23 @@ enum Command {
         net_ids: Vec<u32>,
         #[arg(long)]
         svg: Option<PathBuf>,
+    },
+    /// Report routing quality and optionally fail on thresholds or regressions.
+    Quality {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        #[arg(long, value_enum, default_value_t = QualityFormat::Json)]
+        format: QualityFormat,
+        /// Previous JSON quality report; increases fail the command.
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+        #[arg(long)]
+        max_total_length_nm: Option<i64>,
+        #[arg(long)]
+        max_vias: Option<usize>,
+        #[arg(long)]
+        max_unrouted: Option<usize>,
     },
     /// Route a placed KiCad board across its declared copper layers.
     RouteKicad {
@@ -223,6 +246,75 @@ fn main() -> Result<()> {
                 report.rerouted.join(", "),
                 report.preserved.join(", ")
             );
+        }
+        Command::Quality {
+            input,
+            output,
+            format,
+            baseline,
+            max_total_length_nm,
+            max_vias,
+            max_unrouted,
+        } => {
+            let quality = routing_quality(&read(&input)?);
+            let mut regressions = baseline
+                .map(|path| -> Result<Vec<String>> {
+                    let baseline: RoutingQuality = serde_json::from_str(
+                        &fs::read_to_string(&path)
+                            .with_context(|| format!("reading {}", path.display()))?,
+                    )
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                    Ok(quality.regressions_against(&baseline))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            if max_total_length_nm.is_some_and(|limit| quality.total_length_nm > limit) {
+                regressions.push(format!(
+                    "total length {} exceeds {} nm",
+                    quality.total_length_nm,
+                    max_total_length_nm.unwrap()
+                ));
+            }
+            if max_vias.is_some_and(|limit| quality.total_vias > limit) {
+                regressions.push(format!(
+                    "via count {} exceeds {}",
+                    quality.total_vias,
+                    max_vias.unwrap()
+                ));
+            }
+            if max_unrouted.is_some_and(|limit| quality.unrouted_nets > limit) {
+                regressions.push(format!(
+                    "unrouted-net count {} exceeds {}",
+                    quality.unrouted_nets,
+                    max_unrouted.unwrap()
+                ));
+            }
+            let rendered = match format {
+                QualityFormat::Json => serde_json::to_string_pretty(&quality)?,
+                QualityFormat::Sarif => serde_json::to_string_pretty(&serde_json::json!({
+                    "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+                    "version": "2.1.0",
+                    "runs": [{
+                        "tool": {"driver": {
+                            "name": "pcbex quality",
+                            "rules": [{"id": "routing_quality_regression"}]
+                        }},
+                        "results": regressions.iter().map(|message| serde_json::json!({
+                            "ruleId": "routing_quality_regression",
+                            "level": "error",
+                            "message": {"text": message}
+                        })).collect::<Vec<_>>()
+                    }]
+                }))?,
+            };
+            if let Some(path) = output {
+                fs::write(path, rendered)?;
+            } else {
+                println!("{rendered}");
+            }
+            if !regressions.is_empty() {
+                bail!("routing quality failed: {}", regressions.join("; "))
+            }
         }
         Command::RouteKicad {
             input,

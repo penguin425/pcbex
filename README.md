@@ -259,6 +259,19 @@ a four-layer power/inner-signal board, and an eight-net BGA fanout. Each fixture
 has a deterministic search budget and must remain clean and byte-idempotent;
 see `docs/REGRESSION_CORPUS.md`.
 
+Generate a stable quality report for review or CI:
+
+```sh
+pcbex quality routed.json --output quality.json --max-unrouted 0
+pcbex quality candidate.json --baseline quality.json
+pcbex quality candidate.json --baseline quality.json --format sarif \
+  --output quality.sarif
+```
+
+Reports include per-net length, segments, arcs, vias, bends, used layers, board
+totals, unrouted count, and differential-pair skew/coupling. Baseline gates
+reject increases in total length, vias, bends, or unrouted nets.
+
 ## BGA escape routing
 
 `escape_groups` assigns dense package nets a fanout distance and target copper
