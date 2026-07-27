@@ -3264,7 +3264,16 @@ fn escape_direction_candidates(primary: (Nm, Nm)) -> Vec<(Nm, Nm)> {
 }
 
 fn snap_to_grid(value: Nm, grid: Nm) -> Nm {
-    ((value as f64 / grid as f64).round() as Nm) * grid
+    let value = i128::from(value);
+    let grid = i128::from(grid);
+    let quotient = if value >= 0 {
+        (value + grid / 2).div_euclid(grid)
+    } else {
+        -((-value + grid / 2).div_euclid(grid))
+    };
+    let minimum_quotient = -(-i128::from(Nm::MIN)).div_euclid(grid);
+    let maximum_quotient = i128::from(Nm::MAX).div_euclid(grid);
+    (quotient.clamp(minimum_quotient, maximum_quotient) * grid) as Nm
 }
 
 fn escape_stub_segments(start: Point, end: Point, width_nm: Nm) -> Vec<Segment> {
@@ -7049,6 +7058,19 @@ mod tests {
                 via.position
             );
         }
+    }
+
+    #[test]
+    fn escape_grid_snap_handles_full_signed_coordinates_without_float_rounding() {
+        assert_eq!(snap_to_grid(i64::MAX, 2), i64::MAX - 1);
+        assert_eq!(snap_to_grid(i64::MIN, 3), i64::MIN + 2);
+        assert_eq!(
+            snap_to_grid(9_007_199_254_740_993, 2),
+            9_007_199_254_740_994
+        );
+        assert_eq!(snap_to_grid(-5, 10), -10);
+        assert_eq!(snap_to_grid(5, 10), 10);
+        assert_eq!(snap_to_grid(14, 10), 10);
     }
 
     #[test]
