@@ -125,7 +125,7 @@ pub fn routing_quality(board: &Board) -> RoutingQuality {
         })
         .collect();
     RoutingQuality {
-        total_length_nm: nets.iter().map(|net| net.length_nm).sum(),
+        total_length_nm: saturating_length_sum(nets.iter().map(|net| net.length_nm)),
         total_vias: nets.iter().map(|net| net.vias).sum(),
         total_bends: nets.iter().map(|net| net.bends).sum(),
         routed_nets: nets.iter().filter(|net| net.routed).count(),
@@ -133,6 +133,12 @@ pub fn routing_quality(board: &Board) -> RoutingQuality {
         nets,
         differential_pairs,
     }
+}
+
+fn saturating_length_sum(lengths: impl IntoIterator<Item = Nm>) -> Nm {
+    lengths
+        .into_iter()
+        .fold(0, |total, length| total.saturating_add(length))
 }
 
 fn coordinate_direction(start_nm: Nm, end_nm: Nm) -> i8 {
@@ -148,7 +154,14 @@ fn segment_direction(segment: &Segment) -> (i8, i8) {
 
 #[cfg(test)]
 mod tests {
-    use super::coordinate_direction;
+    use super::{coordinate_direction, saturating_length_sum};
+
+    #[test]
+    fn total_length_sum_saturates_at_signed_limits() {
+        assert_eq!(saturating_length_sum([i64::MAX, 1]), i64::MAX);
+        assert_eq!(saturating_length_sum([i64::MIN, -1]), i64::MIN);
+        assert_eq!(saturating_length_sum([200_000, 300_000]), 500_000);
+    }
 
     #[test]
     fn coordinate_direction_handles_full_signed_range() {
