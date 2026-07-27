@@ -195,6 +195,8 @@ All supported Edge.Cuts coordinates must also fit the signed nanometer range;
 oversized finite values are rejected instead of saturating at integer limits.
 Board-level line, rectangle, circle, and arc points reject trailing values
 instead of silently ignoring malformed coordinate-list elements.
+Polygon and cubic-curve `xy` entries likewise contain exactly two coordinates,
+so every supported outline point has strict arity.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated

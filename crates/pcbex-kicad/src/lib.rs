@@ -1238,7 +1238,7 @@ fn edge_polygon_points(values: &[Sexp]) -> Result<Vec<Point>, String> {
             let Some(xy) = value.as_list() else {
                 return Err("Edge.Cuts polygon points must be xy coordinates".into());
             };
-            if atom(xy.first()) != Some("xy") {
+            if atom(xy.first()) != Some("xy") || xy.len() != 3 {
                 return Err("Edge.Cuts polygon points must be xy coordinates".into());
             }
             let (Some(x), Some(y)) = (number(xy.get(1)), number(xy.get(2))) else {
@@ -1652,7 +1652,7 @@ fn edge_curve_point(value: &Sexp) -> Result<Point, String> {
     let Some(xy) = value.as_list() else {
         return Err("Edge.Cuts curve requires four xy points".into());
     };
-    if atom(xy.first()) != Some("xy") {
+    if atom(xy.first()) != Some("xy") || xy.len() != 3 {
         return Err("Edge.Cuts curve requires four xy points".into());
     }
     let (Some(x), Some(y)) = (number(xy.get(1)), number(xy.get(2))) else {
@@ -3393,6 +3393,29 @@ mod tests {
         assert_eq!(
             import(&pcb, rules()).unwrap_err(),
             "Edge.Cuts polygon contains too many points"
+        );
+    }
+
+    #[test]
+    fn rejects_extra_edge_cuts_xy_values() {
+        let polygon = r#"(kicad_pcb
+          (gr_poly
+            (pts (xy 0 0) (xy 20 0 extra) (xy 20 20) (xy 0 20))
+            (layer "Edge.Cuts"))
+        )"#;
+        let curve = r#"(kicad_pcb
+          (gr_curve
+            (pts (xy 0 0) (xy 5 5 trailing) (xy 10 5) (xy 20 0))
+            (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(polygon, rules()).unwrap_err(),
+            "Edge.Cuts polygon points must be xy coordinates"
+        );
+        assert_eq!(
+            import(curve, rules()).unwrap_err(),
+            "Edge.Cuts curve requires four xy points"
         );
     }
 
