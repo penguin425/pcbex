@@ -225,6 +225,8 @@ cargo run -p pcbex -- fabricate simple.routed.kicad_pcb \
 The placement engine combines graph-clustered initialization with deterministic
 simulated annealing. Its score covers weighted HPWL, overlap area, board
 boundary overflow, coarse routing congestion, and declarative constraints.
+Graph-clustered initialization uses saturating spacing and cursor arithmetic
+for extreme board grids and component dimensions.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
