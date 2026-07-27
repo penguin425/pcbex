@@ -1077,23 +1077,24 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                 }
             }
             Some("gr_rect") => {
-                if let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
-                {
-                    let top_right = Point {
-                        x_nm: end.x_nm,
-                        y_nm: start.y_nm,
-                    };
-                    let bottom_left = Point {
-                        x_nm: start.x_nm,
-                        y_nm: end.y_nm,
-                    };
-                    lines.extend([
-                        (start, top_right),
-                        (top_right, end),
-                        (end, bottom_left),
-                        (bottom_left, start),
-                    ]);
-                }
+                let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
+                else {
+                    return Err("Edge.Cuts rectangle requires start and end points".into());
+                };
+                let top_right = Point {
+                    x_nm: end.x_nm,
+                    y_nm: start.y_nm,
+                };
+                let bottom_left = Point {
+                    x_nm: start.x_nm,
+                    y_nm: end.y_nm,
+                };
+                lines.extend([
+                    (start, top_right),
+                    (top_right, end),
+                    (end, bottom_left),
+                    (bottom_left, start),
+                ]);
             }
             _ => {}
         }
@@ -3076,6 +3077,25 @@ mod tests {
             assert_eq!(
                 import(pcb, rules()).unwrap_err(),
                 "Edge.Cuts line requires start and end points"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_edge_cuts_rectangles_missing_a_corner() {
+        let missing_start = r#"(kicad_pcb
+          (gr_rect (end 20 20) (layer "Edge.Cuts"))
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+        )"#;
+        let missing_end = r#"(kicad_pcb
+          (gr_rect (start 0 0) (layer "Edge.Cuts"))
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+        )"#;
+
+        for pcb in [missing_start, missing_end] {
+            assert_eq!(
+                import(pcb, rules()).unwrap_err(),
+                "Edge.Cuts rectangle requires start and end points"
             );
         }
     }
