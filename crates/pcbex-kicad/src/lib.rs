@@ -1271,6 +1271,9 @@ fn edge_polygon_points(values: &[Sexp]) -> Result<Vec<Point>, String> {
     if polygon.iter().collect::<HashSet<_>>().len() != polygon.len() {
         return Err("Edge.Cuts polygon vertices must be distinct".into());
     }
+    if contour_self_intersects(&polygon) {
+        return Err("Edge.Cuts polygon must not self-intersect".into());
+    }
     Ok(polygon)
 }
 
@@ -3497,6 +3500,20 @@ mod tests {
         assert_eq!(
             import(pcb, rules()).unwrap_err(),
             "Edge.Cuts polygon vertices must be distinct"
+        );
+    }
+
+    #[test]
+    fn rejects_self_intersecting_edge_cuts_polygon_during_parsing() {
+        let pcb = r#"(kicad_pcb
+          (gr_poly
+            (pts (xy 0 0) (xy 10 10) (xy 0 10) (xy 8 0))
+            (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "Edge.Cuts polygon must not self-intersect"
         );
     }
 
