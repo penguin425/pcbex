@@ -1382,9 +1382,11 @@ impl<'a> Router<'a> {
                 return Err(format!("length group {} is invalid", group.name));
             }
         }
+        let mut escape_group_names = HashSet::new();
         let mut escaped_net_ids = HashSet::new();
         for group in &board.escape_groups {
-            if group.name.is_empty()
+            if group.name.trim().is_empty()
+                || !escape_group_names.insert(group.name.as_str())
                 || group.net_ids.is_empty()
                 || group.fanout_distance_nm <= 0
                 || group.via_grid_nm.is_some_and(|grid| grid <= 0)
@@ -4885,6 +4887,46 @@ mod tests {
                 Err(message) if message == "length group BUS is invalid"
             ));
         }
+    }
+
+    #[test]
+    fn router_rejects_invalid_escape_group_names() {
+        let group = |name: &str, net_ids| EscapeGroup {
+            name: name.into(),
+            net_ids,
+            fanout_distance_nm: 1_000_000,
+            target_layer: Layer::Back,
+            direction: EscapeDirection::FourWay,
+            via_grid_nm: None,
+            max_rings: 3,
+        };
+        let mut blank = board();
+        blank.escape_groups.push(group(" \t", vec![1]));
+        assert!(matches!(
+            Router::new(&blank),
+            Err(message) if message.starts_with("escape group ")
+                && message.ends_with(" is invalid")
+        ));
+
+        let mut duplicate = board();
+        duplicate.nets.push(Net {
+            id: 2,
+            name: "N2".into(),
+            terminals: vec![Terminal {
+                position: Point {
+                    x_nm: 1_000_000,
+                    y_nm: 2_000_000,
+                },
+                layers: both_layers(),
+            }],
+            class: None,
+            priority: 0,
+        });
+        duplicate.escape_groups = vec![group("U1", vec![1]), group("U1", vec![2])];
+        assert!(matches!(
+            Router::new(&duplicate),
+            Err(message) if message == "escape group U1 is invalid"
+        ));
     }
 
     #[test]
