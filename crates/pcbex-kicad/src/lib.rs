@@ -1288,7 +1288,7 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
         ccw_sweep - std::f64::consts::TAU
     };
     let max_step = 2.0 * (1.0 - (ARC_CHORD_TOLERANCE_NM / radius).min(1.0)).acos();
-    let steps = (sweep.abs() / max_step.max(1e-6)).ceil().max(1.0) as usize;
+    let steps = (sweep.abs() / max_step.max(1e-6)).ceil().max(2.0) as usize;
     let mut points = Vec::with_capacity(steps + 1);
     for index in 0..=steps {
         let angle = start_angle + sweep * index as f64 / steps as f64;
@@ -2809,7 +2809,27 @@ mod tests {
         };
 
         let points = sample_arc(start, mid, end).unwrap();
-        assert_eq!(points, vec![start, end]);
+        assert_eq!(points.first(), Some(&start));
+        assert_eq!(points.last(), Some(&end));
+    }
+
+    #[test]
+    fn short_semicircle_keeps_intermediate_sample() {
+        let start = Point {
+            x_nm: -1_000,
+            y_nm: 0,
+        };
+        let mid = Point {
+            x_nm: 0,
+            y_nm: -1_000,
+        };
+        let end = Point {
+            x_nm: 1_000,
+            y_nm: 0,
+        };
+
+        let points = sample_arc(start, mid, end).unwrap();
+        assert_eq!(points, vec![start, mid, end]);
     }
 
     #[test]

@@ -288,6 +288,8 @@ KiCad Edge.Cuts contour ordering and zero-area validation use wide signed area
 accumulation across the full coordinate range.
 KiCad Edge.Cuts arc fitting uses start-relative coordinates so small arcs remain
 stable near signed coordinate limits.
+KiCad Edge.Cuts arcs retain an intermediate sample even when their radius is
+smaller than the chord tolerance.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
