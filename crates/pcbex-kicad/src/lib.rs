@@ -10,6 +10,7 @@ use std::fmt::Write;
 
 const NM_PER_MM: f64 = 1_000_000.0;
 const ARC_CHORD_TOLERANCE_NM: f64 = 10_000.0;
+const MAX_EDGE_CIRCLE_SEGMENTS: usize = 16_384;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Sexp {
@@ -1080,6 +1081,21 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                     push_unique_edge(&mut lines, &mut unique_edges, pair[0], pair[1])?;
                 }
             }
+            Some("gr_circle") => {
+                let (Some(center), Some(end)) = (child_point(xs, "center"), child_point(xs, "end"))
+                else {
+                    return Err("Edge.Cuts circle requires center and end points".into());
+                };
+                let points = sample_circle(center, end)?;
+                for index in 0..points.len() {
+                    push_unique_edge(
+                        &mut lines,
+                        &mut unique_edges,
+                        points[index],
+                        points[(index + 1) % points.len()],
+                    )?;
+                }
+            }
             Some("gr_rect") => {
                 let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
                 else {
@@ -1464,6 +1480,42 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
     points[0] = start;
     points[start_steps] = mid;
     points[start_steps + end_steps] = end;
+    Ok(points)
+}
+
+fn sample_circle(center: Point, end: Point) -> Result<Vec<Point>, String> {
+    let offset_x = (i128::from(end.x_nm) - i128::from(center.x_nm)) as f64;
+    let offset_y = (i128::from(end.y_nm) - i128::from(center.y_nm)) as f64;
+    let radius = offset_x.hypot(offset_y);
+    if radius < 1.0 {
+        return Err("Edge.Cuts circle must have a positive radius".into());
+    }
+    let start_angle = offset_y.atan2(offset_x);
+    let max_step = 2.0 * (1.0 - (ARC_CHORD_TOLERANCE_NM / radius).min(1.0)).acos();
+    let required = (std::f64::consts::TAU / max_step.max(1e-6))
+        .ceil()
+        .max(12.0) as usize;
+    let segments = required.div_ceil(4) * 4;
+    if segments > MAX_EDGE_CIRCLE_SEGMENTS {
+        return Err("Edge.Cuts circle requires too many segments".into());
+    }
+
+    let mut points = Vec::with_capacity(segments);
+    for index in 0..segments {
+        let angle = start_angle + std::f64::consts::TAU * index as f64 / segments as f64;
+        points.push(Point {
+            x_nm: translate_arc_coordinate(center.x_nm, radius * angle.cos()),
+            y_nm: translate_arc_coordinate(center.y_nm, radius * angle.sin()),
+        });
+    }
+    points[0] = end;
+    points.dedup();
+    if points.last() == points.first() {
+        points.pop();
+    }
+    if points.len() < 3 {
+        return Err("Edge.Cuts circle is too small to represent".into());
+    }
     Ok(points)
 }
 
@@ -3020,6 +3072,42 @@ mod tests {
             x_nm: 10_000_000,
             y_nm: 20_000_000,
         }));
+    }
+
+    #[test]
+    fn imports_edge_cuts_circles_as_outline_and_cutout() {
+        let pcb = r#"(kicad_pcb
+          (gr_circle (center 20 20) (end 40 20) (layer "Edge.Cuts"))
+          (gr_circle (center 20 20) (end 25 20) (layer "Edge.Cuts"))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+        assert_eq!(
+            (imported.board.width_nm, imported.board.height_nm),
+            (40_000_000, 40_000_000)
+        );
+        assert!(imported.board.outline.len() >= 12);
+        assert_eq!(imported.board.cutouts.len(), 1);
+        assert!(imported.board.cutouts[0].len() >= 12);
+    }
+
+    #[test]
+    fn rejects_malformed_and_zero_radius_edge_cuts_circles() {
+        let missing_end = r#"(kicad_pcb
+          (gr_circle (center 20 20) (layer "Edge.Cuts"))
+        )"#;
+        let zero_radius = r#"(kicad_pcb
+          (gr_circle (center 20 20) (end 20 20) (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(missing_end, rules()).unwrap_err(),
+            "Edge.Cuts circle requires center and end points"
+        );
+        assert_eq!(
+            import(zero_radius, rules()).unwrap_err(),
+            "Edge.Cuts circle must have a positive radius"
+        );
     }
 
     #[test]

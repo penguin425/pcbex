@@ -179,6 +179,8 @@ copper layers, net assignments, legacy board-embedded net classes, existing
 segments and vias.
 Line and three-point arc primitives on `Edge.Cuts` are joined into a polygonal
 outline; arcs use a maximum chord deviation of 0.01 mm.
+Circle primitives use the same chord-deviation bound and can define either the
+outer board outline or an inner cutout.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated
