@@ -514,6 +514,8 @@ The normal DRC track-angle check shares that full-range-safe classification,
 so extreme signed coordinates cannot panic or be misclassified.
 Route-length measurement widens endpoint differences and saturates accumulated
 segment and arc lengths, preserving deterministic results for extreme routes.
+Routing-quality bend classification also widens endpoint differences before
+deriving segment direction at the signed coordinate limits.
 Differential-pair coupled-length measurement uses the same widened geometry and
 saturating accumulation for full-range and multi-segment routes.
 Differential coupling-distance thresholds combine both widths, gap, and
