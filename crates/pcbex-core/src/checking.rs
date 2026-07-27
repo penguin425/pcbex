@@ -1686,6 +1686,17 @@ fn track_clearance_envelope(track_width_nm: i64, clearance_nm: i64) -> i64 {
     envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
+fn track_round_obstacle_clearance_envelope(
+    track_width_nm: i64,
+    obstacle_diameter_nm: i64,
+    clearance_nm: i64,
+) -> i64 {
+    let envelope = i128::from(track_width_nm)
+        + i128::from(obstacle_diameter_nm)
+        + 2 * i128::from(clearance_nm);
+    envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
     let pad_width_nm = if pad.source_width_nm > 0 {
         pad.source_width_nm
@@ -2552,7 +2563,11 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         if obstacle.net_id == Some(net_id) || !obstacle.layers.contains(&segment.layer) {
             continue;
         }
-        let required_twice = segment.width_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
+        let required_twice = track_round_obstacle_clearance_envelope(
+            segment.width_nm,
+            obstacle.diameter_nm,
+            rules.clearance_nm,
+        );
         if point_segment_closer_than(obstacle.center, segment.start, segment.end, required_twice) {
             report.push(
                 "clearance",
@@ -2566,7 +2581,11 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         if obstacle.net_id == Some(net_id) || !obstacle.layers.contains(&segment.layer) {
             continue;
         }
-        let required_twice = segment.width_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
+        let required_twice = track_round_obstacle_clearance_envelope(
+            segment.width_nm,
+            obstacle.diameter_nm,
+            rules.clearance_nm,
+        );
         if segments_closer_than(
             segment.start,
             segment.end,
@@ -3985,6 +4004,22 @@ mod tests {
         assert_eq!(track_clearance_envelope(i64::MAX, i64::MAX), i64::MAX);
         assert_eq!(track_clearance_envelope(i64::MIN, i64::MIN), i64::MIN);
         assert_eq!(track_clearance_envelope(200_000, 150_000), 500_000);
+    }
+
+    #[test]
+    fn track_round_obstacle_envelope_handles_extreme_dimensions() {
+        assert_eq!(
+            track_round_obstacle_clearance_envelope(i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            track_round_obstacle_clearance_envelope(i64::MIN, i64::MIN, i64::MIN),
+            i64::MIN
+        );
+        assert_eq!(
+            track_round_obstacle_clearance_envelope(200_000, 400_000, 150_000),
+            900_000
+        );
     }
 
     #[test]
