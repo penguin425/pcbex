@@ -193,6 +193,8 @@ Line, rectangle, circle, and arc coordinates must be finite before conversion
 to nanometers, matching the validation applied to polygons and cubic curves.
 All supported Edge.Cuts coordinates must also fit the signed nanometer range;
 oversized finite values are rejected instead of saturating at integer limits.
+Board-level line, rectangle, circle, and arc points reject trailing values
+instead of silently ignoring malformed coordinate-list elements.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated
