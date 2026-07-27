@@ -368,6 +368,9 @@ pcbex quality candidate.json --baseline quality.json --format sarif \
   --output quality.sarif
 ```
 
+Quality-report total route length uses saturating accumulation, so large
+multi-net designs cannot wrap the reported aggregate.
+
 Reports include per-net length, segments, arcs, vias, bends, used layers, board
 totals, unrouted count, and differential-pair skew/coupling. Baseline gates
 reject increases in total length, vias, bends, or unrouted nets.
