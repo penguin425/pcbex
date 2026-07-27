@@ -485,6 +485,9 @@ transition steps for single-ended nets and both differential members.
 Boards may define `manufacturing_rules` for minimum track width, copper
 clearance, drill, annular ring, copper-to-edge distance, board thickness, and
 maximum via aspect ratio. These checks are included in the normal board checker.
+Invalid physical limits are reported individually as `dfm_rule_dimensions`;
+track width, drill size, and board thickness must be positive, while clearance
+and spacing limits may be zero but not negative.
 `pcbex dfm board.json [--output report.json]` emits a machine-readable report
 and exits unsuccessfully when manufacturing violations are present.
 Optional rules also detect drill-to-drill spacing, prohibited Via-in-pad, and

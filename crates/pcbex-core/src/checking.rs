@@ -1297,21 +1297,58 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
     let Some(rules) = &board.manufacturing_rules else {
         return report;
     };
-    if rules.minimum_track_width_nm <= 0
-        || rules.minimum_clearance_nm < 0
-        || rules.minimum_drill_nm <= 0
-        || rules.minimum_annular_ring_nm < 0
-        || rules.minimum_copper_to_edge_nm < 0
-        || rules.board_thickness_nm <= 0
-        || rules.maximum_via_aspect_ratio == 0
-        || rules.minimum_drill_to_drill_nm < 0
-        || rules.minimum_trace_angle_deg > 180
-    {
+    let invalid_dimensions = [
+        (
+            "minimum_track_width_nm",
+            rules.minimum_track_width_nm,
+            false,
+        ),
+        ("minimum_clearance_nm", rules.minimum_clearance_nm, true),
+        ("minimum_drill_nm", rules.minimum_drill_nm, false),
+        (
+            "minimum_annular_ring_nm",
+            rules.minimum_annular_ring_nm,
+            true,
+        ),
+        (
+            "minimum_copper_to_edge_nm",
+            rules.minimum_copper_to_edge_nm,
+            true,
+        ),
+        ("board_thickness_nm", rules.board_thickness_nm, false),
+        (
+            "minimum_drill_to_drill_nm",
+            rules.minimum_drill_to_drill_nm,
+            true,
+        ),
+    ];
+    let mut invalid_rule = false;
+    for (name, value, zero_allowed) in invalid_dimensions {
+        if value < 0 || (!zero_allowed && value == 0) {
+            invalid_rule = true;
+            report.push(
+                "dfm_rule_dimensions",
+                format!(
+                    "manufacturing rule {name} must be {}",
+                    if zero_allowed {
+                        "non-negative"
+                    } else {
+                        "positive"
+                    }
+                ),
+                vec![],
+            );
+        }
+    }
+    if rules.maximum_via_aspect_ratio == 0 || rules.minimum_trace_angle_deg > 180 {
+        invalid_rule = true;
         report.push(
             "dfm_rules",
             "manufacturing rules contain invalid dimensions".into(),
             vec![],
         );
+    }
+    if invalid_rule {
         return report;
     }
     for route in &board.routes {
@@ -3635,6 +3672,81 @@ mod tests {
             sarif["runs"][0]["results"]
                 .as_array()
                 .is_some_and(|results| results.len() == report.violations.len())
+        );
+    }
+
+    #[test]
+    fn reports_each_invalid_manufacturing_rule_dimension() {
+        let valid = || crate::ManufacturingRules {
+            minimum_track_width_nm: 200_000,
+            minimum_clearance_nm: 0,
+            minimum_drill_nm: 300_000,
+            minimum_annular_ring_nm: 0,
+            minimum_copper_to_edge_nm: 0,
+            board_thickness_nm: 1_600_000,
+            maximum_via_aspect_ratio: 8,
+            minimum_drill_to_drill_nm: 0,
+            allow_via_in_pad: true,
+            minimum_trace_angle_deg: 0,
+        };
+        let invalid_rules = [
+            {
+                let mut rules = valid();
+                rules.minimum_track_width_nm = 0;
+                rules
+            },
+            {
+                let mut rules = valid();
+                rules.minimum_clearance_nm = -1;
+                rules
+            },
+            {
+                let mut rules = valid();
+                rules.minimum_drill_nm = 0;
+                rules
+            },
+            {
+                let mut rules = valid();
+                rules.minimum_annular_ring_nm = -1;
+                rules
+            },
+            {
+                let mut rules = valid();
+                rules.minimum_copper_to_edge_nm = -1;
+                rules
+            },
+            {
+                let mut rules = valid();
+                rules.board_thickness_nm = 0;
+                rules
+            },
+            {
+                let mut rules = valid();
+                rules.minimum_drill_to_drill_nm = -1;
+                rules
+            },
+        ];
+
+        for rules in invalid_rules {
+            let mut board = base();
+            board.manufacturing_rules = Some(rules);
+            assert_eq!(
+                check_manufacturability(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "dfm_rule_dimensions")
+                    .count(),
+                1
+            );
+        }
+
+        let mut board = base();
+        board.manufacturing_rules = Some(valid());
+        assert!(
+            !check_manufacturability(&board)
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "dfm_rule_dimensions")
         );
     }
 
