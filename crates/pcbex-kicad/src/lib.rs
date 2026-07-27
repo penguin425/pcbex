@@ -1258,9 +1258,15 @@ fn point_in_polygon(point: Point, polygon: &[Point]) -> bool {
 }
 
 fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String> {
-    let (x1, y1) = (start.x_nm as f64, start.y_nm as f64);
-    let (x2, y2) = (mid.x_nm as f64, mid.y_nm as f64);
-    let (x3, y3) = (end.x_nm as f64, end.y_nm as f64);
+    let (x1, y1) = (0.0, 0.0);
+    let (x2, y2) = (
+        (i128::from(mid.x_nm) - i128::from(start.x_nm)) as f64,
+        (i128::from(mid.y_nm) - i128::from(start.y_nm)) as f64,
+    );
+    let (x3, y3) = (
+        (i128::from(end.x_nm) - i128::from(start.x_nm)) as f64,
+        (i128::from(end.y_nm) - i128::from(start.y_nm)) as f64,
+    );
     let determinant = 2.0 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
     if determinant.abs() < 1.0 {
         return Err("Edge.Cuts arc points must not be collinear".into());
@@ -1287,13 +1293,19 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
     for index in 0..=steps {
         let angle = start_angle + sweep * index as f64 / steps as f64;
         points.push(Point {
-            x_nm: (center_x + radius * angle.cos()).round() as i64,
-            y_nm: (center_y + radius * angle.sin()).round() as i64,
+            x_nm: translate_arc_coordinate(start.x_nm, center_x + radius * angle.cos()),
+            y_nm: translate_arc_coordinate(start.y_nm, center_y + radius * angle.sin()),
         });
     }
     points[0] = start;
     points[steps] = end;
     Ok(points)
+}
+
+fn translate_arc_coordinate(origin: i64, offset: f64) -> i64 {
+    i128::from(origin)
+        .saturating_add(offset.round() as i128)
+        .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 fn import_footprint(
@@ -2778,6 +2790,26 @@ mod tests {
             x_nm: 10_000_000,
             y_nm: 20_000_000,
         }));
+    }
+
+    #[test]
+    fn samples_small_arc_near_coordinate_limit() {
+        let center = i64::MAX - 512;
+        let start = Point {
+            x_nm: center - 256,
+            y_nm: center,
+        };
+        let mid = Point {
+            x_nm: center,
+            y_nm: center - 256,
+        };
+        let end = Point {
+            x_nm: center + 256,
+            y_nm: center,
+        };
+
+        let points = sample_arc(start, mid, end).unwrap();
+        assert_eq!(points, vec![start, end]);
     }
 
     #[test]
