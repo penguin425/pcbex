@@ -1118,6 +1118,17 @@ fn absolute_coordinate_difference(value: i64, origin: i64) -> i128 {
     (i128::from(value) - i128::from(origin)).abs()
 }
 
+fn interpolate_coordinate(start: i64, end: i64, step: i64, steps: i64) -> i64 {
+    let start = i128::from(start);
+    let delta = i128::from(end) - start;
+    (start + delta * i128::from(step) / i128::from(steps))
+        .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+fn positive_div_ceil(value: i64, divisor: i64) -> i64 {
+    value / divisor + i64::from(value % divisor != 0)
+}
+
 fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
     for net in &board.nets {
         let Some(class) = net
@@ -1287,14 +1298,22 @@ fn check_return_plane_continuity(board: &Board, report: &mut CheckReport) {
                     .plane_sample_spacing_nm
                     .unwrap_or(board.rules.grid_nm)
                     .max(1);
-                let dx = segment.end.x_nm - segment.start.x_nm;
-                let dy = segment.end.y_nm - segment.start.y_nm;
-                let length = ((dx as f64).hypot(dy as f64)).round() as i64;
-                let steps = ((length + spacing - 1) / spacing).max(1);
+                let length = (segment_length_m(segment) * 1e9).round() as i64;
+                let steps = positive_div_ceil(length, spacing).max(1);
                 let continuous = (0..=steps).all(|step| {
                     let point = Point {
-                        x_nm: segment.start.x_nm + dx * step / steps,
-                        y_nm: segment.start.y_nm + dy * step / steps,
+                        x_nm: interpolate_coordinate(
+                            segment.start.x_nm,
+                            segment.end.x_nm,
+                            step,
+                            steps,
+                        ),
+                        y_nm: interpolate_coordinate(
+                            segment.start.y_nm,
+                            segment.end.y_nm,
+                            step,
+                            steps,
+                        ),
                     };
                     reference_route.zones.iter().any(|zone| {
                         zone.layer == reference_layer
@@ -3997,6 +4016,20 @@ mod tests {
             i128::from(u64::MAX)
         );
         assert_eq!(absolute_coordinate_difference(100, 250), 150);
+    }
+
+    #[test]
+    fn return_path_interpolation_handles_extreme_coordinates() {
+        assert_eq!(
+            interpolate_coordinate(i64::MIN, i64::MAX, 0, i64::MAX),
+            i64::MIN
+        );
+        assert_eq!(
+            interpolate_coordinate(i64::MIN, i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(interpolate_coordinate(0, 1_000, 1, 4), 250);
+        assert_eq!(positive_div_ceil(i64::MAX, 2), 4_611_686_018_427_387_904);
     }
 
     #[test]
