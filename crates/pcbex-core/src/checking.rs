@@ -678,6 +678,19 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
         }
     }
+    let mut seen_power_net_ids = HashSet::new();
+    for rule in &board.power_net_rules {
+        if !seen_power_net_ids.insert(rule.net_id) || !known_net_ids.contains(&rule.net_id) {
+            report.push(
+                "power_net_rule_definition",
+                format!(
+                    "power-net rule must uniquely reference a declared net; net {} is invalid or repeated",
+                    rule.net_id
+                ),
+                vec![rule.net_id],
+            );
+        }
+    }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
             if !pad_geometry_is_valid(pad) {
@@ -6049,6 +6062,36 @@ mod tests {
                     .any(|violation| violation.rule == "return_path_rule_constraints")
             );
         }
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_power_net_rule_definitions() {
+        let mut board = base();
+        board.nets = (1..=2)
+            .map(|id| Net {
+                id,
+                name: format!("N{id}"),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            })
+            .collect();
+        let rule = |net_id| crate::PowerNetRule {
+            net_id,
+            current_ma: 100.0,
+            maximum_voltage_drop_mv: 50.0,
+            minimum_parallel_vias: 0,
+        };
+        board.power_net_rules = vec![rule(1), rule(2), rule(2), rule(99)];
+
+        assert_eq!(
+            check_board(&board)
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "power_net_rule_definition")
+                .count(),
+            2
+        );
     }
 
     #[test]

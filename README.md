@@ -301,6 +301,9 @@ fills are preserved when routed tracks are written back to the board.
 
 ## PDN checks
 
+Each declared power-net rule must reference a distinct net present in the board
+net table.
+
 `power_net_rules` declares a power net's expected current in mA, maximum
 permitted DC drop in mV, and optional minimum parallel-via count. The checker
 uses each routed segment's real length and width plus per-layer stackup copper
