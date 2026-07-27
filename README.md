@@ -532,6 +532,8 @@ Cross-net via-to-via checks likewise combine both diameters and bilateral
 clearance with widened saturating arithmetic.
 Manufacturing track-to-track clearance uses the same overflow-safe envelope,
 including extreme imported widths and clearance limits.
+Manufacturing track-to-via clearance applies widened saturating arithmetic in
+both route-order directions.
 Within-route via connectivity combines both via diameters with widened
 saturating arithmetic before evaluating the connectivity graph.
 Within-route track connectivity combines both track widths with widened

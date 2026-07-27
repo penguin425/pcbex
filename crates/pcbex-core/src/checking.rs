@@ -1726,6 +1726,14 @@ fn manufacturing_track_clearance_envelope(
     two_track_clearance_envelope(first_width_nm, second_width_nm, clearance_nm)
 }
 
+fn manufacturing_track_via_clearance_envelope(
+    track_width_nm: i64,
+    via_diameter_nm: i64,
+    clearance_nm: i64,
+) -> i64 {
+    track_via_clearance_envelope(track_width_nm, via_diameter_nm, clearance_nm)
+}
+
 fn track_via_clearance_envelope(
     track_width_nm: i64,
     via_diameter_nm: i64,
@@ -2251,7 +2259,11 @@ fn check_manufacturing_clearance(
                     via.position,
                     segment.start,
                     segment.end,
-                    via.diameter_nm + segment.width_nm + 2 * clearance_nm,
+                    manufacturing_track_via_clearance_envelope(
+                        segment.width_nm,
+                        via.diameter_nm,
+                        clearance_nm,
+                    ),
                 )
             {
                 report.push(
@@ -2270,7 +2282,11 @@ fn check_manufacturing_clearance(
                     via.position,
                     segment.start,
                     segment.end,
-                    via.diameter_nm + segment.width_nm + 2 * clearance_nm,
+                    manufacturing_track_via_clearance_envelope(
+                        segment.width_nm,
+                        via.diameter_nm,
+                        clearance_nm,
+                    ),
                 )
             {
                 report.push(
@@ -4132,6 +4148,22 @@ mod tests {
         assert_eq!(
             manufacturing_track_clearance_envelope(200_000, 300_000, 150_000),
             800_000
+        );
+    }
+
+    #[test]
+    fn manufacturing_track_via_clearance_envelope_handles_extreme_dimensions() {
+        assert_eq!(
+            manufacturing_track_via_clearance_envelope(i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            manufacturing_track_via_clearance_envelope(i64::MIN, i64::MIN, i64::MIN),
+            i64::MIN
+        );
+        assert_eq!(
+            manufacturing_track_via_clearance_envelope(200_000, 600_000, 150_000),
+            1_100_000
         );
     }
 
