@@ -282,6 +282,8 @@ KiCad generated pad-polygon vertices saturate rotated center offsets at signed
 coordinate limits.
 KiCad custom-pad primitive vertices saturate rotated center offsets at signed
 coordinate limits.
+KiCad board-cutout containment checks handle polygons spanning signed coordinate
+limits without overflowing intermediate edge differences.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

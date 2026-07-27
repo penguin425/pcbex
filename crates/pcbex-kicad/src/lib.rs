@@ -1209,11 +1209,11 @@ fn point_in_polygon(point: Point, polygon: &[Point]) -> bool {
         .zip(polygon.iter().cycle().skip(1))
         .take(polygon.len())
     {
+        let (start_x, start_y) = (start.x_nm as f64, start.y_nm as f64);
+        let (end_x, end_y) = (end.x_nm as f64, end.y_nm as f64);
+        let (point_x, point_y) = (point.x_nm as f64, point.y_nm as f64);
         let crosses = (start.y_nm > point.y_nm) != (end.y_nm > point.y_nm)
-            && (point.x_nm as f64)
-                < (end.x_nm - start.x_nm) as f64 * (point.y_nm - start.y_nm) as f64
-                    / (end.y_nm - start.y_nm) as f64
-                    + start.x_nm as f64;
+            && point_x < (end_x - start_x) * (point_y - start_y) / (end_y - start_y) + start_x;
         if crosses {
             inside = !inside;
         }
@@ -2768,6 +2768,30 @@ mod tests {
                 y_nm: 8_000_000,
             }
         );
+    }
+
+    #[test]
+    fn point_in_polygon_handles_coordinate_extremes() {
+        let polygon = [
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MAX,
+            },
+        ];
+
+        assert!(point_in_polygon(Point { x_nm: 0, y_nm: 0 }, &polygon));
     }
 
     #[test]
