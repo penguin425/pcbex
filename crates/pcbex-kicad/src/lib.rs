@@ -1217,6 +1217,14 @@ impl WideArea {
         self.high == 0 && self.low == 0
     }
 
+    fn is_positive(self) -> bool {
+        self.high >> 127 == 0 && !self.is_zero()
+    }
+
+    fn is_negative(self) -> bool {
+        self.high >> 127 != 0
+    }
+
     fn unsigned_magnitude(self) -> (u128, u128) {
         if self.high >> 127 == 0 {
             (self.high, self.low)
@@ -1245,16 +1253,29 @@ fn point_in_polygon(point: Point, polygon: &[Point]) -> bool {
         .zip(polygon.iter().cycle().skip(1))
         .take(polygon.len())
     {
-        let (start_x, start_y) = (start.x_nm as f64, start.y_nm as f64);
-        let (end_x, end_y) = (end.x_nm as f64, end.y_nm as f64);
-        let (point_x, point_y) = (point.x_nm as f64, point.y_nm as f64);
-        let crosses = (start.y_nm > point.y_nm) != (end.y_nm > point.y_nm)
-            && point_x < (end_x - start_x) * (point_y - start_y) / (end_y - start_y) + start_x;
+        let crosses_y = (start.y_nm > point.y_nm) != (end.y_nm > point.y_nm);
+        let orientation = triangle_orientation(*start, *end, point);
+        let crosses_right = if end.y_nm > start.y_nm {
+            orientation.is_positive()
+        } else {
+            orientation.is_negative()
+        };
+        let crosses = crosses_y && crosses_right;
         if crosses {
             inside = !inside;
         }
     }
     inside
+}
+
+fn triangle_orientation(a: Point, b: Point, c: Point) -> WideArea {
+    WideArea { high: 0, low: 0 }
+        .add_i128(i128::from(a.x_nm) * i128::from(b.y_nm))
+        .add_i128(i128::from(b.x_nm) * i128::from(c.y_nm))
+        .add_i128(i128::from(c.x_nm) * i128::from(a.y_nm))
+        .add_i128(-(i128::from(a.y_nm) * i128::from(b.x_nm)))
+        .add_i128(-(i128::from(b.y_nm) * i128::from(c.x_nm)))
+        .add_i128(-(i128::from(c.y_nm) * i128::from(a.x_nm)))
 }
 
 fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String> {
@@ -2916,6 +2937,36 @@ mod tests {
         ];
 
         assert!(point_in_polygon(Point { x_nm: 0, y_nm: 0 }, &polygon));
+    }
+
+    #[test]
+    fn point_in_polygon_distinguishes_adjacent_extreme_coordinates() {
+        let polygon = [
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MAX,
+            },
+        ];
+
+        assert!(point_in_polygon(
+            Point {
+                x_nm: i64::MAX - 1,
+                y_nm: 0,
+            },
+            &polygon
+        ));
     }
 
     #[test]
