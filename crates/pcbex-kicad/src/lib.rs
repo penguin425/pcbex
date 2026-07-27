@@ -1274,6 +1274,9 @@ fn edge_polygon_points(values: &[Sexp]) -> Result<Vec<Point>, String> {
     if contour_self_intersects(&polygon) {
         return Err("Edge.Cuts polygon must not self-intersect".into());
     }
+    if polygon_twice_area(&polygon).is_zero() {
+        return Err("Edge.Cuts polygon must have nonzero area".into());
+    }
     Ok(polygon)
 }
 
@@ -3514,6 +3517,20 @@ mod tests {
         assert_eq!(
             import(pcb, rules()).unwrap_err(),
             "Edge.Cuts polygon must not self-intersect"
+        );
+    }
+
+    #[test]
+    fn rejects_zero_area_edge_cuts_polygon_during_parsing() {
+        let pcb = r#"(kicad_pcb
+          (gr_poly
+            (pts (xy 0 0) (xy 10 10) (xy 20 20))
+            (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "Edge.Cuts polygon must have nonzero area"
         );
     }
 
