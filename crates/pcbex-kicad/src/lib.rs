@@ -611,14 +611,20 @@ impl ImportedBoard {
             let mut max_x = 0;
             let mut max_y = 0;
             for pad in &footprint.pads {
-                let dx = mm(pad.position.x_nm - footprint.position.x_nm);
-                let dy = mm(pad.position.y_nm - footprint.position.y_nm);
+                let dx = mm(relative_coordinate(
+                    pad.position.x_nm,
+                    footprint.position.x_nm,
+                ));
+                let dy = mm(relative_coordinate(
+                    pad.position.y_nm,
+                    footprint.position.y_nm,
+                ));
                 let (local_x, local_y) = rotate(dx, dy, -footprint.rotation_deg);
                 let local = point_mm(local_x, local_y);
-                min_x = min_x.min(local.x_nm - pad.width_nm / 2);
-                min_y = min_y.min(local.y_nm - pad.height_nm / 2);
-                max_x = max_x.max(local.x_nm + pad.width_nm / 2);
-                max_y = max_y.max(local.y_nm + pad.height_nm / 2);
+                min_x = min_x.min(local.x_nm.saturating_sub(pad.width_nm / 2));
+                min_y = min_y.min(local.y_nm.saturating_sub(pad.height_nm / 2));
+                max_x = max_x.max(local.x_nm.saturating_add(pad.width_nm / 2));
+                max_y = max_y.max(local.y_nm.saturating_add(pad.height_nm / 2));
                 if let Some(net_id) = pad.net_id {
                     net_pins.entry(net_id).or_default().push(PinRef {
                         component: footprint.reference.clone(),
@@ -631,8 +637,8 @@ impl ImportedBoard {
                 .cloned()
                 .unwrap_or_default();
             let (width_nm, height_nm) = polygon_size(&courtyard).unwrap_or((
-                (max_x - min_x).max(1_000_000),
-                (max_y - min_y).max(1_000_000),
+                coordinate_span(max_x, min_x).max(1_000_000),
+                coordinate_span(max_y, min_y).max(1_000_000),
             ));
             components.push(Component {
                 reference: footprint.reference.clone(),
@@ -2382,6 +2388,36 @@ mod tests {
             Some((30, 20))
         );
         assert_eq!(polygon_size(&[]), None);
+    }
+
+    #[test]
+    fn placement_pad_bounds_saturate_full_signed_coordinate_offsets() {
+        let mut imported = import(PCB, rules()).unwrap();
+        imported.board.footprints[0].reference = "U1".into();
+        imported.board.footprints[1].reference = "U2".into();
+        let footprint = &mut imported.board.footprints[0];
+        footprint.position = Point {
+            x_nm: i64::MAX,
+            y_nm: i64::MAX,
+        };
+        footprint.rotation_deg = 0.0;
+        footprint.pads[0].position = Point {
+            x_nm: i64::MIN,
+            y_nm: i64::MIN,
+        };
+        footprint.pads[0].width_nm = i64::MAX;
+        footprint.pads[0].height_nm = i64::MAX;
+
+        let problem = imported.placement_problem(1).unwrap();
+        assert_eq!(problem.components[0].width_nm, i64::MAX);
+        assert_eq!(problem.components[0].height_nm, i64::MAX);
+        assert_eq!(
+            problem.connections[0].from.offset,
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
+        );
     }
 
     #[test]

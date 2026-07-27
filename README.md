@@ -266,6 +266,8 @@ KiCad board extents and origin-relative coordinates widen endpoint differences
 and saturate them at signed coordinate limits.
 KiCad courtyard width and height derivation also saturates full-range coordinate
 spans before creating placement components.
+KiCad placement fallback bounds saturate pad-relative differences, half-size
+offsets, and final component spans.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
