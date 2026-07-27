@@ -1152,6 +1152,7 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
             || cutout
                 .iter()
                 .any(|point| !point_in_polygon(*point, &outline))
+            || contours_intersect(cutout, &outline)
     }) {
         return Err("Edge.Cuts cutouts must be inside the outer outline".into());
     }
@@ -1292,6 +1293,43 @@ fn triangle_orientation(a: Point, b: Point, c: Point) -> WideArea {
         .add_i128(-(i128::from(a.y_nm) * i128::from(b.x_nm)))
         .add_i128(-(i128::from(b.y_nm) * i128::from(c.x_nm)))
         .add_i128(-(i128::from(c.y_nm) * i128::from(a.x_nm)))
+}
+
+fn contours_intersect(left: &[Point], right: &[Point]) -> bool {
+    left.iter()
+        .zip(left.iter().cycle().skip(1))
+        .take(left.len())
+        .any(|(left_start, left_end)| {
+            right
+                .iter()
+                .zip(right.iter().cycle().skip(1))
+                .take(right.len())
+                .any(|(right_start, right_end)| {
+                    segments_intersect(*left_start, *left_end, *right_start, *right_end)
+                })
+        })
+}
+
+fn segments_intersect(a: Point, b: Point, c: Point, d: Point) -> bool {
+    let abc = triangle_orientation(a, b, c);
+    let abd = triangle_orientation(a, b, d);
+    let cda = triangle_orientation(c, d, a);
+    let cdb = triangle_orientation(c, d, b);
+
+    (abc.is_zero() && point_between(c, a, b))
+        || (abd.is_zero() && point_between(d, a, b))
+        || (cda.is_zero() && point_between(a, c, d))
+        || (cdb.is_zero() && point_between(b, c, d))
+        || (((abc.is_positive() && abd.is_negative()) || (abc.is_negative() && abd.is_positive()))
+            && ((cda.is_positive() && cdb.is_negative())
+                || (cda.is_negative() && cdb.is_positive())))
+}
+
+fn point_between(point: Point, start: Point, end: Point) -> bool {
+    point.x_nm >= start.x_nm.min(end.x_nm)
+        && point.x_nm <= start.x_nm.max(end.x_nm)
+        && point.y_nm >= start.y_nm.min(end.y_nm)
+        && point.y_nm <= start.y_nm.max(end.y_nm)
 }
 
 fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String> {
@@ -2977,6 +3015,29 @@ mod tests {
                 x_nm: 8_000_000,
                 y_nm: 8_000_000,
             }
+        );
+    }
+
+    #[test]
+    fn rejects_cutout_edges_that_leave_a_concave_outline() {
+        let pcb = r#"(kicad_pcb
+          (gr_line (start 0 0) (end 10 0) (layer "Edge.Cuts"))
+          (gr_line (start 10 0) (end 10 10) (layer "Edge.Cuts"))
+          (gr_line (start 10 10) (end 7 10) (layer "Edge.Cuts"))
+          (gr_line (start 7 10) (end 7 3) (layer "Edge.Cuts"))
+          (gr_line (start 7 3) (end 3 3) (layer "Edge.Cuts"))
+          (gr_line (start 3 3) (end 3 10) (layer "Edge.Cuts"))
+          (gr_line (start 3 10) (end 0 10) (layer "Edge.Cuts"))
+          (gr_line (start 0 10) (end 0 0) (layer "Edge.Cuts"))
+          (gr_line (start 2 8) (end 8 8) (layer "Edge.Cuts"))
+          (gr_line (start 8 8) (end 5 1) (layer "Edge.Cuts"))
+          (gr_line (start 5 1) (end 2 8) (layer "Edge.Cuts"))
+        )"#;
+
+        assert!(
+            import(pcb, rules())
+                .unwrap_err()
+                .contains("cutouts must be inside")
         );
     }
 
