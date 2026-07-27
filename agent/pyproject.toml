@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pcbex-agent"
-version = "1.167.0"
+version = "1.168.0"
 description = "Bounded planning and repair agent for pcbex"
 requires-python = ">=3.11"
 
