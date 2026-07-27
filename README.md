@@ -274,6 +274,8 @@ KiCad track-segment obstacle envelopes saturate half-width expansion at signed
 coordinate limits.
 KiCad route-arc obstacle envelopes saturate half-width expansion at signed
 coordinate limits.
+KiCad via obstacle envelopes saturate half-diameter expansion at signed
+coordinate limits.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
