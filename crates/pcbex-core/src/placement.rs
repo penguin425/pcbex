@@ -450,6 +450,12 @@ fn bounded_grid_move(position_nm: Nm, grid_steps: Nm, grid_nm: Nm, extent_nm: Nm
         .clamp(0, extent_nm)
 }
 
+fn manhattan_distance_nm(a: Point, b: Point) -> f64 {
+    let dx = (i128::from(a.x_nm) - i128::from(b.x_nm)).abs();
+    let dy = (i128::from(a.y_nm) - i128::from(b.y_nm)).abs();
+    (dx + dy) as f64
+}
+
 fn score(
     problem: &PlacementProblem,
     components: &[Component],
@@ -467,8 +473,7 @@ fn score(
             &components[index[connection.to.component.as_str()]],
             connection.to.offset,
         );
-        out.hpwl +=
-            ((a.x_nm - b.x_nm).abs() + (a.y_nm - b.y_nm).abs()) as f64 / unit * connection.weight;
+        out.hpwl += manhattan_distance_nm(a, b) / unit * connection.weight;
     }
     for (i, a) in components.iter().enumerate() {
         let ar = bounds(a);
@@ -833,6 +838,26 @@ mod tests {
         assert_eq!(bounded_grid_move(1, i64::MAX, i64::MAX, 100), 100);
         assert_eq!(bounded_grid_move(99, i64::MIN, i64::MAX, 100), 0);
         assert_eq!(bounded_grid_move(50, 2, 10, 100), 70);
+    }
+
+    #[test]
+    fn manhattan_distance_handles_full_signed_coordinates() {
+        let distance = manhattan_distance_nm(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+        );
+        assert!(distance.is_finite());
+        assert!(distance > i64::MAX as f64);
+        assert_eq!(
+            manhattan_distance_nm(Point { x_nm: 10, y_nm: 20 }, Point { x_nm: 15, y_nm: 30 }),
+            15.0
+        );
     }
 
     fn component(reference: &str, position: Option<Point>) -> Component {
