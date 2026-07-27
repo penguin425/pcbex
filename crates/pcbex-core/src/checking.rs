@@ -690,6 +690,20 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![rule.net_id],
             );
         }
+        if !rule.current_ma.is_finite()
+            || rule.current_ma <= 0.0
+            || !rule.maximum_voltage_drop_mv.is_finite()
+            || rule.maximum_voltage_drop_mv <= 0.0
+        {
+            report.push(
+                "power_net_rule_constraints",
+                format!(
+                    "power-net rule for net {} must use positive finite current and maximum voltage drop values",
+                    rule.net_id
+                ),
+                vec![rule.net_id],
+            );
+        }
     }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
@@ -6091,6 +6105,53 @@ mod tests {
                 .filter(|violation| violation.rule == "power_net_rule_definition")
                 .count(),
             2
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_power_net_rule_constraints() {
+        let make_board = |current_ma, maximum_voltage_drop_mv| {
+            let mut board = base();
+            board.nets.push(Net {
+                id: 1,
+                name: "POWER".into(),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            });
+            board.power_net_rules.push(crate::PowerNetRule {
+                net_id: 1,
+                current_ma,
+                maximum_voltage_drop_mv,
+                minimum_parallel_vias: 0,
+            });
+            board
+        };
+
+        for board in [
+            make_board(0.0, 50.0),
+            make_board(-1.0, 50.0),
+            make_board(f64::NAN, 50.0),
+            make_board(f64::INFINITY, 50.0),
+            make_board(100.0, 0.0),
+            make_board(100.0, -1.0),
+            make_board(100.0, f64::NAN),
+            make_board(100.0, f64::INFINITY),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "power_net_rule_constraints")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&make_board(100.0, 50.0))
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "power_net_rule_constraints")
         );
     }
 
