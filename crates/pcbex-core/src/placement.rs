@@ -456,6 +456,12 @@ fn manhattan_distance_nm(a: Point, b: Point) -> f64 {
     (dx + dy) as f64
 }
 
+fn manhattan_excess_nm(a: Point, b: Point, allowed_nm: Nm) -> f64 {
+    let dx = (i128::from(a.x_nm) - i128::from(b.x_nm)).abs();
+    let dy = (i128::from(a.y_nm) - i128::from(b.y_nm)).abs();
+    (dx + dy - i128::from(allowed_nm)).max(0) as f64
+}
+
 fn point_boundary_overflow_nm(point: Point, width_nm: Nm, height_nm: Nm) -> f64 {
     let x = i128::from(point.x_nm);
     let y = i128::from(point.y_nm);
@@ -556,9 +562,7 @@ fn constraint_penalty(
             } => {
                 let a = named_position(subject, components, index);
                 let b = named_position(target, components, index);
-                (((a.x_nm - b.x_nm).abs() + (a.y_nm - b.y_nm).abs() - max_distance_nm).max(0))
-                    as f64
-                    / unit
+                manhattan_excess_nm(a, b, *max_distance_nm) / unit
             }
             PlacementConstraint::Decoupling {
                 capacitor_anchor,
@@ -862,6 +866,31 @@ mod tests {
         assert_eq!(
             manhattan_distance_nm(Point { x_nm: 10, y_nm: 20 }, Point { x_nm: 15, y_nm: 30 }),
             15.0
+        );
+    }
+
+    #[test]
+    fn manhattan_excess_handles_full_signed_coordinates() {
+        let excess = manhattan_excess_nm(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            i64::MAX,
+        );
+        assert!(excess.is_finite());
+        assert!(excess > 0.0);
+        assert_eq!(
+            manhattan_excess_nm(
+                Point { x_nm: 10, y_nm: 20 },
+                Point { x_nm: 15, y_nm: 30 },
+                20
+            ),
+            0.0
         );
     }
 

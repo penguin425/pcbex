@@ -233,6 +233,8 @@ Placement HPWL scoring widens both coordinate differences and their Manhattan
 sum, including connections spanning the full signed coordinate range.
 Board-boundary scoring likewise widens negative and positive overflow distances
 before aggregating courtyard penalties.
+`near` placement constraints widen Manhattan distance and allowed-distance
+subtraction before calculating their excess penalty.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
