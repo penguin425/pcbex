@@ -255,6 +255,7 @@ Final placement grid snapping widens rounding arithmetic and stays on a
 representable grid multiple at coordinate limits.
 BGA escape-via grid snapping uses exact integer rounding beyond floating-point
 precision and at signed coordinate limits.
+BGA escape-group centroids widen terminal-coordinate sums before averaging.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
