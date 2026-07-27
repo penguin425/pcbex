@@ -199,6 +199,7 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
         .ok_or_else(|| "KiCad project net_settings.classes is not an array".to_string())?;
     let mut net_classes = board.net_classes.clone();
     let mut nets = board.nets.clone();
+    let mut project_class_names = HashSet::with_capacity(classes.len());
 
     for class in classes {
         let Some(class) = class.as_object() else {
@@ -207,6 +208,9 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
         let Some(name) = class.get("name").and_then(serde_json::Value::as_str) else {
             return Err("KiCad project net class is missing its name".into());
         };
+        if !project_class_names.insert(name) {
+            return Err(format!("KiCad project contains duplicate net class {name}"));
+        }
         let dimension = |key: &str, fallback: i64| -> Result<i64, String> {
             match class.get(key) {
                 None | Some(serde_json::Value::Null) => Ok(fallback),
@@ -4965,6 +4969,28 @@ mod tests {
         );
         assert!(!imported.board.net_classes.contains_key("New"));
         assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
+    }
+
+    #[test]
+    fn rejects_duplicate_project_net_class_definitions() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let mut imported = import(pcb, rules()).unwrap();
+        let project = r#"{
+          "net_settings": {
+            "classes": [
+              {"name": "Signal", "track_width": 0.2},
+              {"name": "Signal", "track_width": 0.3}
+            ]
+          }
+        }"#;
+
+        assert_eq!(
+            apply_project_net_settings(&mut imported.board, project).unwrap_err(),
+            "KiCad project contains duplicate net class Signal"
+        );
+        assert!(!imported.board.net_classes.contains_key("Signal"));
     }
 
     #[test]
