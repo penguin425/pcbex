@@ -871,7 +871,8 @@ pub fn check_board(board: &Board) -> CheckReport {
                     vec![route.net_id],
                 );
             }
-            if !board.point_inside_board(via.position, via.diameter_nm + 2 * rules.clearance_nm) {
+            let via_clearance_twice = via_clearance_envelope(via.diameter_nm, rules.clearance_nm);
+            if !board.point_inside_board(via.position, via_clearance_twice) {
                 report.push(
                     "board_edge",
                     "via crosses the board boundary".into(),
@@ -885,7 +886,7 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if !obstacle.layers.iter().any(|layer| via.spans_layer(*layer)) {
                     continue;
                 }
-                let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
+                let required_twice = via_clearance_twice;
                 if point_rect_closer_than(via.position, obstacle.min, obstacle.max, required_twice)
                 {
                     report.push(
@@ -944,7 +945,7 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if !obstacle.layers.iter().any(|layer| via.spans_layer(*layer)) {
                     continue;
                 }
-                let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
+                let required_twice = via_clearance_twice;
                 if point_in_polygon(via.position, &obstacle.polygon)
                     || point_polygon_closer_than(via.position, &obstacle.polygon, required_twice)
                 {
@@ -963,7 +964,7 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if !keepout.layers.iter().any(|layer| via.spans_layer(*layer)) {
                     continue;
                 }
-                let required_twice = via.diameter_nm + 2 * rules.clearance_nm;
+                let required_twice = via_clearance_twice;
                 if point_in_polygon(via.position, &keepout.polygon)
                     || point_polygon_closer_than(via.position, &keepout.polygon, required_twice)
                 {
@@ -1684,6 +1685,10 @@ fn copper_edge_envelope(copper_width_nm: i64, minimum_edge_distance_nm: i64) -> 
 fn track_clearance_envelope(track_width_nm: i64, clearance_nm: i64) -> i64 {
     let envelope = i128::from(track_width_nm) + 2 * i128::from(clearance_nm);
     envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+fn via_clearance_envelope(via_diameter_nm: i64, clearance_nm: i64) -> i64 {
+    track_clearance_envelope(via_diameter_nm, clearance_nm)
 }
 
 fn track_round_obstacle_clearance_envelope(
@@ -4047,6 +4052,13 @@ mod tests {
         assert_eq!(track_clearance_envelope(i64::MAX, i64::MAX), i64::MAX);
         assert_eq!(track_clearance_envelope(i64::MIN, i64::MIN), i64::MIN);
         assert_eq!(track_clearance_envelope(200_000, 150_000), 500_000);
+    }
+
+    #[test]
+    fn via_clearance_envelope_handles_extreme_dimensions() {
+        assert_eq!(via_clearance_envelope(i64::MAX, i64::MAX), i64::MAX);
+        assert_eq!(via_clearance_envelope(i64::MIN, i64::MIN), i64::MIN);
+        assert_eq!(via_clearance_envelope(600_000, 150_000), 900_000);
     }
 
     #[test]
