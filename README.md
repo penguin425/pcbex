@@ -251,6 +251,8 @@ Region constraints widen all four component-to-region overflow distances before
 aggregating their placement penalty.
 Placement overlap scoring widens rectangle intersection widths and heights
 before calculating their area.
+Final placement grid snapping widens rounding arithmetic and stays on a
+representable grid multiple at coordinate limits.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

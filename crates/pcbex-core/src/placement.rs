@@ -832,7 +832,12 @@ fn bin(value: Nm, extent: Nm, count: usize) -> usize {
     ((value.clamp(0, extent) as i128 * count as i128 / extent as i128) as usize).min(count - 1)
 }
 fn snap(value: Nm, grid: Nm) -> Nm {
-    ((value + grid / 2) / grid) * grid
+    let value = i128::from(value);
+    let grid = i128::from(grid);
+    let quotient = (value + grid / 2).div_euclid(grid);
+    let minimum_quotient = -(-i128::from(Nm::MIN)).div_euclid(grid);
+    let maximum_quotient = i128::from(Nm::MAX).div_euclid(grid);
+    (quotient.clamp(minimum_quotient, maximum_quotient) * grid) as Nm
 }
 
 struct Rng(u64);
@@ -1187,6 +1192,16 @@ mod tests {
             ),
             50.0
         );
+    }
+
+    #[test]
+    fn grid_snap_handles_full_signed_coordinates() {
+        assert_eq!(snap(i64::MAX, 2), i64::MAX - 1);
+        assert_eq!(snap(i64::MIN, 3), i64::MIN + 2);
+        assert_eq!(snap(-6, 10), -10);
+        assert_eq!(snap(-5, 10), 0);
+        assert_eq!(snap(14, 10), 10);
+        assert_eq!(snap(15, 10), 20);
     }
 
     #[test]
