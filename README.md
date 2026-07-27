@@ -189,6 +189,8 @@ An imported board may contain at most 65,536 generated `Edge.Cuts` segments in
 total across all supported primitives.
 Every generated edge passes a shared zero-length check before insertion, so new
 or adaptively sampled primitives cannot introduce collapsed contour segments.
+Line, rectangle, circle, and arc coordinates must be finite before conversion
+to nanometers, matching the validation applied to polygons and cubic curves.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated
