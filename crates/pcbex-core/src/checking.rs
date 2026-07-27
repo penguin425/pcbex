@@ -1048,9 +1048,7 @@ fn check_power_nets(board: &Board, routes: &HashMap<u32, &Route>, report: &mut C
             .segments
             .iter()
             .map(|segment| {
-                let length_m = (((segment.end.x_nm - segment.start.x_nm) as f64)
-                    .hypot((segment.end.y_nm - segment.start.y_nm) as f64))
-                    * 1e-9;
+                let length_m = segment_length_m(segment);
                 let copper_thickness_m = board
                     .stackup
                     .iter()
@@ -1085,6 +1083,12 @@ fn check_power_nets(board: &Board, routes: &HashMap<u32, &Route>, report: &mut C
             );
         }
     }
+}
+
+fn segment_length_m(segment: &Segment) -> f64 {
+    let dx_nm = (i128::from(segment.end.x_nm) - i128::from(segment.start.x_nm)) as f64;
+    let dy_nm = (i128::from(segment.end.y_nm) - i128::from(segment.start.y_nm)) as f64;
+    dx_nm.hypot(dy_nm) * 1e-9
 }
 
 fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
@@ -3889,6 +3893,26 @@ mod tests {
         assert_eq!(copper_edge_envelope(i64::MAX, i64::MAX), i64::MAX);
         assert_eq!(copper_edge_envelope(i64::MIN, i64::MIN), i64::MIN);
         assert_eq!(copper_edge_envelope(300_000, 250_000), 800_000);
+    }
+
+    #[test]
+    fn pdn_segment_length_handles_extreme_coordinates() {
+        let segment = Segment {
+            start: Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            end: Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            width_nm: 100_000,
+            layer: Layer::Front,
+        };
+        let length_m = segment_length_m(&segment);
+        let expected = (2.0_f64).sqrt() * (u64::MAX as f64) * 1e-9;
+        assert!(length_m.is_finite());
+        assert!((length_m - expected).abs() <= expected * f64::EPSILON);
     }
 
     #[test]
