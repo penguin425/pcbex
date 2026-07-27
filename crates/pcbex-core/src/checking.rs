@@ -1129,6 +1129,13 @@ fn positive_div_ceil(value: i64, divisor: i64) -> i64 {
     value / divisor + i64::from(value % divisor != 0)
 }
 
+fn segment_midpoint(segment: &Segment) -> Point {
+    Point {
+        x_nm: interpolate_coordinate(segment.start.x_nm, segment.end.x_nm, 1, 2),
+        y_nm: interpolate_coordinate(segment.start.y_nm, segment.end.y_nm, 1, 2),
+    }
+}
+
 fn points_within_distance(first: Point, second: Point, limit_nm: i64) -> bool {
     let dx = absolute_coordinate_difference(first.x_nm, second.x_nm);
     let dy = absolute_coordinate_difference(first.y_nm, second.y_nm);
@@ -2597,10 +2604,7 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         }
     }
     for keepout in &board.keepouts {
-        let midpoint = Point {
-            x_nm: segment.start.x_nm + (segment.end.x_nm - segment.start.x_nm) / 2,
-            y_nm: segment.start.y_nm + (segment.end.y_nm - segment.start.y_nm) / 2,
-        };
+        let midpoint = segment_midpoint(segment);
         if keepout.net_id != Some(net_id)
             && keepout.layers.contains(&segment.layer)
             && point_in_polygon(midpoint, &keepout.polygon)
@@ -4092,6 +4096,25 @@ mod tests {
         );
         assert_eq!(interpolate_coordinate(0, 1_000, 1, 4), 250);
         assert_eq!(positive_div_ceil(i64::MAX, 2), 4_611_686_018_427_387_904);
+    }
+
+    #[test]
+    fn segment_midpoint_handles_extreme_coordinates() {
+        assert_eq!(
+            segment_midpoint(&Segment {
+                start: Point {
+                    x_nm: i64::MIN,
+                    y_nm: i64::MAX,
+                },
+                end: Point {
+                    x_nm: i64::MAX,
+                    y_nm: i64::MIN,
+                },
+                width_nm: 100_000,
+                layer: Layer::Front,
+            }),
+            Point { x_nm: -1, y_nm: 0 }
+        );
     }
 
     #[test]
