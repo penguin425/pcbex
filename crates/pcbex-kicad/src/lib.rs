@@ -68,6 +68,12 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         if atom(xs.first()) == Some("net")
             && let (Some(id), Some(name)) = (number_u32(xs.get(1)), atom(xs.get(2)))
         {
+            if let Some(existing) = nets.get(&id) {
+                return Err(format!(
+                    "KiCad board contains duplicate net ID {id}: {} and {name}",
+                    existing.name
+                ));
+            }
             nets.insert(
                 id,
                 Net {
@@ -2942,6 +2948,21 @@ mod tests {
       (footprint "B" (layer "F.Cu") (at 35 45)
         (pad "1" smd rect (at 0 0 30) (size 1 1) (layers "F.Cu") (net 1 "VCC")))
     )"#;
+
+    #[test]
+    fn rejects_duplicate_kicad_net_ids() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "FIRST")
+          (net 1 "SECOND")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "KiCad board contains duplicate net ID 1: FIRST and SECOND"
+        );
+    }
+
     #[test]
     fn imports_outline_and_rotated_pads() {
         let b = import(PCB, rules()).unwrap();
