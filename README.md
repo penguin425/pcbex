@@ -375,6 +375,8 @@ the existing defaults retain single-section behavior.
 
 ## BGA escape routing
 
+Escape groups require unique non-empty names, declared unique net IDs, and
+exclusive membership so a net cannot be assigned to multiple escape groups.
 `escape_groups` assigns dense package nets a fanout distance and target copper
 layer. Four-way, radial, row, and column strategies classify package pads from
 their group centroid. Via locations may snap to an absolute grid and search up

@@ -567,6 +567,31 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
         }
     }
+    let mut seen_escape_group_names = HashSet::new();
+    let mut escaped_net_ids = HashSet::new();
+    for group in &board.escape_groups {
+        let members: HashSet<_> = group.net_ids.iter().copied().collect();
+        let membership_is_unique = group
+            .net_ids
+            .iter()
+            .all(|net_id| escaped_net_ids.insert(*net_id));
+        if group.name.trim().is_empty()
+            || !seen_escape_group_names.insert(group.name.as_str())
+            || members.is_empty()
+            || members.len() != group.net_ids.len()
+            || !members.iter().all(|net_id| known_net_ids.contains(net_id))
+            || !membership_is_unique
+        {
+            report.push(
+                "escape_group_definition",
+                format!(
+                    "escape group {} must have a unique non-empty name and unique declared nets that belong to no other escape group",
+                    group.name
+                ),
+                group.net_ids.clone(),
+            );
+        }
+    }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
             if !pad_geometry_is_valid(pad) {
@@ -5689,6 +5714,61 @@ mod tests {
                     .any(|violation| violation.rule == "length_group_constraints")
             );
         }
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_escape_group_definitions() {
+        let make_board = |groups: Vec<crate::EscapeGroup>| {
+            let mut board = base();
+            board.nets = (1..=4)
+                .map(|id| Net {
+                    id,
+                    name: format!("N{id}"),
+                    terminals: vec![],
+                    class: None,
+                    priority: 0,
+                })
+                .collect();
+            board.escape_groups = groups;
+            board
+        };
+        let group = |name: &str, net_ids| crate::EscapeGroup {
+            name: name.into(),
+            net_ids,
+            fanout_distance_nm: 1_000_000,
+            target_layer: Layer::Back,
+            direction: crate::EscapeDirection::FourWay,
+            via_grid_nm: None,
+            max_rings: 3,
+        };
+        let invalid_boards = [
+            make_board(vec![group("", vec![1])]),
+            make_board(vec![group("same", vec![1]), group("same", vec![2])]),
+            make_board(vec![group("empty", vec![])]),
+            make_board(vec![group("repeated", vec![1, 1])]),
+            make_board(vec![group("unknown", vec![99])]),
+            make_board(vec![group("first", vec![1]), group("reused", vec![1, 2])]),
+        ];
+
+        for board in invalid_boards {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "escape_group_definition")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&make_board(vec![
+                group("first", vec![1, 2]),
+                group("second", vec![3, 4]),
+            ]))
+            .violations
+            .iter()
+            .any(|violation| violation.rule == "escape_group_definition")
+        );
     }
 
     #[test]
