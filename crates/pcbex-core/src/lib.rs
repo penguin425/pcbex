@@ -4855,6 +4855,39 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_invalid_length_group_constraints() {
+        let group = |max_skew, amplitude, pitch, sections| LengthGroup {
+            name: "BUS".into(),
+            net_ids: vec![1, 2],
+            max_skew_nm: max_skew,
+            tuning_amplitude_nm: amplitude,
+            tuning_pitch_nm: pitch,
+            max_tuning_sections: sections,
+        };
+        for invalid_group in [
+            group(-1, None, None, 1),
+            group(0, Some(0), None, 1),
+            group(0, None, Some(-1), 1),
+            group(0, None, None, 0),
+            group(0, None, None, 17),
+        ] {
+            let mut invalid = board();
+            invalid.nets.push(Net {
+                id: 2,
+                name: "N2".into(),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            });
+            invalid.length_groups.push(invalid_group);
+            assert!(matches!(
+                Router::new(&invalid),
+                Err(message) if message == "length group BUS is invalid"
+            ));
+        }
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(
