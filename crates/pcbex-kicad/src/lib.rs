@@ -1063,7 +1063,8 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
         }
         match atom(xs.first()) {
             Some("gr_line") => {
-                let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
+                let (Some(start), Some(end)) =
+                    (edge_child_point(xs, "start")?, edge_child_point(xs, "end")?)
                 else {
                     return Err("Edge.Cuts line requires start and end points".into());
                 };
@@ -1074,9 +1075,9 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
             }
             Some("gr_arc") => {
                 let (Some(start), Some(mid), Some(end)) = (
-                    child_point(xs, "start"),
-                    child_point(xs, "mid"),
-                    child_point(xs, "end"),
+                    edge_child_point(xs, "start")?,
+                    edge_child_point(xs, "mid")?,
+                    edge_child_point(xs, "end")?,
                 ) else {
                     return Err("Edge.Cuts arc requires start, mid, and end points".into());
                 };
@@ -1085,8 +1086,10 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                 }
             }
             Some("gr_circle") => {
-                let (Some(center), Some(end)) = (child_point(xs, "center"), child_point(xs, "end"))
-                else {
+                let (Some(center), Some(end)) = (
+                    edge_child_point(xs, "center")?,
+                    edge_child_point(xs, "end")?,
+                ) else {
                     return Err("Edge.Cuts circle requires center and end points".into());
                 };
                 let points = sample_circle(center, end)?;
@@ -1106,7 +1109,8 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                 }
             }
             Some("gr_rect") => {
-                let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
+                let (Some(start), Some(end)) =
+                    (edge_child_point(xs, "start")?, edge_child_point(xs, "end")?)
                 else {
                     return Err("Edge.Cuts rectangle requires start and end points".into());
                 };
@@ -2635,6 +2639,18 @@ fn child_point(list: &[Sexp], name: &str) -> Option<Point> {
     let xs = child_values(list, name)?;
     Some(point_mm(number(xs.get(1))?, number(xs.get(2))?))
 }
+fn edge_child_point(list: &[Sexp], name: &str) -> Result<Option<Point>, String> {
+    let Some(xs) = child_values(list, name) else {
+        return Ok(None);
+    };
+    let (Some(x), Some(y)) = (number(xs.get(1)), number(xs.get(2))) else {
+        return Ok(None);
+    };
+    if !x.is_finite() || !y.is_finite() {
+        return Err("Edge.Cuts coordinates must be finite".into());
+    }
+    Ok(Some(point_mm(x, y)))
+}
 fn atom(value: Option<&Sexp>) -> Option<&str> {
     match value? {
         Sexp::Atom(x) => Some(x),
@@ -3580,6 +3596,28 @@ mod tests {
             assert_eq!(
                 import(pcb, rules()).unwrap_err(),
                 "Edge.Cuts line requires start and end points"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_nonfinite_edge_cuts_primitive_coordinates() {
+        for primitive in [
+            r#"(gr_line (start 1e400 0) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_arc (start 0 0) (mid NaN 10) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_circle (center 0 0) (end -1e400 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_rect (start 0 0) (end 20 NaN) (layer "Edge.Cuts"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {primitive}
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "Edge.Cuts coordinates must be finite"
             );
         }
     }
