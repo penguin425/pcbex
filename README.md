@@ -312,6 +312,8 @@ Edge.Cuts rectangle primitives likewise require both opposite corners, so an
 incomplete rectangle cannot disappear from the imported board geometry.
 Those corners must span nonzero width and height, rejecting collapsed
 rectangles before contour assembly.
+Duplicate Edge.Cuts edges are detected independent of direction across line,
+arc, and rectangle primitives without changing linear contour-import scaling.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

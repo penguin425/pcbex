@@ -1051,6 +1051,7 @@ fn list_spans(
 
 fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
     let mut lines = Vec::new();
+    let mut unique_edges = HashSet::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
         if child_atom(xs, "layer") != Some("Edge.Cuts") {
@@ -1065,7 +1066,7 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                 if start == end {
                     return Err("Edge.Cuts line must have distinct endpoints".into());
                 }
-                lines.push((start, end));
+                push_unique_edge(&mut lines, &mut unique_edges, start, end)?;
             }
             Some("gr_arc") => {
                 let (Some(start), Some(mid), Some(end)) = (
@@ -1076,7 +1077,7 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                     return Err("Edge.Cuts arc requires start, mid, and end points".into());
                 };
                 for pair in sample_arc(start, mid, end)?.windows(2) {
-                    lines.push((pair[0], pair[1]));
+                    push_unique_edge(&mut lines, &mut unique_edges, pair[0], pair[1])?;
                 }
             }
             Some("gr_rect") => {
@@ -1095,12 +1096,14 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                     x_nm: start.x_nm,
                     y_nm: end.y_nm,
                 };
-                lines.extend([
+                for (edge_start, edge_end) in [
                     (start, top_right),
                     (top_right, end),
                     (end, bottom_left),
                     (bottom_left, start),
-                ]);
+                ] {
+                    push_unique_edge(&mut lines, &mut unique_edges, edge_start, edge_end)?;
+                }
             }
             _ => {}
         }
@@ -1179,6 +1182,24 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
         outline,
         cutouts,
     })
+}
+
+fn push_unique_edge(
+    lines: &mut Vec<(Point, Point)>,
+    unique_edges: &mut HashSet<(Point, Point)>,
+    start: Point,
+    end: Point,
+) -> Result<(), String> {
+    let key = if (start.x_nm, start.y_nm) <= (end.x_nm, end.y_nm) {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    if !unique_edges.insert(key) {
+        return Err("Edge.Cuts contains a duplicate edge".into());
+    }
+    lines.push((start, end));
+    Ok(())
 }
 
 fn assemble_contours(lines: Vec<(Point, Point)>) -> Result<Vec<Vec<Point>>, String> {
@@ -3098,6 +3119,25 @@ mod tests {
             import(pcb, rules()).unwrap_err(),
             "Edge.Cuts line must have distinct endpoints"
         );
+    }
+
+    #[test]
+    fn rejects_duplicate_edge_cuts_edges_in_either_direction() {
+        let same_direction = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (gr_line (start 0 0) (end 20 0) (layer "Edge.Cuts"))
+        )"#;
+        let reverse_direction = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (gr_line (start 20 0) (end 0 0) (layer "Edge.Cuts"))
+        )"#;
+
+        for pcb in [same_direction, reverse_direction] {
+            assert_eq!(
+                import(pcb, rules()).unwrap_err(),
+                "Edge.Cuts contains a duplicate edge"
+            );
+        }
     }
 
     #[test]
