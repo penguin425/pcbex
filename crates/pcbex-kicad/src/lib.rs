@@ -1287,18 +1287,35 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
     } else {
         ccw_sweep - std::f64::consts::TAU
     };
+    let mid_sweep = if sweep >= 0.0 {
+        positive(mid_angle - start_angle)
+    } else {
+        -positive(start_angle - mid_angle)
+    };
     let max_step = 2.0 * (1.0 - (ARC_CHORD_TOLERANCE_NM / radius).min(1.0)).acos();
-    let steps = (sweep.abs() / max_step.max(1e-6)).ceil().max(2.0) as usize;
-    let mut points = Vec::with_capacity(steps + 1);
-    for index in 0..=steps {
-        let angle = start_angle + sweep * index as f64 / steps as f64;
+    let interval_steps =
+        |interval: f64| (interval.abs() / max_step.max(1e-6)).ceil().max(1.0) as usize;
+    let start_steps = interval_steps(mid_sweep);
+    let end_sweep = sweep - mid_sweep;
+    let end_steps = interval_steps(end_sweep);
+    let mut points = Vec::with_capacity(start_steps + end_steps + 1);
+    for index in 0..=start_steps {
+        let angle = start_angle + mid_sweep * index as f64 / start_steps as f64;
+        points.push(Point {
+            x_nm: translate_arc_coordinate(start.x_nm, center_x + radius * angle.cos()),
+            y_nm: translate_arc_coordinate(start.y_nm, center_y + radius * angle.sin()),
+        });
+    }
+    for index in 1..=end_steps {
+        let angle = mid_angle + end_sweep * index as f64 / end_steps as f64;
         points.push(Point {
             x_nm: translate_arc_coordinate(start.x_nm, center_x + radius * angle.cos()),
             y_nm: translate_arc_coordinate(start.y_nm, center_y + radius * angle.sin()),
         });
     }
     points[0] = start;
-    points[steps] = end;
+    points[start_steps] = mid;
+    points[start_steps + end_steps] = end;
     Ok(points)
 }
 
@@ -2825,6 +2842,25 @@ mod tests {
         };
         let end = Point {
             x_nm: 1_000,
+            y_nm: 0,
+        };
+
+        let points = sample_arc(start, mid, end).unwrap();
+        assert_eq!(points, vec![start, mid, end]);
+    }
+
+    #[test]
+    fn asymmetric_arc_keeps_declared_midpoint() {
+        let start = Point {
+            x_nm: 5_000,
+            y_nm: 0,
+        };
+        let mid = Point {
+            x_nm: 3_000,
+            y_nm: 4_000,
+        };
+        let end = Point {
+            x_nm: -5_000,
             y_nm: 0,
         };
 
