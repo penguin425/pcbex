@@ -280,6 +280,8 @@ absolute differential target is configured.
 
 ## Length constraints and tuning
 
+Length groups require unique non-empty names and at least two unique declared
+net IDs; normal DRC reports malformed groups before evaluating routed skew.
 Net classes may set `minimum_length_nm` and `maximum_length_nm`. The checker
 reports routes outside that interval. After routing, pcbex deterministically
 adds an orthogonal meander to short routes and accepts it only when the complete
