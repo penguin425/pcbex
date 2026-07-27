@@ -507,6 +507,9 @@ Rotated component-hole offsets and slot endpoints use saturating coordinate
 arithmetic at the signed board-coordinate boundaries.
 PDN resistance estimation skips invalid or non-finite conductor cross sections
 instead of propagating infinite or NaN voltage-drop results.
+Track-angle classification widens and safely takes the absolute value of
+endpoint coordinate differences before checking horizontal, vertical, or
+45-degree geometry.
 `pcbex dfm board.json [--output report.json]` emits a machine-readable report
 and exits unsuccessfully when manufacturing violations are present.
 Optional rules also detect drill-to-drill spacing, prohibited Via-in-pad, and

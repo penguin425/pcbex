@@ -110,8 +110,8 @@ pub fn check_board(board: &Board) -> CheckReport {
         {
             let rules = board.rules_for_net(route.net_id);
             for segment in &route.segments {
-                let dx = (segment.end.x_nm - segment.start.x_nm).abs();
-                let dy = (segment.end.y_nm - segment.start.y_nm).abs();
+                let dx = absolute_coordinate_difference(segment.end.x_nm, segment.start.x_nm);
+                let dy = absolute_coordinate_difference(segment.end.y_nm, segment.start.y_nm);
                 if dx != 0 && dy != 0 && dx != dy {
                     report.push(
                         "track_angle",
@@ -1112,6 +1112,10 @@ fn segment_resistance_ohms(
 
 fn coordinate_difference_nm(value: i64, origin: i64) -> f64 {
     (i128::from(value) - i128::from(origin)) as f64
+}
+
+fn absolute_coordinate_difference(value: i64, origin: i64) -> i128 {
+    (i128::from(value) - i128::from(origin)).abs()
 }
 
 fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
@@ -3980,6 +3984,19 @@ mod tests {
             segment_resistance_ohms(&make_segment(100_000), 35_000.0, 1.724e-8)
                 .is_some_and(|value| value.is_finite() && value > 0.0)
         );
+    }
+
+    #[test]
+    fn track_angle_difference_handles_extreme_coordinates() {
+        assert_eq!(
+            absolute_coordinate_difference(i64::MAX, i64::MIN),
+            i128::from(u64::MAX)
+        );
+        assert_eq!(
+            absolute_coordinate_difference(i64::MIN, i64::MAX),
+            i128::from(u64::MAX)
+        );
+        assert_eq!(absolute_coordinate_difference(100, 250), 150);
     }
 
     #[test]
