@@ -904,8 +904,11 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if !obstacle.layers.iter().any(|layer| via.spans_layer(*layer)) {
                     continue;
                 }
-                let required_twice =
-                    via.diameter_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
+                let required_twice = via_round_obstacle_clearance_envelope(
+                    via.diameter_nm,
+                    obstacle.diameter_nm,
+                    rules.clearance_nm,
+                );
                 if points_closer_than(via.position, obstacle.center, required_twice) {
                     report.push(
                         "clearance",
@@ -922,8 +925,11 @@ pub fn check_board(board: &Board) -> CheckReport {
                 if !obstacle.layers.iter().any(|layer| via.spans_layer(*layer)) {
                     continue;
                 }
-                let required_twice =
-                    via.diameter_nm + obstacle.diameter_nm + 2 * rules.clearance_nm;
+                let required_twice = via_round_obstacle_clearance_envelope(
+                    via.diameter_nm,
+                    obstacle.diameter_nm,
+                    rules.clearance_nm,
+                );
                 if point_segment_closer_than(
                     via.position,
                     obstacle.start,
@@ -1726,6 +1732,14 @@ fn two_via_clearance_envelope(
     clearance_nm: i64,
 ) -> i64 {
     two_track_clearance_envelope(first_diameter_nm, second_diameter_nm, clearance_nm)
+}
+
+fn via_round_obstacle_clearance_envelope(
+    via_diameter_nm: i64,
+    obstacle_diameter_nm: i64,
+    clearance_nm: i64,
+) -> i64 {
+    two_via_clearance_envelope(via_diameter_nm, obstacle_diameter_nm, clearance_nm)
 }
 
 fn two_via_connection_diameter(first_diameter_nm: i64, second_diameter_nm: i64) -> i64 {
@@ -4121,6 +4135,22 @@ mod tests {
         );
         assert_eq!(
             two_via_clearance_envelope(600_000, 800_000, 150_000),
+            1_700_000
+        );
+    }
+
+    #[test]
+    fn via_round_obstacle_envelope_handles_extreme_dimensions() {
+        assert_eq!(
+            via_round_obstacle_clearance_envelope(i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            via_round_obstacle_clearance_envelope(i64::MIN, i64::MIN, i64::MIN),
+            i64::MIN
+        );
+        assert_eq!(
+            via_round_obstacle_clearance_envelope(600_000, 800_000, 150_000),
             1_700_000
         );
     }
