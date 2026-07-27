@@ -447,6 +447,7 @@ fn import_net_classes(
         .iter()
         .map(|(id, net)| (net.name.clone(), *id))
         .collect();
+    let mut class_by_net_id = HashMap::<u32, String>::new();
     for item in top {
         let Some(setup) = item.as_list() else {
             continue;
@@ -521,6 +522,15 @@ fn import_net_classes(
                         "net class {name} references unknown net {net_name}"
                     ));
                 };
+                if let Some(previous) = class_by_net_id.get(net_id)
+                    && previous != name
+                {
+                    return Err(format!(
+                        "net {net_name} is assigned to multiple legacy net classes: \
+                         {previous} and {name}"
+                    ));
+                }
+                class_by_net_id.insert(*net_id, name.to_string());
                 if let Some(net) = nets.get_mut(net_id) {
                     net.class = Some(name.to_string());
                 }
@@ -4869,6 +4879,28 @@ mod tests {
                 "net class Signal contains add_net without a scalar net name"
             );
         }
+    }
+
+    #[test]
+    fn rejects_conflicting_legacy_net_class_assignments() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (add_net "SIG"))
+            (net_class "Power" ""
+              (clearance 0.3)
+              (trace_width 0.5)
+              (add_net "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "net SIG is assigned to multiple legacy net classes: Signal and Power"
+        );
     }
 
     #[test]
