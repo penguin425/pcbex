@@ -5076,6 +5076,37 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_invalid_power_net_rule_constraints() {
+        let rule = |current_ma, maximum_voltage_drop_mv| PowerNetRule {
+            net_id: 1,
+            current_ma,
+            maximum_voltage_drop_mv,
+            minimum_parallel_vias: 0,
+        };
+        for invalid_rule in [
+            rule(0.0, 50.0),
+            rule(-1.0, 50.0),
+            rule(f64::NAN, 50.0),
+            rule(f64::INFINITY, 50.0),
+            rule(100.0, 0.0),
+            rule(100.0, -1.0),
+            rule(100.0, f64::NAN),
+            rule(100.0, f64::INFINITY),
+        ] {
+            let mut invalid = board();
+            invalid.power_net_rules.push(invalid_rule);
+            assert!(matches!(
+                Router::new(&invalid),
+                Err(message) if message == "power-net rule for net 1 is invalid"
+            ));
+        }
+
+        let mut valid = board();
+        valid.power_net_rules.push(rule(100.0, 50.0));
+        assert!(Router::new(&valid).is_ok());
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(
