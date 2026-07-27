@@ -253,6 +253,8 @@ Placement overlap scoring widens rectangle intersection widths and heights
 before calculating their area.
 Final placement grid snapping widens rounding arithmetic and stays on a
 representable grid multiple at coordinate limits.
+BGA escape-via grid snapping uses exact integer rounding beyond floating-point
+precision and at signed coordinate limits.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
