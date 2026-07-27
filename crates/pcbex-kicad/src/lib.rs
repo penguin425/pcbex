@@ -1264,6 +1264,9 @@ fn edge_polygon_points(values: &[Sexp]) -> Result<Vec<Point>, String> {
     {
         return Err("Edge.Cuts polygon must contain distinct adjacent points".into());
     }
+    if polygon.iter().collect::<HashSet<_>>().len() != polygon.len() {
+        return Err("Edge.Cuts polygon vertices must be distinct".into());
+    }
     Ok(polygon)
 }
 
@@ -3461,6 +3464,26 @@ mod tests {
         assert_eq!(
             import(curve, rules()).unwrap_err(),
             "Edge.Cuts curve requires four xy points"
+        );
+    }
+
+    #[test]
+    fn rejects_repeated_nonclosing_edge_cuts_polygon_vertices() {
+        let pcb = r#"(kicad_pcb
+          (gr_poly
+            (pts
+              (xy 0 0)
+              (xy 20 0)
+              (xy 20 20)
+              (xy 10 10)
+              (xy 0 20)
+              (xy 10 10))
+            (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "Edge.Cuts polygon vertices must be distinct"
         );
     }
 
