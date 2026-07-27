@@ -239,6 +239,8 @@ Decoupling anchor-to-power-pin distance uses the same full-range-safe excess
 calculation before applying its board-side penalty.
 Board-edge constraints widen left, right, top, and bottom distances before
 subtracting the permitted edge offset.
+`keep_together` constraints widen both point-cloud spans and their sum before
+subtracting the permitted group span.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

@@ -482,6 +482,23 @@ fn board_edge_excess_nm(
     (distance - i128::from(allowed_nm)).max(0) as f64
 }
 
+fn point_cloud_span_excess_nm(points: &[Point], allowed_nm: Nm) -> f64 {
+    let Some(first) = points.first() else {
+        return 0.0;
+    };
+    let (mut min_x, mut max_x) = (first.x_nm, first.x_nm);
+    let (mut min_y, mut max_y) = (first.y_nm, first.y_nm);
+    for point in &points[1..] {
+        min_x = min_x.min(point.x_nm);
+        max_x = max_x.max(point.x_nm);
+        min_y = min_y.min(point.y_nm);
+        max_y = max_y.max(point.y_nm);
+    }
+    let x_span = i128::from(max_x) - i128::from(min_x);
+    let y_span = i128::from(max_y) - i128::from(min_y);
+    (x_span + y_span - i128::from(allowed_nm)).max(0) as f64
+}
+
 fn point_boundary_overflow_nm(point: Point, width_nm: Nm, height_nm: Nm) -> f64 {
     let x = i128::from(point.x_nm);
     let y = i128::from(point.y_nm);
@@ -628,11 +645,7 @@ fn constraint_penalty(
                 if points.is_empty() {
                     0.0
                 } else {
-                    let span = points.iter().map(|p| p.x_nm).max().unwrap()
-                        - points.iter().map(|p| p.x_nm).min().unwrap()
-                        + points.iter().map(|p| p.y_nm).max().unwrap()
-                        - points.iter().map(|p| p.y_nm).min().unwrap();
-                    (span - max_span_nm).max(0) as f64 / unit
+                    point_cloud_span_excess_nm(&points, *max_span_nm) / unit
                 }
             }
             PlacementConstraint::Region { subject, min, max } => {
@@ -965,6 +978,31 @@ mod tests {
             board_edge_excess_nm(Point { x_nm: 90, y_nm: 50 }, Edge::Right, 100, 100, 10),
             0.0
         );
+    }
+
+    #[test]
+    fn keep_together_span_handles_full_signed_coordinates() {
+        let points = [
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+        ];
+        let excess = point_cloud_span_excess_nm(&points, i64::MAX);
+        assert!(excess.is_finite());
+        assert!(excess > 0.0);
+        assert_eq!(
+            point_cloud_span_excess_nm(
+                &[Point { x_nm: 10, y_nm: 20 }, Point { x_nm: 15, y_nm: 30 }],
+                20
+            ),
+            0.0
+        );
+        assert_eq!(point_cloud_span_excess_nm(&[], 0), 0.0);
     }
 
     #[test]
