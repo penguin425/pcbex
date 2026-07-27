@@ -1718,6 +1718,14 @@ fn two_track_clearance_envelope(
     envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
+fn manufacturing_track_clearance_envelope(
+    first_width_nm: i64,
+    second_width_nm: i64,
+    clearance_nm: i64,
+) -> i64 {
+    two_track_clearance_envelope(first_width_nm, second_width_nm, clearance_nm)
+}
+
 fn track_via_clearance_envelope(
     track_width_nm: i64,
     via_diameter_nm: i64,
@@ -2222,7 +2230,11 @@ fn check_manufacturing_clearance(
                     segment.end,
                     candidate.start,
                     candidate.end,
-                    segment.width_nm + candidate.width_nm + 2 * clearance_nm,
+                    manufacturing_track_clearance_envelope(
+                        segment.width_nm,
+                        candidate.width_nm,
+                        clearance_nm,
+                    ),
                 )
             {
                 report.push(
@@ -4103,6 +4115,22 @@ mod tests {
         );
         assert_eq!(
             two_track_clearance_envelope(200_000, 300_000, 150_000),
+            800_000
+        );
+    }
+
+    #[test]
+    fn manufacturing_track_clearance_envelope_handles_extreme_dimensions() {
+        assert_eq!(
+            manufacturing_track_clearance_envelope(i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            manufacturing_track_clearance_envelope(i64::MIN, i64::MIN, i64::MIN),
+            i64::MIN
+        );
+        assert_eq!(
+            manufacturing_track_clearance_envelope(200_000, 300_000, 150_000),
             800_000
         );
     }
