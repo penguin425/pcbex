@@ -466,6 +466,22 @@ fn decoupling_distance_excess_nm(capacitor: Point, power: Point, allowed_nm: Nm)
     manhattan_excess_nm(capacitor, power, allowed_nm)
 }
 
+fn board_edge_excess_nm(
+    point: Point,
+    edge: Edge,
+    width_nm: Nm,
+    height_nm: Nm,
+    allowed_nm: Nm,
+) -> f64 {
+    let distance = match edge {
+        Edge::Left => i128::from(point.x_nm),
+        Edge::Right => i128::from(width_nm) - i128::from(point.x_nm),
+        Edge::Top => i128::from(point.y_nm),
+        Edge::Bottom => i128::from(height_nm) - i128::from(point.y_nm),
+    };
+    (distance - i128::from(allowed_nm)).max(0) as f64
+}
+
 fn point_boundary_overflow_nm(point: Point, width_nm: Nm, height_nm: Nm) -> f64 {
     let x = i128::from(point.x_nm);
     let y = i128::from(point.y_nm);
@@ -593,13 +609,13 @@ fn constraint_penalty(
                 max_distance_nm,
             } => {
                 let p = center(&components[index[subject.as_str()]]);
-                let distance = match edge {
-                    Edge::Left => p.x_nm,
-                    Edge::Right => problem.width_nm - p.x_nm,
-                    Edge::Top => p.y_nm,
-                    Edge::Bottom => problem.height_nm - p.y_nm,
-                };
-                (distance - max_distance_nm).max(0) as f64 / unit
+                board_edge_excess_nm(
+                    p,
+                    *edge,
+                    problem.width_nm,
+                    problem.height_nm,
+                    *max_distance_nm,
+                ) / unit
             }
             PlacementConstraint::KeepTogether {
                 components: names,
@@ -916,6 +932,37 @@ mod tests {
                 Point { x_nm: 15, y_nm: 30 },
                 20
             ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn board_edge_distance_handles_full_signed_coordinates() {
+        let right = board_edge_excess_nm(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: 0,
+            },
+            Edge::Right,
+            i64::MAX,
+            100,
+            0,
+        );
+        let bottom = board_edge_excess_nm(
+            Point {
+                x_nm: 0,
+                y_nm: i64::MIN,
+            },
+            Edge::Bottom,
+            100,
+            i64::MAX,
+            0,
+        );
+        assert!(right.is_finite());
+        assert!(bottom.is_finite());
+        assert!(right > i64::MAX as f64);
+        assert_eq!(
+            board_edge_excess_nm(Point { x_nm: 90, y_nm: 50 }, Edge::Right, 100, 100, 10),
             0.0
         );
     }
