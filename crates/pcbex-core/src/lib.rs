@@ -3250,8 +3250,8 @@ fn escape_primary_direction(
     strategy: EscapeDirection,
     net_id: u32,
 ) -> (Nm, Nm) {
-    let mut dx = (point.x_nm - centroid.x_nm).signum();
-    let dy = (point.y_nm - centroid.y_nm).signum();
+    let (mut dx, x_distance) = axis_direction_and_distance(point.x_nm, centroid.x_nm);
+    let (dy, y_distance) = axis_direction_and_distance(point.y_nm, centroid.y_nm);
     if dx == 0 && dy == 0 {
         dx = if net_id.is_multiple_of(2) { -1 } else { 1 };
     }
@@ -3260,13 +3260,18 @@ fn escape_primary_direction(
         EscapeDirection::Rows => (if dx == 0 { 1 } else { dx }, 0),
         EscapeDirection::Columns => (0, if dy == 0 { 1 } else { dy }),
         EscapeDirection::FourWay => {
-            if (point.x_nm - centroid.x_nm).abs() >= (point.y_nm - centroid.y_nm).abs() {
+            if x_distance >= y_distance {
                 (if dx == 0 { 1 } else { dx }, 0)
             } else {
                 (0, if dy == 0 { 1 } else { dy })
             }
         }
     }
+}
+
+fn axis_direction_and_distance(value: Nm, origin: Nm) -> (Nm, u128) {
+    let delta = i128::from(value) - i128::from(origin);
+    (delta.signum() as Nm, delta.unsigned_abs())
 }
 
 fn escape_direction_candidates(primary: (Nm, Nm)) -> Vec<(Nm, Nm)> {
@@ -7116,6 +7121,35 @@ mod tests {
                 },
             ]),
             Point { x_nm: 0, y_nm: 0 }
+        );
+    }
+
+    #[test]
+    fn escape_direction_handles_full_signed_coordinate_differences() {
+        let point = Point {
+            x_nm: i64::MIN,
+            y_nm: i64::MAX,
+        };
+        let centroid = Point {
+            x_nm: i64::MAX,
+            y_nm: i64::MIN,
+        };
+        assert_eq!(
+            escape_primary_direction(point, centroid, EscapeDirection::Radial, 1),
+            (-1, 1)
+        );
+        assert_eq!(
+            escape_primary_direction(point, centroid, EscapeDirection::FourWay, 1),
+            (-1, 0)
+        );
+        assert_eq!(
+            escape_primary_direction(
+                Point { x_nm: 10, y_nm: 20 },
+                Point { x_nm: 10, y_nm: 20 },
+                EscapeDirection::Radial,
+                2,
+            ),
+            (-1, 0)
         );
     }
 
