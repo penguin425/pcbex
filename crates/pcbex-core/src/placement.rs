@@ -762,16 +762,16 @@ fn polygons_intersect(left: &[Point], right: &[Point]) -> bool {
 fn rotate_point(point: Point, rotation_deg: u16) -> Point {
     match rotation_deg % 360 {
         90 => Point {
-            x_nm: -point.y_nm,
+            x_nm: point.y_nm.saturating_neg(),
             y_nm: point.x_nm,
         },
         180 => Point {
-            x_nm: -point.x_nm,
-            y_nm: -point.y_nm,
+            x_nm: point.x_nm.saturating_neg(),
+            y_nm: point.y_nm.saturating_neg(),
         },
         270 => Point {
             x_nm: point.y_nm,
-            y_nm: -point.x_nm,
+            y_nm: point.x_nm.saturating_neg(),
         },
         _ => point,
     }
@@ -782,13 +782,13 @@ fn center(c: &Component) -> Point {
 fn pin_position(c: &Component, offset: Point) -> Point {
     let mut offset = offset;
     if c.side == BoardSide::Back {
-        offset.x_nm = -offset.x_nm;
+        offset.x_nm = offset.x_nm.saturating_neg();
     }
     let offset = rotate_point(offset, c.rotation_deg);
     let p = center(c);
     Point {
-        x_nm: p.x_nm + offset.x_nm,
-        y_nm: p.y_nm + offset.y_nm,
+        x_nm: p.x_nm.saturating_add(offset.x_nm),
+        y_nm: p.y_nm.saturating_add(offset.y_nm),
     }
 }
 fn component_name(reference: &str) -> &str {
@@ -1072,6 +1072,39 @@ mod tests {
             Point {
                 x_nm: 110,
                 y_nm: 220,
+            }
+        );
+    }
+
+    #[test]
+    fn pin_position_saturates_rotation_mirroring_and_offsets() {
+        let mut part = component(
+            "U1",
+            Some(Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }),
+        );
+        part.side = BoardSide::Back;
+        part.rotation_deg = 180;
+        assert_eq!(
+            pin_position(
+                &part,
+                Point {
+                    x_nm: i64::MIN,
+                    y_nm: i64::MIN,
+                },
+            ),
+            Point {
+                x_nm: 0,
+                y_nm: i64::MAX,
+            }
+        );
+        assert_eq!(
+            pin_position(&part, Point { x_nm: 10, y_nm: 20 }),
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX - 20,
             }
         );
     }
