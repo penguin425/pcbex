@@ -12,6 +12,7 @@ const NM_PER_MM: f64 = 1_000_000.0;
 const ARC_CHORD_TOLERANCE_NM: f64 = 10_000.0;
 const MAX_EDGE_CIRCLE_SEGMENTS: usize = 16_384;
 const MAX_EDGE_CURVE_SEGMENTS: usize = 16_384;
+const MAX_EDGE_POLYGON_POINTS: usize = 16_384;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Sexp {
@@ -1222,6 +1223,9 @@ fn edge_polygon_points(values: &[Sexp]) -> Result<Vec<Point>, String> {
     let Some(points) = child_values(values, "pts") else {
         return Err("Edge.Cuts polygon requires a pts list".into());
     };
+    if points.len().saturating_sub(1) > MAX_EDGE_POLYGON_POINTS {
+        return Err("Edge.Cuts polygon contains too many points".into());
+    }
     let mut polygon = points
         .iter()
         .skip(1)
@@ -3274,6 +3278,24 @@ mod tests {
         assert_eq!(imported.board.cutouts[0].len(), 4);
         assert!(imported.board.outline.contains(&point_mm(40.0, 10.0)));
         assert!(imported.board.cutouts[0].contains(&point_mm(18.0, 15.0)));
+    }
+
+    #[test]
+    fn rejects_edge_cuts_polygon_above_point_limit() {
+        let points = (0..=MAX_EDGE_POLYGON_POINTS)
+            .map(|index| format!("(xy {index} 0)"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let pcb = format!(
+            r#"(kicad_pcb
+              (gr_poly (pts {points}) (layer "Edge.Cuts"))
+            )"#
+        );
+
+        assert_eq!(
+            import(&pcb, rules()).unwrap_err(),
+            "Edge.Cuts polygon contains too many points"
+        );
     }
 
     #[test]
