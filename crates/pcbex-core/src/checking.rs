@@ -1697,6 +1697,16 @@ fn track_round_obstacle_clearance_envelope(
     envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
+fn two_track_clearance_envelope(
+    first_width_nm: i64,
+    second_width_nm: i64,
+    clearance_nm: i64,
+) -> i64 {
+    let envelope =
+        i128::from(first_width_nm) + i128::from(second_width_nm) + 2 * i128::from(clearance_nm);
+    envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
     let pad_width_nm = if pad.source_width_nm > 0 {
         pad.source_width_nm
@@ -2686,7 +2696,7 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
             if sa.layer != sb.layer {
                 continue;
             }
-            let required_twice = sa.width_nm + sb.width_nm + 2 * clearance;
+            let required_twice = two_track_clearance_envelope(sa.width_nm, sb.width_nm, clearance);
             if segments_closer_than(sa.start, sa.end, sb.start, sb.end, required_twice) {
                 report.push(
                     "clearance",
@@ -4019,6 +4029,22 @@ mod tests {
         assert_eq!(
             track_round_obstacle_clearance_envelope(200_000, 400_000, 150_000),
             900_000
+        );
+    }
+
+    #[test]
+    fn two_track_clearance_envelope_handles_extreme_dimensions() {
+        assert_eq!(
+            two_track_clearance_envelope(i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            two_track_clearance_envelope(i64::MIN, i64::MIN, i64::MIN),
+            i64::MIN
+        );
+        assert_eq!(
+            two_track_clearance_envelope(200_000, 300_000, 150_000),
+            800_000
         );
     }
 
