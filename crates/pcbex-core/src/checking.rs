@@ -1707,6 +1707,14 @@ fn two_track_clearance_envelope(
     envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
+fn track_via_clearance_envelope(
+    track_width_nm: i64,
+    via_diameter_nm: i64,
+    clearance_nm: i64,
+) -> i64 {
+    track_round_obstacle_clearance_envelope(track_width_nm, via_diameter_nm, clearance_nm)
+}
+
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
     let pad_width_nm = if pad.source_width_nm > 0 {
         pad.source_width_nm
@@ -2707,7 +2715,8 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
             }
         }
         for via in &b.vias {
-            let required_twice = sa.width_nm + via.diameter_nm + 2 * clearance;
+            let required_twice =
+                track_via_clearance_envelope(sa.width_nm, via.diameter_nm, clearance);
             if via.spans_layer(sa.layer)
                 && point_segment_closer_than(via.position, sa.start, sa.end, required_twice)
             {
@@ -2722,7 +2731,8 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
     }
     for via in &a.vias {
         for sb in &b.segments {
-            let required_twice = sb.width_nm + via.diameter_nm + 2 * clearance;
+            let required_twice =
+                track_via_clearance_envelope(sb.width_nm, via.diameter_nm, clearance);
             if via.spans_layer(sb.layer)
                 && point_segment_closer_than(via.position, sb.start, sb.end, required_twice)
             {
@@ -4045,6 +4055,22 @@ mod tests {
         assert_eq!(
             two_track_clearance_envelope(200_000, 300_000, 150_000),
             800_000
+        );
+    }
+
+    #[test]
+    fn track_via_clearance_envelope_handles_extreme_dimensions() {
+        assert_eq!(
+            track_via_clearance_envelope(i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            track_via_clearance_envelope(i64::MIN, i64::MIN, i64::MIN),
+            i64::MIN
+        );
+        assert_eq!(
+            track_via_clearance_envelope(200_000, 600_000, 150_000),
+            1_100_000
         );
     }
 
