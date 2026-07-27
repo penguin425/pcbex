@@ -297,9 +297,12 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                     "net-class assignment for {net_name} references unknown class {class}"
                 ));
             }
-            if let Some(net) = nets.iter_mut().find(|net| net.name == *net_name) {
-                net.class = Some(class.to_string());
-            }
+            let Some(net) = nets.iter_mut().find(|net| net.name == *net_name) else {
+                return Err(format!(
+                    "net-class assignment references unknown net {net_name}"
+                ));
+            };
+            net.class = Some(class.to_string());
         }
     }
     board.differential_pairs = infer_differential_pairs(&nets, &net_classes);
@@ -5081,6 +5084,38 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("unknown class Missing"));
+    }
+
+    #[test]
+    fn rejects_unknown_project_assignment_nets_atomically() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)
+              (add_net "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+              (net 1 "SIG")))
+        )"#;
+        let mut imported = import(pcb, rules()).unwrap();
+        let project = r#"{
+          "net_settings": {
+            "classes": [{"name": "New", "track_width": 0.3}],
+            "netclass_assignments": {"MISSING": "New"}
+          }
+        }"#;
+
+        assert_eq!(
+            apply_project_net_settings(&mut imported.board, project).unwrap_err(),
+            "net-class assignment references unknown net MISSING"
+        );
+        assert!(!imported.board.net_classes.contains_key("New"));
+        assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
     }
 
     #[test]
