@@ -227,6 +227,8 @@ simulated annealing. Its score covers weighted HPWL, overlap area, board
 boundary overflow, coarse routing congestion, and declarative constraints.
 Graph-clustered initialization uses saturating spacing and cursor arithmetic
 for extreme board grids and component dimensions.
+Annealing moves also multiply grid steps and update coordinates with saturating
+arithmetic before clamping each component to the board.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
