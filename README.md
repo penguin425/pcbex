@@ -235,6 +235,8 @@ Board-boundary scoring likewise widens negative and positive overflow distances
 before aggregating courtyard penalties.
 `near` placement constraints widen Manhattan distance and allowed-distance
 subtraction before calculating their excess penalty.
+Decoupling anchor-to-power-pin distance uses the same full-range-safe excess
+calculation before applying its board-side penalty.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

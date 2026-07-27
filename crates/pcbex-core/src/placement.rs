@@ -462,6 +462,10 @@ fn manhattan_excess_nm(a: Point, b: Point, allowed_nm: Nm) -> f64 {
     (dx + dy - i128::from(allowed_nm)).max(0) as f64
 }
 
+fn decoupling_distance_excess_nm(capacitor: Point, power: Point, allowed_nm: Nm) -> f64 {
+    manhattan_excess_nm(capacitor, power, allowed_nm)
+}
+
 fn point_boundary_overflow_nm(point: Point, width_nm: Nm, height_nm: Nm) -> f64 {
     let x = i128::from(point.x_nm);
     let y = i128::from(point.y_nm);
@@ -572,11 +576,8 @@ fn constraint_penalty(
             } => {
                 let capacitor = named_position(capacitor_anchor, components, index);
                 let power = named_position(power_pin, components, index);
-                let distance_penalty = ((capacitor.x_nm - power.x_nm).abs()
-                    + (capacitor.y_nm - power.y_nm).abs()
-                    - max_distance_nm)
-                    .max(0) as f64
-                    / unit;
+                let distance_penalty =
+                    decoupling_distance_excess_nm(capacitor, power, *max_distance_nm) / unit;
                 let capacitor_component = &components[index[component_name(capacitor_anchor)]];
                 let power_component = &components[index[component_name(power_pin)]];
                 distance_penalty
@@ -886,6 +887,31 @@ mod tests {
         assert!(excess > 0.0);
         assert_eq!(
             manhattan_excess_nm(
+                Point { x_nm: 10, y_nm: 20 },
+                Point { x_nm: 15, y_nm: 30 },
+                20
+            ),
+            0.0
+        );
+    }
+
+    #[test]
+    fn decoupling_distance_handles_full_signed_coordinates() {
+        let excess = decoupling_distance_excess_nm(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            i64::MAX,
+        );
+        assert!(excess.is_finite());
+        assert!(excess > 0.0);
+        assert_eq!(
+            decoupling_distance_excess_nm(
                 Point { x_nm: 10, y_nm: 20 },
                 Point { x_nm: 15, y_nm: 30 },
                 20
