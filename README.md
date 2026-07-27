@@ -185,6 +185,8 @@ Cubic curve primitives are adaptively subdivided to the same deviation bound.
 They must contain exactly four finite `xy` points before subdivision.
 Polygon primitives preserve their exact vertices and can likewise define an
 outer outline or cutout, with at most 16,384 input points per primitive.
+An imported board may contain at most 65,536 generated `Edge.Cuts` segments in
+total across all supported primitives.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated
