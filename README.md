@@ -182,6 +182,7 @@ polygonal outline; arcs use a maximum chord deviation of 0.01 mm.
 Circle primitives use the same chord-deviation bound and can define either the
 outer board outline or an inner cutout.
 Cubic curve primitives are adaptively subdivided to the same deviation bound.
+They must contain exactly four finite `xy` points before subdivision.
 Polygon primitives preserve their exact vertices and can likewise define an
 outer outline or cutout.
 Additional closed contours inside the largest outline are imported as board
