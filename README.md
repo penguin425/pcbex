@@ -491,6 +491,8 @@ and spacing limits may be zero but not negative.
 The maximum via aspect ratio must be positive, and the minimum trace angle must
 be at most 180 degrees; invalid values use `dfm_rule_aspect_ratio` and
 `dfm_rule_trace_angle`, respectively.
+Aspect-ratio comparisons use overflow-safe widened arithmetic for both routed
+vias and plated component holes.
 `pcbex dfm board.json [--output report.json]` emits a machine-readable report
 and exits unsuccessfully when manufacturing violations are present.
 Optional rules also detect drill-to-drill spacing, prohibited Via-in-pad, and

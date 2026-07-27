@@ -1394,7 +1394,11 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
                     vec![route.net_id],
                 );
             }
-            if rules.board_thickness_nm > via.drill_nm * i64::from(rules.maximum_via_aspect_ratio) {
+            if exceeds_aspect_ratio(
+                rules.board_thickness_nm,
+                via.drill_nm,
+                rules.maximum_via_aspect_ratio,
+            ) {
                 report.push(
                     "dfm_aspect_ratio",
                     "via exceeds the manufacturing aspect-ratio limit".into(),
@@ -1510,7 +1514,11 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
                     pad.net_id.into_iter().collect(),
                 );
             }
-            if rules.board_thickness_nm > drill_nm * i64::from(rules.maximum_via_aspect_ratio) {
+            if exceeds_aspect_ratio(
+                rules.board_thickness_nm,
+                drill_nm,
+                rules.maximum_via_aspect_ratio,
+            ) {
                 report.push(
                     "dfm_component_aspect_ratio",
                     format!(
@@ -1563,6 +1571,10 @@ struct DrilledHole {
     end: Point,
     diameter_nm: i64,
     net_id: Option<u32>,
+}
+
+fn exceeds_aspect_ratio(board_thickness_nm: i64, drill_nm: i64, maximum_ratio: u16) -> bool {
+    i128::from(board_thickness_nm) > i128::from(drill_nm) * i128::from(maximum_ratio)
 }
 
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
@@ -3802,6 +3814,14 @@ mod tests {
                 "dfm_rule_aspect_ratio" | "dfm_rule_trace_angle"
             )
         }));
+    }
+
+    #[test]
+    fn aspect_ratio_comparison_handles_extreme_dimensions() {
+        assert!(!exceeds_aspect_ratio(i64::MAX, i64::MAX, u16::MAX));
+        assert!(exceeds_aspect_ratio(i64::MAX, 1, 1));
+        assert!(!exceeds_aspect_ratio(1_600_000, 200_000, 8));
+        assert!(exceeds_aspect_ratio(1_600_001, 200_000, 8));
     }
 
     #[test]
