@@ -304,6 +304,8 @@ Non-adjacent edges within every Edge.Cuts contour are also checked exactly, so
 asymmetric self-intersections cannot pass merely because their area is nonzero.
 Multiple Edge.Cuts cutouts must be disjoint and unnested because the board model
 represents a flat set of holes rather than alternating material islands.
+Edge.Cuts line primitives must declare both endpoints; malformed lines are
+rejected instead of being silently omitted from the imported board outline.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

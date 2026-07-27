@@ -1058,10 +1058,11 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
         }
         match atom(xs.first()) {
             Some("gr_line") => {
-                if let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
-                {
-                    lines.push((start, end));
-                }
+                let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
+                else {
+                    return Err("Edge.Cuts line requires start and end points".into());
+                };
+                lines.push((start, end));
             }
             Some("gr_arc") => {
                 let (Some(start), Some(mid), Some(end)) = (
@@ -3058,6 +3059,25 @@ mod tests {
           (gr_arc (start 0 0) (mid 10 0) (end 20 0) (layer "Edge.Cuts"))
         )"#;
         assert!(import(pcb, rules()).unwrap_err().contains("collinear"));
+    }
+
+    #[test]
+    fn rejects_edge_cuts_lines_missing_an_endpoint() {
+        let missing_start = r#"(kicad_pcb
+          (gr_line (end 20 0) (layer "Edge.Cuts"))
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+        )"#;
+        let missing_end = r#"(kicad_pcb
+          (gr_line (start 0 0) (layer "Edge.Cuts"))
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+        )"#;
+
+        for pcb in [missing_start, missing_end] {
+            assert_eq!(
+                import(pcb, rules()).unwrap_err(),
+                "Edge.Cuts line requires start and end points"
+            );
+        }
     }
 
     #[test]
