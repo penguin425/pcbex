@@ -4958,6 +4958,34 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_ineligible_escape_group_nets() {
+        let escape_group = || EscapeGroup {
+            name: "U1".into(),
+            net_ids: vec![1],
+            fanout_distance_nm: 1_000_000,
+            target_layer: Layer::Back,
+            direction: EscapeDirection::FourWay,
+            via_grid_nm: None,
+            max_rings: 3,
+        };
+        let mut no_terminals = board();
+        no_terminals.nets[0].terminals.clear();
+        no_terminals.escape_groups.push(escape_group());
+        assert!(matches!(
+            Router::new(&no_terminals),
+            Err(message) if message == "escape group U1 is invalid"
+        ));
+
+        let mut back_first = board();
+        back_first.nets[0].terminals[0].layers = vec![Layer::Back];
+        back_first.escape_groups.push(escape_group());
+        assert!(matches!(
+            Router::new(&back_first),
+            Err(message) if message == "escape group U1 is invalid"
+        ));
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(
