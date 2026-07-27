@@ -1225,7 +1225,7 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
 }
 
 fn edge_polygon_points(values: &[Sexp]) -> Result<Vec<Point>, String> {
-    let Some(points) = child_values(values, "pts") else {
+    let Some(points) = unique_edge_child_values(values, "pts")? else {
         return Err("Edge.Cuts polygon requires a pts list".into());
     };
     if points.len().saturating_sub(1) > MAX_EDGE_POLYGON_POINTS {
@@ -1593,7 +1593,7 @@ fn sample_circle(center: Point, end: Point) -> Result<Vec<Point>, String> {
 }
 
 fn sample_curve(values: &[Sexp]) -> Result<Vec<Point>, String> {
-    let Some(values) = child_values(values, "pts") else {
+    let Some(values) = unique_edge_child_values(values, "pts")? else {
         return Err("Edge.Cuts curve requires four points".into());
     };
     if values.len() != 5 {
@@ -2646,6 +2646,20 @@ fn child_values<'a>(list: &'a [Sexp], name: &str) -> Option<&'a [Sexp]> {
         (atom(xs.first()) == Some(name)).then_some(xs)
     })
 }
+fn unique_edge_child_values<'a>(
+    list: &'a [Sexp],
+    name: &str,
+) -> Result<Option<&'a [Sexp]>, String> {
+    let mut matches = list.iter().filter_map(|value| {
+        let values = value.as_list()?;
+        (atom(values.first()) == Some(name)).then_some(values)
+    });
+    let first = matches.next();
+    if matches.next().is_some() {
+        return Err("Edge.Cuts point lists must not be repeated".into());
+    }
+    Ok(first)
+}
 fn child_atom<'a>(list: &'a [Sexp], name: &str) -> Option<&'a str> {
     atom(child_values(list, name)?.get(1))
 }
@@ -3424,6 +3438,29 @@ mod tests {
             import(curve, rules()).unwrap_err(),
             "Edge.Cuts curve requires four xy points"
         );
+    }
+
+    #[test]
+    fn rejects_repeated_edge_cuts_point_lists() {
+        let polygon = r#"(kicad_pcb
+          (gr_poly
+            (pts (xy 0 0) (xy 20 0) (xy 20 20) (xy 0 20))
+            (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))
+            (layer "Edge.Cuts"))
+        )"#;
+        let curve = r#"(kicad_pcb
+          (gr_curve
+            (pts (xy 0 0) (xy 5 5) (xy 10 5) (xy 20 0))
+            (pts (xy 0 0) (xy 4 4) (xy 8 4) (xy 16 0))
+            (layer "Edge.Cuts"))
+        )"#;
+
+        for pcb in [polygon, curve] {
+            assert_eq!(
+                import(pcb, rules()).unwrap_err(),
+                "Edge.Cuts point lists must not be repeated"
+            );
+        }
     }
 
     #[test]
