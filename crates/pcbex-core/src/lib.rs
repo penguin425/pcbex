@@ -4291,12 +4291,16 @@ pub fn route_length_nm(route: &Route) -> Nm {
         .segments
         .iter()
         .map(|segment| {
-            let dx = (segment.end.x_nm - segment.start.x_nm) as f64;
-            let dy = (segment.end.y_nm - segment.start.y_nm) as f64;
+            let dx = (i128::from(segment.end.x_nm) - i128::from(segment.start.x_nm)) as f64;
+            let dy = (i128::from(segment.end.y_nm) - i128::from(segment.start.y_nm)) as f64;
             dx.hypot(dy).round() as Nm
         })
-        .sum();
-    segment_length + route.arcs.iter().map(arc_length_nm).sum::<Nm>()
+        .fold(0, Nm::saturating_add);
+    route
+        .arcs
+        .iter()
+        .map(arc_length_nm)
+        .fold(segment_length, Nm::saturating_add)
 }
 
 pub fn render_svg(board: &Board) -> String {
@@ -7482,6 +7486,32 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "clearance")
         );
+    }
+
+    #[test]
+    fn route_length_handles_extreme_coordinates_and_saturates() {
+        let extreme = Segment {
+            start: Point {
+                x_nm: i64::MIN,
+                y_nm: 0,
+            },
+            end: Point {
+                x_nm: i64::MAX,
+                y_nm: 0,
+            },
+            width_nm: 250_000,
+            layer: Layer::Front,
+        };
+        let route = Route {
+            net_id: 1,
+            segments: vec![extreme.clone(), extreme],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        };
+
+        assert_eq!(route_length_nm(&route), i64::MAX);
     }
 
     #[test]
