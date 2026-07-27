@@ -1681,6 +1681,11 @@ fn copper_edge_envelope(copper_width_nm: i64, minimum_edge_distance_nm: i64) -> 
     envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
+fn track_clearance_envelope(track_width_nm: i64, clearance_nm: i64) -> i64 {
+    let envelope = i128::from(track_width_nm) + 2 * i128::from(clearance_nm);
+    envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
     let pad_width_nm = if pad.source_width_nm > 0 {
         pad.source_width_nm
@@ -2499,14 +2504,10 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         );
     }
     let outline = board.effective_outline();
+    let track_clearance_twice = track_clearance_envelope(segment.width_nm, rules.clearance_nm);
     if !point_in_polygon(segment.start, &outline)
         || !point_in_polygon(segment.end, &outline)
-        || segment_polygon_closer_than(
-            segment.start,
-            segment.end,
-            &outline,
-            segment.width_nm + 2 * rules.clearance_nm,
-        )
+        || segment_polygon_closer_than(segment.start, segment.end, &outline, track_clearance_twice)
         || board.cutouts.iter().any(|cutout| {
             point_in_polygon(segment.start, cutout)
                 || point_in_polygon(segment.end, cutout)
@@ -2514,7 +2515,7 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
                     segment.start,
                     segment.end,
                     cutout,
-                    segment.width_nm + 2 * rules.clearance_nm,
+                    track_clearance_twice,
                 )
         })
     {
@@ -2531,7 +2532,7 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         if !obstacle.layers.contains(&segment.layer) {
             continue;
         }
-        let required_twice = segment.width_nm + 2 * rules.clearance_nm;
+        let required_twice = track_clearance_twice;
         if segment_rect_closer_than(
             segment.start,
             segment.end,
@@ -2585,7 +2586,7 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         if obstacle.net_id == Some(net_id) || !obstacle.layers.contains(&segment.layer) {
             continue;
         }
-        let required_twice = segment.width_nm + 2 * rules.clearance_nm;
+        let required_twice = track_clearance_twice;
         if point_in_polygon(segment.start, &obstacle.polygon)
             || point_in_polygon(segment.end, &obstacle.polygon)
             || segment_polygon_closer_than(
@@ -2636,7 +2637,7 @@ fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut Che
         {
             continue;
         }
-        let required_twice = segment.width_nm + 2 * rules.clearance_nm;
+        let required_twice = track_clearance_twice;
         if point_in_polygon(segment.start, &keepout.polygon)
             || point_in_polygon(segment.end, &keepout.polygon)
             || segment_polygon_closer_than(
@@ -3977,6 +3978,13 @@ mod tests {
         assert_eq!(copper_edge_envelope(i64::MAX, i64::MAX), i64::MAX);
         assert_eq!(copper_edge_envelope(i64::MIN, i64::MIN), i64::MIN);
         assert_eq!(copper_edge_envelope(300_000, 250_000), 800_000);
+    }
+
+    #[test]
+    fn track_clearance_envelope_handles_extreme_dimensions() {
+        assert_eq!(track_clearance_envelope(i64::MAX, i64::MAX), i64::MAX);
+        assert_eq!(track_clearance_envelope(i64::MIN, i64::MIN), i64::MIN);
+        assert_eq!(track_clearance_envelope(200_000, 150_000), 500_000);
     }
 
     #[test]

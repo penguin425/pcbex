@@ -520,6 +520,8 @@ Differential coupling-distance thresholds combine both widths, gap, and
 tolerance with widened saturating arithmetic.
 Rule-area segment midpoints use widened interpolation, including segments that
 span the complete signed coordinate range.
+Track-to-edge, rectangular, polygon, and keepout clearance envelopes combine
+track width and both clearance sides with widened saturating arithmetic.
 Return-path plane sampling uses overflow-safe ceiling division and widened
 endpoint interpolation, including segments spanning the full coordinate range.
 Return-path via proximity checks widen coordinate differences before subtraction
