@@ -231,6 +231,8 @@ Annealing moves also multiply grid steps and update coordinates with saturating
 arithmetic before clamping each component to the board.
 Placement HPWL scoring widens both coordinate differences and their Manhattan
 sum, including connections spanning the full signed coordinate range.
+Board-boundary scoring likewise widens negative and positive overflow distances
+before aggregating courtyard penalties.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
