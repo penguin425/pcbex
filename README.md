@@ -497,6 +497,8 @@ Annular-ring comparisons likewise use widened arithmetic, including exact
 boundary handling for routed vias and circular or slotted plated holes.
 Drill-to-drill spacing thresholds use widened, saturating arithmetic so extreme
 input dimensions cannot wrap before geometric comparison.
+Copper-to-edge envelopes use the same overflow-safe approach for tracks, vias,
+and component holes.
 `pcbex dfm board.json [--output report.json]` emits a machine-readable report
 and exits unsuccessfully when manufacturing violations are present.
 Optional rules also detect drill-to-drill spacing, prohibited Via-in-pad, and

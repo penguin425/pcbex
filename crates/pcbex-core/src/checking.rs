@@ -1368,7 +1368,8 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
                     vec![route.net_id],
                 );
             }
-            let edge_envelope = segment.width_nm + 2 * rules.minimum_copper_to_edge_nm;
+            let edge_envelope =
+                copper_edge_envelope(segment.width_nm, rules.minimum_copper_to_edge_nm);
             if !board.point_inside_board(segment.start, edge_envelope)
                 || !board.point_inside_board(segment.end, edge_envelope)
             {
@@ -1411,7 +1412,7 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
             }
             if !board.point_inside_board(
                 via.position,
-                via.diameter_nm + 2 * rules.minimum_copper_to_edge_nm,
+                copper_edge_envelope(via.diameter_nm, rules.minimum_copper_to_edge_nm),
             ) {
                 report.push(
                     "dfm_copper_to_edge",
@@ -1540,7 +1541,8 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
                 );
             }
             let hole = drilled_pad_hole(pad, drill_width_nm, drill_height_nm);
-            let edge_envelope = hole.diameter_nm + 2 * rules.minimum_copper_to_edge_nm;
+            let edge_envelope =
+                copper_edge_envelope(hole.diameter_nm, rules.minimum_copper_to_edge_nm);
             if !board.point_inside_board(hole.start, edge_envelope)
                 || !board.point_inside_board(hole.end, edge_envelope)
             {
@@ -1604,6 +1606,11 @@ fn required_drill_spacing_twice(
         + i128::from(second_diameter_nm)
         + 2 * i128::from(minimum_spacing_nm);
     required.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+fn copper_edge_envelope(copper_width_nm: i64, minimum_edge_distance_nm: i64) -> i64 {
+    let envelope = i128::from(copper_width_nm) + 2 * i128::from(minimum_edge_distance_nm);
+    envelope.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
@@ -3875,6 +3882,13 @@ mod tests {
             required_drill_spacing_twice(300_000, 400_000, 150_000),
             1_000_000
         );
+    }
+
+    #[test]
+    fn copper_edge_envelope_handles_extreme_dimensions() {
+        assert_eq!(copper_edge_envelope(i64::MAX, i64::MAX), i64::MAX);
+        assert_eq!(copper_edge_envelope(i64::MIN, i64::MIN), i64::MIN);
+        assert_eq!(copper_edge_envelope(300_000, 250_000), 800_000);
     }
 
     #[test]
