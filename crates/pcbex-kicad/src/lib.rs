@@ -464,6 +464,9 @@ fn import_net_classes(
             let Some(name) = atom(values.get(1)) else {
                 continue;
             };
+            if name.trim().is_empty() {
+                return Err("KiCad board net class name must not be blank".into());
+            }
             if classes.contains_key(name) {
                 return Err(format!("KiCad board contains duplicate net class {name}"));
             }
@@ -4776,6 +4779,26 @@ mod tests {
             import(pcb, rules()).unwrap_err(),
             "KiCad board contains duplicate net class Signal"
         );
+    }
+
+    #[test]
+    fn rejects_blank_legacy_net_class_names() {
+        for name in ["", " \t"] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup
+                    (net_class "{name}" ""
+                      (clearance 0.2)
+                      (trace_width 0.25)))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad board net class name must not be blank"
+            );
+        }
     }
 
     #[test]
