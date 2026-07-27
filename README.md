@@ -183,6 +183,8 @@ All three arc points must be distinct before circle fitting, so repeated
 endpoints or midpoints are rejected as malformed rather than merely collinear.
 Arc sampling is capped at 16,384 segments per primitive before allocation,
 matching the resource bounds applied to circles and cubic curves.
+Arc collinearity is classified with exact integer geometry; extreme noncollinear
+inputs that lose precision during circle fitting report a separate error.
 Circle primitives use the same chord-deviation bound and can define either the
 outer board outline or an inner cutout.
 Cubic curve primitives are adaptively subdivided to the same deviation bound.

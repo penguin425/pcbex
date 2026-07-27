@@ -1502,6 +1502,9 @@ fn point_between(point: Point, start: Point, end: Point) -> bool {
 }
 
 fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String> {
+    if triangle_orientation(start, mid, end).is_zero() {
+        return Err("Edge.Cuts arc points must not be collinear".into());
+    }
     let (x1, y1) = (0.0, 0.0);
     let (x2, y2) = (
         (i128::from(mid.x_nm) - i128::from(start.x_nm)) as f64,
@@ -1512,8 +1515,8 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
         (i128::from(end.y_nm) - i128::from(start.y_nm)) as f64,
     );
     let determinant = 2.0 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
-    if determinant.abs() < 1.0 {
-        return Err("Edge.Cuts arc points must not be collinear".into());
+    if !determinant.is_finite() || determinant == 0.0 {
+        return Err("Edge.Cuts arc geometry exceeds numerical precision".into());
     }
     let q1 = x1 * x1 + y1 * y1;
     let q2 = x2 * x2 + y2 * y2;
@@ -3742,6 +3745,22 @@ mod tests {
           (gr_arc (start 0 0) (mid 10 0) (end 20 0) (layer "Edge.Cuts"))
         )"#;
         assert!(import(pcb, rules()).unwrap_err().contains("collinear"));
+    }
+
+    #[test]
+    fn distinguishes_extreme_near_collinear_edge_cuts_arc() {
+        let start = Point {
+            x_nm: i64::MIN,
+            y_nm: i64::MIN,
+        };
+        let mid = Point { x_nm: 0, y_nm: -1 };
+        let end = Point { x_nm: -1, y_nm: -2 };
+
+        assert!(triangle_orientation(start, mid, end).is_negative());
+        assert_eq!(
+            sample_arc(start, mid, end).unwrap_err(),
+            "Edge.Cuts arc geometry exceeds numerical precision"
+        );
     }
 
     #[test]
