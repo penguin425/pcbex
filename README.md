@@ -278,6 +278,8 @@ KiCad via obstacle envelopes saturate half-diameter expansion at signed
 coordinate limits.
 KiCad oval-pad capsule endpoints saturate rotated center offsets at signed
 coordinate limits.
+KiCad generated pad-polygon vertices saturate rotated center offsets at signed
+coordinate limits.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
