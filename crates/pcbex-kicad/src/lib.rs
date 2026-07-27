@@ -1058,7 +1058,7 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
     let mut unique_edges = HashSet::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
-        if child_atom(xs, "layer") != Some("Edge.Cuts") {
+        if !is_edge_cuts_primitive(xs)? {
             continue;
         }
         match atom(xs.first()) {
@@ -2660,6 +2660,23 @@ fn unique_edge_child_values<'a>(
     }
     Ok(first)
 }
+fn is_edge_cuts_primitive(list: &[Sexp]) -> Result<bool, String> {
+    let mut layer_count = 0;
+    let mut has_edge_cuts = false;
+    for value in list {
+        let Some(values) = value.as_list() else {
+            continue;
+        };
+        if atom(values.first()) == Some("layer") {
+            layer_count += 1;
+            has_edge_cuts |= atom(values.get(1)) == Some("Edge.Cuts");
+        }
+    }
+    if has_edge_cuts && layer_count > 1 {
+        return Err("Edge.Cuts layer fields must not be repeated".into());
+    }
+    Ok(has_edge_cuts)
+}
 fn child_atom<'a>(list: &'a [Sexp], name: &str) -> Option<&'a str> {
     atom(child_values(list, name)?.get(1))
 }
@@ -3770,6 +3787,26 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "Edge.Cuts point fields must not be repeated"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_repeated_edge_cuts_layer_fields() {
+        for primitive in [
+            r#"(gr_line (start 0 0) (end 20 0) (layer "Edge.Cuts") (layer "F.SilkS"))"#,
+            r#"(gr_line (start 0 0) (end 20 0) (layer "F.SilkS") (layer "Edge.Cuts"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {primitive}
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "Edge.Cuts layer fields must not be repeated"
             );
         }
     }
