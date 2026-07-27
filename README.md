@@ -290,6 +290,8 @@ KiCad Edge.Cuts arc fitting uses start-relative coordinates so small arcs remain
 stable near signed coordinate limits.
 KiCad Edge.Cuts arcs retain an intermediate sample even when their radius is
 smaller than the chord tolerance.
+KiCad three-point Edge.Cuts arc sampling preserves the declared midpoint for
+asymmetric sweeps.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
