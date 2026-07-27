@@ -508,11 +508,18 @@ fn import_net_classes(
                 let Some(assignment) = child.as_list() else {
                     continue;
                 };
-                if atom(assignment.first()) == Some("add_net")
-                    && let Some(net_name) = atom(assignment.get(1))
-                    && let Some(net_id) = net_ids_by_name.get(net_name)
-                    && let Some(net) = nets.get_mut(net_id)
-                {
+                if atom(assignment.first()) != Some("add_net") {
+                    continue;
+                }
+                let Some(net_name) = atom(assignment.get(1)) else {
+                    continue;
+                };
+                let Some(net_id) = net_ids_by_name.get(net_name) else {
+                    return Err(format!(
+                        "net class {name} references unknown net {net_name}"
+                    ));
+                };
+                if let Some(net) = nets.get_mut(net_id) {
                     net.class = Some(name.to_string());
                 }
             }
@@ -4819,6 +4826,25 @@ mod tests {
                 "KiCad board net class is missing its name"
             );
         }
+    }
+
+    #[test]
+    fn rejects_unknown_legacy_net_class_assignments() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (add_net "SIG")
+              (add_net "MISSING")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "net class Signal references unknown net MISSING"
+        );
     }
 
     #[test]
