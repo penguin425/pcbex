@@ -1935,8 +1935,8 @@ fn add_pad_obstacle(
                 .map(|(x, y)| {
                     let (x, y) = rotate(x, y, rotation_deg);
                     Point {
-                        x_nm: center.x_nm + nm(x),
-                        y_nm: center.y_nm + nm(y),
+                        x_nm: center.x_nm.saturating_add(nm(x)),
+                        y_nm: center.y_nm.saturating_add(nm(y)),
                     }
                 })
                 .collect();
@@ -3009,6 +3009,57 @@ mod tests {
         );
         assert_eq!(
             capsule_obstacles[1].end,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
+    }
+
+    #[test]
+    fn rectangular_pad_polygon_vertices_saturate_at_coordinate_limits() {
+        let mut round_obstacles = Vec::new();
+        let mut capsule_obstacles = Vec::new();
+        let mut polygon_obstacles = Vec::new();
+        for center in [
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+        ] {
+            add_pad_obstacle(
+                PadShape::Rect,
+                0.0,
+                (0.0, 0.0),
+                &[],
+                center,
+                1e30,
+                1e30,
+                0.0,
+                vec![Layer::Front],
+                None,
+                &mut round_obstacles,
+                &mut capsule_obstacles,
+                &mut polygon_obstacles,
+            );
+        }
+
+        assert!(round_obstacles.is_empty());
+        assert!(capsule_obstacles.is_empty());
+        assert_eq!(polygon_obstacles.len(), 2);
+        assert_eq!(
+            polygon_obstacles[0].polygon[0],
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            polygon_obstacles[1].polygon[2],
             Point {
                 x_nm: i64::MAX,
                 y_nm: i64::MAX,
