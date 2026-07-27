@@ -1162,7 +1162,8 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
         }
         contours
     };
-    contours.sort_by_key(|contour| std::cmp::Reverse(polygon_twice_area(contour).abs()));
+    contours
+        .sort_by_key(|contour| std::cmp::Reverse(polygon_twice_area(contour).unsigned_magnitude()));
     let outline = contours.remove(0);
     let cutouts = contours;
     let min = Point {
@@ -1174,11 +1175,11 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
         y_nm: outline.iter().map(|p| p.y_nm).max().unwrap(),
     };
     let twice_area = polygon_twice_area(&outline);
-    if min == max || twice_area == 0 {
+    if min == max || twice_area.is_zero() {
         return Err("Edge.Cuts outline has zero area".into());
     }
     if cutouts.iter().any(|cutout| {
-        polygon_twice_area(cutout) == 0
+        polygon_twice_area(cutout).is_zero()
             || cutout
                 .iter()
                 .any(|point| !point_in_polygon(*point, &outline))
@@ -1193,13 +1194,48 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
     })
 }
 
-fn polygon_twice_area(polygon: &[Point]) -> i128 {
+#[derive(Clone, Copy)]
+struct WideArea {
+    high: u128,
+    low: u128,
+}
+
+impl WideArea {
+    fn add_i128(self, value: i128) -> Self {
+        let (low, carry) = self.low.overflowing_add(value as u128);
+        let sign_extension = if value < 0 { u128::MAX } else { 0 };
+        Self {
+            high: self
+                .high
+                .wrapping_add(sign_extension)
+                .wrapping_add(carry as u128),
+            low,
+        }
+    }
+
+    fn is_zero(self) -> bool {
+        self.high == 0 && self.low == 0
+    }
+
+    fn unsigned_magnitude(self) -> (u128, u128) {
+        if self.high >> 127 == 0 {
+            (self.high, self.low)
+        } else {
+            let (low, carry) = (!self.low).overflowing_add(1);
+            ((!self.high).wrapping_add(carry as u128), low)
+        }
+    }
+}
+
+fn polygon_twice_area(polygon: &[Point]) -> WideArea {
     polygon
         .iter()
         .zip(polygon.iter().cycle().skip(1))
         .take(polygon.len())
-        .map(|(a, b)| a.x_nm as i128 * b.y_nm as i128 - b.x_nm as i128 * a.y_nm as i128)
-        .sum()
+        .fold(WideArea { high: 0, low: 0 }, |area, (start, end)| {
+            area.add_i128(start.x_nm as i128 * end.y_nm as i128)
+                .add_i128(-(end.x_nm as i128 * start.y_nm as i128))
+        })
 }
 
 fn point_in_polygon(point: Point, polygon: &[Point]) -> bool {
@@ -2792,6 +2828,37 @@ mod tests {
         ];
 
         assert!(point_in_polygon(Point { x_nm: 0, y_nm: 0 }, &polygon));
+    }
+
+    #[test]
+    fn polygon_area_handles_coordinate_extremes() {
+        let polygon = [
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MAX,
+            },
+        ];
+        let reversed = polygon.iter().copied().rev().collect::<Vec<_>>();
+
+        let area = polygon_twice_area(&polygon);
+        let reversed_area = polygon_twice_area(&reversed);
+        let squared_width = (u64::MAX as u128) * (u64::MAX as u128);
+        let expected_magnitude = (squared_width >> 127, squared_width << 1);
+        assert!(!area.is_zero());
+        assert_eq!(area.unsigned_magnitude(), expected_magnitude);
+        assert_eq!(reversed_area.unsigned_magnitude(), expected_magnitude);
     }
 
     #[test]

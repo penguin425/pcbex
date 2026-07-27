@@ -284,6 +284,8 @@ KiCad custom-pad primitive vertices saturate rotated center offsets at signed
 coordinate limits.
 KiCad board-cutout containment checks handle polygons spanning signed coordinate
 limits without overflowing intermediate edge differences.
+KiCad Edge.Cuts contour ordering and zero-area validation use wide signed area
+accumulation across the full coordinate range.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
