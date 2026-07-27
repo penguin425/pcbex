@@ -201,6 +201,8 @@ Board-level Edge.Cuts primitives reject repeated `start`, `mid`, `end`, or
 `center` fields instead of selecting the first ambiguous value.
 Polygon and cubic-curve primitives also require a single `pts` list, rejecting
 ambiguous duplicate point collections.
+Each Edge.Cuts primitive must declare exactly one `layer` field, preventing
+ambiguous mixed-layer graphics from being treated as board outlines.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated
