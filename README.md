@@ -247,6 +247,8 @@ Custom courtyard transforms saturate back-side mirroring and rotated center
 offsets at the same coordinate limits.
 Placement pin coordinates also saturate board-side mirroring, right-angle
 rotation negation, and center-offset addition.
+Region constraints widen all four component-to-region overflow distances before
+aggregating their placement penalty.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
