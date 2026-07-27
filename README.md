@@ -294,6 +294,8 @@ KiCad three-point Edge.Cuts arc sampling preserves the declared midpoint for
 asymmetric sweeps.
 KiCad board-cutout containment uses exact wide-integer ray crossings, including
 points one nanometer from signed coordinate limits.
+KiCad Edge.Cuts primitives are assembled through an endpoint index, keeping
+large unordered and mixed-direction outlines linear in the number of segments.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

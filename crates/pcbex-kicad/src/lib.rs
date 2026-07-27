@@ -1129,38 +1129,7 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
             })
             .collect()
     } else {
-        let mut unused = lines;
-        let mut contours = Vec::new();
-        while !unused.is_empty() {
-            let (start, mut current) = unused.remove(0);
-            let mut ordered = vec![start];
-            while current != start {
-                ordered.push(current);
-                let Some((index, next)) =
-                    unused
-                        .iter()
-                        .enumerate()
-                        .find_map(|(index, (edge_start, edge_end))| {
-                            if *edge_start == current {
-                                Some((index, *edge_end))
-                            } else if *edge_end == current {
-                                Some((index, *edge_start))
-                            } else {
-                                None
-                            }
-                        })
-                else {
-                    return Err("Edge.Cuts primitives do not form closed contours".into());
-                };
-                unused.remove(index);
-                current = next;
-            }
-            if ordered.len() < 3 {
-                return Err("Edge.Cuts contour requires at least three points".into());
-            }
-            contours.push(ordered);
-        }
-        contours
+        assemble_contours(lines)?
     };
     contours
         .sort_by_key(|contour| std::cmp::Reverse(polygon_twice_area(contour).unsigned_magnitude()));
@@ -1192,6 +1161,50 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
         outline,
         cutouts,
     })
+}
+
+fn assemble_contours(lines: Vec<(Point, Point)>) -> Result<Vec<Vec<Point>>, String> {
+    let mut incident = HashMap::<Point, Vec<usize>>::new();
+    for (index, (start, end)) in lines.iter().enumerate() {
+        incident.entry(*start).or_default().push(index);
+        incident.entry(*end).or_default().push(index);
+    }
+
+    let mut used = vec![false; lines.len()];
+    let mut contours = Vec::new();
+    for seed in 0..lines.len() {
+        if used[seed] {
+            continue;
+        }
+        used[seed] = true;
+        let (start, mut current) = lines[seed];
+        let mut ordered = vec![start];
+        while current != start {
+            ordered.push(current);
+            let Some(index) = incident.get_mut(&current).and_then(|edges| {
+                while let Some(index) = edges.pop() {
+                    if !used[index] {
+                        return Some(index);
+                    }
+                }
+                None
+            }) else {
+                return Err("Edge.Cuts primitives do not form closed contours".into());
+            };
+            used[index] = true;
+            let (edge_start, edge_end) = lines[index];
+            current = if edge_start == current {
+                edge_end
+            } else {
+                edge_start
+            };
+        }
+        if ordered.len() < 3 {
+            return Err("Edge.Cuts contour requires at least three points".into());
+        }
+        contours.push(ordered);
+    }
+    Ok(contours)
 }
 
 #[derive(Clone, Copy)]
@@ -2810,6 +2823,41 @@ mod tests {
         let (routed, report) = pcbex_core::route_board(&imported.board).unwrap();
         assert!(report.unrouted.is_empty());
         assert!(pcbex_core::checking::check_board(&routed).is_clean());
+    }
+
+    #[test]
+    fn assembles_large_unordered_outline_from_mixed_edge_directions() {
+        const SIDE: i64 = 1_024;
+        let mut points = Vec::new();
+        points.extend((0..SIDE).map(|x_nm| Point { x_nm, y_nm: 0 }));
+        points.extend((0..SIDE).map(|y_nm| Point { x_nm: SIDE, y_nm }));
+        points.extend((1..=SIDE).rev().map(|x_nm| Point { x_nm, y_nm: SIDE }));
+        points.extend((1..=SIDE).rev().map(|y_nm| Point { x_nm: 0, y_nm }));
+
+        let ordered = points
+            .iter()
+            .copied()
+            .zip(points.iter().copied().cycle().skip(1))
+            .take(points.len())
+            .collect::<Vec<_>>();
+        let mut lines = (0..ordered.len())
+            .step_by(2)
+            .chain((1..ordered.len()).step_by(2))
+            .map(|index| {
+                let (start, end) = ordered[index];
+                if index % 3 == 0 {
+                    (end, start)
+                } else {
+                    (start, end)
+                }
+            })
+            .collect::<Vec<_>>();
+        lines.rotate_left(1_337);
+
+        let contours = assemble_contours(lines).unwrap();
+        assert_eq!(contours.len(), 1);
+        assert_eq!(contours[0].len(), points.len());
+        assert!(!polygon_twice_area(&contours[0]).is_zero());
     }
 
     #[test]
