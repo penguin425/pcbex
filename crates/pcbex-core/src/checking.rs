@@ -1044,22 +1044,23 @@ fn check_power_nets(board: &Board, routes: &HashMap<u32, &Route>, report: &mut C
         let Some(route) = routes.get(&rule.net_id) else {
             continue;
         };
-        let resistance_ohms = route
-            .segments
-            .iter()
-            .map(|segment| {
-                let length_m = segment_length_m(segment);
-                let copper_thickness_m = board
-                    .stackup
-                    .iter()
-                    .find(|entry| entry.layer == segment.layer)
-                    .map_or(35_000, |entry| entry.copper_thickness_nm.max(1))
-                    as f64
-                    * 1e-9;
-                let cross_section_m2 = segment.width_nm as f64 * 1e-9 * copper_thickness_m;
-                COPPER_RESISTIVITY_OHM_M * length_m / cross_section_m2
-            })
-            .sum::<f64>();
+        let resistance_ohms = route.segments.iter().try_fold(0.0, |total, segment| {
+            let copper_thickness_m = board
+                .stackup
+                .iter()
+                .find(|entry| entry.layer == segment.layer)
+                .map_or(35_000, |entry| entry.copper_thickness_nm.max(1))
+                as f64;
+            segment_resistance_ohms(segment, copper_thickness_m, COPPER_RESISTIVITY_OHM_M).and_then(
+                |resistance| {
+                    let sum = total + resistance;
+                    sum.is_finite().then_some(sum)
+                },
+            )
+        });
+        let Some(resistance_ohms) = resistance_ohms else {
+            continue;
+        };
         let voltage_drop_mv = rule.current_ma * resistance_ohms;
         if voltage_drop_mv > rule.maximum_voltage_drop_mv {
             report.push(
@@ -1089,6 +1090,24 @@ fn segment_length_m(segment: &Segment) -> f64 {
     let dx_nm = coordinate_difference_nm(segment.end.x_nm, segment.start.x_nm);
     let dy_nm = coordinate_difference_nm(segment.end.y_nm, segment.start.y_nm);
     dx_nm.hypot(dy_nm) * 1e-9
+}
+
+fn segment_resistance_ohms(
+    segment: &Segment,
+    copper_thickness_nm: f64,
+    resistivity_ohm_m: f64,
+) -> Option<f64> {
+    if segment.width_nm <= 0
+        || !copper_thickness_nm.is_finite()
+        || copper_thickness_nm <= 0.0
+        || !resistivity_ohm_m.is_finite()
+        || resistivity_ohm_m <= 0.0
+    {
+        return None;
+    }
+    let cross_section_m2 = segment.width_nm as f64 * copper_thickness_nm * 1e-18;
+    let resistance = resistivity_ohm_m * segment_length_m(segment) / cross_section_m2;
+    (resistance.is_finite() && resistance >= 0.0).then_some(resistance)
 }
 
 fn coordinate_difference_nm(value: i64, origin: i64) -> f64 {
@@ -3941,6 +3960,26 @@ mod tests {
         assert_eq!(offset_coordinate(i64::MAX, 1), i64::MAX);
         assert_eq!(offset_coordinate(i64::MIN, -1), i64::MIN);
         assert_eq!(offset_coordinate(100, -25), 75);
+    }
+
+    #[test]
+    fn pdn_resistance_rejects_invalid_cross_sections() {
+        let make_segment = |width_nm| Segment {
+            start: Point { x_nm: 0, y_nm: 0 },
+            end: Point {
+                x_nm: 1_000_000,
+                y_nm: 0,
+            },
+            width_nm,
+            layer: Layer::Front,
+        };
+        assert!(segment_resistance_ohms(&make_segment(0), 35_000.0, 1.724e-8).is_none());
+        assert!(segment_resistance_ohms(&make_segment(100_000), 0.0, 1.724e-8).is_none());
+        assert!(segment_resistance_ohms(&make_segment(100_000), 35_000.0, f64::NAN).is_none());
+        assert!(
+            segment_resistance_ohms(&make_segment(100_000), 35_000.0, 1.724e-8)
+                .is_some_and(|value| value.is_finite() && value > 0.0)
+        );
     }
 
     #[test]
