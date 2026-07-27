@@ -395,6 +395,8 @@ including every fanout stub, must pass the normal full-board checker.
 
 Return-path rules require unique non-empty names, one declared reference net,
 and a non-empty set of unique declared signal nets distinct from the reference.
+Maximum stitching-via distance and optional plane-sampling interval must both
+be positive.
 
 `return_path_rules` associates high-speed signal nets with a reference net and
 a maximum signal-to-reference via distance. The board checker reports every

@@ -5021,6 +5021,38 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_invalid_return_path_rule_constraints() {
+        let rule = |max_via_distance, plane_sample_spacing| ReturnPathRule {
+            name: "signal-reference".into(),
+            signal_net_ids: vec![1],
+            reference_net_id: 2,
+            max_via_distance_nm: max_via_distance,
+            auto_stitch: false,
+            require_continuous_plane: false,
+            plane_sample_spacing_nm: plane_sample_spacing,
+        };
+        for invalid_rule in [
+            rule(0, None),
+            rule(1_000_000, Some(0)),
+            rule(1_000_000, Some(-1)),
+        ] {
+            let mut invalid = board();
+            invalid.nets.push(Net {
+                id: 2,
+                name: "GND".into(),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            });
+            invalid.return_path_rules.push(invalid_rule);
+            assert!(matches!(
+                Router::new(&invalid),
+                Err(message) if message == "return path rule signal-reference is invalid"
+            ));
+        }
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(

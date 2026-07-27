@@ -659,6 +659,24 @@ pub fn check_board(board: &Board) -> CheckReport {
                     .collect(),
             );
         }
+        if rule.max_via_distance_nm <= 0
+            || rule
+                .plane_sample_spacing_nm
+                .is_some_and(|spacing| spacing <= 0)
+        {
+            report.push(
+                "return_path_rule_constraints",
+                format!(
+                    "return path rule {} must use a positive maximum via distance and positive optional plane sampling interval",
+                    rule.name
+                ),
+                rule.signal_net_ids
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(rule.reference_net_id))
+                    .collect(),
+            );
+        }
     }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
@@ -5979,6 +5997,58 @@ mod tests {
                 .count(),
             7
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_return_path_rule_constraints() {
+        let make_board = |max_via_distance, plane_sample_spacing| {
+            let mut board = base();
+            board.nets = (1..=2)
+                .map(|id| Net {
+                    id,
+                    name: format!("N{id}"),
+                    terminals: vec![],
+                    class: None,
+                    priority: 0,
+                })
+                .collect();
+            board.return_path_rules.push(crate::ReturnPathRule {
+                name: "signal-reference".into(),
+                signal_net_ids: vec![1],
+                reference_net_id: 2,
+                max_via_distance_nm: max_via_distance,
+                auto_stitch: false,
+                require_continuous_plane: false,
+                plane_sample_spacing_nm: plane_sample_spacing,
+            });
+            board
+        };
+
+        for board in [
+            make_board(0, None),
+            make_board(1_000_000, Some(0)),
+            make_board(1_000_000, Some(-1)),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "return_path_rule_constraints")
+                    .count(),
+                1
+            );
+        }
+        for board in [
+            make_board(1_000_000, None),
+            make_board(1_000_000, Some(250_000)),
+        ] {
+            assert!(
+                !check_board(&board)
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == "return_path_rule_constraints")
+            );
+        }
     }
 
     #[test]
