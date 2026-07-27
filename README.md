@@ -337,7 +337,8 @@ all-vertices-inside cutout from crossing outside a concave board outline.
 Non-adjacent edges within every Edge.Cuts contour are also checked exactly, so
 asymmetric self-intersections cannot pass merely because their area is nonzero.
 Edge.Cuts polygon primitives reject self-intersections during parsing, before
-their invalid edges enter contour assembly.
+their invalid edges enter contour assembly. They also require nonzero exact
+wide-integer area, so collinear polygons cannot enter contour assembly.
 Multiple Edge.Cuts cutouts must be disjoint and unnested because the board model
 represents a flat set of holes rather than alternating material islands.
 Edge.Cuts line primitives must declare both endpoints; malformed lines are
