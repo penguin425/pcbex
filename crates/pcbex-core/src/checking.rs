@@ -1723,6 +1723,11 @@ fn two_via_clearance_envelope(
     two_track_clearance_envelope(first_diameter_nm, second_diameter_nm, clearance_nm)
 }
 
+fn two_via_connection_diameter(first_diameter_nm: i64, second_diameter_nm: i64) -> i64 {
+    let diameter = i128::from(first_diameter_nm) + i128::from(second_diameter_nm);
+    diameter.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
     let pad_width_nm = if pad.source_width_nm > 0 {
         pad.source_width_nm
@@ -2808,7 +2813,7 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
             if points_within(
                 via.position,
                 other.position,
-                via.diameter_nm + other.diameter_nm,
+                two_via_connection_diameter(via.diameter_nm, other.diameter_nm),
             ) {
                 components.union(segment_count + index, segment_count + other_index);
             }
@@ -4097,6 +4102,13 @@ mod tests {
             two_via_clearance_envelope(600_000, 800_000, 150_000),
             1_700_000
         );
+    }
+
+    #[test]
+    fn two_via_connection_diameter_handles_extreme_dimensions() {
+        assert_eq!(two_via_connection_diameter(i64::MAX, i64::MAX), i64::MAX);
+        assert_eq!(two_via_connection_diameter(i64::MIN, i64::MIN), i64::MIN);
+        assert_eq!(two_via_connection_diameter(600_000, 800_000), 1_400_000);
     }
 
     #[test]
