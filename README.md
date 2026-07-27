@@ -185,6 +185,8 @@ Cubic curve primitives are adaptively subdivided to the same deviation bound.
 They must contain exactly four finite `xy` points before subdivision.
 Polygon primitives preserve their exact vertices and can likewise define an
 outer outline or cutout, with at most 16,384 input points per primitive.
+Apart from an optional closing point equal to the first, every polygon vertex
+must be distinct so a single primitive cannot create a branched contour.
 An imported board may contain at most 65,536 generated `Edge.Cuts` segments in
 total across all supported primitives.
 Every generated edge passes a shared zero-length check before insertion, so new
