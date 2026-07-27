@@ -1081,6 +1081,9 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                 ) else {
                     return Err("Edge.Cuts arc requires start, mid, and end points".into());
                 };
+                if start == mid || mid == end || start == end {
+                    return Err("Edge.Cuts arc points must be distinct".into());
+                }
                 for pair in sample_arc(start, mid, end)?.windows(2) {
                     push_unique_edge(&mut lines, &mut unique_edges, pair[0], pair[1])?;
                 }
@@ -3710,6 +3713,27 @@ mod tests {
           (gr_arc (start 0 0) (mid 10 0) (end 20 0) (layer "Edge.Cuts"))
         )"#;
         assert!(import(pcb, rules()).unwrap_err().contains("collinear"));
+    }
+
+    #[test]
+    fn rejects_repeated_edge_cuts_arc_points() {
+        for primitive in [
+            r#"(gr_arc (start 0 0) (mid 0 0) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_arc (start 0 0) (mid 10 10) (end 10 10) (layer "Edge.Cuts"))"#,
+            r#"(gr_arc (start 0 0) (mid 10 10) (end 0 0) (layer "Edge.Cuts"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {primitive}
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "Edge.Cuts arc points must be distinct"
+            );
+        }
     }
 
     #[test]
