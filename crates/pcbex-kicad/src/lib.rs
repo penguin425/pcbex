@@ -1121,6 +1121,17 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                     push_unique_edge(&mut lines, &mut unique_edges, edge_start, edge_end)?;
                 }
             }
+            Some("gr_poly") => {
+                let points = edge_polygon_points(xs)?;
+                for index in 0..points.len() {
+                    push_unique_edge(
+                        &mut lines,
+                        &mut unique_edges,
+                        points[index],
+                        points[(index + 1) % points.len()],
+                    )?;
+                }
+            }
             _ => {}
         }
     }
@@ -1198,6 +1209,46 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
         outline,
         cutouts,
     })
+}
+
+fn edge_polygon_points(values: &[Sexp]) -> Result<Vec<Point>, String> {
+    let Some(points) = child_values(values, "pts") else {
+        return Err("Edge.Cuts polygon requires a pts list".into());
+    };
+    let mut polygon = points
+        .iter()
+        .skip(1)
+        .map(|value| {
+            let Some(xy) = value.as_list() else {
+                return Err("Edge.Cuts polygon points must be xy coordinates".into());
+            };
+            if atom(xy.first()) != Some("xy") {
+                return Err("Edge.Cuts polygon points must be xy coordinates".into());
+            }
+            let (Some(x), Some(y)) = (number(xy.get(1)), number(xy.get(2))) else {
+                return Err("Edge.Cuts polygon points must be xy coordinates".into());
+            };
+            if !x.is_finite() || !y.is_finite() {
+                return Err("Edge.Cuts polygon coordinates must be finite".into());
+            }
+            Ok(point_mm(x, y))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if polygon.first() == polygon.last() {
+        polygon.pop();
+    }
+    if polygon.len() < 3 {
+        return Err("Edge.Cuts polygon must contain at least three distinct points".into());
+    }
+    if polygon
+        .iter()
+        .zip(polygon.iter().cycle().skip(1))
+        .take(polygon.len())
+        .any(|(start, end)| start == end)
+    {
+        return Err("Edge.Cuts polygon must contain distinct adjacent points".into());
+    }
+    Ok(polygon)
 }
 
 fn push_unique_edge(
@@ -3089,6 +3140,29 @@ mod tests {
         assert!(imported.board.outline.len() >= 12);
         assert_eq!(imported.board.cutouts.len(), 1);
         assert!(imported.board.cutouts[0].len() >= 12);
+    }
+
+    #[test]
+    fn imports_edge_cuts_polygons_as_outline_and_cutout() {
+        let pcb = r#"(kicad_pcb
+          (gr_poly
+            (pts (xy 0 0) (xy 30 0) (xy 40 10) (xy 30 30) (xy 0 20))
+            (layer "Edge.Cuts"))
+          (gr_poly
+            (pts (xy 10 8) (xy 20 8) (xy 18 15) (xy 10 14))
+            (layer "Edge.Cuts"))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+        assert_eq!(
+            (imported.board.width_nm, imported.board.height_nm),
+            (40_000_000, 30_000_000)
+        );
+        assert_eq!(imported.board.outline.len(), 5);
+        assert_eq!(imported.board.cutouts.len(), 1);
+        assert_eq!(imported.board.cutouts[0].len(), 4);
+        assert!(imported.board.outline.contains(&point_mm(40.0, 10.0)));
+        assert!(imported.board.cutouts[0].contains(&point_mm(18.0, 15.0)));
     }
 
     #[test]
