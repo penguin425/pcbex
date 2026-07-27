@@ -2663,17 +2663,24 @@ fn unique_edge_child_values<'a>(
 fn is_edge_cuts_primitive(list: &[Sexp]) -> Result<bool, String> {
     let mut layer_count = 0;
     let mut has_edge_cuts = false;
+    let mut has_invalid_edge_cuts_arity = false;
     for value in list {
         let Some(values) = value.as_list() else {
             continue;
         };
         if atom(values.first()) == Some("layer") {
             layer_count += 1;
-            has_edge_cuts |= atom(values.get(1)) == Some("Edge.Cuts");
+            if atom(values.get(1)) == Some("Edge.Cuts") {
+                has_edge_cuts = true;
+                has_invalid_edge_cuts_arity |= values.len() != 2;
+            }
         }
     }
     if has_edge_cuts && layer_count > 1 {
         return Err("Edge.Cuts layer fields must not be repeated".into());
+    }
+    if has_invalid_edge_cuts_arity {
+        return Err("Edge.Cuts layer fields must contain exactly one value".into());
     }
     Ok(has_edge_cuts)
 }
@@ -3809,6 +3816,21 @@ mod tests {
                 "Edge.Cuts layer fields must not be repeated"
             );
         }
+    }
+
+    #[test]
+    fn rejects_extra_edge_cuts_layer_values() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect
+            (start 0 0)
+            (end 20 20)
+            (layer "Edge.Cuts" "F.SilkS"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "Edge.Cuts layer fields must contain exactly one value"
+        );
     }
 
     #[test]
