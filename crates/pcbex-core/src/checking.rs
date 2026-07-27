@@ -1728,6 +1728,11 @@ fn two_via_connection_diameter(first_diameter_nm: i64, second_diameter_nm: i64) 
     diameter.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
+fn two_track_connection_width(first_width_nm: i64, second_width_nm: i64) -> i64 {
+    let width = i128::from(first_width_nm) + i128::from(second_width_nm);
+    width.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
     let pad_width_nm = if pad.source_width_nm > 0 {
         pad.source_width_nm
@@ -2789,7 +2794,7 @@ fn check_route_connectivity(net: &Net, route: &Route, report: &mut CheckReport) 
                     segment.end,
                     other.start,
                     other.end,
-                    segment.width_nm + other.width_nm,
+                    two_track_connection_width(segment.width_nm, other.width_nm),
                 )
             {
                 components.union(index, other_index);
@@ -4109,6 +4114,13 @@ mod tests {
         assert_eq!(two_via_connection_diameter(i64::MAX, i64::MAX), i64::MAX);
         assert_eq!(two_via_connection_diameter(i64::MIN, i64::MIN), i64::MIN);
         assert_eq!(two_via_connection_diameter(600_000, 800_000), 1_400_000);
+    }
+
+    #[test]
+    fn two_track_connection_width_handles_extreme_dimensions() {
+        assert_eq!(two_track_connection_width(i64::MAX, i64::MAX), i64::MAX);
+        assert_eq!(two_track_connection_width(i64::MIN, i64::MIN), i64::MIN);
+        assert_eq!(two_track_connection_width(200_000, 300_000), 500_000);
     }
 
     #[test]
