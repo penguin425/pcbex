@@ -1086,9 +1086,13 @@ fn check_power_nets(board: &Board, routes: &HashMap<u32, &Route>, report: &mut C
 }
 
 fn segment_length_m(segment: &Segment) -> f64 {
-    let dx_nm = (i128::from(segment.end.x_nm) - i128::from(segment.start.x_nm)) as f64;
-    let dy_nm = (i128::from(segment.end.y_nm) - i128::from(segment.start.y_nm)) as f64;
+    let dx_nm = coordinate_difference_nm(segment.end.x_nm, segment.start.x_nm);
+    let dy_nm = coordinate_difference_nm(segment.end.y_nm, segment.start.y_nm);
     dx_nm.hypot(dy_nm) * 1e-9
+}
+
+fn coordinate_difference_nm(value: i64, origin: i64) -> f64 {
+    (i128::from(value) - i128::from(origin)) as f64
 }
 
 fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
@@ -1963,10 +1967,10 @@ fn check_trace_angles(route: &Route, minimum_angle_deg: u16, report: &mut CheckR
             let Some((junction, first_end, second_end)) = shared_endpoint(segment, other) else {
                 continue;
             };
-            let ax = (first_end.x_nm - junction.x_nm) as f64;
-            let ay = (first_end.y_nm - junction.y_nm) as f64;
-            let bx = (second_end.x_nm - junction.x_nm) as f64;
-            let by = (second_end.y_nm - junction.y_nm) as f64;
+            let ax = coordinate_difference_nm(first_end.x_nm, junction.x_nm);
+            let ay = coordinate_difference_nm(first_end.y_nm, junction.y_nm);
+            let bx = coordinate_difference_nm(second_end.x_nm, junction.x_nm);
+            let by = coordinate_difference_nm(second_end.y_nm, junction.y_nm);
             let denominator = ax.hypot(ay) * bx.hypot(by);
             if denominator == 0.0 {
                 continue;
@@ -3913,6 +3917,19 @@ mod tests {
         let expected = (2.0_f64).sqrt() * (u64::MAX as f64) * 1e-9;
         assert!(length_m.is_finite());
         assert!((length_m - expected).abs() <= expected * f64::EPSILON);
+    }
+
+    #[test]
+    fn trace_angle_coordinate_difference_handles_extremes() {
+        assert_eq!(
+            coordinate_difference_nm(i64::MAX, i64::MIN),
+            u64::MAX as f64
+        );
+        assert_eq!(
+            coordinate_difference_nm(i64::MIN, i64::MAX),
+            -(u64::MAX as f64)
+        );
+        assert_eq!(coordinate_difference_nm(250, 100), 150.0);
     }
 
     #[test]
