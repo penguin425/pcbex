@@ -3310,8 +3310,8 @@ fn snap_to_grid(value: Nm, grid: Nm) -> Nm {
 }
 
 fn escape_stub_segments(start: Point, end: Point, width_nm: Nm) -> Vec<Segment> {
-    let dx = (end.x_nm - start.x_nm).abs();
-    let dy = (end.y_nm - start.y_nm).abs();
+    let dx = axis_direction_and_distance(end.x_nm, start.x_nm).1;
+    let dy = axis_direction_and_distance(end.y_nm, start.y_nm).1;
     let points = if dx == 0 || dy == 0 || dx == dy {
         vec![start, end]
     } else {
@@ -7175,6 +7175,63 @@ mod tests {
         assert_eq!(escape_axis_position(i64::MAX, -1, i64::MAX, 1), 0);
         assert_eq!(escape_axis_position(100, 1, 25, 3), 175);
         assert_eq!(escape_axis_position(100, 0, i64::MAX, 8), 100);
+    }
+
+    #[test]
+    fn escape_stub_shape_handles_full_signed_coordinate_differences() {
+        let diagonal = escape_stub_segments(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            10,
+        );
+        assert_eq!(diagonal.len(), 1);
+        assert_eq!(
+            diagonal[0].start,
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            diagonal[0].end,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
+
+        let dogleg = escape_stub_segments(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: 0,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: 10,
+            },
+            10,
+        );
+        assert_eq!(dogleg.len(), 2);
+        assert_eq!(
+            dogleg[0].end,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: 0,
+            }
+        );
+        assert_eq!(
+            dogleg[1].end,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: 10
+            }
+        );
     }
 
     #[test]
