@@ -516,6 +516,8 @@ Route-length measurement widens endpoint differences and saturates accumulated
 segment and arc lengths, preserving deterministic results for extreme routes.
 Differential-pair coupled-length measurement uses the same widened geometry and
 saturating accumulation for full-range and multi-segment routes.
+Differential coupling-distance thresholds combine both widths, gap, and
+tolerance with widened saturating arithmetic.
 Return-path plane sampling uses overflow-safe ceiling division and widened
 endpoint interpolation, including segments spanning the full coordinate range.
 Return-path via proximity checks widen coordinate differences before subtraction
