@@ -41,7 +41,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Exact circular pad geometry | Circle-aware rasterization, checking, SVG, and KiCad import without bounding-box blockage | Circle-corner routing and clearance regressions; KiCad circle-pad import test |
 | Exact oval pad geometry | Rotation-aware capsule rasterization, checking, SVG, and KiCad import | Capsule bounding-box escape and collision regressions; rotated KiCad oval test |
 | Exact rotated rectangular pads | Four-corner polygon rasterization, checking, SVG, and KiCad import | 30-degree coordinate regression and 35-degree real-KiCad E2E fixture |
-| Curved board outlines | Three-point `gr_arc` sampling with a 0.01 mm maximum chord deviation | Semicircle import regression and curved-board real-KiCad E2E fixture |
+| Curved board outlines | Three-point `gr_arc` and four-point cubic `gr_curve` sampling with a 0.01 mm maximum chord deviation | Semicircle and cubic-curve import regressions plus curved-board real-KiCad E2E fixture |
 | Board cutouts and multiple contours | Largest Edge.Cuts contour is the outer outline; enclosed contours are clearance-aware holes | Core routing/checking regression, importer classification test, and holed curved-board E2E fixture |
 | Property and fuzz testing | Geometry symmetry/translation properties plus KiCad parser, migrated board-model, length-tuning, and BGA-escape libFuzzer targets | Property tests run on every PR; scheduled/manual fuzz workflow runs all four targets |
 | Schema compatibility gate | Draft 2020-12 schema has closed definitions for routing rules, net classes, length/escape/return-path constraints, and stackup; v1 migration is compared semantically with native v2 parsing | Migration regression rejects future versions/unknown fields and verifies every advanced constraint definition is closed |
@@ -153,7 +153,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.194.0 exposes 261 Rust tests and 11 Python tests. The release workflow
+Version 1.195.0 exposes 263 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
