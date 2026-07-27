@@ -633,6 +633,33 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
         }
     }
+    let mut seen_return_path_names = HashSet::new();
+    for rule in &board.return_path_rules {
+        let signal_net_ids: HashSet<_> = rule.signal_net_ids.iter().copied().collect();
+        if rule.name.trim().is_empty()
+            || !seen_return_path_names.insert(rule.name.as_str())
+            || !known_net_ids.contains(&rule.reference_net_id)
+            || signal_net_ids.is_empty()
+            || signal_net_ids.len() != rule.signal_net_ids.len()
+            || signal_net_ids.contains(&rule.reference_net_id)
+            || !signal_net_ids
+                .iter()
+                .all(|net_id| known_net_ids.contains(net_id))
+        {
+            report.push(
+                "return_path_rule_definition",
+                format!(
+                    "return path rule {} must have a unique non-empty name, one declared reference net, and unique declared signal nets",
+                    rule.name
+                ),
+                rule.signal_net_ids
+                    .iter()
+                    .copied()
+                    .chain(std::iter::once(rule.reference_net_id))
+                    .collect(),
+            );
+        }
+    }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
             if !pad_geometry_is_valid(pad) {
@@ -5908,6 +5935,49 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "escape_group_net_eligibility")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_return_path_rule_definitions() {
+        let mut board = base();
+        board.nets = (1..=8)
+            .map(|id| Net {
+                id,
+                name: format!("N{id}"),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            })
+            .collect();
+        let rule = |name: &str, signal_net_ids, reference_net_id| crate::ReturnPathRule {
+            name: name.into(),
+            signal_net_ids,
+            reference_net_id,
+            max_via_distance_nm: 1_000_000,
+            auto_stitch: false,
+            require_continuous_plane: false,
+            plane_sample_spacing_nm: None,
+        };
+        board.return_path_rules = vec![
+            rule("valid", vec![1], 2),
+            rule("", vec![3], 4),
+            rule("duplicate", vec![5], 6),
+            rule("duplicate", vec![7], 8),
+            rule("unknown-reference", vec![1], 99),
+            rule("empty", vec![], 2),
+            rule("repeated", vec![1, 1], 2),
+            rule("self", vec![1, 2], 2),
+            rule("unknown-signal", vec![99], 2),
+        ];
+
+        assert_eq!(
+            check_board(&board)
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "return_path_rule_definition")
+                .count(),
+            7
         );
     }
 
