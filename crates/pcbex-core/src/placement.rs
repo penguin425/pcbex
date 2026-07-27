@@ -499,6 +499,14 @@ fn point_cloud_span_excess_nm(points: &[Point], allowed_nm: Nm) -> f64 {
     (x_span + y_span - i128::from(allowed_nm)).max(0) as f64
 }
 
+fn region_overflow_nm(bounds: Rect, min: Point, max: Point) -> f64 {
+    let left = (i128::from(min.x_nm) - i128::from(bounds.min_x)).max(0);
+    let top = (i128::from(min.y_nm) - i128::from(bounds.min_y)).max(0);
+    let right = (i128::from(bounds.max_x) - i128::from(max.x_nm)).max(0);
+    let bottom = (i128::from(bounds.max_y) - i128::from(max.y_nm)).max(0);
+    (left + top + right + bottom) as f64
+}
+
 fn point_boundary_overflow_nm(point: Point, width_nm: Nm, height_nm: Nm) -> f64 {
     let x = i128::from(point.x_nm);
     let y = i128::from(point.y_nm);
@@ -650,10 +658,7 @@ fn constraint_penalty(
             }
             PlacementConstraint::Region { subject, min, max } => {
                 let bounds = bounds(&components[index[subject.as_str()]]);
-                (min.x_nm - bounds.min_x).max(0) as f64 / unit
-                    + (min.y_nm - bounds.min_y).max(0) as f64 / unit
-                    + (bounds.max_x - max.x_nm).max(0) as f64 / unit
-                    + (bounds.max_y - max.y_nm).max(0) as f64 / unit
+                region_overflow_nm(bounds, *min, *max) / unit
             }
         })
         .sum()
@@ -1106,6 +1111,44 @@ mod tests {
                 x_nm: i64::MAX,
                 y_nm: i64::MAX - 20,
             }
+        );
+    }
+
+    #[test]
+    fn region_overflow_handles_full_signed_coordinates() {
+        let overflow = region_overflow_nm(
+            Rect {
+                min_x: i64::MIN,
+                min_y: i64::MIN,
+                max_x: i64::MAX,
+                max_y: i64::MAX,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+        );
+        assert!(overflow.is_finite());
+        assert!(overflow > i64::MAX as f64);
+        assert_eq!(
+            region_overflow_nm(
+                Rect {
+                    min_x: 20,
+                    min_y: 30,
+                    max_x: 80,
+                    max_y: 90,
+                },
+                Point { x_nm: 10, y_nm: 20 },
+                Point {
+                    x_nm: 100,
+                    y_nm: 100,
+                },
+            ),
+            0.0
         );
     }
 
