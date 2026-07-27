@@ -3156,10 +3156,7 @@ fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> 
         if terminals.is_empty() {
             continue;
         }
-        let centroid = Point {
-            x_nm: terminals.iter().map(|point| point.x_nm).sum::<Nm>() / terminals.len() as Nm,
-            y_nm: terminals.iter().map(|point| point.y_nm).sum::<Nm>() / terminals.len() as Nm,
-        };
+        let centroid = point_centroid(&terminals);
         for net_id in &group.net_ids {
             let net_index = adjusted
                 .nets
@@ -3229,6 +3226,22 @@ fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> 
     }
     adjusted.escape_groups.clear();
     Ok((adjusted, stubs))
+}
+
+fn point_centroid(points: &[Point]) -> Point {
+    let count = points.len() as i128;
+    Point {
+        x_nm: (points
+            .iter()
+            .map(|point| i128::from(point.x_nm))
+            .sum::<i128>()
+            / count) as Nm,
+        y_nm: (points
+            .iter()
+            .map(|point| i128::from(point.y_nm))
+            .sum::<i128>()
+            / count) as Nm,
+    }
 }
 
 fn escape_primary_direction(
@@ -7071,6 +7084,39 @@ mod tests {
         assert_eq!(snap_to_grid(-5, 10), -10);
         assert_eq!(snap_to_grid(5, 10), 10);
         assert_eq!(snap_to_grid(14, 10), 10);
+    }
+
+    #[test]
+    fn escape_centroid_handles_full_signed_coordinate_sums() {
+        assert_eq!(
+            point_centroid(&[
+                Point {
+                    x_nm: i64::MAX,
+                    y_nm: i64::MIN,
+                },
+                Point {
+                    x_nm: i64::MAX,
+                    y_nm: i64::MIN,
+                },
+            ]),
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            point_centroid(&[
+                Point {
+                    x_nm: i64::MIN,
+                    y_nm: i64::MAX,
+                },
+                Point {
+                    x_nm: i64::MAX,
+                    y_nm: i64::MIN,
+                },
+            ]),
+            Point { x_nm: 0, y_nm: 0 }
+        );
     }
 
     #[test]
