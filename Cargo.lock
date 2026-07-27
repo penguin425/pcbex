@@ -435,7 +435,7 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "pcbex"
-version = "1.121.0"
+version = "1.122.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -447,7 +447,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-core"
-version = "1.121.0"
+version = "1.122.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-kicad"
-version = "1.121.0"
+version = "1.122.0"
 dependencies = [
  "pcbex-core",
  "regex",
