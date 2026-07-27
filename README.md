@@ -262,6 +262,8 @@ BGA escape candidate coordinates widen ring-distance products and saturate
 directional offsets at signed coordinate limits.
 BGA escape stub shape detection widens endpoint differences before comparing
 axis distances.
+KiCad board extents and origin-relative coordinates widen endpoint differences
+and saturate them at signed coordinate limits.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
