@@ -1387,7 +1387,11 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
                     vec![route.net_id],
                 );
             }
-            if via.diameter_nm - via.drill_nm < 2 * rules.minimum_annular_ring_nm {
+            if annular_ring_is_below_minimum(
+                via.diameter_nm,
+                via.drill_nm,
+                rules.minimum_annular_ring_nm,
+            ) {
                 report.push(
                     "dfm_annular_ring",
                     "via annular ring is smaller than the manufacturing minimum".into(),
@@ -1502,8 +1506,15 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
                 pad.height_nm
             };
             if pad.plated
-                && (pad_width_nm - drill_width_nm < 2 * rules.minimum_annular_ring_nm
-                    || pad_height_nm - drill_height_nm < 2 * rules.minimum_annular_ring_nm)
+                && (annular_ring_is_below_minimum(
+                    pad_width_nm,
+                    drill_width_nm,
+                    rules.minimum_annular_ring_nm,
+                ) || annular_ring_is_below_minimum(
+                    pad_height_nm,
+                    drill_height_nm,
+                    rules.minimum_annular_ring_nm,
+                ))
             {
                 report.push(
                     "dfm_component_annular_ring",
@@ -1575,6 +1586,10 @@ struct DrilledHole {
 
 fn exceeds_aspect_ratio(board_thickness_nm: i64, drill_nm: i64, maximum_ratio: u16) -> bool {
     i128::from(board_thickness_nm) > i128::from(drill_nm) * i128::from(maximum_ratio)
+}
+
+fn annular_ring_is_below_minimum(outer_nm: i64, drill_nm: i64, minimum_ring_nm: i64) -> bool {
+    i128::from(outer_nm) - i128::from(drill_nm) < 2 * i128::from(minimum_ring_nm)
 }
 
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
@@ -3822,6 +3837,14 @@ mod tests {
         assert!(exceeds_aspect_ratio(i64::MAX, 1, 1));
         assert!(!exceeds_aspect_ratio(1_600_000, 200_000, 8));
         assert!(exceeds_aspect_ratio(1_600_001, 200_000, 8));
+    }
+
+    #[test]
+    fn annular_ring_comparison_handles_extreme_dimensions() {
+        assert!(!annular_ring_is_below_minimum(i64::MAX, i64::MIN, i64::MAX));
+        assert!(annular_ring_is_below_minimum(i64::MIN, i64::MAX, i64::MAX));
+        assert!(!annular_ring_is_below_minimum(600_000, 300_000, 150_000));
+        assert!(annular_ring_is_below_minimum(599_999, 300_000, 150_000));
     }
 
     #[test]
