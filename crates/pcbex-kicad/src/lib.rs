@@ -1581,28 +1581,15 @@ fn sample_curve(values: &[Sexp]) -> Result<Vec<Point>, String> {
     let Some(values) = child_values(values, "pts") else {
         return Err("Edge.Cuts curve requires four points".into());
     };
-    let controls = values
-        .iter()
-        .skip(1)
-        .map(|value| {
-            let Some(xy) = value.as_list() else {
-                return Err("Edge.Cuts curve requires four xy points".into());
-            };
-            if atom(xy.first()) != Some("xy") {
-                return Err("Edge.Cuts curve requires four xy points".into());
-            }
-            let (Some(x), Some(y)) = (number(xy.get(1)), number(xy.get(2))) else {
-                return Err("Edge.Cuts curve requires four xy points".into());
-            };
-            if !x.is_finite() || !y.is_finite() {
-                return Err("Edge.Cuts curve coordinates must be finite".into());
-            }
-            Ok(point_mm(x, y))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let [start, control_1, control_2, end] = controls.as_slice() else {
+    if values.len() != 5 {
         return Err("Edge.Cuts curve requires four points".into());
-    };
+    }
+    let [start, control_1, control_2, end] = [
+        edge_curve_point(&values[1])?,
+        edge_curve_point(&values[2])?,
+        edge_curve_point(&values[3])?,
+        edge_curve_point(&values[4])?,
+    ];
 
     let relative = |point: Point| {
         (
@@ -1611,10 +1598,10 @@ fn sample_curve(values: &[Sexp]) -> Result<Vec<Point>, String> {
         )
     };
     let mut stack = vec![[
-        relative(*start),
-        relative(*control_1),
-        relative(*control_2),
-        relative(*end),
+        relative(start),
+        relative(control_1),
+        relative(control_2),
+        relative(end),
     ]];
     let mut sampled = vec![(0.0, 0.0)];
     while let Some(curve) = stack.pop() {
@@ -1637,13 +1624,29 @@ fn sample_curve(values: &[Sexp]) -> Result<Vec<Point>, String> {
             y_nm: translate_arc_coordinate(start.y_nm, y),
         })
         .collect::<Vec<_>>();
-    points[0] = *start;
-    *points.last_mut().unwrap() = *end;
+    points[0] = start;
+    *points.last_mut().unwrap() = end;
     points.dedup();
     if points.len() < 2 {
         return Err("Edge.Cuts curve must have distinct endpoints or control points".into());
     }
     Ok(points)
+}
+
+fn edge_curve_point(value: &Sexp) -> Result<Point, String> {
+    let Some(xy) = value.as_list() else {
+        return Err("Edge.Cuts curve requires four xy points".into());
+    };
+    if atom(xy.first()) != Some("xy") {
+        return Err("Edge.Cuts curve requires four xy points".into());
+    }
+    let (Some(x), Some(y)) = (number(xy.get(1)), number(xy.get(2))) else {
+        return Err("Edge.Cuts curve requires four xy points".into());
+    };
+    if !x.is_finite() || !y.is_finite() {
+        return Err("Edge.Cuts curve coordinates must be finite".into());
+    }
+    Ok(point_mm(x, y))
 }
 
 fn curve_is_flat(curve: [(f64, f64); 4]) -> bool {
@@ -3330,6 +3333,62 @@ mod tests {
                 })
                 .fold(f64::INFINITY, f64::min);
             assert!(distance <= ARC_CHORD_TOLERANCE_NM + 1.0);
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_cubic_edge_cuts_curves() {
+        let cases = [
+            (
+                r#"(kicad_pcb
+                  (gr_curve (layer "Edge.Cuts"))
+                )"#,
+                "Edge.Cuts curve requires four points",
+            ),
+            (
+                r#"(kicad_pcb
+                  (gr_curve
+                    (pts (xy 0 0) (xy 1 1) (xy 2 2))
+                    (layer "Edge.Cuts"))
+                )"#,
+                "Edge.Cuts curve requires four points",
+            ),
+            (
+                r#"(kicad_pcb
+                  (gr_curve
+                    (pts (xy 0 0) (xy 1 1) (xy 2 2) (xy 3 3) (xy 4 4))
+                    (layer "Edge.Cuts"))
+                )"#,
+                "Edge.Cuts curve requires four points",
+            ),
+            (
+                r#"(kicad_pcb
+                  (gr_curve
+                    (pts (xy 0 0) (control 1 1) (xy 2 2) (xy 3 3))
+                    (layer "Edge.Cuts"))
+                )"#,
+                "Edge.Cuts curve requires four xy points",
+            ),
+            (
+                r#"(kicad_pcb
+                  (gr_curve
+                    (pts (xy 0 0) (xy 1 inf) (xy 2 2) (xy 3 3))
+                    (layer "Edge.Cuts"))
+                )"#,
+                "Edge.Cuts curve coordinates must be finite",
+            ),
+            (
+                r#"(kicad_pcb
+                  (gr_curve
+                    (pts (xy 1 1) (xy 1 1) (xy 1 1) (xy 1 1))
+                    (layer "Edge.Cuts"))
+                )"#,
+                "Edge.Cuts curve must have distinct endpoints or control points",
+            ),
+        ];
+
+        for (pcb, expected) in cases {
+            assert_eq!(import(pcb, rules()).unwrap_err(), expected);
         }
     }
 
