@@ -718,17 +718,26 @@ fn courtyard_polygon(component: &Component) -> Vec<Point> {
     let center = center(component);
     local
         .into_iter()
-        .map(|mut point| {
-            if component.side == BoardSide::Back {
-                point.x_nm = -point.x_nm;
-            }
-            let rotated = rotate_point(point, component.rotation_deg);
-            Point {
-                x_nm: center.x_nm + rotated.x_nm,
-                y_nm: center.y_nm + rotated.y_nm,
-            }
+        .map(|point| {
+            transform_courtyard_point(point, center, component.rotation_deg, component.side)
         })
         .collect()
+}
+
+fn transform_courtyard_point(
+    mut point: Point,
+    center: Point,
+    rotation_deg: u16,
+    side: BoardSide,
+) -> Point {
+    if side == BoardSide::Back {
+        point.x_nm = point.x_nm.saturating_neg();
+    }
+    let rotated = rotate_point(point, rotation_deg);
+    Point {
+        x_nm: center.x_nm.saturating_add(rotated.x_nm),
+        y_nm: center.y_nm.saturating_add(rotated.y_nm),
+    }
 }
 
 fn polygons_intersect(left: &[Point], right: &[Point]) -> bool {
@@ -1028,6 +1037,43 @@ mod tests {
         let lower_bounds = bounds(&lower);
         assert_eq!(lower_bounds.min_x, i64::MIN);
         assert_eq!(lower_bounds.min_y, i64::MIN);
+    }
+
+    #[test]
+    fn courtyard_transform_saturates_at_coordinate_limits() {
+        assert_eq!(
+            transform_courtyard_point(
+                Point {
+                    x_nm: i64::MIN,
+                    y_nm: i64::MAX,
+                },
+                Point {
+                    x_nm: i64::MAX,
+                    y_nm: i64::MAX,
+                },
+                0,
+                BoardSide::Back,
+            ),
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
+        assert_eq!(
+            transform_courtyard_point(
+                Point { x_nm: 10, y_nm: 20 },
+                Point {
+                    x_nm: 100,
+                    y_nm: 200
+                },
+                0,
+                BoardSide::Front,
+            ),
+            Point {
+                x_nm: 110,
+                y_nm: 220,
+            }
+        );
     }
 
     #[test]
