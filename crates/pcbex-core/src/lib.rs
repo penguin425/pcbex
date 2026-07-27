@@ -1369,7 +1369,7 @@ impl<'a> Router<'a> {
         let mut length_group_names = HashSet::new();
         for group in &board.length_groups {
             let members: HashSet<_> = group.net_ids.iter().copied().collect();
-            if group.name.is_empty()
+            if group.name.trim().is_empty()
                 || !length_group_names.insert(group.name.as_str())
                 || group.max_skew_nm < 0
                 || group.tuning_amplitude_nm.is_some_and(|value| value <= 0)
@@ -4817,6 +4817,39 @@ mod tests {
             assert!(matches!(
                 Router::new(&invalid),
                 Err(message) if message == "differential pair USB is invalid"
+            ));
+        }
+    }
+
+    #[test]
+    fn router_rejects_invalid_length_group_definitions() {
+        let group = |name: &str, net_ids| LengthGroup {
+            name: name.into(),
+            net_ids,
+            max_skew_nm: 0,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
+        };
+        for invalid_group in [
+            group(" \t", vec![1, 2]),
+            group("single", vec![1]),
+            group("repeated", vec![1, 1]),
+            group("unknown", vec![1, 99]),
+        ] {
+            let mut invalid = board();
+            invalid.nets.push(Net {
+                id: 2,
+                name: "N2".into(),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            });
+            invalid.length_groups.push(invalid_group);
+            assert!(matches!(
+                Router::new(&invalid),
+                Err(message) if message.starts_with("length group ")
+                    && message.ends_with(" is invalid")
             ));
         }
     }

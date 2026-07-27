@@ -534,6 +534,25 @@ pub fn check_board(board: &Board) -> CheckReport {
             );
         }
     }
+    let mut seen_length_group_names = HashSet::new();
+    for group in &board.length_groups {
+        let members: HashSet<_> = group.net_ids.iter().copied().collect();
+        if group.name.trim().is_empty()
+            || !seen_length_group_names.insert(group.name.as_str())
+            || members.len() < 2
+            || members.len() != group.net_ids.len()
+            || !members.iter().all(|net_id| known_net_ids.contains(net_id))
+        {
+            report.push(
+                "length_group_definition",
+                format!(
+                    "length group {} must have a unique non-empty name and at least two unique declared nets",
+                    group.name
+                ),
+                group.net_ids.clone(),
+            );
+        }
+    }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
             if !pad_geometry_is_valid(pad) {
@@ -5563,6 +5582,46 @@ mod tests {
                     .any(|violation| { violation.rule == "differential_pair_tuning_constraints" })
             );
         }
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_length_group_definitions() {
+        let mut board = base();
+        board.nets = (1..=8)
+            .map(|id| Net {
+                id,
+                name: format!("N{id}"),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            })
+            .collect();
+        let group = |name: &str, net_ids| crate::LengthGroup {
+            name: name.into(),
+            net_ids,
+            max_skew_nm: 0,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
+        };
+        board.length_groups = vec![
+            group("valid", vec![1, 2]),
+            group("", vec![3, 4]),
+            group("duplicate", vec![5, 6]),
+            group("duplicate", vec![7, 8]),
+            group("single", vec![1]),
+            group("repeated", vec![2, 2]),
+            group("unknown", vec![3, 99]),
+        ];
+
+        assert_eq!(
+            check_board(&board)
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "length_group_definition")
+                .count(),
+            5
+        );
     }
 
     #[test]
