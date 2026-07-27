@@ -191,6 +191,8 @@ Every generated edge passes a shared zero-length check before insertion, so new
 or adaptively sampled primitives cannot introduce collapsed contour segments.
 Line, rectangle, circle, and arc coordinates must be finite before conversion
 to nanometers, matching the validation applied to polygons and cubic curves.
+All supported Edge.Cuts coordinates must also fit the signed nanometer range;
+oversized finite values are rejected instead of saturating at integer limits.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated

@@ -1247,7 +1247,7 @@ fn edge_polygon_points(values: &[Sexp]) -> Result<Vec<Point>, String> {
             if !x.is_finite() || !y.is_finite() {
                 return Err("Edge.Cuts polygon coordinates must be finite".into());
             }
-            Ok(point_mm(x, y))
+            edge_point_mm(x, y)
         })
         .collect::<Result<Vec<_>, String>>()?;
     if polygon.first() == polygon.last() {
@@ -1661,7 +1661,7 @@ fn edge_curve_point(value: &Sexp) -> Result<Point, String> {
     if !x.is_finite() || !y.is_finite() {
         return Err("Edge.Cuts curve coordinates must be finite".into());
     }
-    Ok(point_mm(x, y))
+    edge_point_mm(x, y)
 }
 
 fn curve_is_flat(curve: [(f64, f64); 4]) -> bool {
@@ -2606,6 +2606,20 @@ fn point_mm(x: f64, y: f64) -> Point {
         y_nm: nm(y),
     }
 }
+fn edge_point_mm(x: f64, y: f64) -> Result<Point, String> {
+    let convert = |value: f64| -> Result<i64, String> {
+        let nanometers = (value * NM_PER_MM).round();
+        if (i64::MIN as f64..-(i64::MIN as f64)).contains(&nanometers) {
+            Ok(nanometers as i64)
+        } else {
+            Err("Edge.Cuts coordinates exceed nanometer range".into())
+        }
+    };
+    Ok(Point {
+        x_nm: convert(x)?,
+        y_nm: convert(y)?,
+    })
+}
 fn relative(p: Point, origin: Point) -> Point {
     Point {
         x_nm: relative_coordinate(p.x_nm, origin.x_nm),
@@ -2649,7 +2663,7 @@ fn edge_child_point(list: &[Sexp], name: &str) -> Result<Option<Point>, String> 
     if !x.is_finite() || !y.is_finite() {
         return Err("Edge.Cuts coordinates must be finite".into());
     }
-    Ok(Some(point_mm(x, y)))
+    Ok(Some(edge_point_mm(x, y)?))
 }
 fn atom(value: Option<&Sexp>) -> Option<&str> {
     match value? {
@@ -3618,6 +3632,30 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "Edge.Cuts coordinates must be finite"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_edge_cuts_coordinates_outside_nanometer_range() {
+        for primitive in [
+            r#"(gr_line (start 1e20 0) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_arc (start 0 0) (mid -1e20 10) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_circle (center 0 0) (end 1e20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_rect (start 0 0) (end 20 -1e20) (layer "Edge.Cuts"))"#,
+            r#"(gr_poly (pts (xy 0 0) (xy 1e20 0) (xy 0 20)) (layer "Edge.Cuts"))"#,
+            r#"(gr_curve (pts (xy 0 0) (xy 5 5) (xy 10 5) (xy 1e20 0)) (layer "Edge.Cuts"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {primitive}
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "Edge.Cuts coordinates exceed nanometer range"
             );
         }
     }
