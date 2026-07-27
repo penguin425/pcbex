@@ -292,6 +292,8 @@ KiCad Edge.Cuts arcs retain an intermediate sample even when their radius is
 smaller than the chord tolerance.
 KiCad three-point Edge.Cuts arc sampling preserves the declared midpoint for
 asymmetric sweeps.
+KiCad board-cutout containment uses exact wide-integer ray crossings, including
+points one nanometer from signed coordinate limits.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
