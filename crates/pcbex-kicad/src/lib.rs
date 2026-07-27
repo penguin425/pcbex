@@ -1451,12 +1451,12 @@ fn import_segment(
     let net_id = child_values(xs, "net").and_then(|v| number_u32(v.get(1)));
     obstacles.push(Obstacle {
         min: Point {
-            x_nm: a.x_nm.min(b.x_nm) - width / 2,
-            y_nm: a.y_nm.min(b.y_nm) - width / 2,
+            x_nm: a.x_nm.min(b.x_nm).saturating_sub(width / 2),
+            y_nm: a.y_nm.min(b.y_nm).saturating_sub(width / 2),
         },
         max: Point {
-            x_nm: a.x_nm.max(b.x_nm) + width / 2,
-            y_nm: a.y_nm.max(b.y_nm) + width / 2,
+            x_nm: a.x_nm.max(b.x_nm).saturating_add(width / 2),
+            y_nm: a.y_nm.max(b.y_nm).saturating_add(width / 2),
         },
         layers: vec![layer],
         net_id,
@@ -2817,6 +2817,45 @@ mod tests {
                 .layers
                 .contains(&Layer::Inner(1))
         );
+    }
+
+    #[test]
+    fn segment_obstacle_envelope_saturates_at_coordinate_limits() {
+        let segment = parse(
+            r#"(segment
+              (start -1e30 -1e30)
+              (end 1e30 1e30)
+              (width 1e30)
+              (layer "F.Cu")
+              (net 0))"#,
+        )
+        .unwrap();
+        let mut obstacles = Vec::new();
+        let mut routes = HashMap::new();
+        import_segment(
+            segment.as_list().unwrap(),
+            Point { x_nm: 0, y_nm: 0 },
+            &rules(),
+            &mut obstacles,
+            &mut routes,
+        );
+
+        assert_eq!(obstacles.len(), 1);
+        assert_eq!(
+            obstacles[0].min,
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            obstacles[0].max,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
+        assert!(routes.is_empty());
     }
 
     #[test]

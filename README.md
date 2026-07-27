@@ -270,6 +270,8 @@ KiCad placement fallback bounds saturate pad-relative differences, half-size
 offsets, and final component spans.
 KiCad placement and copper writers saturate board-origin translation at signed
 coordinate limits.
+KiCad track-segment obstacle envelopes saturate half-width expansion at signed
+coordinate limits.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
