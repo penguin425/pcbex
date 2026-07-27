@@ -165,6 +165,8 @@ regular expressions; exact assignments retain precedence. A sibling
 track/via/hole dimensions, differential gap, and length constraints are applied
 to routing; use `--rules-file` to select another rules file. Custom-rule
 dimensions in either mm or mil must also fit the signed nanometer range.
+Custom-rule application is atomic, so an invalid later constraint or unknown
+net class cannot leave earlier rule updates partially applied.
 
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.

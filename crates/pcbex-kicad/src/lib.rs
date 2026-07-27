@@ -329,6 +329,7 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
     let top = root
         .as_list()
         .ok_or_else(|| "KiCad custom rules are not an s-expression".to_string())?;
+    let mut net_classes = board.net_classes.clone();
     let mut applied = 0;
     for item in top {
         let Some(rule) = item.as_list() else { continue };
@@ -341,7 +342,7 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
         let Some(class_name) = condition_net_class(condition) else {
             continue;
         };
-        let Some(class) = board.net_classes.get_mut(&class_name) else {
+        let Some(class) = net_classes.get_mut(&class_name) else {
             return Err(format!(
                 "custom rule references unknown net class {class_name}"
             ));
@@ -377,7 +378,8 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
             applied += 1;
         }
     }
-    board.differential_pairs = infer_differential_pairs(&board.nets, &board.net_classes);
+    board.differential_pairs = infer_differential_pairs(&board.nets, &net_classes);
+    board.net_classes = net_classes;
     Ok(applied)
 }
 
@@ -4849,6 +4851,55 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 format!("invalid custom-rule dimension {token}")
+            );
+        }
+    }
+
+    #[test]
+    fn custom_rule_errors_leave_net_classes_unchanged() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let cases = [
+            (
+                r#"
+                  (rule "Invalid dimension"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm))
+                    (constraint track_width (min 1e20mm)))
+                "#,
+                "invalid custom-rule dimension 1e20mm",
+            ),
+            (
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "Unknown second"
+                    (condition "A.NetClass == 'Missing'")
+                    (constraint clearance (min 0.5mm)))
+                "#,
+                "custom rule references unknown net class Missing",
+            ),
+        ];
+
+        for (custom_rules, expected) in cases {
+            let mut imported = import(pcb, rules()).unwrap();
+            let original_clearance = imported.board.net_classes["Signal"].clearance_nm;
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, custom_rules).unwrap_err(),
+                expected
+            );
+            assert_eq!(
+                imported.board.net_classes["Signal"].clearance_nm,
+                original_clearance
             );
         }
     }
