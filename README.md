@@ -159,8 +159,9 @@ Project net-class dimensions must be non-negative and fit the signed nanometer
 range; oversized values are rejected instead of saturating at the integer limit.
 Legacy net classes embedded in `.kicad_pcb` files follow the same finite,
 non-negative, signed-nanometer range contract. Their names must also be
-non-blank and unique; blank or duplicate embedded definitions are rejected
-instead of retaining an unusable class or silently selecting the last one.
+present as scalar values, non-blank, and unique; missing, malformed, blank, or
+duplicate embedded definitions are rejected instead of being ignored, retaining
+an unusable class, or silently selecting the last one.
 Project settings are applied atomically, so an invalid class, pattern, or exact
 assignment cannot leave new classes or partial net assignments behind.
 Each project `classes` entry must have a non-blank, unique name; blank or
