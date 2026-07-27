@@ -1967,8 +1967,8 @@ fn custom_pad_polygon(pad: &[Sexp], center: Point, rotation_deg: f64) -> Option<
                 }
                 let (x, y) = rotate(number(xy.get(1))?, number(xy.get(2))?, rotation_deg);
                 Some(Point {
-                    x_nm: center.x_nm + nm(x),
-                    y_nm: center.y_nm + nm(y),
+                    x_nm: center.x_nm.saturating_add(nm(x)),
+                    y_nm: center.y_nm.saturating_add(nm(y)),
                 })
             })
             .collect();
@@ -3060,6 +3060,60 @@ mod tests {
         );
         assert_eq!(
             polygon_obstacles[1].polygon[2],
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
+    }
+
+    #[test]
+    fn custom_pad_polygon_vertices_saturate_at_coordinate_limits() {
+        let pad = parse(
+            r#"(pad "1" smd custom
+              (at 0 0)
+              (size 1 1)
+              (layers "F.Cu")
+              (primitives
+                (gr_poly
+                  (pts
+                    (xy -1e30 -1e30)
+                    (xy 1e30 -1e30)
+                    (xy 1e30 1e30))
+                  (width 0)
+                  (fill yes))))"#,
+        )
+        .unwrap();
+        let values = pad.as_list().unwrap();
+        let minimum = custom_pad_polygon(
+            values,
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            0.0,
+        )
+        .unwrap();
+        let maximum = custom_pad_polygon(
+            values,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            0.0,
+        )
+        .unwrap();
+
+        assert_eq!(minimum.len(), 3);
+        assert_eq!(
+            minimum[0],
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            maximum[2],
             Point {
                 x_nm: i64::MAX,
                 y_nm: i64::MAX,
