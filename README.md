@@ -159,6 +159,8 @@ Project net-class dimensions must be non-negative and fit the signed nanometer
 range; oversized values are rejected instead of saturating at the integer limit.
 Legacy net classes embedded in `.kicad_pcb` files follow the same finite,
 non-negative, signed-nanometer range contract.
+Project settings are applied atomically, so an invalid class, pattern, or exact
+assignment cannot leave new classes or partial net assignments behind.
 Ordered `netclass_patterns` support hierarchical names, `*`/`?` wildcards, and
 regular expressions; exact assignments retain precedence. A sibling
 `.kicad_dru` is also discovered automatically. NetClass-conditioned clearance,

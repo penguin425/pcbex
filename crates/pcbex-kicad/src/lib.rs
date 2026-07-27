@@ -197,6 +197,8 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
         .get("classes")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| "KiCad project net_settings.classes is not an array".to_string())?;
+    let mut net_classes = board.net_classes.clone();
+    let mut nets = board.nets.clone();
 
     for class in classes {
         let Some(class) = class.as_object() else {
@@ -224,7 +226,7 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                     .ok_or_else(|| format!("net class {name} has invalid {key}")),
             }
         };
-        board.net_classes.insert(
+        net_classes.insert(
             name.to_string(),
             NetClassRules {
                 track_width_nm: dimension("track_width", board.rules.track_width_nm)?,
@@ -259,13 +261,13 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 .get("netclass")
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| "net-class pattern is missing netclass".to_string())?;
-            if !board.net_classes.contains_key(class) {
+            if !net_classes.contains_key(class) {
                 return Err(format!(
                     "net-class pattern {pattern} references unknown class {class}"
                 ));
             }
             let matcher = compile_net_pattern(pattern)?;
-            for net in &mut board.nets {
+            for net in &mut nets {
                 if matcher.is_match(&net.name) {
                     net.class = Some(class.to_string());
                 }
@@ -283,17 +285,19 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                     "net-class assignment for {net_name} is not a string"
                 ));
             };
-            if !board.net_classes.contains_key(class) {
+            if !net_classes.contains_key(class) {
                 return Err(format!(
                     "net-class assignment for {net_name} references unknown class {class}"
                 ));
             }
-            if let Some(net) = board.nets.iter_mut().find(|net| net.name == *net_name) {
+            if let Some(net) = nets.iter_mut().find(|net| net.name == *net_name) {
                 net.class = Some(class.to_string());
             }
         }
     }
-    board.differential_pairs = infer_differential_pairs(&board.nets, &board.net_classes);
+    board.differential_pairs = infer_differential_pairs(&nets, &net_classes);
+    board.net_classes = net_classes;
+    board.nets = nets;
     Ok(())
 }
 
@@ -4923,6 +4927,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("unknown class Missing"));
+    }
+
+    #[test]
+    fn project_setting_errors_leave_classes_and_assignments_unchanged() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)
+              (add_net "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+              (net 1 "SIG")))
+        )"#;
+        let mut imported = import(pcb, rules()).unwrap();
+        let project = r#"{
+          "net_settings": {
+            "classes": [{
+              "name": "New", "clearance": 0.3, "track_width": 0.4,
+              "via_diameter": 0.7, "via_drill": 0.35
+            }],
+            "netclass_patterns": [
+              {"pattern": "SIG", "netclass": "New"}
+            ],
+            "netclass_assignments": {"SIG": "Missing"}
+          }
+        }"#;
+
+        assert_eq!(
+            apply_project_net_settings(&mut imported.board, project).unwrap_err(),
+            "net-class assignment for SIG references unknown class Missing"
+        );
+        assert!(!imported.board.net_classes.contains_key("New"));
+        assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
     }
 
     #[test]
