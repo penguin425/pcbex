@@ -197,6 +197,8 @@ Board-level line, rectangle, circle, and arc points reject trailing values
 instead of silently ignoring malformed coordinate-list elements.
 Polygon and cubic-curve `xy` entries likewise contain exactly two coordinates,
 so every supported outline point has strict arity.
+Board-level Edge.Cuts primitives reject repeated `start`, `mid`, `end`, or
+`center` fields instead of selecting the first ambiguous value.
 Additional closed contours inside the largest outline are imported as board
 cutouts and excluded from routing with the same copper-to-edge clearance.
 Geometry invariants run as property tests in the normal Rust suite. Dedicated
