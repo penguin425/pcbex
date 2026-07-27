@@ -271,6 +271,8 @@ Set `target_differential_impedance_ohms` together with
 impedance. The estimate combines routed width, pair gap, copper thickness,
 dielectric height, and permittivity and reports missing/invalid stackup data
 separately.
+Normal DRC also reports incomplete, non-finite, or negative impedance
+constraints before evaluating routed geometry.
 `maximum_differential_impedance_step_ohms` additionally limits the largest
 stackup-derived impedance change around any via on either member, even when no
 absolute differential target is configured.

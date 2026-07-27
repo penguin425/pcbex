@@ -501,6 +501,24 @@ pub fn check_board(board: &Board) -> CheckReport {
                 vec![pair.positive_net_id, pair.negative_net_id],
             );
         }
+        let target = pair.target_differential_impedance_ohms;
+        let tolerance = pair.differential_impedance_tolerance_ohms;
+        if target.is_some_and(|value| !value.is_finite() || value <= 0.0)
+            || tolerance.is_some_and(|value| !value.is_finite() || value < 0.0)
+            || pair
+                .maximum_differential_impedance_step_ohms
+                .is_some_and(|value| !value.is_finite() || value < 0.0)
+            || target.is_some() != tolerance.is_some()
+        {
+            report.push(
+                "differential_pair_impedance_constraints",
+                format!(
+                    "differential pair {} must use a positive finite impedance target with a non-negative finite tolerance and transition limit",
+                    pair.name
+                ),
+                vec![pair.positive_net_id, pair.negative_net_id],
+            );
+        }
     }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
@@ -5403,6 +5421,71 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "differential_pair_constraints")
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_differential_pair_impedance_constraints() {
+        let make_board = |target, tolerance, maximum_step| {
+            let mut board = base();
+            board.nets = (1..=2)
+                .map(|id| Net {
+                    id,
+                    name: format!("N{id}"),
+                    terminals: vec![],
+                    class: None,
+                    priority: 0,
+                })
+                .collect();
+            board.differential_pairs.push(DifferentialPair {
+                name: "USB".into(),
+                positive_net_id: 1,
+                negative_net_id: 2,
+                gap_nm: 100_000,
+                gap_tolerance_nm: 50_000,
+                max_skew_nm: 250_000,
+                min_coupled_percent: 80,
+                target_differential_impedance_ohms: target,
+                differential_impedance_tolerance_ohms: tolerance,
+                maximum_differential_impedance_step_ohms: maximum_step,
+                minimum_length_nm: None,
+                tuning_amplitude_nm: None,
+                tuning_pitch_nm: None,
+                max_tuning_sections: 1,
+            });
+            board
+        };
+
+        for board in [
+            make_board(Some(0.0), Some(10.0), None),
+            make_board(Some(f64::NAN), Some(10.0), None),
+            make_board(Some(90.0), Some(-1.0), None),
+            make_board(Some(90.0), Some(f64::INFINITY), None),
+            make_board(Some(90.0), None, None),
+            make_board(None, Some(10.0), None),
+            make_board(None, None, Some(-1.0)),
+            make_board(None, None, Some(f64::NAN)),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| {
+                        violation.rule == "differential_pair_impedance_constraints"
+                    })
+                    .count(),
+                1
+            );
+        }
+        for board in [
+            make_board(None, None, None),
+            make_board(Some(90.0), Some(0.0), Some(0.0)),
+        ] {
+            assert!(
+                !check_board(&board).violations.iter().any(|violation| {
+                    violation.rule == "differential_pair_impedance_constraints"
+                })
+            );
+        }
     }
 
     #[test]
