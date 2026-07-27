@@ -3177,10 +3177,19 @@ fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> 
             let mut selected = None;
             'rings: for ring in 1..=group.max_rings {
                 for (dx, dy) in &directions {
-                    let distance = group.fanout_distance_nm * Nm::from(ring);
                     let mut escape = Point {
-                        x_nm: original.x_nm + dx * distance,
-                        y_nm: original.y_nm + dy * distance,
+                        x_nm: escape_axis_position(
+                            original.x_nm,
+                            *dx,
+                            group.fanout_distance_nm,
+                            ring,
+                        ),
+                        y_nm: escape_axis_position(
+                            original.y_nm,
+                            *dy,
+                            group.fanout_distance_nm,
+                            ring,
+                        ),
                     };
                     if let Some(grid) = group.via_grid_nm {
                         escape.x_nm = snap_to_grid(escape.x_nm, grid);
@@ -3226,6 +3235,12 @@ fn prepare_escape_routing(board: &Board) -> Result<(Board, Vec<Route>), String> 
     }
     adjusted.escape_groups.clear();
     Ok((adjusted, stubs))
+}
+
+fn escape_axis_position(origin: Nm, direction: Nm, distance: Nm, ring: u8) -> Nm {
+    let position =
+        i128::from(origin) + i128::from(direction) * i128::from(distance) * i128::from(ring);
+    position.clamp(i128::from(Nm::MIN), i128::from(Nm::MAX)) as Nm
 }
 
 fn point_centroid(points: &[Point]) -> Point {
@@ -7151,6 +7166,15 @@ mod tests {
             ),
             (-1, 0)
         );
+    }
+
+    #[test]
+    fn escape_candidate_coordinates_saturate_distance_products_and_offsets() {
+        assert_eq!(escape_axis_position(i64::MAX, 1, i64::MAX, 8), i64::MAX);
+        assert_eq!(escape_axis_position(i64::MIN, -1, i64::MAX, 8), i64::MIN);
+        assert_eq!(escape_axis_position(i64::MAX, -1, i64::MAX, 1), 0);
+        assert_eq!(escape_axis_position(100, 1, 25, 3), 175);
+        assert_eq!(escape_axis_position(100, 0, i64::MAX, 8), 100);
     }
 
     #[test]
