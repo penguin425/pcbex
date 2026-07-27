@@ -462,7 +462,7 @@ fn import_net_classes(
                 continue;
             }
             let Some(name) = atom(values.get(1)) else {
-                continue;
+                return Err("KiCad board net class is missing its name".into());
             };
             if name.trim().is_empty() {
                 return Err("KiCad board net class name must not be blank".into());
@@ -4797,6 +4797,26 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "KiCad board net class name must not be blank"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_legacy_net_classes_without_a_scalar_name() {
+        for definition in [
+            "(net_class)",
+            r#"(net_class (name "Signal") "" (trace_width 0.25))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup {definition})
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad board net class is missing its name"
             );
         }
     }
