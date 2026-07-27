@@ -237,6 +237,8 @@ before aggregating courtyard penalties.
 subtraction before calculating their excess penalty.
 Decoupling anchor-to-power-pin distance uses the same full-range-safe excess
 calculation before applying its board-side penalty.
+Board-edge constraints widen left, right, top, and bottom distances before
+subtracting the permitted edge offset.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
