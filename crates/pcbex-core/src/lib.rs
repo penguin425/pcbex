@@ -1412,14 +1412,16 @@ impl<'a> Router<'a> {
         }
         let mut return_path_names = HashSet::new();
         for rule in &board.return_path_rules {
-            if rule.name.is_empty()
+            let signal_net_ids: HashSet<_> = rule.signal_net_ids.iter().copied().collect();
+            if rule.name.trim().is_empty()
                 || !return_path_names.insert(rule.name.as_str())
                 || rule.max_via_distance_nm <= 0
                 || rule
                     .plane_sample_spacing_nm
                     .is_some_and(|spacing| spacing <= 0)
                 || !net_ids.contains(&rule.reference_net_id)
-                || rule.signal_net_ids.is_empty()
+                || signal_net_ids.is_empty()
+                || signal_net_ids.len() != rule.signal_net_ids.len()
                 || rule
                     .signal_net_ids
                     .iter()
@@ -4983,6 +4985,39 @@ mod tests {
             Router::new(&back_first),
             Err(message) if message == "escape group U1 is invalid"
         ));
+    }
+
+    #[test]
+    fn router_rejects_invalid_return_path_rule_definitions() {
+        let rule = |name: &str, signal_net_ids| ReturnPathRule {
+            name: name.into(),
+            signal_net_ids,
+            reference_net_id: 2,
+            max_via_distance_nm: 1_000_000,
+            auto_stitch: false,
+            require_continuous_plane: false,
+            plane_sample_spacing_nm: None,
+        };
+        for invalid_rule in [
+            rule(" \t", vec![1]),
+            rule("repeated", vec![1, 1]),
+            rule("empty", vec![]),
+        ] {
+            let mut invalid = board();
+            invalid.nets.push(Net {
+                id: 2,
+                name: "GND".into(),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            });
+            invalid.return_path_rules.push(invalid_rule);
+            assert!(matches!(
+                Router::new(&invalid),
+                Err(message) if message.starts_with("return path rule ")
+                    && message.ends_with(" is invalid")
+            ));
+        }
     }
 
     #[test]

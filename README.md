@@ -393,6 +393,9 @@ including every fanout stub, must pass the normal full-board checker.
 
 ## Return-path stitching
 
+Return-path rules require unique non-empty names, one declared reference net,
+and a non-empty set of unique declared signal nets distinct from the reference.
+
 `return_path_rules` associates high-speed signal nets with a reference net and
 a maximum signal-to-reference via distance. The board checker reports every
 layer transition without a nearby reference via that spans the same layers.
