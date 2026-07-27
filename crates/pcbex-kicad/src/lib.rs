@@ -1507,12 +1507,28 @@ fn import_route_arc(
     let net_id = child_values(xs, "net").and_then(|values| number_u32(values.get(1)));
     obstacles.push(Obstacle {
         min: Point {
-            x_nm: start.x_nm.min(mid.x_nm).min(end.x_nm) - width / 2,
-            y_nm: start.y_nm.min(mid.y_nm).min(end.y_nm) - width / 2,
+            x_nm: start
+                .x_nm
+                .min(mid.x_nm)
+                .min(end.x_nm)
+                .saturating_sub(width / 2),
+            y_nm: start
+                .y_nm
+                .min(mid.y_nm)
+                .min(end.y_nm)
+                .saturating_sub(width / 2),
         },
         max: Point {
-            x_nm: start.x_nm.max(mid.x_nm).max(end.x_nm) + width / 2,
-            y_nm: start.y_nm.max(mid.y_nm).max(end.y_nm) + width / 2,
+            x_nm: start
+                .x_nm
+                .max(mid.x_nm)
+                .max(end.x_nm)
+                .saturating_add(width / 2),
+            y_nm: start
+                .y_nm
+                .max(mid.y_nm)
+                .max(end.y_nm)
+                .saturating_add(width / 2),
         },
         layers: vec![layer],
         net_id,
@@ -2834,6 +2850,46 @@ mod tests {
         let mut routes = HashMap::new();
         import_segment(
             segment.as_list().unwrap(),
+            Point { x_nm: 0, y_nm: 0 },
+            &rules(),
+            &mut obstacles,
+            &mut routes,
+        );
+
+        assert_eq!(obstacles.len(), 1);
+        assert_eq!(
+            obstacles[0].min,
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            obstacles[0].max,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
+        assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn route_arc_obstacle_envelope_saturates_at_coordinate_limits() {
+        let arc = parse(
+            r#"(arc
+              (start -1e30 -1e30)
+              (mid 0 1e30)
+              (end 1e30 -1e30)
+              (width 1e30)
+              (layer "F.Cu")
+              (net 0))"#,
+        )
+        .unwrap();
+        let mut obstacles = Vec::new();
+        let mut routes = HashMap::new();
+        import_route_arc(
+            arc.as_list().unwrap(),
             Point { x_nm: 0, y_nm: 0 },
             &rules(),
             &mut obstacles,
