@@ -1129,6 +1129,16 @@ fn positive_div_ceil(value: i64, divisor: i64) -> i64 {
     value / divisor + i64::from(value % divisor != 0)
 }
 
+fn points_within_distance(first: Point, second: Point, limit_nm: i64) -> bool {
+    let dx = absolute_coordinate_difference(first.x_nm, second.x_nm);
+    let dy = absolute_coordinate_difference(first.y_nm, second.y_nm);
+    let limit = i128::from(limit_nm);
+    if dx > limit || dy > limit {
+        return false;
+    }
+    dx * dx + dy * dy <= limit * limit
+}
+
 fn check_impedance(board: &Board, routes: &HashMap<u32, &Route>, report: &mut CheckReport) {
     for net in &board.nets {
         let Some(class) = net
@@ -1235,10 +1245,11 @@ fn check_return_paths(board: &Board, routes: &HashMap<u32, &Route>, report: &mut
                     if !signal_via.shares_layer_with(reference_via) {
                         return false;
                     }
-                    let dx = i128::from(signal_via.position.x_nm - reference_via.position.x_nm);
-                    let dy = i128::from(signal_via.position.y_nm - reference_via.position.y_nm);
-                    let limit = i128::from(rule.max_via_distance_nm);
-                    dx * dx + dy * dy <= limit * limit
+                    points_within_distance(
+                        signal_via.position,
+                        reference_via.position,
+                        rule.max_via_distance_nm,
+                    )
                 });
                 if !has_return {
                     report.push(
@@ -4030,6 +4041,29 @@ mod tests {
         );
         assert_eq!(interpolate_coordinate(0, 1_000, 1, 4), 250);
         assert_eq!(positive_div_ceil(i64::MAX, 2), 4_611_686_018_427_387_904);
+    }
+
+    #[test]
+    fn return_path_via_distance_handles_extreme_coordinates() {
+        assert!(!points_within_distance(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            i64::MAX,
+        ));
+        assert!(points_within_distance(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: 0,
+            },
+            Point { x_nm: -1, y_nm: 0 },
+            i64::MAX,
+        ));
     }
 
     #[test]

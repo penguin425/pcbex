@@ -512,6 +512,8 @@ endpoint coordinate differences before checking horizontal, vertical, or
 45-degree geometry.
 Return-path plane sampling uses overflow-safe ceiling division and widened
 endpoint interpolation, including segments spanning the full coordinate range.
+Return-path via proximity checks widen coordinate differences before subtraction
+and bound each axis before squaring, including full-range coordinates.
 `pcbex dfm board.json [--output report.json]` emits a machine-readable report
 and exits unsuccessfully when manufacturing violations are present.
 Optional rules also detect drill-to-drill spacing, prohibited Via-in-pad, and
