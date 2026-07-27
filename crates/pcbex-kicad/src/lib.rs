@@ -210,8 +210,7 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 None | Some(serde_json::Value::Null) => Ok(fallback),
                 Some(value) => value
                     .as_f64()
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .map(nm)
+                    .and_then(checked_nonnegative_nm)
                     .ok_or_else(|| format!("net class {name} has invalid {key}")),
             }
         };
@@ -220,8 +219,8 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 None | Some(serde_json::Value::Null) => Ok(None),
                 Some(value) => value
                     .as_f64()
-                    .filter(|value| value.is_finite() && *value >= 0.0)
-                    .map(|value| Some(nm(value)))
+                    .and_then(checked_nonnegative_nm)
+                    .map(Some)
                     .ok_or_else(|| format!("net class {name} has invalid {key}")),
             }
         };
@@ -2699,6 +2698,11 @@ fn relative_coordinate(value: i64, origin: i64) -> i64 {
 fn nm(value: f64) -> i64 {
     (value * NM_PER_MM).round() as i64
 }
+fn checked_nonnegative_nm(value: f64) -> Option<i64> {
+    let nanometers = (value * NM_PER_MM).round();
+    (nanometers.is_finite() && (0.0..-(i64::MIN as f64)).contains(&nanometers))
+        .then_some(nanometers as i64)
+}
 fn mm(value: i64) -> f64 {
     value as f64 / NM_PER_MM
 }
@@ -4810,6 +4814,29 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("unknown class Missing"));
+    }
+
+    #[test]
+    fn rejects_project_net_class_dimensions_outside_nanometer_range() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for key in ["track_width", "diff_pair_gap"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = format!(
+                r#"{{
+                  "net_settings": {{
+                    "classes": [{{"name": "Huge", "{key}": 1e20}}]
+                  }}
+                }}"#
+            );
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project).unwrap_err(),
+                format!("net class Huge has invalid {key}")
+            );
+        }
     }
 
     #[test]
