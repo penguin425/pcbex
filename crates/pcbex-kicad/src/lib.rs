@@ -1169,6 +1169,9 @@ fn assemble_contours(lines: Vec<(Point, Point)>) -> Result<Vec<Vec<Point>>, Stri
         incident.entry(*start).or_default().push(index);
         incident.entry(*end).or_default().push(index);
     }
+    if incident.values().any(|edges| edges.len() != 2) {
+        return Err("each Edge.Cuts contour vertex must join exactly two primitives".into());
+    }
 
     let mut used = vec![false; lines.len()];
     let mut contours = Vec::new();
@@ -2858,6 +2861,20 @@ mod tests {
         assert_eq!(contours.len(), 1);
         assert_eq!(contours[0].len(), points.len());
         assert!(!polygon_twice_area(&contours[0]).is_zero());
+    }
+
+    #[test]
+    fn rejects_edge_cuts_contours_that_branch_at_a_shared_vertex() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (gr_rect (start 20 20) (end 30 30) (layer "Edge.Cuts"))
+        )"#;
+
+        assert!(
+            import(pcb, rules())
+                .unwrap_err()
+                .contains("must join exactly two primitives")
+        );
     }
 
     #[test]
