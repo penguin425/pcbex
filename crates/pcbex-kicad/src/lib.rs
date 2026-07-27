@@ -461,6 +461,9 @@ fn import_net_classes(
             let Some(name) = atom(values.get(1)) else {
                 continue;
             };
+            if classes.contains_key(name) {
+                return Err(format!("KiCad board contains duplicate net class {name}"));
+            }
             let dimension = |key: &str, fallback: i64| -> Result<i64, String> {
                 let Some(value) = child_values(values, key) else {
                     return Ok(fallback);
@@ -4751,6 +4754,25 @@ mod tests {
                 format!("net class Invalid has invalid {key}")
             );
         }
+    }
+
+    #[test]
+    fn rejects_duplicate_legacy_net_class_definitions() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25))
+            (net_class "Signal" ""
+              (clearance 0.3)
+              (trace_width 0.4)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "KiCad board contains duplicate net class Signal"
+        );
     }
 
     #[test]
