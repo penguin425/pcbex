@@ -534,6 +534,8 @@ Within-route via connectivity combines both via diameters with widened
 saturating arithmetic before evaluating the connectivity graph.
 Within-route track connectivity combines both track widths with widened
 saturating arithmetic before testing segment contact.
+Within-route track-to-via connectivity safely combines track width and via
+diameter before testing layer-spanning contact.
 Return-path plane sampling uses overflow-safe ceiling division and widened
 endpoint interpolation, including segments spanning the full coordinate range.
 Return-path via proximity checks widen coordinate differences before subtraction
