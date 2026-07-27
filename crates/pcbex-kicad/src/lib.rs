@@ -1162,6 +1162,9 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
     }) {
         return Err("Edge.Cuts cutouts must be inside the outer outline".into());
     }
+    if cutouts_conflict(&cutouts) {
+        return Err("Edge.Cuts cutouts must not overlap or nest".into());
+    }
     Ok(BoardGeometry {
         min,
         max,
@@ -1314,6 +1317,20 @@ fn contours_intersect(left: &[Point], right: &[Point]) -> bool {
                     segments_intersect(*left_start, *left_end, *right_start, *right_end)
                 })
         })
+}
+
+fn cutouts_conflict(cutouts: &[Vec<Point>]) -> bool {
+    for first in 0..cutouts.len() {
+        for second in first + 1..cutouts.len() {
+            if contours_intersect(&cutouts[first], &cutouts[second])
+                || point_in_polygon(cutouts[first][0], &cutouts[second])
+                || point_in_polygon(cutouts[second][0], &cutouts[first])
+            {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn contour_self_intersects(contour: &[Point]) -> bool {
@@ -3082,6 +3099,28 @@ mod tests {
                 .unwrap_err()
                 .contains("cutouts must be inside")
         );
+    }
+
+    #[test]
+    fn rejects_overlapping_and_nested_edge_cuts_cutouts() {
+        let overlapping = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 40 40) (layer "Edge.Cuts"))
+          (gr_rect (start 5 5) (end 20 20) (layer "Edge.Cuts"))
+          (gr_rect (start 15 15) (end 30 30) (layer "Edge.Cuts"))
+        )"#;
+        let nested = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 40 40) (layer "Edge.Cuts"))
+          (gr_rect (start 5 5) (end 30 30) (layer "Edge.Cuts"))
+          (gr_rect (start 10 10) (end 20 20) (layer "Edge.Cuts"))
+        )"#;
+
+        for pcb in [overlapping, nested] {
+            assert!(
+                import(pcb, rules())
+                    .unwrap_err()
+                    .contains("must not overlap or nest")
+            );
+        }
     }
 
     #[test]

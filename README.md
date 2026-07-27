@@ -302,6 +302,8 @@ Cutout edges are checked exactly against the outer contour, preventing an
 all-vertices-inside cutout from crossing outside a concave board outline.
 Non-adjacent edges within every Edge.Cuts contour are also checked exactly, so
 asymmetric self-intersections cannot pass merely because their area is nonzero.
+Multiple Edge.Cuts cutouts must be disjoint and unnested because the board model
+represents a flat set of holes rather than alternating material islands.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
