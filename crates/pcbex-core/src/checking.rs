@@ -1558,8 +1558,11 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
     }
     for (index, hole) in drilled_holes.iter().enumerate() {
         for other in &drilled_holes[index + 1..] {
-            let required_twice =
-                hole.diameter_nm + other.diameter_nm + 2 * rules.minimum_drill_to_drill_nm;
+            let required_twice = required_drill_spacing_twice(
+                hole.diameter_nm,
+                other.diameter_nm,
+                rules.minimum_drill_to_drill_nm,
+            );
             if segments_closer_than(hole.start, hole.end, other.start, other.end, required_twice) {
                 let mut net_ids: Vec<_> =
                     [hole.net_id, other.net_id].into_iter().flatten().collect();
@@ -1590,6 +1593,17 @@ fn exceeds_aspect_ratio(board_thickness_nm: i64, drill_nm: i64, maximum_ratio: u
 
 fn annular_ring_is_below_minimum(outer_nm: i64, drill_nm: i64, minimum_ring_nm: i64) -> bool {
     i128::from(outer_nm) - i128::from(drill_nm) < 2 * i128::from(minimum_ring_nm)
+}
+
+fn required_drill_spacing_twice(
+    first_diameter_nm: i64,
+    second_diameter_nm: i64,
+    minimum_spacing_nm: i64,
+) -> i64 {
+    let required = i128::from(first_diameter_nm)
+        + i128::from(second_diameter_nm)
+        + 2 * i128::from(minimum_spacing_nm);
+    required.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
@@ -3845,6 +3859,22 @@ mod tests {
         assert!(annular_ring_is_below_minimum(i64::MIN, i64::MAX, i64::MAX));
         assert!(!annular_ring_is_below_minimum(600_000, 300_000, 150_000));
         assert!(annular_ring_is_below_minimum(599_999, 300_000, 150_000));
+    }
+
+    #[test]
+    fn drill_spacing_threshold_handles_extreme_dimensions() {
+        assert_eq!(
+            required_drill_spacing_twice(i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            required_drill_spacing_twice(i64::MIN, i64::MIN, i64::MIN),
+            i64::MIN
+        );
+        assert_eq!(
+            required_drill_spacing_twice(300_000, 400_000, 150_000),
+            1_000_000
+        );
     }
 
     #[test]
