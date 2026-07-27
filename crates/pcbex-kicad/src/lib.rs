@@ -11,6 +11,7 @@ use std::fmt::Write;
 const NM_PER_MM: f64 = 1_000_000.0;
 const ARC_CHORD_TOLERANCE_NM: f64 = 10_000.0;
 const MAX_EDGE_CIRCLE_SEGMENTS: usize = 16_384;
+const MAX_EDGE_CURVE_SEGMENTS: usize = 16_384;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Sexp {
@@ -1096,6 +1097,12 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                     )?;
                 }
             }
+            Some("gr_curve") => {
+                let points = sample_curve(xs)?;
+                for pair in points.windows(2) {
+                    push_unique_edge(&mut lines, &mut unique_edges, pair[0], pair[1])?;
+                }
+            }
             Some("gr_rect") => {
                 let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
                 else {
@@ -1568,6 +1575,107 @@ fn sample_circle(center: Point, end: Point) -> Result<Vec<Point>, String> {
         return Err("Edge.Cuts circle is too small to represent".into());
     }
     Ok(points)
+}
+
+fn sample_curve(values: &[Sexp]) -> Result<Vec<Point>, String> {
+    let Some(values) = child_values(values, "pts") else {
+        return Err("Edge.Cuts curve requires four points".into());
+    };
+    let controls = values
+        .iter()
+        .skip(1)
+        .map(|value| {
+            let Some(xy) = value.as_list() else {
+                return Err("Edge.Cuts curve requires four xy points".into());
+            };
+            if atom(xy.first()) != Some("xy") {
+                return Err("Edge.Cuts curve requires four xy points".into());
+            }
+            let (Some(x), Some(y)) = (number(xy.get(1)), number(xy.get(2))) else {
+                return Err("Edge.Cuts curve requires four xy points".into());
+            };
+            if !x.is_finite() || !y.is_finite() {
+                return Err("Edge.Cuts curve coordinates must be finite".into());
+            }
+            Ok(point_mm(x, y))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let [start, control_1, control_2, end] = controls.as_slice() else {
+        return Err("Edge.Cuts curve requires four points".into());
+    };
+
+    let relative = |point: Point| {
+        (
+            (i128::from(point.x_nm) - i128::from(start.x_nm)) as f64,
+            (i128::from(point.y_nm) - i128::from(start.y_nm)) as f64,
+        )
+    };
+    let mut stack = vec![[
+        relative(*start),
+        relative(*control_1),
+        relative(*control_2),
+        relative(*end),
+    ]];
+    let mut sampled = vec![(0.0, 0.0)];
+    while let Some(curve) = stack.pop() {
+        if curve_is_flat(curve) {
+            sampled.push(curve[3]);
+            if sampled.len() > MAX_EDGE_CURVE_SEGMENTS + 1 {
+                return Err("Edge.Cuts curve requires too many segments".into());
+            }
+            continue;
+        }
+        let [left, right] = split_curve(curve);
+        stack.push(right);
+        stack.push(left);
+    }
+
+    let mut points = sampled
+        .into_iter()
+        .map(|(x, y)| Point {
+            x_nm: translate_arc_coordinate(start.x_nm, x),
+            y_nm: translate_arc_coordinate(start.y_nm, y),
+        })
+        .collect::<Vec<_>>();
+    points[0] = *start;
+    *points.last_mut().unwrap() = *end;
+    points.dedup();
+    if points.len() < 2 {
+        return Err("Edge.Cuts curve must have distinct endpoints or control points".into());
+    }
+    Ok(points)
+}
+
+fn curve_is_flat(curve: [(f64, f64); 4]) -> bool {
+    point_segment_distance(curve[1], curve[0], curve[3]) <= ARC_CHORD_TOLERANCE_NM
+        && point_segment_distance(curve[2], curve[0], curve[3]) <= ARC_CHORD_TOLERANCE_NM
+}
+
+fn point_segment_distance(point: (f64, f64), start: (f64, f64), end: (f64, f64)) -> f64 {
+    let delta = (end.0 - start.0, end.1 - start.1);
+    let length_squared = delta.0 * delta.0 + delta.1 * delta.1;
+    if length_squared == 0.0 {
+        return (point.0 - start.0).hypot(point.1 - start.1);
+    }
+    let projection =
+        ((point.0 - start.0) * delta.0 + (point.1 - start.1) * delta.1) / length_squared;
+    let projection = projection.clamp(0.0, 1.0);
+    (point.0 - (start.0 + projection * delta.0)).hypot(point.1 - (start.1 + projection * delta.1))
+}
+
+fn split_curve(curve: [(f64, f64); 4]) -> [[(f64, f64); 4]; 2] {
+    let midpoint =
+        |left: (f64, f64), right: (f64, f64)| ((left.0 + right.0) / 2.0, (left.1 + right.1) / 2.0);
+    let first = midpoint(curve[0], curve[1]);
+    let second = midpoint(curve[1], curve[2]);
+    let third = midpoint(curve[2], curve[3]);
+    let fourth = midpoint(first, second);
+    let fifth = midpoint(second, third);
+    let center = midpoint(fourth, fifth);
+    [
+        [curve[0], first, fourth, center],
+        [center, fifth, third, curve[3]],
+    ]
 }
 
 fn translate_arc_coordinate(origin: i64, offset: f64) -> i64 {
@@ -3163,6 +3271,66 @@ mod tests {
         assert_eq!(imported.board.cutouts[0].len(), 4);
         assert!(imported.board.outline.contains(&point_mm(40.0, 10.0)));
         assert!(imported.board.cutouts[0].contains(&point_mm(18.0, 15.0)));
+    }
+
+    #[test]
+    fn imports_cubic_edge_cuts_curve_with_bounded_chords() {
+        let pcb = r#"(kicad_pcb
+          (gr_curve
+            (pts (xy 0 10) (xy 0 4.477) (xy 4.477 0) (xy 10 0))
+            (layer "Edge.Cuts"))
+          (gr_line (start 10 0) (end 20 0) (layer "Edge.Cuts"))
+          (gr_line (start 20 0) (end 20 20) (layer "Edge.Cuts"))
+          (gr_line (start 20 20) (end 0 20) (layer "Edge.Cuts"))
+          (gr_line (start 0 20) (end 0 10) (layer "Edge.Cuts"))
+        )"#;
+
+        let imported = import(pcb, rules()).unwrap();
+        assert_eq!(
+            (imported.board.width_nm, imported.board.height_nm),
+            (20_000_000, 20_000_000)
+        );
+        assert!(imported.board.outline.len() > 12);
+        assert!(imported.board.outline.contains(&point_mm(0.0, 10.0)));
+        assert!(imported.board.outline.contains(&point_mm(10.0, 0.0)));
+        assert!(imported.board.outline.iter().any(
+            |point| (point.x_nm - 2_928_875).abs() <= 1 && (point.y_nm - 2_928_875).abs() <= 1
+        ));
+    }
+
+    #[test]
+    fn cubic_edge_curve_sampling_respects_chord_tolerance() {
+        let curve = parse(
+            r#"(gr_curve
+              (pts (xy 0 10) (xy -5 -10) (xy 25 30) (xy 20 0))
+              (layer "Edge.Cuts"))"#,
+        )
+        .unwrap();
+        let sampled = sample_curve(curve.as_list().unwrap()).unwrap();
+
+        for step in 0..=1_024 {
+            let t = step as f64 / 1_024.0;
+            let one_minus_t = 1.0 - t;
+            let point = (
+                3.0 * one_minus_t.powi(2) * t * -5_000_000.0
+                    + 3.0 * one_minus_t * t.powi(2) * 25_000_000.0
+                    + t.powi(3) * 20_000_000.0,
+                one_minus_t.powi(3) * 10_000_000.0
+                    + 3.0 * one_minus_t.powi(2) * t * -10_000_000.0
+                    + 3.0 * one_minus_t * t.powi(2) * 30_000_000.0,
+            );
+            let distance = sampled
+                .windows(2)
+                .map(|pair| {
+                    point_segment_distance(
+                        point,
+                        (pair[0].x_nm as f64, pair[0].y_nm as f64),
+                        (pair[1].x_nm as f64, pair[1].y_nm as f64),
+                    )
+                })
+                .fold(f64::INFINITY, f64::min);
+            assert!(distance <= ARC_CHORD_TOLERANCE_NM + 1.0);
+        }
     }
 
     #[test]
