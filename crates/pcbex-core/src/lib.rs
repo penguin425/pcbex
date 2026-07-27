@@ -5053,6 +5053,29 @@ mod tests {
     }
 
     #[test]
+    fn router_rejects_invalid_power_net_rule_definitions() {
+        let rule = |net_id| PowerNetRule {
+            net_id,
+            current_ma: 100.0,
+            maximum_voltage_drop_mv: 50.0,
+            minimum_parallel_vias: 0,
+        };
+        let mut duplicate = board();
+        duplicate.power_net_rules = vec![rule(1), rule(1)];
+        assert!(matches!(
+            Router::new(&duplicate),
+            Err(message) if message == "power-net rule for net 1 is invalid"
+        ));
+
+        let mut unknown = board();
+        unknown.power_net_rules.push(rule(99));
+        assert!(matches!(
+            Router::new(&unknown),
+            Err(message) if message == "power-net rule for net 99 is invalid"
+        ));
+    }
+
+    #[test]
     fn spatial_window_clamps_to_the_board() {
         assert_eq!(
             cell_window(
