@@ -552,6 +552,20 @@ pub fn check_board(board: &Board) -> CheckReport {
                 group.net_ids.clone(),
             );
         }
+        if group.max_skew_nm < 0
+            || group.tuning_amplitude_nm.is_some_and(|value| value <= 0)
+            || group.tuning_pitch_nm.is_some_and(|value| value <= 0)
+            || !(1..=16).contains(&group.max_tuning_sections)
+        {
+            report.push(
+                "length_group_constraints",
+                format!(
+                    "length group {} must use a non-negative skew, positive tuning dimensions, and between 1 and 16 tuning sections",
+                    group.name
+                ),
+                group.net_ids.clone(),
+            );
+        }
     }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
@@ -5622,6 +5636,59 @@ mod tests {
                 .count(),
             5
         );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_length_group_constraints() {
+        let make_board = |max_skew, amplitude, pitch, sections| {
+            let mut board = base();
+            board.nets = (1..=2)
+                .map(|id| Net {
+                    id,
+                    name: format!("N{id}"),
+                    terminals: vec![],
+                    class: None,
+                    priority: 0,
+                })
+                .collect();
+            board.length_groups.push(crate::LengthGroup {
+                name: "BUS".into(),
+                net_ids: vec![1, 2],
+                max_skew_nm: max_skew,
+                tuning_amplitude_nm: amplitude,
+                tuning_pitch_nm: pitch,
+                max_tuning_sections: sections,
+            });
+            board
+        };
+
+        for board in [
+            make_board(-1, None, None, 1),
+            make_board(0, Some(0), None, 1),
+            make_board(0, None, Some(-1), 1),
+            make_board(0, None, None, 0),
+            make_board(0, None, None, 17),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "length_group_constraints")
+                    .count(),
+                1
+            );
+        }
+        for board in [
+            make_board(0, None, None, 1),
+            make_board(250_000, Some(500_000), Some(1_000_000), 16),
+        ] {
+            assert!(
+                !check_board(&board)
+                    .violations
+                    .iter()
+                    .any(|violation| violation.rule == "length_group_constraints")
+            );
+        }
     }
 
     #[test]
