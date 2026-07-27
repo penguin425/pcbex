@@ -186,7 +186,9 @@ matching the resource bounds applied to circles and cubic curves.
 Arc collinearity is classified with exact integer geometry; extreme noncollinear
 inputs that lose precision during circle fitting report a separate error.
 Circle primitives use the same chord-deviation bound and can define either the
-outer board outline or an inner cutout.
+outer board outline or an inner cutout. Their complete radius must fit within
+the signed nanometer coordinate range, preventing saturated samples from
+distorting circles near a coordinate limit.
 Cubic curve primitives are adaptively subdivided to the same deviation bound.
 They must contain exactly four finite `xy` points before subdivision.
 Polygon primitives preserve their exact vertices and can likewise define an

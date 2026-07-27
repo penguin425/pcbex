@@ -1579,12 +1579,32 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
 }
 
 fn sample_circle(center: Point, end: Point) -> Result<Vec<Point>, String> {
-    let offset_x = (i128::from(end.x_nm) - i128::from(center.x_nm)) as f64;
-    let offset_y = (i128::from(end.y_nm) - i128::from(center.y_nm)) as f64;
-    let radius = offset_x.hypot(offset_y);
-    if radius < 1.0 {
+    let exact_offset_x = i128::from(end.x_nm) - i128::from(center.x_nm);
+    let exact_offset_y = i128::from(end.y_nm) - i128::from(center.y_nm);
+    let radius_squared = exact_offset_x
+        .unsigned_abs()
+        .pow(2)
+        .checked_add(exact_offset_y.unsigned_abs().pow(2))
+        .ok_or("Edge.Cuts circle exceeds nanometer range")?;
+    if radius_squared == 0 {
         return Err("Edge.Cuts circle must have a positive radius".into());
     }
+    let coordinate_margin = [
+        i128::from(center.x_nm) - i128::from(i64::MIN),
+        i128::from(i64::MAX) - i128::from(center.x_nm),
+        i128::from(center.y_nm) - i128::from(i64::MIN),
+        i128::from(i64::MAX) - i128::from(center.y_nm),
+    ]
+    .into_iter()
+    .min()
+    .unwrap() as u128;
+    if radius_squared > coordinate_margin.pow(2) {
+        return Err("Edge.Cuts circle exceeds nanometer range".into());
+    }
+
+    let offset_x = exact_offset_x as f64;
+    let offset_y = exact_offset_y as f64;
+    let radius = offset_x.hypot(offset_y);
     let start_angle = offset_y.atan2(offset_x);
     let max_step = 2.0 * (1.0 - (ARC_CHORD_TOLERANCE_NM / radius).min(1.0)).acos();
     let required = (std::f64::consts::TAU / max_step.max(1e-6))
@@ -3689,6 +3709,40 @@ mod tests {
         assert_eq!(
             import(zero_radius, rules()).unwrap_err(),
             "Edge.Cuts circle must have a positive radius"
+        );
+    }
+
+    #[test]
+    fn rejects_edge_cuts_circle_extending_beyond_coordinate_range() {
+        let center = Point {
+            x_nm: i64::MAX - 100,
+            y_nm: 0,
+        };
+        let end = Point {
+            x_nm: i64::MAX - 300,
+            y_nm: 0,
+        };
+
+        assert_eq!(
+            sample_circle(center, end).unwrap_err(),
+            "Edge.Cuts circle exceeds nanometer range"
+        );
+
+        let boundary_center = Point {
+            x_nm: i64::MAX - 200,
+            y_nm: 0,
+        };
+        let boundary_end = Point {
+            x_nm: i64::MAX - 400,
+            y_nm: 0,
+        };
+        assert!(
+            sample_circle(boundary_center, boundary_end)
+                .unwrap()
+                .contains(&Point {
+                    x_nm: i64::MAX,
+                    y_nm: 0,
+                })
         );
     }
 
