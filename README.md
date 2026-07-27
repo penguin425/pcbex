@@ -536,6 +536,8 @@ Within-route track connectivity combines both track widths with widened
 saturating arithmetic before testing segment contact.
 Within-route track-to-via connectivity safely combines track width and via
 diameter before testing layer-spanning contact.
+Via-to-edge, rectangular, polygon, and keepout clearance checks reuse a widened
+saturating diameter-plus-bilateral-clearance envelope.
 Return-path plane sampling uses overflow-safe ceiling division and widened
 endpoint interpolation, including segments spanning the full coordinate range.
 Return-path via proximity checks widen coordinate differences before subtraction
