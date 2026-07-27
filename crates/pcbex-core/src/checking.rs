@@ -2074,8 +2074,8 @@ fn point_in_pad(point: Point, pad: &Pad) -> bool {
         pad.height_nm
     };
     let radians = (-pad.rotation_deg).to_radians();
-    let dx = (point.x_nm - pad.position.x_nm) as f64;
-    let dy = (point.y_nm - pad.position.y_nm) as f64;
+    let dx = coordinate_difference_nm(point.x_nm, pad.position.x_nm);
+    let dy = coordinate_difference_nm(point.y_nm, pad.position.y_nm);
     let x = dx * radians.cos() - dy * radians.sin();
     let y = dx * radians.sin() + dy * radians.cos();
     match pad.shape {
@@ -4064,6 +4064,43 @@ mod tests {
             Point { x_nm: -1, y_nm: 0 },
             i64::MAX,
         ));
+    }
+
+    #[test]
+    fn point_in_pad_handles_extreme_coordinates() {
+        let pad = Pad {
+            number: "1".into(),
+            position: Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            width_nm: i64::MAX,
+            height_nm: i64::MAX,
+            source_width_nm: i64::MAX,
+            source_height_nm: i64::MAX,
+            rotation_deg: 0.0,
+            shape: PadShape::Rect,
+            custom_polygon: vec![],
+            roundrect_radius_nm: 0,
+            trapezoid_delta_x_nm: 0,
+            trapezoid_delta_y_nm: 0,
+            drill_width_nm: None,
+            drill_height_nm: None,
+            drill_offset_x_nm: 0,
+            drill_offset_y_nm: 0,
+            plated: true,
+            layers: vec![Layer::Front],
+            net_id: Some(1),
+        };
+
+        assert!(!point_in_pad(
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            &pad,
+        ));
+        assert!(point_in_pad(pad.position, &pad));
     }
 
     #[test]
