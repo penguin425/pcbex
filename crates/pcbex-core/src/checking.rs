@@ -1340,11 +1340,19 @@ pub fn check_manufacturability(board: &Board) -> CheckReport {
             );
         }
     }
-    if rules.maximum_via_aspect_ratio == 0 || rules.minimum_trace_angle_deg > 180 {
+    if rules.maximum_via_aspect_ratio == 0 {
         invalid_rule = true;
         report.push(
-            "dfm_rules",
-            "manufacturing rules contain invalid dimensions".into(),
+            "dfm_rule_aspect_ratio",
+            "manufacturing rule maximum_via_aspect_ratio must be positive".into(),
+            vec![],
+        );
+    }
+    if rules.minimum_trace_angle_deg > 180 {
+        invalid_rule = true;
+        report.push(
+            "dfm_rule_trace_angle",
+            "manufacturing rule minimum_trace_angle_deg must not exceed 180 degrees".into(),
             vec![],
         );
     }
@@ -3748,6 +3756,52 @@ mod tests {
                 .iter()
                 .any(|violation| violation.rule == "dfm_rule_dimensions")
         );
+    }
+
+    #[test]
+    fn reports_invalid_manufacturing_ratio_and_angle_rules() {
+        let make_board = |maximum_via_aspect_ratio, minimum_trace_angle_deg| {
+            let mut board = base();
+            board.manufacturing_rules = Some(crate::ManufacturingRules {
+                minimum_track_width_nm: 200_000,
+                minimum_clearance_nm: 0,
+                minimum_drill_nm: 300_000,
+                minimum_annular_ring_nm: 0,
+                minimum_copper_to_edge_nm: 0,
+                board_thickness_nm: 1_600_000,
+                maximum_via_aspect_ratio,
+                minimum_drill_to_drill_nm: 0,
+                allow_via_in_pad: true,
+                minimum_trace_angle_deg,
+            });
+            board
+        };
+
+        let zero_ratio = check_manufacturability(&make_board(0, 90));
+        assert_eq!(
+            zero_ratio
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "dfm_rule_aspect_ratio")
+                .count(),
+            1
+        );
+        let excessive_angle = check_manufacturability(&make_board(8, 181));
+        assert_eq!(
+            excessive_angle
+                .violations
+                .iter()
+                .filter(|violation| violation.rule == "dfm_rule_trace_angle")
+                .count(),
+            1
+        );
+        let valid = check_manufacturability(&make_board(1, 180));
+        assert!(!valid.violations.iter().any(|violation| {
+            matches!(
+                violation.rule.as_str(),
+                "dfm_rule_aspect_ratio" | "dfm_rule_trace_angle"
+            )
+        }));
     }
 
     #[test]
