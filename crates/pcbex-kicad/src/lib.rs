@@ -13,6 +13,7 @@ const ARC_CHORD_TOLERANCE_NM: f64 = 10_000.0;
 const MAX_EDGE_CIRCLE_SEGMENTS: usize = 16_384;
 const MAX_EDGE_CURVE_SEGMENTS: usize = 16_384;
 const MAX_EDGE_POLYGON_POINTS: usize = 16_384;
+const MAX_EDGE_SEGMENTS: usize = 65_536;
 
 #[derive(Clone, Debug, PartialEq)]
 enum Sexp {
@@ -1268,6 +1269,9 @@ fn push_unique_edge(
     start: Point,
     end: Point,
 ) -> Result<(), String> {
+    if lines.len() >= MAX_EDGE_SEGMENTS {
+        return Err("Edge.Cuts contains too many segments".into());
+    }
     let key = if (start.x_nm, start.y_nm) <= (end.x_nm, end.y_nm) {
         (start, end)
     } else {
@@ -3190,6 +3194,46 @@ mod tests {
         assert_eq!(contours.len(), 1);
         assert_eq!(contours[0].len(), points.len());
         assert!(!polygon_twice_area(&contours[0]).is_zero());
+    }
+
+    #[test]
+    fn edge_segment_limit_is_enforced_before_insertion() {
+        let mut lines = Vec::new();
+        let mut unique_edges = HashSet::new();
+        for index in 0..MAX_EDGE_SEGMENTS {
+            push_unique_edge(
+                &mut lines,
+                &mut unique_edges,
+                Point {
+                    x_nm: index as i64,
+                    y_nm: 0,
+                },
+                Point {
+                    x_nm: index as i64,
+                    y_nm: 1,
+                },
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            push_unique_edge(
+                &mut lines,
+                &mut unique_edges,
+                Point {
+                    x_nm: MAX_EDGE_SEGMENTS as i64,
+                    y_nm: 0,
+                },
+                Point {
+                    x_nm: MAX_EDGE_SEGMENTS as i64,
+                    y_nm: 1,
+                },
+            )
+            .unwrap_err(),
+            "Edge.Cuts contains too many segments"
+        );
+        assert_eq!(lines.len(), MAX_EDGE_SEGMENTS);
+        assert_eq!(unique_edges.len(), MAX_EDGE_SEGMENTS);
     }
 
     #[test]
