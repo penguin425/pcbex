@@ -135,9 +135,25 @@ pub fn routing_quality(board: &Board) -> RoutingQuality {
     }
 }
 
-fn segment_direction(segment: &Segment) -> (i64, i64) {
+fn coordinate_direction(start_nm: Nm, end_nm: Nm) -> i8 {
+    (i128::from(end_nm) - i128::from(start_nm)).signum() as i8
+}
+
+fn segment_direction(segment: &Segment) -> (i8, i8) {
     (
-        (segment.end.x_nm - segment.start.x_nm).signum(),
-        (segment.end.y_nm - segment.start.y_nm).signum(),
+        coordinate_direction(segment.start.x_nm, segment.end.x_nm),
+        coordinate_direction(segment.start.y_nm, segment.end.y_nm),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::coordinate_direction;
+
+    #[test]
+    fn coordinate_direction_handles_full_signed_range() {
+        assert_eq!(coordinate_direction(i64::MIN, i64::MAX), 1);
+        assert_eq!(coordinate_direction(i64::MAX, i64::MIN), -1);
+        assert_eq!(coordinate_direction(i64::MIN, i64::MIN), 0);
+    }
 }
