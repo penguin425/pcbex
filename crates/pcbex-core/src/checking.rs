@@ -606,6 +606,32 @@ pub fn check_board(board: &Board) -> CheckReport {
                 group.net_ids.clone(),
             );
         }
+        let group_has_routes = board
+            .routes
+            .iter()
+            .any(|route| group.net_ids.contains(&route.net_id));
+        if !group_has_routes
+            && group.net_ids.iter().any(|net_id| {
+                board
+                    .nets
+                    .iter()
+                    .find(|net| net.id == *net_id)
+                    .is_some_and(|net| {
+                        net.terminals
+                            .first()
+                            .is_none_or(|terminal| !terminal.layers.contains(&crate::Layer::Front))
+                    })
+            })
+        {
+            report.push(
+                "escape_group_net_eligibility",
+                format!(
+                    "unrouted escape group {} nets must start at a front-layer terminal",
+                    group.name
+                ),
+                group.net_ids.clone(),
+            );
+        }
     }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
@@ -5831,6 +5857,57 @@ mod tests {
                 .violations
                 .iter()
                 .any(|violation| violation.rule == "escape_group_constraints")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_ineligible_escape_group_nets() {
+        let make_board = |terminals: Vec<Terminal>| {
+            let mut board = base();
+            board.nets.push(Net {
+                id: 1,
+                name: "N1".into(),
+                terminals,
+                class: None,
+                priority: 0,
+            });
+            board.escape_groups.push(crate::EscapeGroup {
+                name: "U1".into(),
+                net_ids: vec![1],
+                fanout_distance_nm: 1_000_000,
+                target_layer: Layer::Back,
+                direction: crate::EscapeDirection::FourWay,
+                via_grid_nm: None,
+                max_rings: 3,
+            });
+            board
+        };
+        let terminal = |layers| Terminal {
+            position: Point {
+                x_nm: 1_000_000,
+                y_nm: 1_000_000,
+            },
+            layers,
+        };
+
+        for board in [
+            make_board(vec![]),
+            make_board(vec![terminal(vec![Layer::Back])]),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "escape_group_net_eligibility")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&make_board(vec![terminal(vec![Layer::Front])]))
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "escape_group_net_eligibility")
         );
     }
 
