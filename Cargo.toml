@@ -3,7 +3,7 @@ members = ["crates/pcbex-core", "crates/pcbex-kicad", "crates/pcbex-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "1.206.0"
+version = "1.207.0"
 edition = "2024"
 license = "MIT"
 
