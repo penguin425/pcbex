@@ -310,6 +310,8 @@ Their endpoints must also be distinct, preventing zero-length primitives from
 entering contour assembly.
 Edge.Cuts rectangle primitives likewise require both opposite corners, so an
 incomplete rectangle cannot disappear from the imported board geometry.
+Those corners must span nonzero width and height, rejecting collapsed
+rectangles before contour assembly.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

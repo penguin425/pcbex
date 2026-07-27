@@ -1084,6 +1084,9 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                 else {
                     return Err("Edge.Cuts rectangle requires start and end points".into());
                 };
+                if start.x_nm == end.x_nm || start.y_nm == end.y_nm {
+                    return Err("Edge.Cuts rectangle must have nonzero width and height".into());
+                }
                 let top_right = Point {
                     x_nm: end.x_nm,
                     y_nm: start.y_nm,
@@ -3112,6 +3115,23 @@ mod tests {
             assert_eq!(
                 import(pcb, rules()).unwrap_err(),
                 "Edge.Cuts rectangle requires start and end points"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_degenerate_edge_cuts_rectangles() {
+        let zero_width = r#"(kicad_pcb
+          (gr_rect (start 5 0) (end 5 20) (layer "Edge.Cuts"))
+        )"#;
+        let zero_height = r#"(kicad_pcb
+          (gr_rect (start 0 5) (end 20 5) (layer "Edge.Cuts"))
+        )"#;
+
+        for pcb in [zero_width, zero_height] {
+            assert_eq!(
+                import(pcb, rules()).unwrap_err(),
+                "Edge.Cuts rectangle must have nonzero width and height"
             );
         }
     }
