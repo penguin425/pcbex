@@ -2657,6 +2657,9 @@ fn edge_child_point(list: &[Sexp], name: &str) -> Result<Option<Point>, String> 
     let Some(xs) = child_values(list, name) else {
         return Ok(None);
     };
+    if xs.len() > 3 {
+        return Err("Edge.Cuts points must contain exactly two coordinates".into());
+    }
     let (Some(x), Some(y)) = (number(xs.get(1)), number(xs.get(2))) else {
         return Ok(None);
     };
@@ -3656,6 +3659,28 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "Edge.Cuts coordinates exceed nanometer range"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_extra_edge_cuts_point_values() {
+        for primitive in [
+            r#"(gr_line (start 0 0 1) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_arc (start 0 0) (mid 10 10 extra) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_circle (center 0 0) (end 20 0 90) (layer "Edge.Cuts"))"#,
+            r#"(gr_rect (start 0 0 ignored) (end 20 20) (layer "Edge.Cuts"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {primitive}
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "Edge.Cuts points must contain exactly two coordinates"
             );
         }
     }
