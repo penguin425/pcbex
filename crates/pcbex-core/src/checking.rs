@@ -591,6 +591,21 @@ pub fn check_board(board: &Board) -> CheckReport {
                 group.net_ids.clone(),
             );
         }
+        if group.fanout_distance_nm <= 0
+            || group.via_grid_nm.is_some_and(|grid| grid <= 0)
+            || !(1..=8).contains(&group.max_rings)
+            || group.target_layer == crate::Layer::Front
+            || !board.copper_layers.contains(&group.target_layer)
+        {
+            report.push(
+                "escape_group_constraints",
+                format!(
+                    "escape group {} must use positive geometry, between 1 and 8 rings, and a declared non-front target layer",
+                    group.name
+                ),
+                group.net_ids.clone(),
+            );
+        }
     }
     for footprint in &board.footprints {
         for pad in &footprint.pads {
@@ -5768,6 +5783,54 @@ mod tests {
             .violations
             .iter()
             .any(|violation| violation.rule == "escape_group_definition")
+        );
+    }
+
+    #[test]
+    fn normal_check_rejects_invalid_escape_group_constraints() {
+        let make_board = |fanout_distance, via_grid, rings, target_layer| {
+            let mut board = base();
+            board.nets.push(Net {
+                id: 1,
+                name: "N1".into(),
+                terminals: vec![],
+                class: None,
+                priority: 0,
+            });
+            board.escape_groups.push(crate::EscapeGroup {
+                name: "U1".into(),
+                net_ids: vec![1],
+                fanout_distance_nm: fanout_distance,
+                target_layer,
+                direction: crate::EscapeDirection::FourWay,
+                via_grid_nm: via_grid,
+                max_rings: rings,
+            });
+            board
+        };
+
+        for board in [
+            make_board(0, None, 1, Layer::Back),
+            make_board(1_000_000, Some(-1), 1, Layer::Back),
+            make_board(1_000_000, None, 0, Layer::Back),
+            make_board(1_000_000, None, 9, Layer::Back),
+            make_board(1_000_000, None, 1, Layer::Front),
+            make_board(1_000_000, None, 1, Layer::Inner(1)),
+        ] {
+            assert_eq!(
+                check_board(&board)
+                    .violations
+                    .iter()
+                    .filter(|violation| violation.rule == "escape_group_constraints")
+                    .count(),
+                1
+            );
+        }
+        assert!(
+            !check_board(&make_board(1_000_000, Some(500_000), 8, Layer::Back))
+                .violations
+                .iter()
+                .any(|violation| violation.rule == "escape_group_constraints")
         );
     }
 

@@ -377,6 +377,8 @@ the existing defaults retain single-section behavior.
 
 Escape groups require unique non-empty names, declared unique net IDs, and
 exclusive membership so a net cannot be assigned to multiple escape groups.
+Fanout distance and optional via grid must be positive, ring count must be
+between 1 and 8, and the target must be a declared non-front copper layer.
 `escape_groups` assigns dense package nets a fanout distance and target copper
 layer. Four-way, radial, row, and column strategies classify package pads from
 their group centroid. Via locations may snap to an absolute grid and search up
