@@ -2414,6 +2414,10 @@ fn route_length(route: &Route) -> i64 {
     route_length_nm(route)
 }
 
+fn segment_length_nm_saturated(segment: &Segment) -> i64 {
+    (segment_length_m(segment) * 1e9).round() as i64
+}
+
 pub fn coupled_percent(route: &Route, partner: &Route, pair: &crate::DifferentialPair) -> u8 {
     let total = route_length(route);
     if total == 0 {
@@ -2435,12 +2439,8 @@ pub fn coupled_percent(route: &Route, partner: &Route, pair: &crate::Differentia
                     && point_segment_closer_than(segment.end, other.start, other.end, maximum_twice)
             })
         })
-        .map(|segment| {
-            let dx = (segment.end.x_nm - segment.start.x_nm) as f64;
-            let dy = (segment.end.y_nm - segment.start.y_nm) as f64;
-            dx.hypot(dy).round() as i64
-        })
-        .sum();
+        .map(segment_length_nm_saturated)
+        .fold(0, i64::saturating_add);
     ((coupled as i128 * 100 / total as i128).clamp(0, 100)) as u8
 }
 
@@ -3978,6 +3978,14 @@ mod tests {
         let expected = (2.0_f64).sqrt() * (u64::MAX as f64) * 1e-9;
         assert!(length_m.is_finite());
         assert!((length_m - expected).abs() <= expected * f64::EPSILON);
+        assert_eq!(segment_length_nm_saturated(&segment), i64::MAX);
+        assert_eq!(
+            [&segment, &segment]
+                .into_iter()
+                .map(segment_length_nm_saturated)
+                .fold(0, i64::saturating_add),
+            i64::MAX
+        );
     }
 
     #[test]
