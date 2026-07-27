@@ -510,6 +510,8 @@ instead of propagating infinite or NaN voltage-drop results.
 Track-angle classification widens and safely takes the absolute value of
 endpoint coordinate differences before checking horizontal, vertical, or
 45-degree geometry.
+The normal DRC track-angle check shares that full-range-safe classification,
+so extreme signed coordinates cannot panic or be misclassified.
 Return-path plane sampling uses overflow-safe ceiling division and widened
 endpoint interpolation, including segments spanning the full coordinate range.
 Return-path via proximity checks widen coordinate differences before subtraction

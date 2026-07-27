@@ -2454,11 +2454,15 @@ impl CheckReport {
     }
 }
 
+fn segment_has_standard_angle(segment: &Segment) -> bool {
+    let dx = absolute_coordinate_difference(segment.end.x_nm, segment.start.x_nm);
+    let dy = absolute_coordinate_difference(segment.end.y_nm, segment.start.y_nm);
+    dx == 0 || dy == 0 || dx == dy
+}
+
 fn check_segment(board: &Board, net_id: u32, segment: &Segment, report: &mut CheckReport) {
     let rules = board.rules_for_net(net_id);
-    let dx = (segment.end.x_nm - segment.start.x_nm).abs();
-    let dy = (segment.end.y_nm - segment.start.y_nm).abs();
-    if dx != 0 && dy != 0 && dx != dy {
+    if !segment_has_standard_angle(segment) {
         report.push(
             "track_angle",
             "track is not horizontal, vertical, or 45 degrees".into(),
@@ -4027,6 +4031,18 @@ mod tests {
             i128::from(u64::MAX)
         );
         assert_eq!(absolute_coordinate_difference(100, 250), 150);
+        assert!(segment_has_standard_angle(&Segment {
+            start: Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            end: Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            width_nm: 100_000,
+            layer: Layer::Front,
+        }));
     }
 
     #[test]
