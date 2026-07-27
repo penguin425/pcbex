@@ -121,8 +121,8 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     routes.sort_by_key(|route| route.net_id);
     let mut board = Board {
         schema_version: pcbex_core::CURRENT_SCHEMA_VERSION,
-        width_nm: max.x_nm - min.x_nm,
-        height_nm: max.y_nm - min.y_nm,
+        width_nm: coordinate_span(max.x_nm, min.x_nm),
+        height_nm: coordinate_span(max.y_nm, min.y_nm),
         outline: outline
             .into_iter()
             .map(|point| relative(point, min))
@@ -2142,9 +2142,16 @@ fn point_mm(x: f64, y: f64) -> Point {
 }
 fn relative(p: Point, origin: Point) -> Point {
     Point {
-        x_nm: p.x_nm - origin.x_nm,
-        y_nm: p.y_nm - origin.y_nm,
+        x_nm: relative_coordinate(p.x_nm, origin.x_nm),
+        y_nm: relative_coordinate(p.y_nm, origin.y_nm),
     }
+}
+fn coordinate_span(maximum: i64, minimum: i64) -> i64 {
+    (i128::from(maximum) - i128::from(minimum)).clamp(0, i128::from(i64::MAX)) as i64
+}
+fn relative_coordinate(value: i64, origin: i64) -> i64 {
+    (i128::from(value) - i128::from(origin)).clamp(i128::from(i64::MIN), i128::from(i64::MAX))
+        as i64
 }
 fn nm(value: f64) -> i64 {
     (value * NM_PER_MM).round() as i64
@@ -2325,6 +2332,32 @@ mod tests {
         assert_eq!(through_hole.drill_width_nm, Some(500_000));
         assert_eq!(through_hole.drill_height_nm, Some(500_000));
         assert!(through_hole.plated);
+    }
+
+    #[test]
+    fn coordinate_normalization_handles_full_signed_range() {
+        assert_eq!(coordinate_span(i64::MAX, i64::MIN), i64::MAX);
+        assert_eq!(coordinate_span(10, -20), 30);
+        assert_eq!(
+            relative(
+                Point {
+                    x_nm: i64::MAX,
+                    y_nm: i64::MIN,
+                },
+                Point {
+                    x_nm: i64::MIN,
+                    y_nm: i64::MAX,
+                },
+            ),
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            relative(Point { x_nm: 10, y_nm: 20 }, Point { x_nm: 3, y_nm: 5 }),
+            Point { x_nm: 7, y_nm: 15 }
+        );
     }
 
     #[test]
