@@ -2418,6 +2418,19 @@ fn segment_length_nm_saturated(segment: &Segment) -> i64 {
     (segment_length_m(segment) * 1e9).round() as i64
 }
 
+fn differential_coupling_threshold_twice(
+    first_width_nm: i64,
+    second_width_nm: i64,
+    gap_nm: i64,
+    gap_tolerance_nm: i64,
+) -> i64 {
+    let threshold = i128::from(first_width_nm)
+        + i128::from(second_width_nm)
+        + 2 * (i128::from(gap_nm) + i128::from(gap_tolerance_nm))
+        + 1;
+    threshold.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
 pub fn coupled_percent(route: &Route, partner: &Route, pair: &crate::DifferentialPair) -> u8 {
     let total = route_length(route);
     if total == 0 {
@@ -2431,10 +2444,12 @@ pub fn coupled_percent(route: &Route, partner: &Route, pair: &crate::Differentia
                 if segment.layer != other.layer {
                     return false;
                 }
-                let maximum_twice = segment.width_nm
-                    + other.width_nm
-                    + 2 * (pair.gap_nm + pair.gap_tolerance_nm)
-                    + 1;
+                let maximum_twice = differential_coupling_threshold_twice(
+                    segment.width_nm,
+                    other.width_nm,
+                    pair.gap_nm,
+                    pair.gap_tolerance_nm,
+                );
                 point_segment_closer_than(segment.start, other.start, other.end, maximum_twice)
                     && point_segment_closer_than(segment.end, other.start, other.end, maximum_twice)
             })
@@ -3958,6 +3973,18 @@ mod tests {
         assert_eq!(copper_edge_envelope(i64::MAX, i64::MAX), i64::MAX);
         assert_eq!(copper_edge_envelope(i64::MIN, i64::MIN), i64::MIN);
         assert_eq!(copper_edge_envelope(300_000, 250_000), 800_000);
+    }
+
+    #[test]
+    fn differential_coupling_threshold_handles_extreme_dimensions() {
+        assert_eq!(
+            differential_coupling_threshold_twice(i64::MAX, i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            differential_coupling_threshold_twice(200_000, 200_000, 100_000, 25_000),
+            650_001
+        );
     }
 
     #[test]
