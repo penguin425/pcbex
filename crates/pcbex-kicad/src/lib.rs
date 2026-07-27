@@ -1133,6 +1133,12 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
     };
     contours
         .sort_by_key(|contour| std::cmp::Reverse(polygon_twice_area(contour).unsigned_magnitude()));
+    if contours
+        .iter()
+        .any(|contour| contour_self_intersects(contour))
+    {
+        return Err("Edge.Cuts contours must not self-intersect".into());
+    }
     let outline = contours.remove(0);
     let cutouts = contours;
     let min = Point {
@@ -1308,6 +1314,27 @@ fn contours_intersect(left: &[Point], right: &[Point]) -> bool {
                     segments_intersect(*left_start, *left_end, *right_start, *right_end)
                 })
         })
+}
+
+fn contour_self_intersects(contour: &[Point]) -> bool {
+    for first in 0..contour.len() {
+        let first_end = (first + 1) % contour.len();
+        for second in first + 1..contour.len() {
+            let second_end = (second + 1) % contour.len();
+            if first_end == second || second_end == first {
+                continue;
+            }
+            if segments_intersect(
+                contour[first],
+                contour[first_end],
+                contour[second],
+                contour[second_end],
+            ) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn segments_intersect(a: Point, b: Point, c: Point, d: Point) -> bool {
@@ -2912,6 +2939,22 @@ mod tests {
             import(pcb, rules())
                 .unwrap_err()
                 .contains("must join exactly two primitives")
+        );
+    }
+
+    #[test]
+    fn rejects_nonzero_area_self_intersecting_edge_cuts_contour() {
+        let pcb = r#"(kicad_pcb
+          (gr_line (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (gr_line (start 10 10) (end 0 10) (layer "Edge.Cuts"))
+          (gr_line (start 0 10) (end 8 0) (layer "Edge.Cuts"))
+          (gr_line (start 8 0) (end 0 0) (layer "Edge.Cuts"))
+        )"#;
+
+        assert!(
+            import(pcb, rules())
+                .unwrap_err()
+                .contains("must not self-intersect")
         );
     }
 
