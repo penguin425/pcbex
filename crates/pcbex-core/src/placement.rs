@@ -437,11 +437,17 @@ fn mutate(
             let dx = (rng.next() % (radius as u64 * 2 + 1)) as i64 - radius;
             let dy = (rng.next() % (radius as u64 * 2 + 1)) as i64 - radius;
             if let Some(p) = &mut components[i].position {
-                p.x_nm = (p.x_nm + dx * grid).clamp(0, board_width);
-                p.y_nm = (p.y_nm + dy * grid).clamp(0, board_height);
+                p.x_nm = bounded_grid_move(p.x_nm, dx, grid, board_width);
+                p.y_nm = bounded_grid_move(p.y_nm, dy, grid, board_height);
             }
         }
     }
+}
+
+fn bounded_grid_move(position_nm: Nm, grid_steps: Nm, grid_nm: Nm, extent_nm: Nm) -> Nm {
+    position_nm
+        .saturating_add(grid_steps.saturating_mul(grid_nm))
+        .clamp(0, extent_nm)
 }
 
 fn score(
@@ -820,6 +826,13 @@ mod tests {
     fn placement_spacing_step_saturates_extreme_dimensions() {
         assert_eq!(placement_spacing_step(i64::MAX, i64::MAX), i64::MAX);
         assert_eq!(placement_spacing_step(2_000_000, 500_000), 3_000_000);
+    }
+
+    #[test]
+    fn bounded_grid_move_saturates_extreme_displacements() {
+        assert_eq!(bounded_grid_move(1, i64::MAX, i64::MAX, 100), 100);
+        assert_eq!(bounded_grid_move(99, i64::MIN, i64::MAX, 100), 0);
+        assert_eq!(bounded_grid_move(50, 2, 10, 100), 70);
     }
 
     fn component(reference: &str, position: Option<Point>) -> Component {
