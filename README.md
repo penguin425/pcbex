@@ -249,6 +249,8 @@ Placement pin coordinates also saturate board-side mirroring, right-angle
 rotation negation, and center-offset addition.
 Region constraints widen all four component-to-region overflow distances before
 aggregating their placement penalty.
+Placement overlap scoring widens rectangle intersection widths and heights
+before calculating their area.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

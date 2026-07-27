@@ -817,10 +817,17 @@ fn named_position(
     pin_position(component, offset)
 }
 fn intersection(a: Rect, b: Rect) -> f64 {
-    let w = (a.max_x.min(b.max_x) - a.min_x.max(b.min_x)).max(0) as f64;
-    let h = (a.max_y.min(b.max_y) - a.min_y.max(b.min_y)).max(0) as f64;
+    let w = overlap_extent_nm(a.min_x, a.max_x, b.min_x, b.max_x);
+    let h = overlap_extent_nm(a.min_y, a.max_y, b.min_y, b.max_y);
     w * h
 }
+
+fn overlap_extent_nm(first_min: Nm, first_max: Nm, second_min: Nm, second_max: Nm) -> f64 {
+    let lower = first_min.max(second_min);
+    let upper = first_max.min(second_max);
+    (i128::from(upper) - i128::from(lower)).max(0) as f64
+}
+
 fn bin(value: Nm, extent: Nm, count: usize) -> usize {
     ((value.clamp(0, extent) as i128 * count as i128 / extent as i128) as usize).min(count - 1)
 }
@@ -1149,6 +1156,36 @@ mod tests {
                 },
             ),
             0.0
+        );
+    }
+
+    #[test]
+    fn rectangle_intersection_handles_full_signed_coordinates() {
+        let full = Rect {
+            min_x: i64::MIN,
+            min_y: i64::MIN,
+            max_x: i64::MAX,
+            max_y: i64::MAX,
+        };
+        let area = intersection(full, full);
+        assert!(area.is_finite());
+        assert!(area > (i64::MAX as f64).powi(2));
+        assert_eq!(
+            intersection(
+                Rect {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: 10,
+                    max_y: 20,
+                },
+                Rect {
+                    min_x: 5,
+                    min_y: 10,
+                    max_x: 15,
+                    max_y: 30,
+                },
+            ),
+            50.0
         );
     }
 
