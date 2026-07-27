@@ -1929,30 +1929,34 @@ fn drilled_pad_hole(pad: &Pad, width_nm: i64, height_nm: i64) -> DrilledHole {
     };
     let radians = angle_deg.to_radians();
     let pad_radians = pad.rotation_deg.to_radians();
+    let offset_x = (pad_radians.cos() * pad.drill_offset_x_nm as f64
+        - pad_radians.sin() * pad.drill_offset_y_nm as f64)
+        .round() as i64;
+    let offset_y = (pad_radians.sin() * pad.drill_offset_x_nm as f64
+        + pad_radians.cos() * pad.drill_offset_y_nm as f64)
+        .round() as i64;
     let center = Point {
-        x_nm: pad.position.x_nm
-            + (pad_radians.cos() * pad.drill_offset_x_nm as f64
-                - pad_radians.sin() * pad.drill_offset_y_nm as f64)
-                .round() as i64,
-        y_nm: pad.position.y_nm
-            + (pad_radians.sin() * pad.drill_offset_x_nm as f64
-                + pad_radians.cos() * pad.drill_offset_y_nm as f64)
-                .round() as i64,
+        x_nm: offset_coordinate(pad.position.x_nm, offset_x),
+        y_nm: offset_coordinate(pad.position.y_nm, offset_y),
     };
     let half_dx = (radians.cos() * centerline_nm as f64 / 2.0).round() as i64;
     let half_dy = (radians.sin() * centerline_nm as f64 / 2.0).round() as i64;
     DrilledHole {
         start: Point {
-            x_nm: center.x_nm - half_dx,
-            y_nm: center.y_nm - half_dy,
+            x_nm: offset_coordinate(center.x_nm, half_dx.saturating_neg()),
+            y_nm: offset_coordinate(center.y_nm, half_dy.saturating_neg()),
         },
         end: Point {
-            x_nm: center.x_nm + half_dx,
-            y_nm: center.y_nm + half_dy,
+            x_nm: offset_coordinate(center.x_nm, half_dx),
+            y_nm: offset_coordinate(center.y_nm, half_dy),
         },
         diameter_nm,
         net_id: pad.net_id,
     }
+}
+
+fn offset_coordinate(coordinate: i64, offset: i64) -> i64 {
+    coordinate.saturating_add(offset)
 }
 
 fn check_trace_angles(route: &Route, minimum_angle_deg: u16, report: &mut CheckReport) {
@@ -3930,6 +3934,13 @@ mod tests {
             -(u64::MAX as f64)
         );
         assert_eq!(coordinate_difference_nm(250, 100), 150.0);
+    }
+
+    #[test]
+    fn component_hole_coordinate_offsets_saturate_at_boundaries() {
+        assert_eq!(offset_coordinate(i64::MAX, 1), i64::MAX);
+        assert_eq!(offset_coordinate(i64::MIN, -1), i64::MIN);
+        assert_eq!(offset_coordinate(100, -25), 75);
     }
 
     #[test]
