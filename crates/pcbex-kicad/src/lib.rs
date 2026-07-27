@@ -1557,24 +1557,36 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
     if segments > MAX_EDGE_ARC_SEGMENTS {
         return Err("Edge.Cuts arc requires too many segments".into());
     }
+    let sample_point = |angle: f64| {
+        let x = center_x + radius * angle.cos();
+        let y = center_y + radius * angle.sin();
+        let (Some(x_nm), Some(y_nm)) = (
+            checked_arc_coordinate(start.x_nm, x),
+            checked_arc_coordinate(start.y_nm, y),
+        ) else {
+            return Err("Edge.Cuts arc exceeds nanometer range".to_string());
+        };
+        Ok(Point { x_nm, y_nm })
+    };
     let mut points = Vec::with_capacity(segments + 1);
     for index in 0..=start_steps {
         let angle = start_angle + mid_sweep * index as f64 / start_steps as f64;
-        points.push(Point {
-            x_nm: translate_arc_coordinate(start.x_nm, center_x + radius * angle.cos()),
-            y_nm: translate_arc_coordinate(start.y_nm, center_y + radius * angle.sin()),
+        points.push(if index == 0 {
+            start
+        } else if index == start_steps {
+            mid
+        } else {
+            sample_point(angle)?
         });
     }
     for index in 1..=end_steps {
         let angle = mid_angle + end_sweep * index as f64 / end_steps as f64;
-        points.push(Point {
-            x_nm: translate_arc_coordinate(start.x_nm, center_x + radius * angle.cos()),
-            y_nm: translate_arc_coordinate(start.y_nm, center_y + radius * angle.sin()),
+        points.push(if index == end_steps {
+            end
+        } else {
+            sample_point(angle)?
         });
     }
-    points[0] = start;
-    points[start_steps] = mid;
-    points[segments] = end;
     Ok(points)
 }
 
@@ -1742,6 +1754,15 @@ fn translate_arc_coordinate(origin: i64, offset: f64) -> i64 {
     i128::from(origin)
         .saturating_add(offset.round() as i128)
         .clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+fn checked_arc_coordinate(origin: i64, offset: f64) -> Option<i64> {
+    if !offset.is_finite() {
+        return None;
+    }
+    i128::from(origin)
+        .checked_add(offset.round() as i128)
+        .and_then(|coordinate| coordinate.try_into().ok())
 }
 
 fn import_footprint(
@@ -3765,6 +3786,28 @@ mod tests {
         let points = sample_arc(start, mid, end).unwrap();
         assert_eq!(points.first(), Some(&start));
         assert_eq!(points.last(), Some(&end));
+    }
+
+    #[test]
+    fn rejects_edge_cuts_arc_extending_beyond_coordinate_range() {
+        let center_x = i64::MAX - 1_000_000;
+        let start = Point {
+            x_nm: center_x - 1_000_000,
+            y_nm: -1_732_051,
+        };
+        let mid = Point {
+            x_nm: i64::MAX,
+            y_nm: -1_732_051,
+        };
+        let end = Point {
+            x_nm: i64::MAX,
+            y_nm: 1_732_051,
+        };
+
+        assert_eq!(
+            sample_arc(start, mid, end).unwrap_err(),
+            "Edge.Cuts arc exceeds nanometer range"
+        );
     }
 
     #[test]
