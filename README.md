@@ -162,8 +162,9 @@ non-negative, signed-nanometer range contract. Their names must also be
 present as scalar values, non-blank, and unique; missing, malformed, blank, or
 duplicate embedded definitions are rejected instead of being ignored, retaining
 an unusable class, or silently selecting the last one.
-Legacy `add_net` assignments must name a net present in the board; stale or
-misspelled references are rejected instead of being silently ignored.
+Legacy `add_net` assignments must contain a scalar name for a net present in the
+board; malformed, stale, or misspelled references are rejected instead of being
+silently ignored.
 Project settings are applied atomically, so an invalid class, pattern, or exact
 assignment cannot leave new classes or partial net assignments behind.
 Each project `classes` entry must have a non-blank, unique name; blank or

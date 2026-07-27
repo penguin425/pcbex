@@ -512,7 +512,9 @@ fn import_net_classes(
                     continue;
                 }
                 let Some(net_name) = atom(assignment.get(1)) else {
-                    continue;
+                    return Err(format!(
+                        "net class {name} contains add_net without a scalar net name"
+                    ));
                 };
                 let Some(net_id) = net_ids_by_name.get(net_name) else {
                     return Err(format!(
@@ -4845,6 +4847,28 @@ mod tests {
             import(pcb, rules()).unwrap_err(),
             "net class Signal references unknown net MISSING"
         );
+    }
+
+    #[test]
+    fn rejects_legacy_add_net_without_a_scalar_name() {
+        for assignment in ["(add_net)", r#"(add_net (name "SIG"))"#] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIG")
+                  (setup
+                    (net_class "Signal" ""
+                      (clearance 0.2)
+                      (trace_width 0.25)
+                      {assignment}))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "net class Signal contains add_net without a scalar net name"
+            );
+        }
     }
 
     #[test]
