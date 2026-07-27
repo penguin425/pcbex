@@ -1269,6 +1269,9 @@ fn push_unique_edge(
     start: Point,
     end: Point,
 ) -> Result<(), String> {
+    if start == end {
+        return Err("Edge.Cuts edges must have distinct endpoints".into());
+    }
     if lines.len() >= MAX_EDGE_SEGMENTS {
         return Err("Edge.Cuts contains too many segments".into());
     }
@@ -3234,6 +3237,24 @@ mod tests {
         );
         assert_eq!(lines.len(), MAX_EDGE_SEGMENTS);
         assert_eq!(unique_edges.len(), MAX_EDGE_SEGMENTS);
+    }
+
+    #[test]
+    fn zero_length_edge_is_rejected_before_insertion() {
+        let mut lines = vec![(Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 1, y_nm: 0 })];
+        let mut unique_edges =
+            HashSet::from([(Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 1, y_nm: 0 })]);
+        let point = Point { x_nm: 2, y_nm: 3 };
+
+        assert_eq!(
+            push_unique_edge(&mut lines, &mut unique_edges, point, point).unwrap_err(),
+            "Edge.Cuts edges must have distinct endpoints"
+        );
+        assert_eq!(
+            lines,
+            vec![(Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 1, y_nm: 0 },)]
+        );
+        assert_eq!(unique_edges.len(), 1);
     }
 
     #[test]
