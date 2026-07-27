@@ -884,8 +884,8 @@ impl ImportedBoard {
 
     fn absolute(&self, point: Point) -> Point {
         Point {
-            x_nm: point.x_nm + self.origin.x_nm,
-            y_nm: point.y_nm + self.origin.y_nm,
+            x_nm: point.x_nm.saturating_add(self.origin.x_nm),
+            y_nm: point.y_nm.saturating_add(self.origin.y_nm),
         }
     }
 }
@@ -2365,6 +2365,49 @@ mod tests {
         assert_eq!(
             relative(Point { x_nm: 10, y_nm: 20 }, Point { x_nm: 3, y_nm: 5 }),
             Point { x_nm: 7, y_nm: 15 }
+        );
+    }
+
+    #[test]
+    fn absolute_coordinate_translation_saturates_at_signed_limits() {
+        let positive_origin = import(PCB, rules()).unwrap();
+        assert_eq!(
+            positive_origin.absolute(Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }),
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
+        assert_eq!(
+            positive_origin.absolute(Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            }),
+            Point {
+                x_nm: 15_000_000,
+                y_nm: 25_000_000,
+            }
+        );
+
+        let negative_origin = import(
+            r#"(kicad_pcb
+              (gr_rect (start -20 -30) (end -10 -5) (layer "Edge.Cuts"))
+            )"#,
+            rules(),
+        )
+        .unwrap();
+        assert_eq!(
+            negative_origin.absolute(Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }),
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
         );
     }
 
