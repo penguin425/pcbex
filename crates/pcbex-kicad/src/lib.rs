@@ -419,10 +419,9 @@ fn constraint_optional_value(constraint: &[Sexp], name: &str) -> Result<Option<i
         token.parse::<f64>()
     }
     .map_err(|_| format!("invalid custom-rule dimension {token}"))?;
-    if !millimetres.is_finite() || millimetres < 0.0 {
-        return Err(format!("invalid custom-rule dimension {token}"));
-    }
-    Ok(Some(nm(millimetres)))
+    checked_nonnegative_nm(millimetres)
+        .map(Some)
+        .ok_or_else(|| format!("invalid custom-rule dimension {token}"))
 }
 
 fn import_net_classes(
@@ -4822,6 +4821,36 @@ mod tests {
                 .unwrap()
                 .is_match("/sheet/D12")
         );
+    }
+
+    #[test]
+    fn rejects_custom_rule_dimensions_outside_nanometer_range() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for token in ["1e20mm", "1e30mil", "inf"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (version 1)
+                  (rule "Oversized"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint track_width (min {token})))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                format!("invalid custom-rule dimension {token}")
+            );
+        }
     }
 
     #[test]
