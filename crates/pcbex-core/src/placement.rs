@@ -456,6 +456,16 @@ fn manhattan_distance_nm(a: Point, b: Point) -> f64 {
     (dx + dy) as f64
 }
 
+fn point_boundary_overflow_nm(point: Point, width_nm: Nm, height_nm: Nm) -> f64 {
+    let x = i128::from(point.x_nm);
+    let y = i128::from(point.y_nm);
+    let left = (-x).max(0);
+    let top = (-y).max(0);
+    let right = (x - i128::from(width_nm)).max(0);
+    let bottom = (y - i128::from(height_nm)).max(0);
+    (left + top + right + bottom) as f64
+}
+
 fn score(
     problem: &PlacementProblem,
     components: &[Component],
@@ -480,13 +490,8 @@ fn score(
         let polygon = courtyard_polygon(a);
         out.boundary += polygon
             .iter()
-            .map(|point| {
-                (-point.x_nm).max(0)
-                    + (-point.y_nm).max(0)
-                    + (point.x_nm - problem.width_nm).max(0)
-                    + (point.y_nm - problem.height_nm).max(0)
-            })
-            .sum::<i64>() as f64
+            .map(|point| point_boundary_overflow_nm(*point, problem.width_nm, problem.height_nm))
+            .sum::<f64>()
             / unit;
         for b in &components[i + 1..] {
             let bbox_overlap = intersection(ar, bounds(b));
@@ -857,6 +862,32 @@ mod tests {
         assert_eq!(
             manhattan_distance_nm(Point { x_nm: 10, y_nm: 20 }, Point { x_nm: 15, y_nm: 30 }),
             15.0
+        );
+    }
+
+    #[test]
+    fn boundary_overflow_handles_full_signed_coordinates() {
+        let negative = point_boundary_overflow_nm(
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            100,
+            100,
+        );
+        let positive = point_boundary_overflow_nm(
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+            100,
+            100,
+        );
+        assert!(negative.is_finite());
+        assert!(positive.is_finite());
+        assert_eq!(
+            point_boundary_overflow_nm(Point { x_nm: 20, y_nm: 30 }, 100, 100),
+            0.0
         );
     }
 
