@@ -2654,9 +2654,16 @@ fn child_point(list: &[Sexp], name: &str) -> Option<Point> {
     Some(point_mm(number(xs.get(1))?, number(xs.get(2))?))
 }
 fn edge_child_point(list: &[Sexp], name: &str) -> Result<Option<Point>, String> {
-    let Some(xs) = child_values(list, name) else {
+    let mut matches = list.iter().filter_map(|value| {
+        let values = value.as_list()?;
+        (atom(values.first()) == Some(name)).then_some(values)
+    });
+    let Some(xs) = matches.next() else {
         return Ok(None);
     };
+    if matches.next().is_some() {
+        return Err("Edge.Cuts point fields must not be repeated".into());
+    }
     if xs.len() > 3 {
         return Err("Edge.Cuts points must contain exactly two coordinates".into());
     }
@@ -3704,6 +3711,28 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "Edge.Cuts points must contain exactly two coordinates"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_repeated_edge_cuts_point_fields() {
+        for primitive in [
+            r#"(gr_line (start 0 0) (start 1 1) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_arc (start 0 0) (mid 10 10) (mid 10 9) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_circle (center 0 0) (center 1 1) (end 20 0) (layer "Edge.Cuts"))"#,
+            r#"(gr_rect (start 0 0) (end 20 20) (end 19 19) (layer "Edge.Cuts"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {primitive}
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "Edge.Cuts point fields must not be repeated"
             );
         }
     }
