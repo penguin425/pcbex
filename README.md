@@ -241,6 +241,8 @@ Board-edge constraints widen left, right, top, and bottom distances before
 subtracting the permitted edge offset.
 `keep_together` constraints widen both point-cloud spans and their sum before
 subtracting the permitted group span.
+Axis-aligned component bounds use saturating half-dimension offsets at the
+signed board-coordinate limits.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \

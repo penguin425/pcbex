@@ -683,10 +683,10 @@ fn bounds(c: &Component) -> Rect {
         (c.height_nm, c.width_nm)
     };
     Rect {
-        min_x: p.x_nm - w / 2,
-        min_y: p.y_nm - h / 2,
-        max_x: p.x_nm + w / 2,
-        max_y: p.y_nm + h / 2,
+        min_x: p.x_nm.saturating_sub(w / 2),
+        min_y: p.y_nm.saturating_sub(h / 2),
+        max_x: p.x_nm.saturating_add(w / 2),
+        max_y: p.y_nm.saturating_add(h / 2),
     }
 }
 
@@ -1003,6 +1003,31 @@ mod tests {
             0.0
         );
         assert_eq!(point_cloud_span_excess_nm(&[], 0), 0.0);
+    }
+
+    #[test]
+    fn component_bounds_saturate_at_coordinate_limits() {
+        let mut upper = component(
+            "U1",
+            Some(Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }),
+        );
+        upper.width_nm = i64::MAX;
+        upper.height_nm = i64::MAX;
+        let upper_bounds = bounds(&upper);
+        assert_eq!(upper_bounds.max_x, i64::MAX);
+        assert_eq!(upper_bounds.max_y, i64::MAX);
+
+        let mut lower = upper;
+        lower.position = Some(Point {
+            x_nm: i64::MIN,
+            y_nm: i64::MIN,
+        });
+        let lower_bounds = bounds(&lower);
+        assert_eq!(lower_bounds.min_x, i64::MIN);
+        assert_eq!(lower_bounds.min_y, i64::MIN);
     }
 
     #[test]
