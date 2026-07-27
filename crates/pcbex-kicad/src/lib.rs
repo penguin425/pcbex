@@ -1865,12 +1865,12 @@ fn add_pad_obstacle(
             let (dx, dy) = rotate(half_line, 0.0, angle);
             capsule_obstacles.push(CapsuleObstacle {
                 start: Point {
-                    x_nm: center.x_nm - nm(dx),
-                    y_nm: center.y_nm - nm(dy),
+                    x_nm: center.x_nm.saturating_sub(nm(dx)),
+                    y_nm: center.y_nm.saturating_sub(nm(dy)),
                 },
                 end: Point {
-                    x_nm: center.x_nm + nm(dx),
-                    y_nm: center.y_nm + nm(dy),
+                    x_nm: center.x_nm.saturating_add(nm(dx)),
+                    y_nm: center.y_nm.saturating_add(nm(dy)),
                 },
                 diameter_nm: nm(minor),
                 layers,
@@ -2963,6 +2963,57 @@ mod tests {
             }
         );
         assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn oval_pad_capsule_endpoints_saturate_at_coordinate_limits() {
+        let mut round_obstacles = Vec::new();
+        let mut capsule_obstacles = Vec::new();
+        let mut polygon_obstacles = Vec::new();
+        for center in [
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            },
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            },
+        ] {
+            add_pad_obstacle(
+                PadShape::Oval,
+                0.0,
+                (0.0, 0.0),
+                &[],
+                center,
+                1e30,
+                1.0,
+                45.0,
+                vec![Layer::Front],
+                None,
+                &mut round_obstacles,
+                &mut capsule_obstacles,
+                &mut polygon_obstacles,
+            );
+        }
+
+        assert!(round_obstacles.is_empty());
+        assert!(polygon_obstacles.is_empty());
+        assert_eq!(capsule_obstacles.len(), 2);
+        assert_eq!(
+            capsule_obstacles[0].start,
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            capsule_obstacles[1].end,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
     }
 
     #[test]
