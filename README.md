@@ -260,6 +260,8 @@ BGA escape direction selection widens centroid differences before comparing
 axis distances.
 BGA escape candidate coordinates widen ring-distance products and saturate
 directional offsets at signed coordinate limits.
+BGA escape stub shape detection widens endpoint differences before comparing
+axis distances.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
