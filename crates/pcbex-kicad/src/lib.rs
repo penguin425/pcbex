@@ -74,6 +74,12 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                     existing.name
                 ));
             }
+            if let Some(existing) = nets.values().find(|net| net.name == name) {
+                return Err(format!(
+                    "KiCad board contains duplicate net name {name}: IDs {} and {id}",
+                    existing.id
+                ));
+            }
             nets.insert(
                 id,
                 Net {
@@ -2960,6 +2966,20 @@ mod tests {
         assert_eq!(
             import(pcb, rules()).unwrap_err(),
             "KiCad board contains duplicate net ID 1: FIRST and SECOND"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_kicad_net_names() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (net 2 "SIG")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "KiCad board contains duplicate net name SIG: IDs 1 and 2"
         );
     }
 
