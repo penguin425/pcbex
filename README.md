@@ -528,6 +528,8 @@ Cross-net track-to-track clearance thresholds combine both widths and bilateral
 clearance with widened saturating arithmetic.
 Cross-net track-to-via checks use the same overflow-safe envelope in both route
 directions, combining track width, via diameter, and bilateral clearance.
+Cross-net via-to-via checks likewise combine both diameters and bilateral
+clearance with widened saturating arithmetic.
 Return-path plane sampling uses overflow-safe ceiling division and widened
 endpoint interpolation, including segments spanning the full coordinate range.
 Return-path via proximity checks widen coordinate differences before subtraction

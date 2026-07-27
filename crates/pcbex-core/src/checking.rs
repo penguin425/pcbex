@@ -1715,6 +1715,14 @@ fn track_via_clearance_envelope(
     track_round_obstacle_clearance_envelope(track_width_nm, via_diameter_nm, clearance_nm)
 }
 
+fn two_via_clearance_envelope(
+    first_diameter_nm: i64,
+    second_diameter_nm: i64,
+    clearance_nm: i64,
+) -> i64 {
+    two_track_clearance_envelope(first_diameter_nm, second_diameter_nm, clearance_nm)
+}
+
 fn drill_fits_pad(pad: &Pad, width_nm: i64, height_nm: i64) -> bool {
     let pad_width_nm = if pad.source_width_nm > 0 {
         pad.source_width_nm
@@ -2745,7 +2753,8 @@ fn check_route_clearance(board: &Board, a: &Route, b: &Route, report: &mut Check
             }
         }
         for other in &b.vias {
-            let required_twice = via.diameter_nm + other.diameter_nm + 2 * clearance;
+            let required_twice =
+                two_via_clearance_envelope(via.diameter_nm, other.diameter_nm, clearance);
             if via.shares_layer_with(other)
                 && points_closer_than(via.position, other.position, required_twice)
             {
@@ -4071,6 +4080,22 @@ mod tests {
         assert_eq!(
             track_via_clearance_envelope(200_000, 600_000, 150_000),
             1_100_000
+        );
+    }
+
+    #[test]
+    fn two_via_clearance_envelope_handles_extreme_dimensions() {
+        assert_eq!(
+            two_via_clearance_envelope(i64::MAX, i64::MAX, i64::MAX),
+            i64::MAX
+        );
+        assert_eq!(
+            two_via_clearance_envelope(i64::MIN, i64::MIN, i64::MIN),
+            i64::MIN
+        );
+        assert_eq!(
+            two_via_clearance_envelope(600_000, 800_000, 150_000),
+            1_700_000
         );
     }
 
