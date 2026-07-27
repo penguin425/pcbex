@@ -1062,6 +1062,9 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
                 else {
                     return Err("Edge.Cuts line requires start and end points".into());
                 };
+                if start == end {
+                    return Err("Edge.Cuts line must have distinct endpoints".into());
+                }
                 lines.push((start, end));
             }
             Some("gr_arc") => {
@@ -3079,6 +3082,19 @@ mod tests {
                 "Edge.Cuts line requires start and end points"
             );
         }
+    }
+
+    #[test]
+    fn rejects_zero_length_edge_cuts_line() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (gr_line (start 5 5) (end 5 5) (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "Edge.Cuts line must have distinct endpoints"
+        );
     }
 
     #[test]
