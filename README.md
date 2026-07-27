@@ -265,7 +265,8 @@ pair `_P`/`_N` or `+`/`-` nets and apply the differential trace width.
 Pairs may additionally set `minimum_length_nm`, `tuning_amplitude_nm`,
 `tuning_pitch_nm`, and `max_tuning_sections`. The router adds each meander to
 both members in one transaction, retaining equal length and accepting only
-whole-board DRC-clean geometry.
+whole-board DRC-clean geometry. Tuning dimensions must be positive and the
+section count must be between 1 and 16.
 Set `target_differential_impedance_ohms` together with
 `differential_impedance_tolerance_ohms` to check edge-coupled microstrip
 impedance. The estimate combines routed width, pair gap, copper thickness,
