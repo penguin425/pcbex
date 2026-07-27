@@ -179,6 +179,8 @@ copper layers, net assignments, legacy board-embedded net classes, existing
 segments and vias.
 Line, rectangle, and three-point arc primitives on `Edge.Cuts` are joined into a
 polygonal outline; arcs use a maximum chord deviation of 0.01 mm.
+All three arc points must be distinct before circle fitting, so repeated
+endpoints or midpoints are rejected as malformed rather than merely collinear.
 Circle primitives use the same chord-deviation bound and can define either the
 outer board outline or an inner cutout.
 Cubic curve primitives are adaptively subdivided to the same deviation bound.
