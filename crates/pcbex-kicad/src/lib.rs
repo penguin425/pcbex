@@ -81,7 +81,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         }
     }
 
-    let net_classes = import_net_classes(top, &rules, &mut nets);
+    let net_classes = import_net_classes(top, &rules, &mut nets)?;
     let mut obstacles = Vec::new();
     let mut footprint_geometry = FootprintGeometry::default();
     let mut keepouts = Vec::new();
@@ -429,7 +429,7 @@ fn import_net_classes(
     top: &[Sexp],
     defaults: &Rules,
     nets: &mut HashMap<u32, Net>,
-) -> HashMap<String, NetClassRules> {
+) -> Result<HashMap<String, NetClassRules>, String> {
     let mut classes = HashMap::new();
     let net_ids_by_name: HashMap<_, _> = nets
         .iter()
@@ -452,27 +452,33 @@ fn import_net_classes(
             let Some(name) = atom(values.get(1)) else {
                 continue;
             };
-            let dimension = |key: &str, fallback: i64| {
-                child_values(values, key)
-                    .and_then(|value| number(value.get(1)))
-                    .map(nm)
-                    .unwrap_or(fallback)
+            let dimension = |key: &str, fallback: i64| -> Result<i64, String> {
+                let Some(value) = child_values(values, key) else {
+                    return Ok(fallback);
+                };
+                number(value.get(1))
+                    .and_then(checked_nonnegative_nm)
+                    .ok_or_else(|| format!("net class {name} has invalid {key}"))
             };
-            let optional_dimension = |key: &str| {
-                child_values(values, key)
-                    .and_then(|value| number(value.get(1)))
-                    .map(nm)
+            let optional_dimension = |key: &str| -> Result<Option<i64>, String> {
+                let Some(value) = child_values(values, key) else {
+                    return Ok(None);
+                };
+                number(value.get(1))
+                    .and_then(checked_nonnegative_nm)
+                    .map(Some)
+                    .ok_or_else(|| format!("net class {name} has invalid {key}"))
             };
             classes.insert(
                 name.to_string(),
                 NetClassRules {
-                    track_width_nm: dimension("trace_width", defaults.track_width_nm),
-                    clearance_nm: dimension("clearance", defaults.clearance_nm),
-                    via_diameter_nm: dimension("via_dia", defaults.via_diameter_nm),
-                    via_drill_nm: dimension("via_drill", defaults.via_drill_nm),
+                    track_width_nm: dimension("trace_width", defaults.track_width_nm)?,
+                    clearance_nm: dimension("clearance", defaults.clearance_nm)?,
+                    via_diameter_nm: dimension("via_dia", defaults.via_diameter_nm)?,
+                    via_drill_nm: dimension("via_drill", defaults.via_drill_nm)?,
                     layers: None,
-                    differential_width_nm: optional_dimension("diff_pair_width"),
-                    differential_gap_nm: optional_dimension("diff_pair_gap"),
+                    differential_width_nm: optional_dimension("diff_pair_width")?,
+                    differential_gap_nm: optional_dimension("diff_pair_gap")?,
                     minimum_length_nm: None,
                     maximum_length_nm: None,
                     target_impedance_ohms: None,
@@ -494,7 +500,7 @@ fn import_net_classes(
             }
         }
     }
-    classes
+    Ok(classes)
 }
 
 fn infer_differential_pairs(
@@ -4713,6 +4719,29 @@ mod tests {
         assert_eq!(pair.name, "USB");
         assert_eq!(pair.gap_nm, 220_000);
         assert_eq!(imported.board.rules_for_net(1).track_width_nm, 180_000);
+    }
+
+    #[test]
+    fn rejects_invalid_legacy_net_class_dimensions() {
+        for (key, value) in [
+            ("trace_width", "1e20"),
+            ("diff_pair_gap", "-0.1"),
+            ("via_dia", "nan"),
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup
+                    (net_class "Invalid" ""
+                      ({key} {value})))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                format!("net class Invalid has invalid {key}")
+            );
+        }
     }
 
     #[test]
