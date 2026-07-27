@@ -163,8 +163,9 @@ duplicate embedded definitions are rejected instead of silently selecting the
 last one.
 Project settings are applied atomically, so an invalid class, pattern, or exact
 assignment cannot leave new classes or partial net assignments behind.
-Each project `classes` entry must have a unique name; duplicate definitions are
-rejected instead of silently selecting the last one.
+Each project `classes` entry must have a non-blank, unique name; blank or
+duplicate definitions are rejected instead of retaining an unusable class or
+silently selecting the last one.
 Ordered `netclass_patterns` support hierarchical names, `*`/`?` wildcards, and
 regular expressions; exact assignments retain precedence. A sibling
 `.kicad_dru` is also discovered automatically. NetClass-conditioned clearance,

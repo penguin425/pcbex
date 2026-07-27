@@ -208,6 +208,9 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
         let Some(name) = class.get("name").and_then(serde_json::Value::as_str) else {
             return Err("KiCad project net class is missing its name".into());
         };
+        if name.trim().is_empty() {
+            return Err("KiCad project net class name must not be blank".into());
+        }
         if !project_class_names.insert(name) {
             return Err(format!("KiCad project contains duplicate net class {name}"));
         }
@@ -5013,6 +5016,36 @@ mod tests {
             "KiCad project contains duplicate net class Signal"
         );
         assert!(!imported.board.net_classes.contains_key("Signal"));
+    }
+
+    #[test]
+    fn rejects_blank_project_net_class_names_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for name in ["", " \t"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = serde_json::json!({
+                "net_settings": {
+                    "classes": [
+                        {"name": "New", "track_width": 0.2},
+                        {"name": name, "track_width": 0.3}
+                    ]
+                }
+            });
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
+                "KiCad project net class name must not be blank"
+            );
+            assert_eq!(imported.board.net_classes.len(), 1);
+            assert!(imported.board.net_classes.contains_key("Existing"));
+        }
     }
 
     #[test]
