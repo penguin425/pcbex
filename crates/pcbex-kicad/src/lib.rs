@@ -1820,12 +1820,12 @@ fn rect_obstacle(
 ) -> Obstacle {
     Obstacle {
         min: Point {
-            x_nm: center.x_nm - width / 2,
-            y_nm: center.y_nm - height / 2,
+            x_nm: center.x_nm.saturating_sub(width / 2),
+            y_nm: center.y_nm.saturating_sub(height / 2),
         },
         max: Point {
-            x_nm: center.x_nm + width / 2,
-            y_nm: center.y_nm + height / 2,
+            x_nm: center.x_nm.saturating_add(width / 2),
+            y_nm: center.y_nm.saturating_add(height / 2),
         },
         layers,
         net_id,
@@ -2906,6 +2906,57 @@ mod tests {
         );
         assert_eq!(
             obstacles[0].max,
+            Point {
+                x_nm: i64::MAX,
+                y_nm: i64::MAX,
+            }
+        );
+        assert!(routes.is_empty());
+    }
+
+    #[test]
+    fn via_obstacle_envelope_saturates_at_coordinate_limits() {
+        let minimum_via = parse(
+            r#"(via
+              (at -1e30 -1e30)
+              (size 1e30)
+              (drill 0.3)
+              (layers "F.Cu" "B.Cu")
+              (net 0))"#,
+        )
+        .unwrap();
+        let maximum_via = parse(
+            r#"(via
+              (at 1e30 1e30)
+              (size 1e30)
+              (drill 0.3)
+              (layers "F.Cu" "B.Cu")
+              (net 0))"#,
+        )
+        .unwrap();
+        let mut obstacles = Vec::new();
+        let mut routes = HashMap::new();
+        for via in [&minimum_via, &maximum_via] {
+            import_via(
+                via.as_list().unwrap(),
+                Point { x_nm: 0, y_nm: 0 },
+                &rules(),
+                &mut obstacles,
+                &mut routes,
+                &[Layer::Front, Layer::Back],
+            );
+        }
+
+        assert_eq!(obstacles.len(), 2);
+        assert_eq!(
+            obstacles[0].min,
+            Point {
+                x_nm: i64::MIN,
+                y_nm: i64::MIN,
+            }
+        );
+        assert_eq!(
+            obstacles[1].max,
             Point {
                 x_nm: i64::MAX,
                 y_nm: i64::MAX,
