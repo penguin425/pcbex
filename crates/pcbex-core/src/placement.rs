@@ -373,11 +373,14 @@ fn initial_placement(problem: &PlacementProblem, index: &HashMap<&str, usize>) -
             placed[i] = true;
             if components[i].position.is_none() {
                 components[i].position = Some(cursor);
-                let step = components[i].width_nm + problem.grid_nm * 2;
-                cursor.x_nm += step;
-                if cursor.x_nm + step > problem.width_nm {
+                let step = placement_spacing_step(components[i].width_nm, problem.grid_nm);
+                cursor.x_nm = cursor.x_nm.saturating_add(step);
+                if cursor.x_nm.saturating_add(step) > problem.width_nm {
                     cursor.x_nm = problem.grid_nm;
-                    cursor.y_nm += components[i].height_nm + problem.grid_nm * 2;
+                    cursor.y_nm = cursor.y_nm.saturating_add(placement_spacing_step(
+                        components[i].height_nm,
+                        problem.grid_nm,
+                    ));
                 }
             }
             let mut neighbors = adjacency[i].clone();
@@ -386,6 +389,10 @@ fn initial_placement(problem: &PlacementProblem, index: &HashMap<&str, usize>) -
         }
     }
     components
+}
+
+fn placement_spacing_step(component_extent_nm: Nm, grid_nm: Nm) -> Nm {
+    component_extent_nm.saturating_add(grid_nm.saturating_mul(2))
 }
 
 fn mutate(
@@ -808,6 +815,13 @@ fn constraint_weight() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn placement_spacing_step_saturates_extreme_dimensions() {
+        assert_eq!(placement_spacing_step(i64::MAX, i64::MAX), i64::MAX);
+        assert_eq!(placement_spacing_step(2_000_000, 500_000), 3_000_000);
+    }
+
     fn component(reference: &str, position: Option<Point>) -> Component {
         Component {
             reference: reference.into(),
