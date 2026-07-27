@@ -264,6 +264,9 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 .get("pattern")
                 .and_then(serde_json::Value::as_str)
                 .ok_or_else(|| "net-class pattern is missing pattern".to_string())?;
+            if pattern.trim().is_empty() {
+                return Err("net-class pattern is blank".to_string());
+            }
             let class = assignment
                 .get("netclass")
                 .and_then(serde_json::Value::as_str)
@@ -5116,6 +5119,43 @@ mod tests {
         );
         assert!(!imported.board.net_classes.contains_key("New"));
         assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
+    }
+
+    #[test]
+    fn rejects_blank_project_net_class_patterns_atomically() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)
+              (add_net "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+              (net 1 "SIG")))
+        )"#;
+
+        for pattern in ["", "   "] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = format!(
+                r#"{{
+                  "net_settings": {{
+                    "classes": [{{"name": "New", "track_width": 0.3}}],
+                    "netclass_patterns": [{{"pattern": "{pattern}", "netclass": "New"}}]
+                  }}
+                }}"#
+            );
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project).unwrap_err(),
+                "net-class pattern is blank"
+            );
+            assert!(!imported.board.net_classes.contains_key("New"));
+            assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
+        }
     }
 
     #[test]
