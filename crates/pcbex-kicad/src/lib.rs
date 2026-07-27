@@ -10,6 +10,7 @@ use std::fmt::Write;
 
 const NM_PER_MM: f64 = 1_000_000.0;
 const ARC_CHORD_TOLERANCE_NM: f64 = 10_000.0;
+const MAX_EDGE_ARC_SEGMENTS: usize = 16_384;
 const MAX_EDGE_CIRCLE_SEGMENTS: usize = 16_384;
 const MAX_EDGE_CURVE_SEGMENTS: usize = 16_384;
 const MAX_EDGE_POLYGON_POINTS: usize = 16_384;
@@ -1541,7 +1542,13 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
     let start_steps = interval_steps(mid_sweep);
     let end_sweep = sweep - mid_sweep;
     let end_steps = interval_steps(end_sweep);
-    let mut points = Vec::with_capacity(start_steps + end_steps + 1);
+    let segments = start_steps
+        .checked_add(end_steps)
+        .ok_or("Edge.Cuts arc requires too many segments")?;
+    if segments > MAX_EDGE_ARC_SEGMENTS {
+        return Err("Edge.Cuts arc requires too many segments".into());
+    }
+    let mut points = Vec::with_capacity(segments + 1);
     for index in 0..=start_steps {
         let angle = start_angle + mid_sweep * index as f64 / start_steps as f64;
         points.push(Point {
@@ -1558,7 +1565,7 @@ fn sample_arc(start: Point, mid: Point, end: Point) -> Result<Vec<Point>, String
     }
     points[0] = start;
     points[start_steps] = mid;
-    points[start_steps + end_steps] = end;
+    points[segments] = end;
     Ok(points)
 }
 
@@ -3705,6 +3712,28 @@ mod tests {
 
         let points = sample_arc(start, mid, end).unwrap();
         assert_eq!(points, vec![start, mid, end]);
+    }
+
+    #[test]
+    fn rejects_edge_cuts_arc_above_segment_limit() {
+        let radius_nm = 3_000_000_000_000;
+        let start = Point {
+            x_nm: -radius_nm,
+            y_nm: 0,
+        };
+        let mid = Point {
+            x_nm: 0,
+            y_nm: -radius_nm,
+        };
+        let end = Point {
+            x_nm: radius_nm,
+            y_nm: 0,
+        };
+
+        assert_eq!(
+            sample_arc(start, mid, end).unwrap_err(),
+            "Edge.Cuts arc requires too many segments"
+        );
     }
 
     #[test]
