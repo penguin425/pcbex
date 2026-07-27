@@ -962,11 +962,13 @@ fn courtyard_polygon_local(footprint: &[Sexp]) -> Option<Vec<Point>> {
 }
 
 fn polygon_size(polygon: &[Point]) -> Option<(i64, i64)> {
+    let minimum_x = polygon.iter().map(|point| point.x_nm).min()?;
+    let maximum_x = polygon.iter().map(|point| point.x_nm).max()?;
+    let minimum_y = polygon.iter().map(|point| point.y_nm).min()?;
+    let maximum_y = polygon.iter().map(|point| point.y_nm).max()?;
     Some((
-        polygon.iter().map(|point| point.x_nm).max()?
-            - polygon.iter().map(|point| point.x_nm).min()?,
-        polygon.iter().map(|point| point.y_nm).max()?
-            - polygon.iter().map(|point| point.y_nm).min()?,
+        coordinate_span(maximum_x, minimum_x),
+        coordinate_span(maximum_y, minimum_y),
     ))
 }
 
@@ -2358,6 +2360,28 @@ mod tests {
             relative(Point { x_nm: 10, y_nm: 20 }, Point { x_nm: 3, y_nm: 5 }),
             Point { x_nm: 7, y_nm: 15 }
         );
+    }
+
+    #[test]
+    fn courtyard_size_handles_full_signed_coordinate_spans() {
+        assert_eq!(
+            polygon_size(&[
+                Point {
+                    x_nm: i64::MIN,
+                    y_nm: i64::MAX,
+                },
+                Point {
+                    x_nm: i64::MAX,
+                    y_nm: i64::MIN,
+                },
+            ]),
+            Some((i64::MAX, i64::MAX))
+        );
+        assert_eq!(
+            polygon_size(&[Point { x_nm: -20, y_nm: 5 }, Point { x_nm: 10, y_nm: 25 }]),
+            Some((30, 20))
+        );
+        assert_eq!(polygon_size(&[]), None);
     }
 
     #[test]

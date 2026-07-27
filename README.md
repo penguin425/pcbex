@@ -264,6 +264,8 @@ BGA escape stub shape detection widens endpoint differences before comparing
 axis distances.
 KiCad board extents and origin-relative coordinates widen endpoint differences
 and saturate them at signed coordinate limits.
+KiCad courtyard width and height derivation also saturates full-range coordinate
+spans before creating placement components.
 
 ```sh
 cargo run -p pcbex -- place examples/placement.json \
