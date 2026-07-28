@@ -18,6 +18,8 @@ use std::{
     process::Command as ProcessCommand,
 };
 
+mod mcp;
+
 #[derive(Parser)]
 #[command(version, about = "Deterministic PCB physical-design engine")]
 struct Cli {
@@ -101,6 +103,8 @@ enum Command {
         #[arg(value_enum)]
         shell: Shell,
     },
+    /// Serve pcbex tools over newline-delimited MCP JSON-RPC on stdio.
+    McpServer,
     /// Print the current board JSON Schema.
     Schema {
         #[arg(short, long)]
@@ -344,6 +348,7 @@ fn main() -> Result<()> {
             let name = command.get_name().to_string();
             generate(shell, &mut command, name, &mut io::stdout());
         }
+        Command::McpServer => mcp::serve_stdio()?,
         Command::Schema { output } => {
             let schema = serde_json::to_string_pretty(&board_json_schema())?;
             if let Some(path) = output {
