@@ -1,0 +1,127 @@
+name: pcbex hardware CI
+description: Analyze a KiCad PCB, publish CI artifacts, and optionally gate regressions.
+author: pcbex contributors
+
+branding:
+  icon: cpu
+  color: blue
+
+inputs:
+  board:
+    description: Path to the current .kicad_pcb file in the caller workspace.
+    required: true
+  baseline-board:
+    description: Optional path to a baseline .kicad_pcb file.
+    required: false
+    default: ""
+  output-dir:
+    description: Directory for analysis bundles, relative to the caller workspace.
+    required: false
+    default: pcbex-analysis
+  fail-on-violations:
+    description: Fail after publishing artifacts when the current board has violations.
+    required: false
+    default: "false"
+  fail-on-regressions:
+    description: Fail after publishing artifacts when the baseline comparison regresses.
+    required: false
+    default: "true"
+  upload-artifact:
+    description: Upload the complete analysis directory as a workflow artifact.
+    required: false
+    default: "true"
+  artifact-name:
+    description: Name of the uploaded workflow artifact.
+    required: false
+    default: pcbex-analysis
+  retention-days:
+    description: Number of days to retain the workflow artifact.
+    required: false
+    default: "14"
+  upload-sarif:
+    description: Upload SARIF to GitHub code scanning; requires security-events write permission.
+    required: false
+    default: "false"
+
+outputs:
+  artifact-dir:
+    description: Directory containing all generated analysis artifacts.
+    value: ${{ steps.analyze.outputs.artifact-dir }}
+  current-sarif:
+    description: SARIF report for the current board.
+    value: ${{ steps.analyze.outputs.current-sarif }}
+  comparison-sarif:
+    description: SARIF report for the baseline comparison, if requested.
+    value: ${{ steps.analyze.outputs.comparison-sarif }}
+  violation-count:
+    description: Number of violations in the current board.
+    value: ${{ steps.analyze.outputs.violation-count }}
+  regression:
+    description: Whether the baseline comparison found a regression.
+    value: ${{ steps.analyze.outputs.regression }}
+
+runs:
+  using: composite
+  steps:
+    - name: Build pcbex
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustup toolchain install stable --profile minimal
+        cargo +stable build \
+          --manifest-path "$GITHUB_ACTION_PATH/Cargo.toml" \
+          --package pcbex \
+          --release \
+          --locked
+        echo "binary=$GITHUB_ACTION_PATH/target/release/pcbex" >> "$GITHUB_OUTPUT"
+
+    - name: Analyze hardware
+      id: analyze
+      shell: bash
+      env:
+        PCBEX_BINARY: ${{ steps.build.outputs.binary }}
+        PCBEX_BOARD: ${{ inputs.board }}
+        PCBEX_BASELINE_BOARD: ${{ inputs.baseline-board }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
+
+    - name: Upload analysis artifact
+      if: ${{ always() && inputs.upload-artifact == 'true' && steps.analyze.outputs.artifact-dir != '' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.analyze.outputs.artifact-dir }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
+
+    - name: Upload SARIF
+      if: ${{ always() && inputs.upload-sarif == 'true' && steps.analyze.outputs.sarif-dir != '' }}
+      uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81
+      with:
+        sarif_file: ${{ steps.analyze.outputs.sarif-dir }}
+        category: pcbex-hardware-ci
+
+    - name: Enforce analysis gates
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PCBEX_ANALYSIS_STATUS: ${{ steps.analyze.outputs.status }}
+        PCBEX_VIOLATION_COUNT: ${{ steps.analyze.outputs.violation-count }}
+        PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
+        PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
+        PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
+      run: |
+        set -euo pipefail
+        if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
+          echo "::error::pcbex analysis did not complete"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_VIOLATIONS" == "true" && "$PCBEX_VIOLATION_COUNT" != "0" ]]; then
+          echo "::error::pcbex found $PCBEX_VIOLATION_COUNT current-board violation(s)"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_REGRESSIONS" == "true" && "$PCBEX_REGRESSION" == "true" ]]; then
+          echo "::error::pcbex found a hardware-analysis regression"
+          exit 1
+        fi

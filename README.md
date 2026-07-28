@@ -610,6 +610,41 @@ count. Violations are compared by rule, message, and normalized net IDs so a
 new finding cannot be hidden by resolving an unrelated finding. Resolved
 violations are retained separately for review.
 
+### GitHub Actions hardware CI
+
+The repository is also a composite GitHub Action. It builds the engine from the
+selected pcbex tag, analyzes the current board, adds Markdown to the Job
+Summary, and uploads the complete bundle. An optional baseline board enables
+the structured regression comparison:
+
+```yaml
+permissions:
+  contents: read
+  security-events: write
+
+steps:
+  - uses: actions/checkout@v7
+  - uses: actions/checkout@v7
+    with:
+      ref: ${{ github.event.pull_request.base.sha }}
+      path: .pcbex-baseline
+  - id: hardware
+    uses: penguin425/pcbex@v1.299.0
+    with:
+      board: hardware/controller.kicad_pcb
+      baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
+      fail-on-regressions: "true"
+      upload-sarif: "true"
+```
+
+The action outputs the artifact directory, current and comparison SARIF paths,
+violation count, and regression result. `upload-sarif` is opt-in because the
+calling job must grant `security-events: write`; artifact upload defaults to
+on. Violation and regression gates run only after uploads, so a failed PR check
+still retains the JSON, SVG, SARIF, summaries, and provenance manifests.
+Baseline checkout is intentionally caller-controlled, allowing a PR workflow
+to compare against its exact base SHA without using `pull_request_target`.
+
 Length groups may also set `tuning_amplitude_nm`, `tuning_pitch_nm`, and
 `max_tuning_sections`. The tuner distributes the required delay across multiple
 legal straight sections, checking the whole board after every section, while
