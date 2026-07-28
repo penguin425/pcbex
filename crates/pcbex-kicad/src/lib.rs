@@ -468,9 +468,8 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
             if atom(constraint.first()) != Some("constraint") {
                 continue;
             }
-            let Some(kind) = atom(constraint.get(1)) else {
-                continue;
-            };
+            let kind = atom(constraint.get(1))
+                .ok_or_else(|| "custom constraint must contain one scalar type".to_string())?;
             if matches!(
                 kind,
                 "clearance"
@@ -6814,6 +6813,44 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 "custom rule NetClass condition class name must not be blank"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
+    }
+
+    #[test]
+    fn rejects_missing_and_non_scalar_custom_constraint_types_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for constraint in [
+            "(constraint)",
+            "(constraint (type track_width) (min 0.4mm))",
+        ] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "Malformed constraint"
+                    (condition "A.NetClass == 'Signal'")
+                    {constraint})
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom constraint must contain one scalar type"
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);
