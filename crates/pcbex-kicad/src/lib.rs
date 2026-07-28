@@ -499,8 +499,15 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
                     class.differential_gap_nm = Some(constraint_value(constraint, &["opt", "min"])?)
                 }
                 "length" => {
-                    class.minimum_length_nm = constraint_optional_value(constraint, "min")?;
-                    class.maximum_length_nm = constraint_optional_value(constraint, "max")?;
+                    let minimum = constraint_optional_value(constraint, "min")?;
+                    let maximum = constraint_optional_value(constraint, "max")?;
+                    for (name, value) in [("min", minimum), ("max", maximum)] {
+                        if value.is_some_and(|length| length <= 0) {
+                            return Err(format!("custom rule length {name} must be positive"));
+                        }
+                    }
+                    class.minimum_length_nm = minimum;
+                    class.maximum_length_nm = maximum;
                 }
                 _ => continue,
             }
@@ -6237,6 +6244,55 @@ mod tests {
         let class = &imported.board.net_classes["Signal"];
         assert_eq!(class.via_diameter_nm, 200_000);
         assert_eq!(class.via_drill_nm, 100_000);
+    }
+
+    #[test]
+    fn rejects_zero_custom_rule_length_limits_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for bound in ["min", "max"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Invalid"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm))
+                    (constraint length ({bound} 0mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                format!("custom rule length {bound} must be positive")
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.minimum_length_nm, None);
+            assert_eq!(class.maximum_length_nm, None);
+        }
+
+        let mut imported = import(pcb, rules()).unwrap();
+        let applied = apply_custom_design_rules(
+            &mut imported.board,
+            r#"
+              (rule "Exact positive length"
+                (condition "A.NetClass == 'Signal'")
+                (constraint length (min 1mm) (max 1mm)))
+            "#,
+        )
+        .unwrap();
+        assert_eq!(applied, 1);
+        let class = &imported.board.net_classes["Signal"];
+        assert_eq!(class.minimum_length_nm, Some(1_000_000));
+        assert_eq!(class.maximum_length_nm, Some(1_000_000));
     }
 
     #[test]
