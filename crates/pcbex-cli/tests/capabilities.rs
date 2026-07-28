@@ -24,6 +24,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "capabilities",
         "doctor",
         "analyze-kicad",
+        "record-manufacturing-feedback",
+        "compare-manufacturing-feedback",
         "check-schematic",
         "prepare-ai-review",
         "mcp-server",

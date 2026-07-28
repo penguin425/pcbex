@@ -38,9 +38,19 @@ use std::{
     process::Command as ProcessCommand,
 };
 
+mod manufacturing_feedback;
 mod mcp;
 mod policy_pack;
 
+use manufacturing_feedback::{
+    EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
+    evidence_descriptor, manufacturing_feedback_comparison_json_schema,
+    manufacturing_feedback_comparison_to_sarif, manufacturing_feedback_declaration_json_schema,
+    manufacturing_feedback_json_schema, manufacturing_feedback_to_sarif,
+    parse_manufacturing_feedback, parse_manufacturing_feedback_declaration,
+    render_manufacturing_feedback_comparison_summary, render_manufacturing_feedback_summary,
+    verify_analysis_manifest_board,
+};
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
     parse_policy_pack, parse_policy_trust_state, parse_signed_policy_pack, policy_pack_json_schema,
@@ -294,6 +304,55 @@ enum Command {
     SimulationEvidenceSchema {
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+    /// Print the closed fabrication feedback declaration JSON Schema.
+    ManufacturingFeedbackDeclarationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed, digest-bound manufacturing feedback JSON Schema.
+    ManufacturingFeedbackSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed manufacturing feedback comparison JSON Schema.
+    ManufacturingFeedbackComparisonSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Bind fabrication findings and raw evidence to an exact analyzed board.
+    RecordManufacturingFeedback {
+        declaration: PathBuf,
+        #[arg(long)]
+        analysis_dir: PathBuf,
+        #[arg(long)]
+        board: PathBuf,
+        /// Raw fabrication or inspection artifact to hash; repeat for each file.
+        #[arg(long = "artifact", required = true)]
+        artifacts: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        sarif_output: Option<PathBuf>,
+        /// Fail after writing evidence unless fabrication feedback passes.
+        #[arg(long)]
+        require_passed: bool,
+    },
+    /// Compare accepted manufacturing feedback with a new fabrication result.
+    CompareManufacturingFeedback {
+        baseline: PathBuf,
+        current: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        sarif_output: Option<PathBuf>,
+        /// Fail after writing all reports when new or escalated findings regress.
+        #[arg(long)]
+        fail_on_regressions: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -1250,6 +1309,146 @@ fn main() -> Result<()> {
                 fs::write(path, schema)?;
             } else {
                 println!("{schema}");
+            }
+        }
+        Command::ManufacturingFeedbackDeclarationSchema { output } => {
+            write_or_print_json(
+                &manufacturing_feedback_declaration_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ManufacturingFeedbackSchema { output } => {
+            write_or_print_json(&manufacturing_feedback_json_schema(), output.as_ref())?;
+        }
+        Command::ManufacturingFeedbackComparisonSchema { output } => {
+            write_or_print_json(
+                &manufacturing_feedback_comparison_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::RecordManufacturingFeedback {
+            declaration,
+            analysis_dir,
+            board,
+            artifacts,
+            output,
+            summary_output,
+            sarif_output,
+            require_passed,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(output.as_path()),
+                    summary_output.as_deref(),
+                    sarif_output.as_deref(),
+                ],
+                "manufacturing feedback",
+            )?;
+            let declaration_source = fs::read_to_string(&declaration)
+                .with_context(|| format!("reading {}", declaration.display()))?;
+            let declaration = parse_manufacturing_feedback_declaration(&declaration_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("parsing {}", declaration.display()))?;
+            let manifest_path = analysis_dir.join("run.json");
+            let manifest_bytes = fs::read(&manifest_path)
+                .with_context(|| format!("reading {}", manifest_path.display()))?;
+            let board_bytes =
+                fs::read(&board).with_context(|| format!("reading {}", board.display()))?;
+            let board_sha256 = format!("{:x}", Sha256::digest(&board_bytes));
+            verify_analysis_manifest_board(&manifest_bytes, &board_sha256)
+                .map_err(anyhow::Error::msg)?;
+            if artifacts.len() > 1_000 {
+                bail!("manufacturing feedback accepts at most 1000 evidence artifacts");
+            }
+            let artifact_descriptors = artifacts
+                .iter()
+                .map(|path| manufacturing_evidence_descriptor(path))
+                .collect::<Result<Vec<_>>>()?;
+            let feedback = bind_manufacturing_feedback(
+                declaration,
+                evidence_descriptor("run.json", &manifest_bytes).map_err(anyhow::Error::msg)?,
+                evidence_descriptor(&portable_basename(&board)?, &board_bytes)
+                    .map_err(anyhow::Error::msg)?,
+                artifact_descriptors,
+            )
+            .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&feedback)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            if let Some(path) = summary_output {
+                fs::write(&path, render_manufacturing_feedback_summary(&feedback))
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
+            if let Some(path) = sarif_output {
+                fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&manufacturing_feedback_to_sarif(&feedback))?,
+                )
+                .with_context(|| format!("writing {}", path.display()))?;
+            }
+            eprintln!(
+                "manufacturing feedback {}: {} finding(s), disposition {:?}, passed {}",
+                feedback.declaration.id,
+                feedback.declaration.findings.len(),
+                feedback.declaration.disposition,
+                feedback.passed
+            );
+            if require_passed && !feedback.passed {
+                bail!("manufacturing feedback did not pass");
+            }
+        }
+        Command::CompareManufacturingFeedback {
+            baseline,
+            current,
+            output,
+            summary_output,
+            sarif_output,
+            fail_on_regressions,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(output.as_path()),
+                    summary_output.as_deref(),
+                    sarif_output.as_deref(),
+                ],
+                "manufacturing feedback comparison",
+            )?;
+            let baseline_source = fs::read_to_string(&baseline)
+                .with_context(|| format!("reading {}", baseline.display()))?;
+            let current_source = fs::read_to_string(&current)
+                .with_context(|| format!("reading {}", current.display()))?;
+            let baseline =
+                parse_manufacturing_feedback(&baseline_source).map_err(anyhow::Error::msg)?;
+            let current =
+                parse_manufacturing_feedback(&current_source).map_err(anyhow::Error::msg)?;
+            let comparison =
+                compare_manufacturing_feedback(&baseline, &current).map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&comparison)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            if let Some(path) = summary_output {
+                fs::write(
+                    &path,
+                    render_manufacturing_feedback_comparison_summary(&comparison),
+                )
+                .with_context(|| format!("writing {}", path.display()))?;
+            }
+            if let Some(path) = sarif_output {
+                fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&manufacturing_feedback_comparison_to_sarif(
+                        &comparison,
+                    ))?,
+                )
+                .with_context(|| format!("writing {}", path.display()))?;
+            }
+            eprintln!(
+                "manufacturing feedback comparison: {} new, {} escalated, {} resolved; regression {}",
+                comparison.new_findings.len(),
+                comparison.escalated_findings.len(),
+                comparison.resolved_findings.len(),
+                comparison.regression
+            );
+            if fail_on_regressions && comparison.regression {
+                bail!("manufacturing feedback comparison found regressions");
             }
         }
         Command::RecordSimulationEvidence {
@@ -2796,6 +2995,52 @@ fn simulation_artifact(path: &Path) -> Result<SimulationArtifact> {
         bytes,
         sha256: format!("{:x}", digest.finalize()),
     })
+}
+
+fn manufacturing_evidence_descriptor(path: &Path) -> Result<EvidenceDescriptor> {
+    let name = portable_basename(path)?;
+    let mut file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(count as u64)
+            .ok_or_else(|| anyhow::anyhow!("manufacturing evidence artifact size overflow"))?;
+        digest.update(&buffer[..count]);
+    }
+    Ok(EvidenceDescriptor {
+        name,
+        bytes,
+        sha256: format!("{:x}", digest.finalize()),
+    })
+}
+
+fn portable_basename(path: &Path) -> Result<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("{} has no portable UTF-8 basename", path.display()))
+}
+
+fn require_distinct_outputs<'a>(
+    paths: impl IntoIterator<Item = Option<&'a Path>>,
+    label: &str,
+) -> Result<()> {
+    let paths = paths.into_iter().flatten().collect::<Vec<_>>();
+    for (index, path) in paths.iter().enumerate() {
+        if paths[index + 1..].contains(path) {
+            bail!("{label} output paths must be distinct");
+        }
+    }
+    Ok(())
 }
 
 fn read_described_json<T: DeserializeOwned>(path: &Path) -> Result<(T, InputDescriptor)> {

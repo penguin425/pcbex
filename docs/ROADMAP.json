@@ -129,6 +129,11 @@
     {
       "id": "monotonic-policy-trust-state",
       "release": "v1.322.0",
+      "status": "released"
+    },
+    {
+      "id": "manufacturing-feedback-ingestion",
+      "release": "v1.323.0",
       "status": "current"
     }
   ]
