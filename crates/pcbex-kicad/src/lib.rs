@@ -2080,6 +2080,11 @@ fn validate_declared_copper_net(
     if net_fields.next().is_some() {
         return Err(format!("KiCad {kind} net fields must not be repeated"));
     }
+    if values.len() > 2 {
+        return Err(format!(
+            "KiCad {kind} net field must contain exactly one ID"
+        ));
+    }
     let id = number_u32(values.get(1))
         .ok_or_else(|| format!("KiCad {kind} is missing a valid numeric net ID"))?;
     if id != 0 && !nets.contains_key(&id) {
@@ -3456,6 +3461,47 @@ mod tests {
                     format!("KiCad {kind} net fields must not be repeated")
                 );
             }
+        }
+    }
+
+    #[test]
+    fn rejects_extra_values_in_routed_copper_net_fields() {
+        let primitives = [
+            (
+                "segment",
+                r#"(segment (start 1 1) (end 5 1) (width 0.25)
+                  (layer "F.Cu") (net 1 extra))"#,
+            ),
+            (
+                "route arc",
+                r#"(arc (start 1 1) (mid 3 3) (end 5 1) (width 0.25)
+                  (layer "F.Cu") (net 1 extra))"#,
+            ),
+            (
+                "via",
+                r#"(via (at 3 3) (size 0.6) (drill 0.3)
+                  (layers "F.Cu" "B.Cu") (net 1 extra))"#,
+            ),
+            (
+                "copper zone",
+                r#"(zone (net 1 extra) (net_name "SIGNAL") (layer "F.Cu")
+                  (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))"#,
+            ),
+        ];
+
+        for (kind, primitive) in primitives {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIGNAL")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  {primitive}
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                format!("KiCad {kind} net field must contain exactly one ID")
+            );
         }
     }
 
