@@ -54,6 +54,8 @@ fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     let unchanged_comparison = temporary_directory("comparison-unchanged");
     let current = temporary_directory("analysis-current");
     let regressed_comparison = temporary_directory("comparison-regressed");
+    let profiled = temporary_directory("analysis-profiled");
+    let profiles = temporary_directory("profiles").with_extension("json");
 
     assert!(analyze(&input, &output, false).success());
     for artifact in [
@@ -84,6 +86,47 @@ fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     assert!(!analyze(&input, &gated_output, true).success());
     assert!(gated_output.join("run.json").is_file());
     assert!(gated_output.join("report.sarif").is_file());
+
+    let profile_status = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("analyze-kicad")
+        .arg(&input)
+        .arg("--output-dir")
+        .arg(&profiled)
+        .arg("--fab")
+        .arg("jlcpcb-2layer")
+        .status()
+        .unwrap();
+    assert!(profile_status.success());
+    let profile_manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(profiled.join("run.json")).unwrap()).unwrap();
+    assert_eq!(
+        profile_manifest["configuration"]["dfm_profile"]["id"],
+        "jlcpcb-standard-2layer-1oz-v1"
+    );
+    assert_eq!(
+        profile_manifest["configuration"]["rules"]["via_diameter_nm"],
+        660_000
+    );
+    let profile_board: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(profiled.join("board.json")).unwrap()).unwrap();
+    assert_eq!(
+        profile_board["manufacturing_rules"]["minimum_copper_to_edge_nm"],
+        200_000
+    );
+
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("dfm-profiles")
+            .arg("--output")
+            .arg(&profiles)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let listed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&profiles).unwrap()).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 2);
+    assert_eq!(listed[0]["revision"], 1);
 
     assert!(compare(&output, &output, &unchanged_comparison, true).success());
     assert!(unchanged_comparison.join("delta.json").is_file());
@@ -131,4 +174,6 @@ fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     fs::remove_dir_all(unchanged_comparison).unwrap();
     fs::remove_dir_all(current).unwrap();
     fs::remove_dir_all(regressed_comparison).unwrap();
+    fs::remove_dir_all(profiled).unwrap();
+    fs::remove_file(profiles).unwrap();
 }

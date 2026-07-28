@@ -24,6 +24,7 @@ jobs:
         with:
           board: examples/simple.kicad_pcb
           baseline-board: examples/simple.kicad_pcb
+          fab: jlcpcb-2layer
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"

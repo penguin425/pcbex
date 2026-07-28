@@ -39,7 +39,11 @@ write_output comparison-sarif ""
 write_output violation-count ""
 write_output regression false
 
-"$PCBEX_BINARY" analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir"
+analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
+if [[ -n "${PCBEX_FAB:-}" ]]; then
+  analysis_arguments+=(--fab "$PCBEX_FAB")
+fi
+"$PCBEX_BINARY" "${analysis_arguments[@]}"
 cp "$current_dir/report.sarif" "$sarif_dir/current.sarif"
 
 violation_count="$(
@@ -57,7 +61,11 @@ comparison_sarif=""
 regression=false
 if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
   mkdir -p "$baseline_dir" "$comparison_dir"
-  "$PCBEX_BINARY" analyze-kicad "$PCBEX_BASELINE_BOARD" --output-dir "$baseline_dir"
+  baseline_arguments=(analyze-kicad "$PCBEX_BASELINE_BOARD" --output-dir "$baseline_dir")
+  if [[ -n "${PCBEX_FAB:-}" ]]; then
+    baseline_arguments+=(--fab "$PCBEX_FAB")
+  fi
+  "$PCBEX_BINARY" "${baseline_arguments[@]}"
   "$PCBEX_BINARY" compare-analysis \
     "$baseline_dir" \
     "$current_dir" \
