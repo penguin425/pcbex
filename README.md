@@ -1362,6 +1362,40 @@ Closed request, response, and signature contracts are emitted by
 `ai-review-request-schema`, `ai-review-response-schema`, and
 `signed-ai-approval-schema`.
 
+For a real provider, wrap its SDK or HTTP API in an executable that reads the
+review prompt from stdin and writes only the response JSON to stdout. The agent
+runs that adapter without a shell:
+
+```sh
+pcbex-agent review-schematic ai-review-request.json \
+  --output ai-review-response.json \
+  --receipt ai-provider-receipt.json \
+  --timeout-seconds 120 \
+  --maximum-output-bytes 1048576 \
+  --provider-command ./review-adapter --model production-reviewer
+
+pcbex-agent provider-receipt-schema \
+  --output provider-receipt.schema.json
+```
+
+`--provider-command` must be last so every following token is passed as one
+exact argument. pcbex-agent does not interpret a command string, expand shell
+syntax, or accept or persist a provider credential. Credentials remain an
+adapter concern, typically supplied through its environment. pcbex-agent
+bounds stdout and stderr while the process runs, kills timed-out or oversized
+providers, validates the closed response before writing anything, and refuses
+to overwrite an existing response or receipt. The generated prompt labels
+every schematic and requirement field as untrusted evidence rather than model
+instructions, reducing prompt-injection authority at the review boundary.
+
+The versioned receipt records SHA-256 and byte length for the request and
+normalized response, the provider executable basename, a SHA-256 commitment to
+the exact argument vector, and the applied runtime limits. The receipt does not
+contain the prompt, command arguments, environment, or credentials. A valid
+provider response still has no approval authority until `sign-ai-review`
+recomputes every deterministic gate and signs it with the separately held
+Ed25519 key.
+
 ## Releases
 
 Diagnose the local CLI and its optional KiCad, Git, and Python integrations
