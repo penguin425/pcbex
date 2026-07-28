@@ -590,11 +590,13 @@ fn condition_net_class(condition: &str) -> Result<Option<String>, String> {
         .strip_prefix("==")
         .ok_or_else(|| "custom rule NetClass condition must use the == operator".to_string())?;
     let rest = rest.trim_start();
-    let Some(quote) = rest.chars().next() else {
-        return Ok(None);
-    };
+    let quote = rest.chars().next().ok_or_else(|| {
+        "custom rule NetClass condition must contain one quoted class name".to_string()
+    })?;
     if quote != '\'' && quote != '"' {
-        return Ok(None);
+        return Err(
+            "custom rule NetClass condition must contain one quoted class name".to_string(),
+        );
     }
     let quoted = &rest[quote.len_utf8()..];
     let Some(closing_quote) = quoted.find(quote) else {
@@ -6862,6 +6864,41 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 "custom rule NetClass condition must use the == operator"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
+    }
+
+    #[test]
+    fn rejects_missing_and_unquoted_net_class_names_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for condition in ["A.NetClass ==", "B.NetClass == Signal"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "Invalid class name"
+                    (condition "{condition}")
+                    (constraint track_width (min 0.4mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom rule NetClass condition must contain one quoted class name"
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);
