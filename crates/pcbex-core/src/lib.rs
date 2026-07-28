@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 
 pub mod analysis;
 pub mod checking;
+pub mod dfm_profiles;
 mod geometry;
 pub mod impedance;
 pub mod placement;
@@ -11,6 +12,7 @@ pub mod quality;
 pub mod schema;
 
 pub use analysis::{AnalysisDelta, analysis_delta_to_sarif};
+pub use dfm_profiles::{DfmProfile, apply_dfm_profile, dfm_profile, dfm_profiles};
 pub use impedance::{ImpedanceReport, impedance_report};
 pub use quality::{DifferentialQuality, NetQuality, RoutingQuality, routing_quality};
 pub use schema::{board_json_schema, migrate_board_json, parse_board_json};
@@ -354,7 +356,7 @@ fn default_escape_rings() -> u8 {
     3
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ManufacturingRules {
     pub minimum_track_width_nm: Nm,
     pub minimum_clearance_nm: Nm,

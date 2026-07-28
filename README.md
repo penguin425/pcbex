@@ -629,10 +629,11 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.299.0
+    uses: penguin425/pcbex@v1.300.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
+      fab: jlcpcb-2layer
       fail-on-regressions: "true"
       upload-sarif: "true"
 ```
@@ -758,6 +759,30 @@ transition steps for single-ended nets and both differential members.
 Boards may define `manufacturing_rules` for minimum track width, copper
 clearance, drill, annular ring, copper-to-edge distance, board thickness, and
 maximum via aspect ratio. These checks are included in the normal board checker.
+
+Built-in fabrication profiles make those rules explicit, revisioned, and
+reproducible:
+
+```sh
+pcbex dfm-profiles
+pcbex analyze-kicad board.kicad_pcb --output-dir build/analysis \
+  --fab jlcpcb-2layer
+pcbex route-kicad board.kicad_pcb --output routed.kicad_pcb \
+  --fab pcbway-2layer
+pcbex dfm board.json --fab jlcpcb-standard-2layer-1oz-v1
+```
+
+The stable aliases `jlcpcb-2layer` and `pcbway-2layer` currently resolve to the
+immutable `jlcpcb-standard-2layer-1oz-v1` and
+`pcbway-standard-2layer-1oz-v1` profiles. Each listing includes its revision,
+verification date, official capability URLs, and exact nanometre rules.
+`analyze-kicad` records the resolved profile and effective routing rules in
+`run.json`. Profile application raises base and net-class track width,
+clearance, drill, and annular-ring-derived via diameter where required; it
+never lowers a stricter project rule. Both initial profiles model routed-edge
+clearance and a 1.6 mm board. They use a conservative 10:1 via aspect-ratio
+limit where the standard capability pages do not publish a tighter limit.
+
 Invalid physical limits are reported individually as `dfm_rule_dimensions`;
 track width, drill size, and board thickness must be positive, while clearance
 and spacing limits may be zero but not negative.
