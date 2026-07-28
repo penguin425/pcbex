@@ -1141,6 +1141,25 @@ skipped. Suite properties retain the schematic and policy SHA-256 identities,
 so Jenkins, GitLab, Buildkite, and other JUnit-aware CI systems can display the
 same approval evidence without changing the canonical JSON review.
 
+Adopt an existing review as a CI baseline without allowing new electrical
+errors:
+
+```sh
+pcbex compare-electrical-reviews accepted-review.json electrical-review.json \
+  --output electrical-comparison.json \
+  --require-no-new-errors
+pcbex electrical-review-comparison-schema \
+  --output electrical-review-comparison-v1.schema.json
+```
+
+The comparison uses stable finding IDs instead of aggregate counts. Existing
+baseline errors do not fail the gate, while a new error or a warning/info
+finding escalated to error returns nonzero after writing the report. New,
+resolved, unchanged, and severity-changed findings are counted separately;
+actionable summaries and canonical SHA-256 identities for both reviews are
+retained. Duplicate or malformed finding IDs, inconsistent counts or approval
+flags, blank policy identities, and future schema versions fail closed.
+
 Temporary exceptions are represented separately from the immutable electrical
 review. Every waiver targets one stable finding ID and requires a non-empty
 reason, approver identity, and expiration date:
