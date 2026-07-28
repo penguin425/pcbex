@@ -70,7 +70,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                 return Err("KiCad board net is missing a valid numeric ID".into());
             };
             let Some(name) = atom(xs.get(2)) else {
-                continue;
+                return Err(format!("KiCad board net {id} is missing a scalar name"));
             };
             if let Some(existing) = nets.get(&id) {
                 return Err(format!(
@@ -3000,6 +3000,23 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "KiCad board net is missing a valid numeric ID"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_and_non_scalar_kicad_net_names() {
+        for declaration in [r#"(net 1)"#, r#"(net 1 (name "SIG"))"#] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {declaration}
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad board net 1 is missing a scalar name"
             );
         }
     }
