@@ -7,10 +7,11 @@ use pcbex_core::placement::{
     PlacementProblem, place, place_candidates,
 };
 use pcbex_core::{
-    AnalysisDelta, Board, DfmProfile, RoutingQuality, Rules, analysis_delta_to_sarif,
-    apply_dfm_profile, board_json_schema, dfm_profile, dfm_profiles, impedance_report,
-    migrate_board_json, parse_board_json, render_svg, repair_routes, repairable_net_ids,
-    route_board, routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
+    AnalysisDelta, Board, DfmProfile, RoutingCandidateObjective, RoutingCandidateOptions,
+    RoutingCandidateSet, RoutingQuality, Rules, analysis_delta_to_sarif, apply_dfm_profile,
+    board_json_schema, dfm_profile, dfm_profiles, impedance_report, migrate_board_json,
+    parse_board_json, render_svg, repair_routes, repairable_net_ids, route_board, route_candidates,
+    routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{apply_custom_design_rules, apply_project_net_settings, import as import_kicad};
 use serde::{Serialize, de::DeserializeOwned};
@@ -133,6 +134,20 @@ enum Command {
         #[arg(long)]
         allow_unrouted: bool,
     },
+    /// Generate Pareto-ranked N-best routes for a board JSON document.
+    RouteCandidates {
+        input: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        candidates: usize,
+        #[arg(long, default_value_t = 4)]
+        workers: usize,
+        #[arg(long, default_value_t = 2)]
+        router_workers: usize,
+        #[arg(long)]
+        allow_unrouted: bool,
+    },
     /// Reroute only violating or explicitly selected nets; keep all others locked.
     Repair {
         input: PathBuf,
@@ -239,6 +254,40 @@ enum Command {
         /// Run `kicad-cli pcb drc` after writing the board.
         #[arg(long)]
         drc: bool,
+        #[arg(long)]
+        allow_unrouted: bool,
+    },
+    /// Generate Pareto-ranked N-best routes directly from a placed KiCad board.
+    RouteKicadCandidates {
+        input: PathBuf,
+        #[arg(long)]
+        project: Option<PathBuf>,
+        #[arg(long)]
+        rules_file: Option<PathBuf>,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 0.25)]
+        grid_mm: f64,
+        #[arg(long, default_value_t = 0.25)]
+        width_mm: f64,
+        #[arg(long, default_value_t = 0.20)]
+        clearance_mm: f64,
+        #[arg(long, default_value_t = 0.60)]
+        via_diameter_mm: f64,
+        #[arg(long, default_value_t = 0.30)]
+        via_drill_mm: f64,
+        #[arg(long, default_value_t = 5)]
+        bend_cost: u32,
+        #[arg(long, default_value_t = 20)]
+        via_cost: u32,
+        #[arg(long)]
+        fab: Option<String>,
+        #[arg(long, default_value_t = 5)]
+        candidates: usize,
+        #[arg(long, default_value_t = 4)]
+        workers: usize,
+        #[arg(long, default_value_t = 2)]
+        router_workers: usize,
         #[arg(long)]
         allow_unrouted: bool,
     },
@@ -438,6 +487,43 @@ fn main() -> Result<()> {
                 bail!("unrouted nets: {}", report.unrouted.join(", "))
             }
             ensure_clean(&board)?;
+        }
+        Command::RouteCandidates {
+            input,
+            output_dir,
+            candidates,
+            workers,
+            router_workers,
+            allow_unrouted,
+        } => {
+            let results = route_candidates(
+                &read(&input)?,
+                &RoutingCandidateOptions {
+                    candidates,
+                    workers,
+                    router_workers,
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_routing_candidate_reports(&output_dir, &results)?;
+            eprintln!(
+                "generated {} routing candidates ({} unique); Pareto front: {}; selected: {}",
+                results.candidates.len(),
+                results
+                    .candidates
+                    .iter()
+                    .filter(|candidate| candidate.duplicate_of.is_none())
+                    .count(),
+                results.pareto_front.len(),
+                results.selected_candidate_id
+            );
+            if !allow_unrouted && results.selected().quality.unrouted_nets != 0 {
+                bail!(
+                    "selected routing candidate has {} unrouted net(s)",
+                    results.selected().quality.unrouted_nets
+                )
+            }
+            ensure_clean(&results.selected().board)?;
         }
         Command::Repair {
             input,
@@ -872,6 +958,115 @@ fn main() -> Result<()> {
                 run_kicad_drc(&output)?;
             }
         }
+        Command::RouteKicadCandidates {
+            input,
+            project,
+            rules_file,
+            output_dir,
+            grid_mm,
+            width_mm,
+            clearance_mm,
+            via_diameter_mm,
+            via_drill_mm,
+            bend_cost,
+            via_cost,
+            fab,
+            candidates,
+            workers,
+            router_workers,
+            allow_unrouted,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let rules = Rules {
+                grid_nm: to_nm(grid_mm, "grid")?,
+                track_width_nm: to_nm(width_mm, "track width")?,
+                clearance_nm: to_nm(clearance_mm, "clearance")?,
+                via_diameter_nm: to_nm(via_diameter_mm, "via diameter")?,
+                via_drill_nm: to_nm(via_drill_mm, "via drill")?,
+                bend_cost,
+                via_cost,
+            };
+            if rules.via_drill_nm >= rules.via_diameter_nm {
+                bail!("via drill must be smaller than via diameter");
+            }
+            let mut imported = import_kicad(&source, rules).map_err(anyhow::Error::msg)?;
+            let project = project.or_else(|| {
+                let candidate = input.with_extension("kicad_pro");
+                candidate.exists().then_some(candidate)
+            });
+            if let Some(path) = project {
+                let project_source = fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                apply_project_net_settings(&mut imported.board, &project_source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("importing rules from {}", path.display()))?;
+            }
+            let rules_file = rules_file.or_else(|| {
+                let candidate = input.with_extension("kicad_dru");
+                candidate.exists().then_some(candidate)
+            });
+            if let Some(path) = rules_file {
+                let rules_source = fs::read_to_string(&path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                apply_custom_design_rules(&mut imported.board, &rules_source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("importing custom rules from {}", path.display()))?;
+            }
+            if let Some(profile) = resolve_dfm_profile(fab.as_deref())? {
+                apply_dfm_profile(&mut imported.board, &profile);
+            }
+            let results = route_candidates(
+                &imported.board,
+                &RoutingCandidateOptions {
+                    candidates,
+                    workers,
+                    router_workers,
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            fs::create_dir_all(&output_dir)
+                .with_context(|| format!("creating {}", output_dir.display()))?;
+            for candidate in &results.candidates {
+                let path = output_dir.join(format!(
+                    "{}-{}.kicad_pcb",
+                    candidate.id,
+                    routing_candidate_objective_name(candidate.objective)
+                ));
+                fs::write(
+                    &path,
+                    imported
+                        .write_routes(&candidate.board.routes)
+                        .map_err(anyhow::Error::msg)?,
+                )
+                .with_context(|| format!("writing {}", path.display()))?;
+            }
+            fs::write(
+                output_dir.join("selected.kicad_pcb"),
+                imported
+                    .write_routes(&results.selected().board.routes)
+                    .map_err(anyhow::Error::msg)?,
+            )?;
+            write_routing_candidate_reports(&output_dir, &results)?;
+            eprintln!(
+                "generated {} KiCad routing candidates ({} unique); Pareto front: {}; selected: {}",
+                results.candidates.len(),
+                results
+                    .candidates
+                    .iter()
+                    .filter(|candidate| candidate.duplicate_of.is_none())
+                    .count(),
+                results.pareto_front.len(),
+                results.selected_candidate_id
+            );
+            if !allow_unrouted && results.selected().quality.unrouted_nets != 0 {
+                bail!(
+                    "selected routing candidate has {} unrouted net(s)",
+                    results.selected().quality.unrouted_nets
+                )
+            }
+            ensure_clean(&results.selected().board)?;
+        }
         Command::Check { input } => {
             let b = read(&input)?;
             if b.width_nm <= 0 || b.height_nm <= 0 || b.rules.grid_nm <= 0 {
@@ -1201,6 +1396,45 @@ fn placement_candidate_options(
         candidates,
         workers,
         placement,
+    }
+}
+
+fn write_routing_candidate_reports(output_dir: &Path, results: &RoutingCandidateSet) -> Result<()> {
+    fs::create_dir_all(output_dir).with_context(|| format!("creating {}", output_dir.display()))?;
+    let manifest = output_dir.join("candidates.json");
+    fs::write(&manifest, serde_json::to_string_pretty(results)?)
+        .with_context(|| format!("writing {}", manifest.display()))?;
+    for candidate in &results.candidates {
+        let objective = routing_candidate_objective_name(candidate.objective);
+        let board_path = output_dir.join(format!("{}-{objective}.board.json", candidate.id));
+        fs::write(&board_path, serde_json::to_string_pretty(&candidate.board)?)
+            .with_context(|| format!("writing {}", board_path.display()))?;
+        let report_path = output_dir.join(format!("{}.report.json", candidate.id));
+        fs::write(&report_path, serde_json::to_string_pretty(candidate)?)
+            .with_context(|| format!("writing {}", report_path.display()))?;
+    }
+    let selected_board = output_dir.join("selected.board.json");
+    fs::write(
+        &selected_board,
+        serde_json::to_string_pretty(&results.selected().board)?,
+    )
+    .with_context(|| format!("writing {}", selected_board.display()))?;
+    let selected_report = output_dir.join("selected.report.json");
+    fs::write(
+        &selected_report,
+        serde_json::to_string_pretty(results.selected())?,
+    )
+    .with_context(|| format!("writing {}", selected_report.display()))?;
+    Ok(())
+}
+
+fn routing_candidate_objective_name(objective: RoutingCandidateObjective) -> &'static str {
+    match objective {
+        RoutingCandidateObjective::Balanced => "balanced",
+        RoutingCandidateObjective::Shortest => "shortest",
+        RoutingCandidateObjective::ViaMinimized => "via-minimized",
+        RoutingCandidateObjective::BendMinimized => "bend-minimized",
+        RoutingCandidateObjective::AlternateOrder => "alternate-order",
     }
 }
 
@@ -1534,6 +1768,37 @@ mod tests {
                 seed: Some(42),
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn parses_routing_candidate_controls() {
+        let cli = Cli::try_parse_from([
+            "pcbex",
+            "route-kicad-candidates",
+            "board.kicad_pcb",
+            "--output-dir",
+            "routes",
+            "--candidates",
+            "10",
+            "--workers",
+            "4",
+            "--router-workers",
+            "2",
+            "--fab",
+            "jlcpcb-2layer",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::RouteKicadCandidates {
+                candidates: 10,
+                workers: 4,
+                router_workers: 2,
+                fab: Some(fab),
+                ..
+            } if fab == "jlcpcb-2layer"
         ));
     }
 
