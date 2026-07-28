@@ -586,9 +586,9 @@ fn condition_net_class(condition: &str) -> Result<Option<String>, String> {
         return Ok(None);
     };
     let rest = rest.trim_start();
-    let Some(rest) = rest.strip_prefix("==") else {
-        return Ok(None);
-    };
+    let rest = rest
+        .strip_prefix("==")
+        .ok_or_else(|| "custom rule NetClass condition must use the == operator".to_string())?;
     let rest = rest.trim_start();
     let Some(quote) = rest.chars().next() else {
         return Ok(None);
@@ -6823,6 +6823,45 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 "custom rule NetClass condition class name must not be blank"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
+    }
+
+    #[test]
+    fn rejects_non_equality_net_class_conditions_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for condition in [
+            "A.NetClass = 'Signal'",
+            "A.NetClass != 'Signal'",
+            "B.NetClass 'Signal'",
+        ] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "Invalid operator"
+                    (condition "{condition}")
+                    (constraint track_width (min 0.4mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom rule NetClass condition must use the == operator"
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);

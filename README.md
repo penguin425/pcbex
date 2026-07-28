@@ -227,9 +227,10 @@ condition field must contain one scalar expression and no extra expressions. A
 recognized NetClass condition must close its quoted class name and end
 immediately afterward; the class name must not be blank, and trailing condition
 fragments are rejected rather than partially applied. Only direct `A.NetClass`
-or `B.NetClass` selectors are interpreted; compound conditions remain KiCad's
-authority. Custom-rule application is atomic, so an invalid later constraint or
-unknown net class cannot leave earlier rule updates partially applied.
+or `B.NetClass` selectors using the `==` operator are interpreted; malformed
+direct operators are rejected, while compound conditions remain KiCad's
+authority. Custom-rule application is atomic, so an invalid later constraint
+or unknown net class cannot leave earlier rule updates partially applied.
 
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.
