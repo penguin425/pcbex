@@ -226,8 +226,9 @@ repeated conditions are rejected instead of silently selecting the first. A
 custom rule must contain one scalar name; missing or structured names are
 rejected, blank names are invalid, and extra scalar values are not permitted. A
 condition field must contain one scalar expression and no extra expressions. A
-recognized NetClass condition must close its quoted class name
-and end immediately afterward; the class name must be present, quoted, and non-blank,
+blank condition is rejected. A recognized NetClass condition must close its
+quoted class name and end immediately afterward; the class name must be
+present, quoted, and non-blank,
 and trailing condition fragments are rejected rather than partially applied.
 Only direct `A.NetClass` or `B.NetClass` selectors using the `==` operator are
 interpreted; malformed direct operators are rejected, while compound conditions
