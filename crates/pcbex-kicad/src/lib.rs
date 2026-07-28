@@ -454,6 +454,9 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
         if rule_name.trim().is_empty() {
             return Err("custom rule name must not be blank".to_string());
         }
+        if rule.iter().skip(2).any(|value| value.as_list().is_none()) {
+            return Err("custom rule must not contain extra scalar values".to_string());
+        }
         let Some(condition) = custom_rule_condition(rule)? else {
             continue;
         };
@@ -6713,6 +6716,47 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 "custom rule name must not be blank"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
+    }
+
+    #[test]
+    fn rejects_extra_custom_rule_scalar_values_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for invalid_rule in [
+            r#"(rule "Extra before" unexpected
+                  (condition "A.NetClass == 'Signal'")
+                  (constraint track_width (min 0.4mm)))"#,
+            r#"(rule "Extra after"
+                  (condition "A.NetClass == 'Signal'")
+                  (constraint track_width (min 0.4mm))
+                  unexpected)"#,
+        ] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  {invalid_rule}
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom rule must not contain extra scalar values"
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);
