@@ -580,6 +580,22 @@ Reports include per-net length, segments, arcs, vias, bends, used layers, board
 totals, unrouted count, and differential-pair skew/coupling. Baseline gates
 reject increases in total length, vias, bends, or unrouted nets.
 
+Analyze a KiCad board directly and produce one self-contained artifact bundle
+for CI, MCP, or later candidate comparison:
+
+```sh
+pcbex analyze-kicad board.kicad_pcb --output-dir build/pcbex-analysis
+```
+
+The bundle contains the normalized board JSON, SVG, quality and internal
+DRC/DFM JSON, SARIF, a Markdown summary, and `run.json`. The run manifest records
+the engine version, SHA-256 and byte length of every applied input, effective
+routing defaults, applied custom-rule count, result totals, and artifact names.
+Sibling `.kicad_pro` and `.kicad_dru` files are discovered automatically or may
+be selected with `--project` and `--rules-file`. Add `--fail-on-violations` to
+write the complete bundle and then fail a CI job when internal checks are not
+clean.
+
 Length groups may also set `tuning_amplitude_nm`, `tuning_pitch_nm`, and
 `max_tuning_sections`. The tuner distributes the required delay across multiple
 legal straight sections, checking the whole board after every section, while

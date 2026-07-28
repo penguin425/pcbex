@@ -9,7 +9,13 @@ use pcbex_core::{
     solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{apply_custom_design_rules, apply_project_net_settings, import as import_kicad};
-use std::{fs, io, path::PathBuf, process::Command as ProcessCommand};
+use serde::Serialize;
+use sha2::{Digest, Sha256};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    process::Command as ProcessCommand,
+};
 
 #[derive(Parser)]
 #[command(version, about = "Deterministic PCB physical-design engine")]
@@ -28,6 +34,44 @@ enum ReportFormat {
 enum QualityFormat {
     Json,
     Sarif,
+}
+
+#[derive(Debug, Serialize)]
+struct InputDescriptor {
+    path: String,
+    bytes: usize,
+    sha256: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AnalysisConfiguration {
+    rules: Rules,
+    project_settings_loaded: bool,
+    applied_custom_rules: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct AnalysisResult {
+    clean: bool,
+    violations: usize,
+    routed_nets: usize,
+    unrouted_nets: usize,
+    total_length_nm: i64,
+    total_vias: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RunManifest {
+    schema_version: u32,
+    engine: String,
+    engine_version: String,
+    command: String,
+    input: InputDescriptor,
+    project: Option<InputDescriptor>,
+    rules_file: Option<InputDescriptor>,
+    configuration: AnalysisConfiguration,
+    result: AnalysisResult,
+    artifacts: Vec<String>,
 }
 
 #[derive(Subcommand)]
@@ -84,6 +128,35 @@ enum Command {
         max_vias: Option<usize>,
         #[arg(long)]
         max_unrouted: Option<usize>,
+    },
+    /// Analyze a KiCad board and emit a reproducible CI artifact bundle.
+    AnalyzeKicad {
+        input: PathBuf,
+        /// KiCad project settings. Defaults to the input's sibling `.kicad_pro` when present.
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// KiCad custom design rules. Defaults to the input's sibling `.kicad_dru`.
+        #[arg(long)]
+        rules_file: Option<PathBuf>,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 0.25)]
+        grid_mm: f64,
+        #[arg(long, default_value_t = 0.25)]
+        width_mm: f64,
+        #[arg(long, default_value_t = 0.20)]
+        clearance_mm: f64,
+        #[arg(long, default_value_t = 0.60)]
+        via_diameter_mm: f64,
+        #[arg(long, default_value_t = 0.30)]
+        via_drill_mm: f64,
+        #[arg(long, default_value_t = 5)]
+        bend_cost: u32,
+        #[arg(long, default_value_t = 20)]
+        via_cost: u32,
+        /// Write all reports before exiting unsuccessfully on violations.
+        #[arg(long)]
+        fail_on_violations: bool,
     },
     /// Route a placed KiCad board across its declared copper layers.
     RouteKicad {
@@ -352,6 +425,151 @@ fn main() -> Result<()> {
             }
             if !regressions.is_empty() {
                 bail!("routing quality failed: {}", regressions.join("; "))
+            }
+        }
+        Command::AnalyzeKicad {
+            input,
+            project,
+            rules_file,
+            output_dir,
+            grid_mm,
+            width_mm,
+            clearance_mm,
+            via_diameter_mm,
+            via_drill_mm,
+            bend_cost,
+            via_cost,
+            fail_on_violations,
+        } => {
+            let input_bytes =
+                fs::read(&input).with_context(|| format!("reading {}", input.display()))?;
+            let source = std::str::from_utf8(&input_bytes)
+                .with_context(|| format!("decoding {} as UTF-8", input.display()))?;
+            let rules = Rules {
+                grid_nm: to_nm(grid_mm, "grid")?,
+                track_width_nm: to_nm(width_mm, "track width")?,
+                clearance_nm: to_nm(clearance_mm, "clearance")?,
+                via_diameter_nm: to_nm(via_diameter_mm, "via diameter")?,
+                via_drill_nm: to_nm(via_drill_mm, "via drill")?,
+                bend_cost,
+                via_cost,
+            };
+            if rules.via_drill_nm >= rules.via_diameter_nm {
+                bail!("via drill must be smaller than via diameter");
+            }
+            let mut imported = import_kicad(source, rules.clone()).map_err(anyhow::Error::msg)?;
+
+            let project = project.or_else(|| {
+                let candidate = input.with_extension("kicad_pro");
+                candidate.exists().then_some(candidate)
+            });
+            let project_descriptor = project
+                .as_ref()
+                .map(|path| -> Result<InputDescriptor> {
+                    let bytes =
+                        fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+                    let project_source = std::str::from_utf8(&bytes)
+                        .with_context(|| format!("decoding {} as UTF-8", path.display()))?;
+                    apply_project_net_settings(&mut imported.board, project_source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("importing rules from {}", path.display()))?;
+                    Ok(input_descriptor(path, &bytes))
+                })
+                .transpose()?;
+
+            let rules_file = rules_file.or_else(|| {
+                let candidate = input.with_extension("kicad_dru");
+                candidate.exists().then_some(candidate)
+            });
+            let mut applied_custom_rules = 0;
+            let rules_descriptor = rules_file
+                .as_ref()
+                .map(|path| -> Result<InputDescriptor> {
+                    let bytes =
+                        fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+                    let rules_source = std::str::from_utf8(&bytes)
+                        .with_context(|| format!("decoding {} as UTF-8", path.display()))?;
+                    applied_custom_rules =
+                        apply_custom_design_rules(&mut imported.board, rules_source)
+                            .map_err(anyhow::Error::msg)
+                            .with_context(|| {
+                                format!("importing custom rules from {}", path.display())
+                            })?;
+                    Ok(input_descriptor(path, &bytes))
+                })
+                .transpose()?;
+
+            let report = check_board(&imported.board);
+            let quality = routing_quality(&imported.board);
+            let summary = render_analysis_summary(&quality, &report);
+            let artifacts = vec![
+                "board.json".to_string(),
+                "board.svg".to_string(),
+                "checks.json".to_string(),
+                "quality.json".to_string(),
+                "report.sarif".to_string(),
+                "summary.md".to_string(),
+                "run.json".to_string(),
+            ];
+            fs::create_dir_all(&output_dir)
+                .with_context(|| format!("creating {}", output_dir.display()))?;
+            fs::write(
+                output_dir.join("board.json"),
+                serde_json::to_string_pretty(&imported.board)?,
+            )?;
+            fs::write(output_dir.join("board.svg"), render_svg(&imported.board))?;
+            fs::write(
+                output_dir.join("checks.json"),
+                serde_json::to_string_pretty(&report)?,
+            )?;
+            fs::write(
+                output_dir.join("quality.json"),
+                serde_json::to_string_pretty(&quality)?,
+            )?;
+            fs::write(
+                output_dir.join("report.sarif"),
+                serde_json::to_string_pretty(&check_report_to_sarif(&report))?,
+            )?;
+            fs::write(output_dir.join("summary.md"), summary)?;
+            let manifest = RunManifest {
+                schema_version: 1,
+                engine: "pcbex".to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                command: "analyze-kicad".to_string(),
+                input: input_descriptor(&input, &input_bytes),
+                project: project_descriptor,
+                rules_file: rules_descriptor,
+                configuration: AnalysisConfiguration {
+                    rules,
+                    project_settings_loaded: project.is_some(),
+                    applied_custom_rules,
+                },
+                result: AnalysisResult {
+                    clean: report.is_clean(),
+                    violations: report.violations.len(),
+                    routed_nets: quality.routed_nets,
+                    unrouted_nets: quality.unrouted_nets,
+                    total_length_nm: quality.total_length_nm,
+                    total_vias: quality.total_vias,
+                },
+                artifacts,
+            };
+            fs::write(
+                output_dir.join("run.json"),
+                serde_json::to_string_pretty(&manifest)?,
+            )?;
+            eprintln!(
+                "analysis written to {}: {} violation(s), {} routed, {} unrouted",
+                output_dir.display(),
+                report.violations.len(),
+                quality.routed_nets,
+                quality.unrouted_nets
+            );
+            if fail_on_violations && !report.is_clean() {
+                bail!(
+                    "KiCad analysis found {} violation(s)",
+                    report.violations.len()
+                );
             }
         }
         Command::RouteKicad {
@@ -693,6 +911,54 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn input_descriptor(path: &Path, bytes: &[u8]) -> InputDescriptor {
+    InputDescriptor {
+        path: path.display().to_string(),
+        bytes: bytes.len(),
+        sha256: format!("{:x}", Sha256::digest(bytes)),
+    }
+}
+
+fn render_analysis_summary(
+    quality: &RoutingQuality,
+    report: &pcbex_core::checking::CheckReport,
+) -> String {
+    let mut summary = format!(
+        "# pcbex KiCad analysis\n\n\
+         **Status:** {}\n\n\
+         | Metric | Value |\n\
+         |---|---:|\n\
+         | Internal DRC/DFM violations | {} |\n\
+         | Routed nets | {} |\n\
+         | Unrouted nets | {} |\n\
+         | Total route length (nm) | {} |\n\
+         | Vias | {} |\n\
+         | Bends | {} |\n",
+        if report.is_clean() {
+            "clean"
+        } else {
+            "violations found"
+        },
+        report.violations.len(),
+        quality.routed_nets,
+        quality.unrouted_nets,
+        quality.total_length_nm,
+        quality.total_vias,
+        quality.total_bends,
+    );
+    if !report.violations.is_empty() {
+        summary.push_str("\n## Violations\n\n");
+        for violation in &report.violations {
+            summary.push_str(&format!(
+                "- `{}`: {}\n",
+                violation.rule,
+                violation.message.replace(['\r', '\n'], " ")
+            ));
+        }
+    }
+    summary
+}
+
 fn to_nm(mm: f64, name: &str) -> Result<i64> {
     if !mm.is_finite() || mm <= 0.0 {
         bail!("{name} must be a positive finite value")
@@ -832,5 +1098,72 @@ mod tests {
                 && output.as_os_str() == "report.json"
                 && baseline.as_os_str() == "baseline.json"
         ));
+    }
+
+    #[test]
+    fn parses_analyze_kicad_artifact_options() {
+        let cli = Cli::try_parse_from([
+            "pcbex",
+            "analyze-kicad",
+            "board.kicad_pcb",
+            "--output-dir",
+            "analysis",
+            "--project",
+            "board.kicad_pro",
+            "--rules-file",
+            "board.kicad_dru",
+            "--fail-on-violations",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::AnalyzeKicad {
+                input,
+                project: Some(project),
+                rules_file: Some(rules_file),
+                output_dir,
+                fail_on_violations: true,
+                ..
+            } if input.as_os_str() == "board.kicad_pcb"
+                && project.as_os_str() == "board.kicad_pro"
+                && rules_file.as_os_str() == "board.kicad_dru"
+                && output_dir.as_os_str() == "analysis"
+        ));
+    }
+
+    #[test]
+    fn input_descriptors_use_sha256() {
+        let descriptor = input_descriptor(&PathBuf::from("board.kicad_pcb"), b"abc");
+        assert_eq!(descriptor.bytes, 3);
+        assert_eq!(
+            descriptor.sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn analysis_summary_reports_metrics_and_violations() {
+        let quality = RoutingQuality {
+            total_length_nm: 42,
+            total_vias: 2,
+            total_bends: 3,
+            routed_nets: 1,
+            unrouted_nets: 4,
+            nets: vec![],
+            differential_pairs: vec![],
+        };
+        let report = pcbex_core::checking::CheckReport {
+            violations: vec![pcbex_core::checking::Violation {
+                rule: "clearance".to_string(),
+                message: "too close".to_string(),
+                net_ids: vec![1],
+            }],
+        };
+
+        let summary = render_analysis_summary(&quality, &report);
+        assert!(summary.contains("violations found"));
+        assert!(summary.contains("| Unrouted nets | 4 |"));
+        assert!(summary.contains("- `clearance`: too close"));
     }
 }
