@@ -187,6 +187,29 @@ def github_json(endpoint: str) -> Any:
     return json.loads(run("gh", "api", endpoint))
 
 
+def github_release_by_tag(repository: str, tag: str) -> Any:
+    pages = json.loads(
+        run(
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{repository}/releases?per_page=100",
+        )
+    )
+    matches = [
+        release
+        for page in pages
+        for release in page
+        if release.get("tag_name") == tag
+    ]
+    if len(matches) != 1:
+        raise AuditError(
+            f"expected exactly one release for {tag}, found {len(matches)}"
+        )
+    return matches[0]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repository", required=True, help="owner/repository")
@@ -214,7 +237,9 @@ def main() -> int:
         if tag_sha != expected_sha:
             raise AuditError("tag does not resolve to the expected commit")
 
-        release = github_json(f"repos/{args.repository}/releases/tags/{tag}")
+        # GitHub's "get by tag" endpoint returns 404 for draft releases.
+        # The paginated release collection includes drafts for authorized callers.
+        release = github_release_by_tag(args.repository, tag)
         validate_release(release, tag, expected_sha, allow_draft=args.allow_draft)
 
         if not args.skip_download:
