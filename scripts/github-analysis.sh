@@ -24,6 +24,7 @@ current_dir="${artifact_dir}/current"
 baseline_dir="${artifact_dir}/baseline"
 comparison_dir="${artifact_dir}/comparison"
 sarif_dir="${artifact_dir}/sarif"
+comment_body="${artifact_dir}/pr-comment.md"
 
 mkdir -p "$current_dir" "$sarif_dir"
 
@@ -36,6 +37,7 @@ write_output artifact-dir "$artifact_dir"
 write_output sarif-dir ""
 write_output current-sarif ""
 write_output comparison-sarif ""
+write_output comment-body ""
 write_output violation-count ""
 write_output regression false
 
@@ -55,7 +57,8 @@ violation_count="$(
 {
   printf '# pcbex hardware analysis\n\n'
   cat "$current_dir/summary.md"
-} >> "$GITHUB_STEP_SUMMARY"
+} > "$comment_body"
+cat "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 
 comparison_sarif=""
 regression=false
@@ -80,12 +83,13 @@ if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
   {
     printf '\n# pcbex baseline comparison\n\n'
     cat "$comparison_dir/summary.md"
-  } >> "$GITHUB_STEP_SUMMARY"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
 write_output sarif-dir "$sarif_dir"
 write_output current-sarif "$current_dir/report.sarif"
 write_output comparison-sarif "$comparison_sarif"
+write_output comment-body "$comment_body"
 write_output violation-count "$violation_count"
 write_output regression "$regression"
 write_output status ok

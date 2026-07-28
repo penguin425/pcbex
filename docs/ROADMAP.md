@@ -26,6 +26,7 @@ auditable release.
 | v1.314.0 | Electrical JUnit reporting | Native rule results for standard CI test viewers |
 | v1.315.0 | Electrical baseline gate | Fail CI only for new or severity-escalated electrical errors |
 | v1.316.0 | Electrical SARIF reporting | Stable schematic findings for code-scanning review tools |
+| v1.317.0 | Idempotent PR comments | Update one stable hardware-analysis comment per PR |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
