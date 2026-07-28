@@ -1915,6 +1915,18 @@ fn import_footprint(
                 "KiCad pad {number} references undeclared net ID {id}"
             ));
         }
+        if let (Some(values), Some(id)) = (net_values, net_id)
+            && let Some(declared) = nets.get(&id)
+        {
+            let name = atom(values.get(2)).expect("pad net name was validated");
+            if name != declared.name {
+                let number = atom(pad.get(1)).unwrap_or("");
+                return Err(format!(
+                    "KiCad pad {number} net {id} name {name:?} does not match declared name {:?}",
+                    declared.name
+                ));
+            }
+        }
         let drill = child_values(pad, "drill").and_then(|values| {
             let (width, height) = if atom(values.get(1)) == Some("oval") {
                 (
@@ -3158,6 +3170,34 @@ mod tests {
                 import(&pcb, rules()).unwrap_err(),
                 "KiCad pad A1 net 1 is missing a scalar name"
             );
+        }
+    }
+
+    #[test]
+    fn rejects_kicad_pad_net_names_that_mismatch_the_declaration() {
+        for (declaration, net, error) in [
+            (
+                r#"(net 1 "SIGNAL")"#,
+                r#"(net 1 "OTHER")"#,
+                r#"KiCad pad A1 net 1 name "OTHER" does not match declared name "SIGNAL""#,
+            ),
+            (
+                r#"(net 0 "")"#,
+                r#"(net 0 "SIGNAL")"#,
+                r#"KiCad pad A1 net 0 name "SIGNAL" does not match declared name """#,
+            ),
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {declaration}
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (footprint "P" (layer "F.Cu") (at 2 2)
+                    (pad "A1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+                      {net}))
+                )"#
+            );
+
+            assert_eq!(import(&pcb, rules()).unwrap_err(), error);
         }
     }
 
