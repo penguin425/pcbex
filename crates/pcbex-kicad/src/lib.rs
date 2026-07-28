@@ -341,6 +341,9 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
             .as_object()
             .ok_or_else(|| "KiCad project netclass_assignments is not an object".to_string())?;
         for (net_name, class) in assignments {
+            if net_name.trim().is_empty() {
+                return Err("net-class assignment net name must not be blank".to_string());
+            }
             let Some(class) = class.as_str() else {
                 return Err(format!(
                     "net-class assignment for {net_name} is not a string"
@@ -6063,6 +6066,39 @@ mod tests {
         );
         assert!(!imported.board.net_classes.contains_key("New"));
         assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
+    }
+
+    #[test]
+    fn rejects_blank_project_assignment_net_names_atomically() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (add_net "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+              (net 1 "SIG")))
+        )"#;
+
+        for net_name in ["", "   "] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = serde_json::json!({
+                "net_settings": {
+                    "classes": [{"name": "New", "track_width": 0.3}],
+                    "netclass_assignments": {net_name: "New"}
+                }
+            });
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
+                "net-class assignment net name must not be blank"
+            );
+            assert!(!imported.board.net_classes.contains_key("New"));
+            assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
+        }
     }
 
     #[test]
