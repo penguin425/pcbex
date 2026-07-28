@@ -45,6 +45,13 @@ def python_test_count() -> int:
 def generated_block() -> str:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
     version = workspace["workspace"]["package"]["version"]
+    agent = tomllib.loads((ROOT / "agent" / "pyproject.toml").read_text())
+    agent_version = agent["project"]["version"]
+    if agent_version != version:
+        raise SystemExit(
+            "workspace and agent versions differ: "
+            f"Rust {version}, Python {agent_version}"
+        )
     return (
         f"{START}\n"
         f"Version {version} exposes {rust_test_count()} Rust tests and "
