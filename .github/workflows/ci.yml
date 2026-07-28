@@ -61,6 +61,8 @@ jobs:
         run: scripts/regression-corpus.sh target/release/pcbex build/regression-corpus
       - name: Verify completion audit is current
         run: python3 scripts/update-completion-audit.py --check
+      - name: Test release audit
+        run: python3 -m unittest discover -s scripts/tests -v
 
   python:
     name: Python

@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "milestones": [
+    {
+      "id": "integrated-kicad-analysis",
+      "release": "v1.297.0",
+      "status": "released"
+    },
+    {
+      "id": "bundle-diff-regression",
+      "release": "v1.298.0",
+      "status": "released"
+    },
+    {
+      "id": "github-actions-reporting",
+      "release": "v1.299.0",
+      "status": "released"
+    },
+    {
+      "id": "versioned-dfm-profiles",
+      "release": "v1.300.0",
+      "status": "released"
+    },
+    {
+      "id": "mcp-server",
+      "release": "v1.301.0",
+      "status": "released"
+    },
+    {
+      "id": "asynchronous-mcp-tasks",
+      "release": "v1.302.0",
+      "status": "released"
+    },
+    {
+      "id": "placement-pareto-generation",
+      "release": "v1.303.0",
+      "status": "released"
+    },
+    {
+      "id": "routing-pareto-generation",
+      "release": "v1.304.0",
+      "status": "released"
+    },
+    {
+      "id": "schematic-ir-kicad-import",
+      "release": "v1.305.0",
+      "status": "released"
+    },
+    {
+      "id": "electrical-approval-policy",
+      "release": "v1.306.0",
+      "status": "released"
+    },
+    {
+      "id": "bound-simulation-evidence",
+      "release": "v1.307.0",
+      "status": "released"
+    },
+    {
+      "id": "signed-ai-schematic-approval",
+      "release": "v1.308.0",
+      "status": "released"
+    },
+    {
+      "id": "roadmap-release-audit",
+      "release": "v1.309.0",
+      "status": "current"
+    }
+  ]
+}
