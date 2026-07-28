@@ -1890,7 +1890,8 @@ fn import_footprint(
         let custom_polygon =
             custom_pad_polygon(pad, position, angle + pad_angle).unwrap_or_default();
         let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
-        let net_id = child_values(pad, "net")
+        let net_values = child_values(pad, "net");
+        let net_id = net_values
             .map(|values| {
                 number_u32(values.get(1)).ok_or_else(|| {
                     let number = atom(pad.get(1)).unwrap_or("");
@@ -1898,6 +1899,14 @@ fn import_footprint(
                 })
             })
             .transpose()?;
+        if let (Some(values), Some(id)) = (net_values, net_id)
+            && atom(values.get(2)).is_none()
+        {
+            let number = atom(pad.get(1)).unwrap_or("");
+            return Err(format!(
+                "KiCad pad {number} net {id} is missing a scalar name"
+            ));
+        }
         if let Some(id) = net_id.filter(|id| *id != 0)
             && !nets.contains_key(&id)
         {
@@ -1959,7 +1968,7 @@ fn import_footprint(
             layers: layers.clone(),
             net_id,
         });
-        if let Some(net_values) = child_values(pad, "net")
+        if let Some(net_values) = net_values
             && let Some(id) = number_u32(net_values.get(1))
             && let Some(net) = nets.get_mut(&id)
         {
@@ -3119,6 +3128,35 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "KiCad pad A1 is missing a valid numeric net ID"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_missing_and_non_scalar_kicad_pad_net_names() {
+        let unconnected = r#"(kicad_pcb
+          (net 0 "")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "A1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+              (net 0 "")))
+        )"#;
+        assert!(import(unconnected, rules()).is_ok());
+
+        for net in [r#"(net 1)"#, r#"(net 1 (name "SIGNAL"))"#] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIGNAL")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (footprint "P" (layer "F.Cu") (at 2 2)
+                    (pad "A1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+                      {net}))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad pad A1 net 1 is missing a scalar name"
             );
         }
     }
