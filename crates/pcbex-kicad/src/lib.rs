@@ -608,9 +608,12 @@ fn import_net_classes(
                         "net class {name} references unknown net {net_name}"
                     ));
                 };
-                if let Some(previous) = class_by_net_id.get(net_id)
-                    && previous != name
-                {
+                if let Some(previous) = class_by_net_id.get(net_id) {
+                    if previous == name {
+                        return Err(format!(
+                            "net class {name} contains duplicate add_net assignment for {net_name}"
+                        ));
+                    }
                     return Err(format!(
                         "net {net_name} is assigned to multiple legacy net classes: \
                          {previous} and {name}"
@@ -5773,6 +5776,25 @@ mod tests {
                 "net class Signal add_net must contain exactly one net name"
             );
         }
+    }
+
+    #[test]
+    fn rejects_duplicate_legacy_add_net_assignments() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (add_net "SIG")
+              (add_net "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "net class Signal contains duplicate add_net assignment for SIG"
+        );
     }
 
     #[test]

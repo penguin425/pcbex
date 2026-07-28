@@ -183,9 +183,9 @@ ignored, retaining an unusable class, or silently selecting the first or last
 value.
 Legacy `add_net` assignments must contain exactly one scalar name for a net
 present in the board; malformed, trailing, stale, or misspelled references are
-rejected instead of being silently ignored. A net may belong to only one
-embedded class; conflicting assignments are rejected instead of silently
-selecting the last class.
+rejected instead of being silently ignored. Each net may appear only once and
+belong to only one embedded class; duplicate or conflicting assignments are
+rejected instead of silently overwriting or repeating the assignment.
 Project settings are applied atomically, so an invalid class, pattern, or exact
 assignment cannot leave new classes or partial net assignments behind.
 Exact project assignments must name a net present in the board; stale or
