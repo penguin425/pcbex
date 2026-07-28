@@ -72,6 +72,11 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
             let Some(name) = atom(xs.get(2)) else {
                 return Err(format!("KiCad board net {id} is missing a scalar name"));
             };
+            if xs.len() > 3 {
+                return Err(format!(
+                    "KiCad board net {id} declaration must contain exactly one ID and name"
+                ));
+            }
             if id == 0 && !name.is_empty() {
                 return Err("KiCad board net 0 name must be empty".into());
             }
@@ -3157,6 +3162,26 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "KiCad board net 1 is missing a scalar name"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_extra_values_in_kicad_net_declarations() {
+        for declaration in [
+            r#"(net 1 "SIGNAL" extra)"#,
+            r#"(net 1 "SIGNAL" (alias "OTHER"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {declaration}
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad board net 1 declaration must contain exactly one ID and name"
             );
         }
     }
