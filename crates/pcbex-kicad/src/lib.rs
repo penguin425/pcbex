@@ -565,6 +565,11 @@ fn import_net_classes(
                         "net class {name} contains add_net without a scalar net name"
                     ));
                 };
+                if assignment.len() > 2 {
+                    return Err(format!(
+                        "net class {name} add_net must contain exactly one net name"
+                    ));
+                }
                 let Some(net_id) = net_ids_by_name.get(net_name) else {
                     return Err(format!(
                         "net class {name} references unknown net {net_name}"
@@ -5606,6 +5611,31 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "net class Signal contains add_net without a scalar net name"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_extra_values_in_legacy_add_net_assignments() {
+        for assignment in [
+            r#"(add_net "SIG" extra)"#,
+            r#"(add_net "SIG" (alias "OTHER"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIG")
+                  (setup
+                    (net_class "Signal" ""
+                      (clearance 0.2)
+                      (trace_width 0.25)
+                      {assignment}))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "net class Signal add_net must contain exactly one net name"
             );
         }
     }
