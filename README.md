@@ -677,7 +677,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.305.0
+    uses: penguin425/pcbex@v1.306.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1104,6 +1104,36 @@ library symbols, and hierarchical sheets/labels are retained as explicit
 coverage gaps rather than silently approved. `--require-complete` writes the
 inspectable IR first and then fails if any such gap exists. The included
 example is also parsed by KiCad 10 in CI-facing verification.
+
+## Deterministic schematic approval gate
+
+Run policy-controlled electrical checks before asking an AI reviewer to assess
+intent:
+
+```sh
+pcbex check-schematic design.kicad_sch \
+  --output electrical-review.json --require-approved
+pcbex electrical-policy --output electrical-policy.json
+pcbex check-schematic design.kicad_sch \
+  --policy electrical-policy.json \
+  --output electrical-review.json --require-approved
+```
+
+The default policy checks importer coverage, annotation and footprint
+completeness, duplicate reference units, connected no-connect pins, unmarked
+unconnected pins, conflicting signal and power drivers, undriven signal and
+power inputs, and nets with multiple names. DNP symbols are excluded. Every
+finding has a stable identity and structured symbol/pin references.
+
+Reports are deterministic and contain canonical SHA-256 identities for both
+the normalized schematic and effective policy. An approval is granted only
+when no enabled error-severity finding remains. A policy may explicitly
+disable or change the severity of known rules; unknown rules, fields, and
+schema versions fail closed. `--require-approved` writes the report before
+returning nonzero so CI and later AI-review stages retain evidence.
+
+Closed Draft 2020-12 contracts are available through
+`electrical-policy-schema` and `electrical-review-schema`.
 
 ## Releases
 

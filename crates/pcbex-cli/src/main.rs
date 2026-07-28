@@ -14,8 +14,9 @@ use pcbex_core::{
     routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
-    apply_custom_design_rules, apply_project_net_settings, import as import_kicad,
-    import_schematic, schematic_json_schema,
+    ElectricalPolicy, apply_custom_design_rules, apply_project_net_settings, check_schematic,
+    electrical_policy_json_schema, electrical_review_json_schema, import as import_kicad,
+    import_schematic, parse_electrical_policy, schematic_json_schema,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -130,6 +131,33 @@ enum Command {
         /// Fail after writing the IR when buses or hierarchy prevent complete coverage.
         #[arg(long)]
         require_complete: bool,
+    },
+    /// Print the closed deterministic electrical-policy JSON Schema.
+    ElectricalPolicySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed deterministic electrical-review JSON Schema.
+    ElectricalReviewSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the complete built-in electrical approval policy.
+    ElectricalPolicy {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Run deterministic electrical checks and emit an approval report.
+    CheckSchematic {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Override built-in rule enablement and severities with a JSON policy.
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        /// Fail after writing the report when error-severity findings remain.
+        #[arg(long)]
+        require_approved: bool,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -501,6 +529,73 @@ fn main() -> Result<()> {
                         .map(|feature| format!("{} ({})", feature.kind, feature.count))
                         .collect::<Vec<_>>()
                         .join(", ")
+                );
+            }
+        }
+        Command::ElectricalPolicySchema { output } => {
+            let schema = serde_json::to_string_pretty(&electrical_policy_json_schema())?;
+            if let Some(path) = output {
+                fs::write(path, schema)?;
+            } else {
+                println!("{schema}");
+            }
+        }
+        Command::ElectricalReviewSchema { output } => {
+            let schema = serde_json::to_string_pretty(&electrical_review_json_schema())?;
+            if let Some(path) = output {
+                fs::write(path, schema)?;
+            } else {
+                println!("{schema}");
+            }
+        }
+        Command::ElectricalPolicy { output } => {
+            let policy = serde_json::to_string_pretty(&ElectricalPolicy::default())?;
+            if let Some(path) = output {
+                fs::write(path, policy)?;
+            } else {
+                println!("{policy}");
+            }
+        }
+        Command::CheckSchematic {
+            input,
+            output,
+            policy,
+            require_approved,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let schematic = import_schematic(&source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", input.display()))?;
+            let policy = if let Some(path) = policy {
+                parse_electrical_policy(
+                    &fs::read_to_string(&path)
+                        .with_context(|| format!("reading {}", path.display()))?,
+                )
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("parsing {}", path.display()))?
+            } else {
+                ElectricalPolicy::default()
+            };
+            let review = check_schematic(&schematic, &policy).map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&review)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "electrical review: {}; {} error(s), {} warning(s), {} info finding(s)",
+                if review.approved {
+                    "approved"
+                } else {
+                    "rejected"
+                },
+                review.counts.errors,
+                review.counts.warnings,
+                review.counts.info
+            );
+            if require_approved && !review.approved {
+                bail!(
+                    "electrical approval rejected by policy {} with {} error(s)",
+                    review.policy_id,
+                    review.counts.errors
                 );
             }
         }

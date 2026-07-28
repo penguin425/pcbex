@@ -9,3 +9,4 @@ pcbex-core = { path = "../pcbex-core" }
 serde.workspace = true
 serde_json.workspace = true
 regex.workspace = true
+sha2.workspace = true
