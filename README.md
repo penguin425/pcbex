@@ -765,6 +765,8 @@ Imported KiCad track segments, route arcs, vias, and copper zones with non-zero
 net identifiers must likewise reference entries declared in that table.
 When any of those copper primitives supplies a `net` field, its identifier must
 be a non-negative integer rather than malformed data that loses net ownership.
+Each primitive may supply at most one such field, preventing duplicate or
+conflicting declarations from being silently resolved by source order.
 The net table itself requires unique non-zero identifiers and unique non-empty
 names, preventing ambiguous routing, rule lookup, and pad ownership.
 Every route must likewise reference a declared net; normal DRC reports unknown
