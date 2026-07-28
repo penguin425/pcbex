@@ -569,11 +569,13 @@ fn custom_rule_condition(rule: &[Sexp]) -> Result<Option<&str>, String> {
 }
 
 fn condition_net_class(condition: &str) -> Result<Option<String>, String> {
-    let marker = "NetClass";
-    let Some(marker_position) = condition.find(marker) else {
+    let condition = condition.trim_start();
+    let Some(rest) = condition
+        .strip_prefix("A.NetClass")
+        .or_else(|| condition.strip_prefix("B.NetClass"))
+    else {
         return Ok(None);
     };
-    let rest = &condition[marker_position + marker.len()..];
     let rest = rest.trim_start();
     let Some(rest) = rest.strip_prefix("==") else {
         return Ok(None);
@@ -6817,6 +6819,41 @@ mod tests {
             assert_eq!(class.clearance_nm, 200_000);
             assert_eq!(class.track_width_nm, 250_000);
         }
+    }
+
+    #[test]
+    fn only_applies_direct_a_or_b_net_class_conditions() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let mut imported = import(pcb, rules()).unwrap();
+        let applied = apply_custom_design_rules(
+            &mut imported.board,
+            r#"
+              (rule "Direct A selector"
+                (condition "A.NetClass == 'Signal'")
+                (constraint clearance (min 0.4mm)))
+              (rule "Direct B selector"
+                (condition "B.NetClass == 'Signal'")
+                (constraint track_width (min 0.35mm)))
+              (rule "Unsupported compound selector"
+                (condition "A.Layer == 'F.Cu' && A.NetClass == 'Signal'")
+                (constraint via_diameter (min 0.8mm)))
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(applied, 2);
+        let class = &imported.board.net_classes["Signal"];
+        assert_eq!(class.clearance_nm, 400_000);
+        assert_eq!(class.track_width_nm, 350_000);
+        assert_eq!(class.via_diameter_nm, 600_000);
     }
 
     #[test]
