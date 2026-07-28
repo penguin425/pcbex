@@ -472,12 +472,22 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
             match kind {
                 "clearance" => class.clearance_nm = constraint_value(constraint, &["min"])?,
                 "track_width" => {
-                    class.track_width_nm = constraint_value(constraint, &["opt", "min"])?
+                    let value = constraint_value(constraint, &["opt", "min"])?;
+                    if value <= 0 {
+                        return Err("custom rule track_width must be positive".into());
+                    }
+                    class.track_width_nm = value;
                 }
                 "via_diameter" => {
                     class.via_diameter_nm = constraint_value(constraint, &["opt", "min"])?
                 }
-                "hole_size" => class.via_drill_nm = constraint_value(constraint, &["opt", "min"])?,
+                "hole_size" => {
+                    let value = constraint_value(constraint, &["opt", "min"])?;
+                    if value <= 0 {
+                        return Err("custom rule hole_size must be positive".into());
+                    }
+                    class.via_drill_nm = value;
+                }
                 "diff_pair_gap" => {
                     class.differential_gap_nm = Some(constraint_value(constraint, &["opt", "min"])?)
                 }
@@ -6109,6 +6119,56 @@ mod tests {
                 format!("invalid custom-rule dimension {token}")
             );
         }
+    }
+
+    #[test]
+    fn rejects_zero_custom_rule_track_widths_and_hole_sizes_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for kind in ["track_width", "hole_size"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Invalid"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm))
+                    (constraint {kind} (min 0mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                format!("custom rule {kind} must be positive")
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+            assert_eq!(class.via_drill_nm, 300_000);
+        }
+
+        let mut imported = import(pcb, rules()).unwrap();
+        let applied = apply_custom_design_rules(
+            &mut imported.board,
+            r#"
+              (rule "Zero nonnegative dimensions"
+                (condition "A.NetClass == 'Signal'")
+                (constraint clearance (min 0mm))
+                (constraint diff_pair_gap (min 0mm)))
+            "#,
+        )
+        .unwrap();
+        assert_eq!(applied, 2);
+        let class = &imported.board.net_classes["Signal"];
+        assert_eq!(class.clearance_nm, 0);
+        assert_eq!(class.differential_gap_nm, Some(0));
     }
 
     #[test]
