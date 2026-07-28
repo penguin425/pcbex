@@ -21,6 +21,7 @@ auditable release.
 | v1.309.2 | Release audit | Machine-checked roadmap, assets, checksums, and protection |
 | v1.310.0 | Installation doctor | Machine-readable local and CI readiness diagnostics |
 | v1.311.0 | Capability inventory | Versioned discovery for commands and integration contracts |
+| v1.312.0 | Electrical rule explanations | Policy-bound triggers and remediation for every finding |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing

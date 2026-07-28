@@ -18,9 +18,11 @@ pub use approval::{
 };
 mod electrical;
 pub use electrical::{
-    ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy, ElectricalReview,
-    ElectricalRulePolicy, ElectricalSeverity, ElectricalSymbolRef, check_schematic,
-    electrical_policy_json_schema, electrical_review_json_schema, parse_electrical_policy,
+    ElectricalExplanationReport, ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy,
+    ElectricalReview, ElectricalRuleExplanation, ElectricalRulePolicy, ElectricalSeverity,
+    ElectricalSymbolRef, check_schematic, electrical_explanation_json_schema,
+    electrical_policy_json_schema, electrical_review_json_schema, explain_electrical_review,
+    parse_electrical_policy,
 };
 mod evidence;
 pub use evidence::{
