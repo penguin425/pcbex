@@ -649,6 +649,12 @@ fn import_net_classes(
                     "net class {name} via_dia must be greater than via_drill"
                 ));
             }
+            if class_rules
+                .differential_width_nm
+                .is_some_and(|width| width <= 0)
+            {
+                return Err(format!("net class {name} has invalid diff_pair_width"));
+            }
             classes.insert(name.to_string(), class_rules);
             for child in values {
                 let Some(assignment) = child.as_list() else {
@@ -5676,6 +5682,33 @@ mod tests {
         let class = &imported.board.net_classes["Valid"];
         assert_eq!(class.via_diameter_nm, 301_000);
         assert_eq!(class.via_drill_nm, 300_000);
+    }
+
+    #[test]
+    fn rejects_zero_legacy_differential_widths() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Invalid" ""
+              (diff_pair_width 0)
+              (diff_pair_gap 0.2)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "net class Invalid has invalid diff_pair_width"
+        );
+
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Valid" ""
+              (diff_pair_width 0.2)
+              (diff_pair_gap 0)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let imported = import(pcb, rules()).unwrap();
+        let class = &imported.board.net_classes["Valid"];
+        assert_eq!(class.differential_width_nm, Some(200_000));
+        assert_eq!(class.differential_gap_nm, Some(0));
     }
 
     #[test]
