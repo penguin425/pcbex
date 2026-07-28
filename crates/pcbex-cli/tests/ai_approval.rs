@@ -75,6 +75,8 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
             "--allow-no-simulation",
             "--output",
             path(&request),
+            "--session-output",
+            path(&directory.join("review-session.json")),
         ])
         .status
         .success()
@@ -172,6 +174,69 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
             "--public-key",
             path(&public_key),
             "--require-approved",
+        ])
+        .status
+        .success()
+    );
+
+    let session = directory.join("review-session.json");
+    let session_value: Value = serde_json::from_slice(&fs::read(&session).unwrap()).unwrap();
+    assert_eq!(session_value["schema_version"], 1);
+    assert!(
+        session_value["expires_at_unix"].as_u64().unwrap()
+            > session_value["issued_at_unix"].as_u64().unwrap()
+    );
+    assert_eq!(session_value["challenge"].as_str().unwrap().len(), 64);
+
+    let session_approval = directory.join("session-approval.json");
+    assert!(
+        run(&[
+            "sign-ai-review",
+            path(&request),
+            path(&response),
+            "--private-key",
+            path(&private_key),
+            "--signer-id",
+            "ci-production",
+            "--session",
+            path(&session),
+            "--output",
+            path(&session_approval),
+            "--require-approved",
+        ])
+        .status
+        .success()
+    );
+    let session_approval_value: Value =
+        serde_json::from_slice(&fs::read(&session_approval).unwrap()).unwrap();
+    assert_eq!(session_approval_value["schema_version"], 2);
+    assert_eq!(
+        session_approval_value["session_sha256"],
+        session_value["session_sha256"]
+    );
+    assert!(
+        run(&[
+            "verify-ai-approval",
+            path(&session_approval),
+            path(&request),
+            path(&response),
+            "--public-key",
+            path(&public_key),
+            "--session",
+            path(&session),
+            "--require-approved",
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        !run(&[
+            "verify-ai-approval",
+            path(&session_approval),
+            path(&request),
+            path(&response),
+            "--public-key",
+            path(&public_key),
         ])
         .status
         .success()

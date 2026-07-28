@@ -13,6 +13,7 @@ const MAX_REQUIREMENTS: usize = 1_000;
 const MAX_RISKS: usize = 1_000;
 const MAX_EVIDENCE_REFS: usize = 10_000;
 const SIGNATURE_DOMAIN: &str = "pcbex-ai-schematic-approval-v1";
+const SESSION_SIGNATURE_DOMAIN: &str = "pcbex-ai-schematic-approval-session-v2";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -112,6 +113,8 @@ pub struct SignedAiApproval {
     pub schema_version: u32,
     pub request_sha256: String,
     pub response_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_sha256: Option<String>,
     pub approved: bool,
     pub gate_failures: Vec<String>,
     pub signer_id: String,
@@ -123,6 +126,17 @@ pub struct SignedAiApproval {
 #[derive(Serialize)]
 struct ApprovalPayload<'a> {
     domain: &'static str,
+    request_sha256: &'a str,
+    response_sha256: &'a str,
+    approved: bool,
+    gate_failures: &'a [String],
+    signer_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct SessionApprovalPayload<'a> {
+    domain: &'static str,
+    session_sha256: &'a str,
     request_sha256: &'a str,
     response_sha256: &'a str,
     approved: bool,
@@ -330,6 +344,48 @@ pub fn sign_ai_review(
         schema_version: 1,
         request_sha256,
         response_sha256,
+        session_sha256: None,
+        approved,
+        gate_failures,
+        signer_id: signer_id.into(),
+        algorithm: "ed25519".into(),
+        public_key: hex_encode(&public_key),
+        signature: hex_encode(&signature),
+    })
+}
+
+pub fn sign_ai_review_for_session(
+    request: &AiReviewRequest,
+    response: &AiReviewResponse,
+    session_sha256: &str,
+    signer_id: &str,
+    secret_key: &[u8; 32],
+) -> Result<SignedAiApproval, String> {
+    validate_sha256(session_sha256, "AI review session SHA-256")?;
+    validate_nonblank(signer_id, "approval signer id")?;
+    let request_sha256 = ai_review_request_sha256(request)?;
+    let gate_failures = evaluate_ai_review(request, response, &request_sha256)?;
+    let response_sha256 = hex_digest(
+        &serde_json::to_vec(response)
+            .map_err(|error| format!("serializing AI review response: {error}"))?,
+    );
+    let approved = gate_failures.is_empty();
+    let signing_key = SigningKey::from_bytes(secret_key);
+    let public_key = signing_key.verifying_key().to_bytes();
+    let payload = session_approval_payload_bytes(
+        session_sha256,
+        &request_sha256,
+        &response_sha256,
+        approved,
+        &gate_failures,
+        signer_id,
+    )?;
+    let signature = signing_key.sign(&payload).to_bytes();
+    Ok(SignedAiApproval {
+        schema_version: 2,
+        request_sha256,
+        response_sha256,
+        session_sha256: Some(session_sha256.into()),
         approved,
         gate_failures,
         signer_id: signer_id.into(),
@@ -353,12 +409,49 @@ pub fn verify_signed_ai_approval(
     response: &AiReviewResponse,
     trusted_public_key: &[u8; 32],
 ) -> Result<(), String> {
-    if approval.schema_version != 1 {
-        return Err(format!(
-            "unsupported signed AI approval schema version {}",
-            approval.schema_version
-        ));
+    match (approval.schema_version, approval.session_sha256.is_some()) {
+        (1, false) => {}
+        (2, true) => {
+            return Err(
+                "signed AI approval schema version 2 requires its bound review session".into(),
+            );
+        }
+        (version, _) => {
+            return Err(format!(
+                "unsupported signed AI approval schema version {version}"
+            ));
+        }
     }
+    verify_signed_ai_approval_inner(approval, request, response, trusted_public_key, None)
+}
+
+pub fn verify_session_signed_ai_approval(
+    approval: &SignedAiApproval,
+    request: &AiReviewRequest,
+    response: &AiReviewResponse,
+    trusted_public_key: &[u8; 32],
+    session_sha256: &str,
+) -> Result<(), String> {
+    validate_sha256(session_sha256, "AI review session SHA-256")?;
+    if approval.schema_version != 2 || approval.session_sha256.as_deref() != Some(session_sha256) {
+        return Err("signed AI approval is not bound to the supplied review session".into());
+    }
+    verify_signed_ai_approval_inner(
+        approval,
+        request,
+        response,
+        trusted_public_key,
+        Some(session_sha256),
+    )
+}
+
+fn verify_signed_ai_approval_inner(
+    approval: &SignedAiApproval,
+    request: &AiReviewRequest,
+    response: &AiReviewResponse,
+    trusted_public_key: &[u8; 32],
+    session_sha256: Option<&str>,
+) -> Result<(), String> {
     if approval.algorithm != "ed25519" {
         return Err(format!(
             "unsupported approval signature algorithm {}",
@@ -388,13 +481,24 @@ pub fn verify_signed_ai_approval(
     let verifying_key = VerifyingKey::from_bytes(&public_key)
         .map_err(|error| format!("invalid approval public key: {error}"))?;
     let signature = Signature::from_bytes(&signature);
-    let payload = approval_payload_bytes(
-        &request_sha256,
-        &response_sha256,
-        approval.approved,
-        &approval.gate_failures,
-        &approval.signer_id,
-    )?;
+    let payload = if let Some(session_sha256) = session_sha256 {
+        session_approval_payload_bytes(
+            session_sha256,
+            &request_sha256,
+            &response_sha256,
+            approval.approved,
+            &approval.gate_failures,
+            &approval.signer_id,
+        )?
+    } else {
+        approval_payload_bytes(
+            &request_sha256,
+            &response_sha256,
+            approval.approved,
+            &approval.gate_failures,
+            &approval.signer_id,
+        )?
+    };
     verifying_key
         .verify_strict(&payload, &signature)
         .map_err(|error| format!("invalid AI approval signature: {error}"))
@@ -571,6 +675,26 @@ fn approval_payload_bytes(
         signer_id,
     })
     .map_err(|error| format!("serializing approval signature payload: {error}"))
+}
+
+fn session_approval_payload_bytes(
+    session_sha256: &str,
+    request_sha256: &str,
+    response_sha256: &str,
+    approved: bool,
+    gate_failures: &[String],
+    signer_id: &str,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&SessionApprovalPayload {
+        domain: SESSION_SIGNATURE_DOMAIN,
+        session_sha256,
+        request_sha256,
+        response_sha256,
+        approved,
+        gate_failures,
+        signer_id,
+    })
+    .map_err(|error| format!("serializing session approval signature payload: {error}"))
 }
 
 fn request_body_sha256(request: &AiReviewRequest) -> Result<String, String> {
@@ -778,7 +902,7 @@ pub fn ai_review_response_json_schema() -> Value {
 pub fn signed_ai_approval_json_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://github.com/penguin425/pcbex/schemas/signed-ai-approval-v1.json",
+        "$id": "https://github.com/penguin425/pcbex/schemas/signed-ai-approval-v2.json",
         "title": "pcbex signed AI schematic approval",
         "type": "object",
         "additionalProperties": false,
@@ -787,16 +911,24 @@ pub fn signed_ai_approval_json_schema() -> Value {
             "gate_failures", "signer_id", "algorithm", "public_key", "signature"
         ],
         "properties": {
-            "schema_version": {"const": 1},
+            "schema_version": {"enum": [1, 2]},
             "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "session_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "approved": {"type": "boolean"},
             "gate_failures": {"type": "array", "items": string_schema()},
             "signer_id": string_schema(),
             "algorithm": {"const": "ed25519"},
             "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
-        }
+        },
+        "allOf": [
+            {
+                "if": {"properties": {"schema_version": {"const": 2}}},
+                "then": {"required": ["session_sha256"]},
+                "else": {"not": {"required": ["session_sha256"]}}
+            }
+        ]
     })
 }
 
@@ -872,6 +1004,29 @@ mod tests {
             approval,
             sign_ai_review(&request, &response, "ci", &[7; 32]).unwrap()
         );
+    }
+
+    #[test]
+    fn session_signatures_cannot_be_replayed_or_downgraded() {
+        let request = approved_request();
+        let response = response(&request);
+        let session = "d".repeat(64);
+        let approval =
+            sign_ai_review_for_session(&request, &response, &session, "ci", &[7; 32]).unwrap();
+        let public_key = SigningKey::from_bytes(&[7; 32]).verifying_key().to_bytes();
+        verify_session_signed_ai_approval(&approval, &request, &response, &public_key, &session)
+            .unwrap();
+        assert!(
+            verify_session_signed_ai_approval(
+                &approval,
+                &request,
+                &response,
+                &public_key,
+                &"e".repeat(64),
+            )
+            .is_err()
+        );
+        assert!(verify_signed_ai_approval(&approval, &request, &response, &public_key).is_err());
     }
 
     #[test]

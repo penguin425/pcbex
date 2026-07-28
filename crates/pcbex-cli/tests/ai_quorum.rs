@@ -122,6 +122,8 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
             path(&policy_pack),
             "--output",
             path(&request),
+            "--session-output",
+            path(&directory.join("session.json")),
         ])
         .status
         .success()
@@ -222,6 +224,67 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
             .unwrap()
             .contains("**Result:** approved")
     );
+
+    let session = directory.join("session.json");
+    let session_approval_a = directory.join("session-approval-a.json");
+    let session_approval_b = directory.join("session-approval-b.json");
+    for (response, private, signer, approval) in [
+        (&response_a, &private_a, "reviewer-a", &session_approval_a),
+        (&response_b, &private_b, "reviewer-b", &session_approval_b),
+    ] {
+        assert!(
+            run(&[
+                "sign-ai-review",
+                path(&request),
+                path(response),
+                "--private-key",
+                path(private),
+                "--signer-id",
+                signer,
+                "--session",
+                path(&session),
+                "--output",
+                path(approval),
+                "--require-approved",
+            ])
+            .status
+            .success()
+        );
+    }
+    let session_report = directory.join("session-quorum.json");
+    assert!(
+        run(&[
+            "verify-ai-quorum",
+            path(&request),
+            "--approval",
+            path(&session_approval_a),
+            "--approval",
+            path(&session_approval_b),
+            "--response",
+            path(&response_a),
+            "--response",
+            path(&response_b),
+            "--policy-pack",
+            path(&policy_pack),
+            "--minimum-approvals",
+            "2",
+            "--minimum-distinct-providers",
+            "2",
+            "--minimum-distinct-models",
+            "2",
+            "--session",
+            path(&session),
+            "--output",
+            path(&session_report),
+            "--require-quorum",
+        ])
+        .status
+        .success()
+    );
+    let session_report_value: Value =
+        serde_json::from_slice(&fs::read(&session_report).unwrap()).unwrap();
+    assert!(session_report_value["evaluated_at_unix"].as_u64().is_some());
+    assert_eq!(session_report_value["quorum"]["quorum_met"], true);
 
     let baseline = directory.join("baseline.kicad_sch");
     fs::write(

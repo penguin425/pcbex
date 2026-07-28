@@ -1,6 +1,7 @@
 use super::{
     AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiApprovalQuorumReport, AiModelIdentity,
-    AiReviewRequest, SchematicReviewerRoutingPlan, verify_ai_approval_quorum,
+    AiReviewRequest, AiReviewSession, SchematicReviewerRoutingPlan, SessionAiApprovalQuorumReport,
+    verify_ai_approval_quorum, verify_session_ai_approval_quorum,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -34,6 +35,14 @@ pub struct RoutedAiApprovalQuorumReport {
     pub routed_quorum_failures: Vec<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionRoutedAiApprovalQuorumReport {
+    pub schema_version: u32,
+    pub session: SessionAiApprovalQuorumReport,
+    pub routed_quorum: RoutedAiApprovalQuorumReport,
+}
+
 pub fn verify_routed_ai_approval_quorum(
     request: &AiReviewRequest,
     candidates: &[AiApprovalQuorumCandidate<'_>],
@@ -43,6 +52,30 @@ pub fn verify_routed_ai_approval_quorum(
     validate_plan(request, plan)?;
     let quorum = verify_ai_approval_quorum(request, candidates, quorum_policy)?;
     Ok(evaluate(quorum, plan))
+}
+
+pub fn verify_session_routed_ai_approval_quorum(
+    request: &AiReviewRequest,
+    session: &AiReviewSession,
+    evaluated_at_unix: u64,
+    candidates: &[AiApprovalQuorumCandidate<'_>],
+    quorum_policy: AiApprovalQuorumPolicy,
+    plan: &SchematicReviewerRoutingPlan,
+) -> Result<SessionRoutedAiApprovalQuorumReport, String> {
+    validate_plan(request, plan)?;
+    let session = verify_session_ai_approval_quorum(
+        request,
+        session,
+        evaluated_at_unix,
+        candidates,
+        quorum_policy,
+    )?;
+    let routed_quorum = evaluate(session.quorum.clone(), plan);
+    Ok(SessionRoutedAiApprovalQuorumReport {
+        schema_version: 1,
+        session,
+        routed_quorum,
+    })
 }
 
 fn validate_plan(
@@ -201,6 +234,24 @@ pub fn render_routed_ai_approval_quorum_summary(report: &RoutedAiApprovalQuorumR
     output
 }
 
+pub fn render_session_routed_ai_approval_quorum_summary(
+    report: &SessionRoutedAiApprovalQuorumReport,
+) -> String {
+    let mut output = String::from("# Time-bound routed AI schematic approval quorum\n\n");
+    let _ = writeln!(output, "- Session: `{}`", report.session.session_sha256);
+    let _ = writeln!(output, "- Issued: `{}`", report.session.issued_at_unix);
+    let _ = writeln!(output, "- Expires: `{}`", report.session.expires_at_unix);
+    let _ = writeln!(
+        output,
+        "- Evaluated: `{}`\n",
+        report.session.evaluated_at_unix
+    );
+    output.push_str(&render_routed_ai_approval_quorum_summary(
+        &report.routed_quorum,
+    ));
+    output
+}
+
 pub fn routed_ai_approval_quorum_report_json_schema() -> Value {
     let nonblank = json!({"type": "string", "minLength": 1});
     json!({
@@ -249,6 +300,22 @@ pub fn routed_ai_approval_quorum_report_json_schema() -> Value {
                     "profile_met": {"type": "boolean"}
                 }
             }
+        }
+    })
+}
+
+pub fn session_routed_ai_approval_quorum_report_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/session-routed-ai-approval-quorum-report-v1.json",
+        "title": "pcbex time-bound profile-aware AI approval quorum report",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "session", "routed_quorum"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "session": super::session_ai_approval_quorum_report_json_schema(),
+            "routed_quorum": routed_ai_approval_quorum_report_json_schema()
         }
     })
 }
@@ -332,5 +399,9 @@ mod tests {
         let schema = routed_ai_approval_quorum_report_json_schema();
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(schema["$defs"]["profile"]["additionalProperties"], false);
+        assert_eq!(
+            session_routed_ai_approval_quorum_report_json_schema()["additionalProperties"],
+            false
+        );
     }
 }

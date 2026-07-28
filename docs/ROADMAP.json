@@ -154,6 +154,11 @@
     {
       "id": "profile-aware-ai-approval-quorum",
       "release": "v1.327.0",
+      "status": "released"
+    },
+    {
+      "id": "time-bound-ai-review-sessions",
+      "release": "v1.328.0",
       "status": "current"
     }
   ]

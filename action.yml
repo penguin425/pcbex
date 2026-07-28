@@ -62,6 +62,10 @@ inputs:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
     default: ""
+  ai-review-session:
+    description: Optional time-bound challenge requiring session-bound v2 AI approvals.
+    required: false
+    default: ""
   ai-approval-files:
     description: Newline-separated signed AI approval files, paired with ai-response-files.
     required: false
@@ -225,6 +229,7 @@ runs:
         PCBEX_MANUFACTURING_FEEDBACK_DECLARATION: ${{ inputs.manufacturing-feedback-declaration }}
         PCBEX_MANUFACTURING_FEEDBACK_ARTIFACTS: ${{ inputs.manufacturing-feedback-artifacts }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
+        PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
         PCBEX_AI_RESPONSE_FILES: ${{ inputs.ai-response-files }}
         PCBEX_AI_QUORUM_MINIMUM_APPROVALS: ${{ inputs.ai-quorum-minimum-approvals }}

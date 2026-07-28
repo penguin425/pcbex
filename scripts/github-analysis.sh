@@ -212,6 +212,10 @@ if ((ai_quorum_inputs != 0 && ai_quorum_inputs != 3)); then
   echo "PCBEX_AI_REVIEW_REQUEST, PCBEX_AI_APPROVAL_FILES, and PCBEX_AI_RESPONSE_FILES must be supplied together" >&2
   exit 2
 fi
+if [[ -n "${PCBEX_AI_REVIEW_SESSION:-}" ]] && ((ai_quorum_inputs != 3)); then
+  echo "PCBEX_AI_REVIEW_SESSION requires the complete AI quorum input set" >&2
+  exit 2
+fi
 if ((ai_quorum_inputs == 3)); then
   if [[ -z "$effective_policy_pack" ]]; then
     echo "AI approval quorum verification requires a policy pack or signed policy pack" >&2
@@ -227,6 +231,9 @@ if ((ai_quorum_inputs == 3)); then
     --minimum-distinct-models "${PCBEX_AI_QUORUM_MINIMUM_DISTINCT_MODELS:-2}" \
     --output "$ai_approval_quorum" \
     --summary-output "$ai_approval_quorum_summary")
+  if [[ -n "${PCBEX_AI_REVIEW_SESSION:-}" ]]; then
+    quorum_arguments+=(--session "$PCBEX_AI_REVIEW_SESSION")
+  fi
   if [[ -n "${PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY:-}" ]]; then
     quorum_arguments+=( \
       --baseline-schematic "$PCBEX_BASELINE_SCHEMATIC" \
@@ -246,7 +253,7 @@ if ((ai_quorum_inputs == 3)); then
   "$PCBEX_BINARY" "${quorum_arguments[@]}"
   ai_approval_quorum_met="$(
     python3 -c \
-      'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(str(data.get("routed_quorum_met", data.get("quorum_met"))).lower())' \
+      'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); routed=data.get("routed_quorum", data); quorum=data.get("quorum", data); print(str(routed.get("routed_quorum_met", quorum.get("quorum_met"))).lower())' \
       "$ai_approval_quorum"
   )"
   {
