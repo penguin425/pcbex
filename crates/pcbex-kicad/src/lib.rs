@@ -521,6 +521,11 @@ fn import_net_classes(
                     "KiCad board net class {name} is missing a scalar description"
                 ));
             }
+            if values.iter().skip(3).any(|value| value.as_list().is_none()) {
+                return Err(format!(
+                    "KiCad board net class {name} contains an unexpected scalar value"
+                ));
+            }
             if classes.contains_key(name) {
                 return Err(format!("KiCad board contains duplicate net class {name}"));
             }
@@ -5606,6 +5611,26 @@ mod tests {
           (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
         )"#;
         assert!(import(empty_description, rules()).is_ok());
+    }
+
+    #[test]
+    fn rejects_unexpected_scalar_values_in_legacy_net_classes() {
+        for definition in [
+            r#"(net_class "Signal" "" extra (trace_width 0.25))"#,
+            r#"(net_class "Signal" "signals" first second (clearance 0.2))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup {definition})
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad board net class Signal contains an unexpected scalar value"
+            );
+        }
     }
 
     #[test]
