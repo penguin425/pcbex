@@ -39,6 +39,9 @@ use std::{
 };
 
 mod mcp;
+mod policy_pack;
+
+use policy_pack::{OrganizationPolicyPack, parse_policy_pack, policy_pack_json_schema};
 
 #[derive(Parser)]
 #[command(version, about = "Deterministic PCB physical-design engine")]
@@ -107,6 +110,7 @@ struct AnalysisConfiguration {
     project_settings_loaded: bool,
     applied_custom_rules: usize,
     dfm_profile: Option<DfmProfile>,
+    organization_policy_pack: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -129,6 +133,7 @@ struct RunManifest {
     project: Option<InputDescriptor>,
     rules_file: Option<InputDescriptor>,
     dfm_profile_file: Option<InputDescriptor>,
+    policy_pack_file: Option<InputDescriptor>,
     configuration: AnalysisConfiguration,
     result: AnalysisResult,
     artifacts: Vec<String>,
@@ -243,8 +248,11 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         sarif_output: Option<PathBuf>,
         /// Override built-in rule enablement and severities with a JSON policy.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "policy_pack")]
         policy: Option<PathBuf>,
+        /// Apply the electrical policy from an organization policy pack.
+        #[arg(long, value_name = "PATH", conflicts_with = "policy")]
+        policy_pack: Option<PathBuf>,
         /// Fail after writing the report when error-severity findings remain.
         #[arg(long)]
         require_approved: bool,
@@ -316,13 +324,16 @@ enum Command {
         input: PathBuf,
         #[arg(long)]
         electrical_review: PathBuf,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "policy_pack")]
         policy: Option<PathBuf>,
         #[arg(long = "simulation-evidence")]
         simulation_evidence: Vec<PathBuf>,
         /// Required design intent as `id=text`; repeat for each requirement.
-        #[arg(long = "requirement", required = true)]
+        #[arg(long = "requirement", conflicts_with = "policy_pack")]
         requirements: Vec<String>,
+        /// Use electrical policy, requirements, and simulation gate from an organization policy pack.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["policy", "requirements", "allow_no_simulation"])]
+        policy_pack: Option<PathBuf>,
         /// Permit final approval without any simulation evidence.
         #[arg(long)]
         allow_no_simulation: bool,
@@ -355,8 +366,15 @@ enum Command {
         approval: PathBuf,
         request: PathBuf,
         response: PathBuf,
-        #[arg(long)]
-        public_key: PathBuf,
+        #[arg(
+            long,
+            conflicts_with = "policy_pack",
+            required_unless_present = "policy_pack"
+        )]
+        public_key: Option<PathBuf>,
+        /// Trust the signer key declared by an organization policy pack.
+        #[arg(long, value_name = "PATH", conflicts_with = "public_key")]
+        policy_pack: Option<PathBuf>,
         /// Also require the verified envelope to represent an approval.
         #[arg(long)]
         require_approved: bool,
@@ -373,6 +391,17 @@ enum Command {
     },
     /// Validate and normalize an external DFM profile.
     ValidateDfmProfile {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Write the closed organization policy-pack JSON Schema.
+    PolicyPackSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize an organization policy pack.
+    ValidatePolicyPack {
         input: PathBuf,
         #[arg(short, long)]
         output: Option<PathBuf>,
@@ -460,11 +489,14 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
         /// Built-in fabrication profile ID or stable alias.
-        #[arg(long, conflicts_with = "fab_profile")]
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack"])]
         fab: Option<String>,
         /// Strict external DFM profile JSON.
-        #[arg(long, value_name = "PATH", conflicts_with = "fab")]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack"])]
         fab_profile: Option<PathBuf>,
+        /// Apply the DFM profile from an organization policy pack.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
+        policy_pack: Option<PathBuf>,
         /// Write all reports before exiting unsuccessfully on violations.
         #[arg(long)]
         fail_on_violations: bool,
@@ -505,11 +537,14 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
         /// Built-in fabrication profile ID or stable alias.
-        #[arg(long, conflicts_with = "fab_profile")]
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack"])]
         fab: Option<String>,
         /// Strict external DFM profile JSON.
-        #[arg(long, value_name = "PATH", conflicts_with = "fab")]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack"])]
         fab_profile: Option<PathBuf>,
+        /// Apply the DFM profile from an organization policy pack.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
+        policy_pack: Option<PathBuf>,
         #[arg(long)]
         svg: Option<PathBuf>,
         /// Also write routed items as JSON for the KiCad IPC adapter.
@@ -544,11 +579,14 @@ enum Command {
         bend_cost: u32,
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
-        #[arg(long, conflicts_with = "fab_profile")]
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack"])]
         fab: Option<String>,
         /// Strict external DFM profile JSON.
-        #[arg(long, value_name = "PATH", conflicts_with = "fab")]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack"])]
         fab_profile: Option<PathBuf>,
+        /// Apply the DFM profile from an organization policy pack.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
+        policy_pack: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         candidates: usize,
         #[arg(long, default_value_t = 4)]
@@ -565,11 +603,14 @@ enum Command {
     Dfm {
         input: PathBuf,
         /// Override embedded manufacturing rules with a built-in profile.
-        #[arg(long, conflicts_with = "fab_profile")]
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack"])]
         fab: Option<String>,
         /// Override embedded manufacturing rules with a strict external DFM profile JSON.
-        #[arg(long, value_name = "PATH", conflicts_with = "fab")]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack"])]
         fab_profile: Option<PathBuf>,
+        /// Override embedded manufacturing rules with an organization policy pack.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
+        policy_pack: Option<PathBuf>,
         #[arg(short, long)]
         output: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
@@ -706,6 +747,43 @@ fn resolve_dfm_profile(
         })
         .transpose()?;
     Ok((profile, None))
+}
+
+fn load_policy_pack(path: &Path) -> Result<(OrganizationPolicyPack, InputDescriptor)> {
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let source = std::str::from_utf8(&bytes)
+        .with_context(|| format!("decoding {} as UTF-8", path.display()))?;
+    let pack = parse_policy_pack(source)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("validating organization policy pack {}", path.display()))?;
+    Ok((pack, input_descriptor(path, &bytes)))
+}
+
+fn validate_ai_request_against_policy_pack(
+    request: &AiReviewRequest,
+    pack: &OrganizationPolicyPack,
+) -> Result<()> {
+    if request.electrical_policy != pack.electrical_policy {
+        bail!(
+            "AI review request electrical policy does not match policy pack {}",
+            pack.id
+        );
+    }
+    let mut requirements = pack.ai_requirements.clone();
+    requirements.sort_by(|left, right| left.id.cmp(&right.id));
+    if request.requirements != requirements {
+        bail!(
+            "AI review request requirements do not match policy pack {}",
+            pack.id
+        );
+    }
+    if request.approval_policy.require_simulation_evidence != pack.require_simulation_evidence {
+        bail!(
+            "AI review request simulation-evidence policy does not match policy pack {}",
+            pack.id
+        );
+    }
+    Ok(())
 }
 
 fn executable_check(
@@ -977,6 +1055,7 @@ fn main() -> Result<()> {
             junit_output,
             sarif_output,
             policy,
+            policy_pack,
             require_approved,
         } => {
             let source = fs::read_to_string(&input)
@@ -984,7 +1063,9 @@ fn main() -> Result<()> {
             let schematic = import_schematic(&source)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("importing {}", input.display()))?;
-            let policy = if let Some(path) = policy {
+            let policy = if let Some(path) = policy_pack {
+                load_policy_pack(&path)?.0.electrical_policy
+            } else if let Some(path) = policy {
                 parse_electrical_policy(
                     &fs::read_to_string(&path)
                         .with_context(|| format!("reading {}", path.display()))?,
@@ -1184,6 +1265,7 @@ fn main() -> Result<()> {
             policy,
             simulation_evidence,
             requirements,
+            policy_pack,
             allow_no_simulation,
             output,
         } => {
@@ -1192,7 +1274,13 @@ fn main() -> Result<()> {
             let schematic = import_schematic(&schematic_source)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("importing {}", input.display()))?;
-            let policy = if let Some(path) = policy {
+            let pack = policy_pack
+                .as_ref()
+                .map(|path| load_policy_pack(path).map(|value| value.0))
+                .transpose()?;
+            let policy = if let Some(pack) = &pack {
+                pack.electrical_policy.clone()
+            } else if let Some(path) = policy {
                 parse_electrical_policy(
                     &fs::read_to_string(&path)
                         .with_context(|| format!("reading {}", path.display()))?,
@@ -1210,10 +1298,17 @@ fn main() -> Result<()> {
                 .iter()
                 .map(|path| read_described_json::<SimulationEvidence>(path).map(|(value, _)| value))
                 .collect::<Result<Vec<_>>>()?;
-            let requirements = requirements
-                .iter()
-                .map(|value| parse_ai_requirement(value))
-                .collect::<Result<Vec<_>>>()?;
+            let requirements = if let Some(pack) = &pack {
+                pack.ai_requirements.clone()
+            } else {
+                if requirements.is_empty() {
+                    bail!("at least one --requirement is required without --policy-pack");
+                }
+                requirements
+                    .iter()
+                    .map(|value| parse_ai_requirement(value))
+                    .collect::<Result<Vec<_>>>()?
+            };
             let request = build_ai_review_request(
                 schematic,
                 &policy,
@@ -1221,7 +1316,9 @@ fn main() -> Result<()> {
                 format!("{:x}", Sha256::digest(&review_bytes)),
                 evidence,
                 requirements,
-                !allow_no_simulation,
+                pack.as_ref()
+                    .map(|pack| pack.require_simulation_evidence)
+                    .unwrap_or(!allow_no_simulation),
             )
             .map_err(anyhow::Error::msg)?;
             fs::write(&output, serde_json::to_string_pretty(&request)?)
@@ -1294,12 +1391,35 @@ fn main() -> Result<()> {
             request,
             response,
             public_key,
+            policy_pack,
             require_approved,
         } => {
             let (approval, _) = read_described_json::<SignedAiApproval>(&approval)?;
             let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
             let (response, _) = read_described_json::<AiReviewResponse>(&response)?;
-            let public_key = read_hex_key(&public_key, "approval public key")?;
+            let public_key = if let Some(path) = policy_pack {
+                let pack = load_policy_pack(&path)?.0;
+                validate_ai_request_against_policy_pack(&request, &pack)?;
+                let trusted = pack
+                    .trusted_approval_keys
+                    .iter()
+                    .find(|trusted| trusted.signer_id == approval.signer_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "approval signer {:?} is not trusted by policy pack {}",
+                            approval.signer_id,
+                            pack.id
+                        )
+                    })?;
+                decode_hex_key(&trusted.public_key, "trusted approval public key")?
+            } else {
+                read_hex_key(
+                    public_key
+                        .as_deref()
+                        .expect("clap requires a public key or policy pack"),
+                    "approval public key",
+                )?
+            };
             verify_signed_ai_approval(&approval, &request, &response, &public_key)
                 .map_err(anyhow::Error::msg)?;
             if require_approved && !approval.approved {
@@ -1341,6 +1461,13 @@ fn main() -> Result<()> {
             } else {
                 println!("{normalized}");
             }
+        }
+        Command::PolicyPackSchema { output } => {
+            write_or_print_json(&policy_pack_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyPack { input, output } => {
+            let pack = load_policy_pack(&input)?.0;
+            write_or_print_json(&serde_json::to_value(pack)?, output.as_ref())?;
         }
         Command::Migrate { input, output } => {
             let source = fs::read_to_string(&input)
@@ -1527,6 +1654,7 @@ fn main() -> Result<()> {
             via_cost,
             fab,
             fab_profile,
+            policy_pack,
             fail_on_violations,
         } => {
             let input_bytes =
@@ -1586,8 +1714,15 @@ fn main() -> Result<()> {
                     Ok(input_descriptor(path, &bytes))
                 })
                 .transpose()?;
-            let (dfm_profile, dfm_profile_file) =
+            let policy_pack = policy_pack
+                .as_ref()
+                .map(|path| load_policy_pack(path))
+                .transpose()?;
+            let (mut dfm_profile, dfm_profile_file) =
                 resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?;
+            if let Some((pack, _)) = &policy_pack {
+                dfm_profile = Some(pack.dfm_profile.clone());
+            }
             if let Some(profile) = &dfm_profile {
                 apply_dfm_profile(&mut imported.board, profile);
             }
@@ -1633,11 +1768,17 @@ fn main() -> Result<()> {
                 project: project_descriptor,
                 rules_file: rules_descriptor,
                 dfm_profile_file,
+                policy_pack_file: policy_pack.as_ref().map(|value| InputDescriptor {
+                    path: value.1.path.clone(),
+                    bytes: value.1.bytes,
+                    sha256: value.1.sha256.clone(),
+                }),
                 configuration: AnalysisConfiguration {
                     rules: imported.board.rules.clone(),
                     project_settings_loaded: project.is_some(),
                     applied_custom_rules,
                     dfm_profile,
+                    organization_policy_pack: policy_pack.as_ref().map(|value| value.0.id.clone()),
                 },
                 result: AnalysisResult {
                     clean: report.is_clean(),
@@ -1757,6 +1898,7 @@ fn main() -> Result<()> {
             via_cost,
             fab,
             fab_profile,
+            policy_pack,
             svg,
             json_output,
             drc,
@@ -1803,7 +1945,12 @@ fn main() -> Result<()> {
                     path.display()
                 );
             }
-            if let Some(profile) = resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0 {
+            let profile = if let Some(path) = policy_pack {
+                Some(load_policy_pack(&path)?.0.dfm_profile)
+            } else {
+                resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0
+            };
+            if let Some(profile) = profile {
                 apply_dfm_profile(&mut imported.board, &profile);
                 eprintln!("applied fabrication profile {}", profile.id);
             }
@@ -1871,6 +2018,7 @@ fn main() -> Result<()> {
             via_cost,
             fab,
             fab_profile,
+            policy_pack,
             candidates,
             workers,
             router_workers,
@@ -1913,7 +2061,12 @@ fn main() -> Result<()> {
                     .map_err(anyhow::Error::msg)
                     .with_context(|| format!("importing custom rules from {}", path.display()))?;
             }
-            if let Some(profile) = resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0 {
+            let profile = if let Some(path) = policy_pack {
+                Some(load_policy_pack(&path)?.0.dfm_profile)
+            } else {
+                resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0
+            };
+            if let Some(profile) = profile {
                 apply_dfm_profile(&mut imported.board, &profile);
             }
             let results = route_candidates(
@@ -1989,16 +2142,22 @@ fn main() -> Result<()> {
             input,
             fab,
             fab_profile,
+            policy_pack,
             output,
             format,
         } => {
             let mut board = read(&input)?;
-            if let Some(profile) = resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0 {
+            let profile = if let Some(path) = policy_pack {
+                Some(load_policy_pack(&path)?.0.dfm_profile)
+            } else {
+                resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0
+            };
+            if let Some(profile) = profile {
                 apply_dfm_profile(&mut board, &profile);
             }
             if board.manufacturing_rules.is_none() {
                 bail!(
-                    "board does not define manufacturing_rules; select --fab PROFILE or --fab-profile PATH"
+                    "board does not define manufacturing_rules; select --fab PROFILE, --fab-profile PATH, or --policy-pack PATH"
                 )
             }
             let report = check_manufacturability(&board);
@@ -2419,7 +2578,10 @@ fn read_secret_key(path: &Path) -> Result<[u8; 32]> {
 
 fn read_hex_key(path: &Path, description: &str) -> Result<[u8; 32]> {
     let value = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let value = value.trim();
+    decode_hex_key(value.trim(), description)
+}
+
+fn decode_hex_key(value: &str, description: &str) -> Result<[u8; 32]> {
     if value.len() != 64
         || !value
             .bytes()

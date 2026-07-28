@@ -22,6 +22,10 @@ inputs:
     description: Optional strict external DFM profile JSON path; mutually exclusive with fab.
     required: false
     default: ""
+  policy-pack:
+    description: Optional organization policy pack; mutually exclusive with fab and fab-profile.
+    required: false
+    default: ""
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -112,6 +116,7 @@ runs:
         PCBEX_BASELINE_BOARD: ${{ inputs.baseline-board }}
         PCBEX_FAB: ${{ inputs.fab }}
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
+        PCBEX_POLICY_PACK: ${{ inputs.policy-pack }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 
