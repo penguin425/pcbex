@@ -94,6 +94,11 @@
     {
       "id": "electrical-review-baseline-gate",
       "release": "v1.315.0",
+      "status": "released"
+    },
+    {
+      "id": "electrical-sarif-reporting",
+      "release": "v1.316.0",
       "status": "current"
     }
   ]

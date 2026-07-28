@@ -1115,6 +1115,7 @@ pcbex check-schematic design.kicad_sch \
   --output electrical-review.json \
   --explain electrical-explanations.json \
   --junit-output electrical-review.xml \
+  --sarif-output electrical-review.sarif \
   --require-approved
 pcbex electrical-policy --output electrical-policy.json
 pcbex check-schematic design.kicad_sch \
@@ -1140,6 +1141,12 @@ remain visible in `system-out`, and policy-disabled rules are explicitly
 skipped. Suite properties retain the schematic and policy SHA-256 identities,
 so Jenkins, GitLab, Buildkite, and other JUnit-aware CI systems can display the
 same approval evidence without changing the canonical JSON review.
+
+`--sarif-output` emits SARIF 2.1.0 for GitHub Code Scanning and other
+SARIF-aware review tools. Every finding carries its severity, source schematic,
+stable partial fingerprint, net/symbol/pin context, and the canonical
+schematic/policy identities. The SARIF driver also embeds the title, purpose,
+trigger, remediation, default level, and enablement of all 12 rules.
 
 Adopt an existing review as a CI baseline without allowing new electrical
 errors:
