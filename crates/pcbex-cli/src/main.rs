@@ -20,7 +20,7 @@ use pcbex_kicad::{
     ai_review_request_json_schema, ai_review_response_json_schema, apply_custom_design_rules,
     apply_electrical_waivers, apply_project_net_settings, approval_public_key,
     build_ai_review_request, check_schematic, electrical_explanation_json_schema,
-    electrical_policy_json_schema, electrical_review_json_schema,
+    electrical_policy_json_schema, electrical_review_json_schema, electrical_review_to_junit,
     electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
     explain_electrical_review, import as import_kicad, import_schematic, parse_ai_review_response,
     parse_electrical_policy, parse_simulation_declaration, record_simulation_evidence,
@@ -228,6 +228,9 @@ enum Command {
         /// Write a policy-bound explanation for every electrical rule.
         #[arg(long, value_name = "PATH")]
         explain: Option<PathBuf>,
+        /// Write a JUnit XML testsuite with one testcase per electrical rule.
+        #[arg(long, value_name = "PATH")]
+        junit_output: Option<PathBuf>,
         /// Override built-in rule enablement and severities with a JSON policy.
         #[arg(long)]
         policy: Option<PathBuf>,
@@ -908,6 +911,7 @@ fn main() -> Result<()> {
             input,
             output,
             explain,
+            junit_output,
             policy,
             require_approved,
         } => {
@@ -934,6 +938,11 @@ fn main() -> Result<()> {
                     explain_electrical_review(&review, &policy).map_err(anyhow::Error::msg)?;
                 fs::write(&path, serde_json::to_string_pretty(&explanations)?)
                     .with_context(|| format!("writing {}", path.display()))?;
+            }
+            if let Some(path) = junit_output {
+                let junit =
+                    electrical_review_to_junit(&review, &policy).map_err(anyhow::Error::msg)?;
+                fs::write(&path, junit).with_context(|| format!("writing {}", path.display()))?;
             }
             eprintln!(
                 "electrical review: {}; {} error(s), {} warning(s), {} info finding(s)",

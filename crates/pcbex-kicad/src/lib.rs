@@ -21,8 +21,8 @@ pub use electrical::{
     ElectricalExplanationReport, ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy,
     ElectricalReview, ElectricalRuleExplanation, ElectricalRulePolicy, ElectricalSeverity,
     ElectricalSymbolRef, check_schematic, electrical_explanation_json_schema,
-    electrical_policy_json_schema, electrical_review_json_schema, explain_electrical_review,
-    parse_electrical_policy,
+    electrical_policy_json_schema, electrical_review_json_schema, electrical_review_to_junit,
+    explain_electrical_review, parse_electrical_policy,
 };
 mod evidence;
 pub use evidence::{
