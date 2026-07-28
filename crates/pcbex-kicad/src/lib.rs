@@ -64,6 +64,12 @@ pub use reviewer_routing::{
     render_schematic_reviewer_routing_summary, route_schematic_review,
     schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
 };
+mod routed_quorum;
+pub use routed_quorum::{
+    RoutedAiApprovalProfile, RoutedAiApprovalQuorumReport,
+    render_routed_ai_approval_quorum_summary, routed_ai_approval_quorum_report_json_schema,
+    verify_routed_ai_approval_quorum,
+};
 mod waiver;
 pub use waiver::{
     ElectricalFindingDisposition, ElectricalWaiver, ElectricalWaiverCounts,

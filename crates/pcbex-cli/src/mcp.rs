@@ -892,6 +892,9 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "minimum_distinct_models": {
                         "type": "integer", "minimum": 1, "maximum": 100, "default": 2
                     },
+                    "baseline_schematic": {"type": "string"},
+                    "current_schematic": {"type": "string"},
+                    "reviewer_routing_policy": {"type": "string"},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
                     "require_quorum": {"type": "boolean", "default": false}
@@ -1512,6 +1515,9 @@ fn verify_schematic_approval_quorum(
             "minimum_approvals",
             "minimum_distinct_providers",
             "minimum_distinct_models",
+            "baseline_schematic",
+            "current_schematic",
+            "reviewer_routing_policy",
             "output",
             "summary_output",
             "require_quorum",
@@ -1551,6 +1557,37 @@ fn verify_schematic_approval_quorum(
         &arguments,
         "minimum_distinct_models",
         "--minimum-distinct-models",
+        &mut command,
+    )?;
+    let routed_inputs = [
+        "baseline_schematic",
+        "current_schematic",
+        "reviewer_routing_policy",
+    ]
+    .iter()
+    .filter(|name| arguments.contains_key(**name))
+    .count();
+    if routed_inputs != 0 && routed_inputs != 3 {
+        return Err(json!({
+            "detail": "baseline_schematic, current_schematic, and reviewer_routing_policy must be supplied together"
+        }));
+    }
+    optional_option(
+        &arguments,
+        "baseline_schematic",
+        "--baseline-schematic",
+        &mut command,
+    )?;
+    optional_option(
+        &arguments,
+        "current_schematic",
+        "--current-schematic",
+        &mut command,
+    )?;
+    optional_option(
+        &arguments,
+        "reviewer_routing_policy",
+        "--reviewer-routing-policy",
         &mut command,
     )?;
     command.extend(["--output".into(), output.clone()]);
@@ -1858,6 +1895,11 @@ mod tests {
         assert_eq!(
             named("verify_schematic_approval_quorum")["inputSchema"]["properties"]["approvals"]["type"],
             "array"
+        );
+        assert_eq!(
+            named("verify_schematic_approval_quorum")["inputSchema"]["properties"]["reviewer_routing_policy"]
+                ["type"],
+            "string"
         );
         assert_eq!(
             named("verify_schematic_approval_quorum")["annotations"]["destructiveHint"],

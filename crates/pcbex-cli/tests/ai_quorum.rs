@@ -223,6 +223,156 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
             .contains("**Result:** approved")
     );
 
+    let baseline = directory.join("baseline.kicad_sch");
+    fs::write(
+        &baseline,
+        fs::read_to_string(&schematic)
+            .unwrap()
+            .replace("\"10k\"", "\"22k\""),
+    )
+    .unwrap();
+    let routing_policy = directory.join("routing-policy.json");
+    let routing = |model: &str| {
+        json!({
+            "schema_version": 1,
+            "id": "test-routing-v1",
+            "fallback_profile_id": "general",
+            "profiles": [{
+                "id": "general",
+                "title": "General reviewer",
+                "minimum_reviewers": 1,
+                "reviewer_candidates": [{
+                    "provider": "provider-a",
+                    "model": model,
+                    "version": "1"
+                }],
+                "instructions": ["Review unmatched semantic changes."],
+                "selectors": []
+            }]
+        })
+    };
+    fs::write(
+        &routing_policy,
+        serde_json::to_vec_pretty(&routing("model-a")).unwrap(),
+    )
+    .unwrap();
+    let routed_report = directory.join("routed-quorum.json");
+    let routed_summary = directory.join("routed-quorum.md");
+    assert!(
+        run(&[
+            "verify-ai-quorum",
+            path(&request),
+            "--approval",
+            path(&approval_a),
+            "--approval",
+            path(&approval_b),
+            "--response",
+            path(&response_a),
+            "--response",
+            path(&response_b),
+            "--policy-pack",
+            path(&policy_pack),
+            "--minimum-approvals",
+            "2",
+            "--minimum-distinct-providers",
+            "2",
+            "--minimum-distinct-models",
+            "2",
+            "--baseline-schematic",
+            path(&baseline),
+            "--current-schematic",
+            path(&schematic),
+            "--reviewer-routing-policy",
+            path(&routing_policy),
+            "--output",
+            path(&routed_report),
+            "--summary-output",
+            path(&routed_summary),
+            "--require-quorum",
+        ])
+        .status
+        .success()
+    );
+    let routed: Value = serde_json::from_slice(&fs::read(&routed_report).unwrap()).unwrap();
+    assert_eq!(routed["routed_quorum_met"], true);
+    assert_eq!(routed["profiles"][0]["approved_signers"][0], "reviewer-a");
+
+    fs::write(
+        &routing_policy,
+        serde_json::to_vec_pretty(&routing("missing-specialist")).unwrap(),
+    )
+    .unwrap();
+    let missing_report = directory.join("missing-specialist.json");
+    let missing = run(&[
+        "verify-ai-quorum",
+        path(&request),
+        "--approval",
+        path(&approval_a),
+        "--approval",
+        path(&approval_b),
+        "--response",
+        path(&response_a),
+        "--response",
+        path(&response_b),
+        "--policy-pack",
+        path(&policy_pack),
+        "--minimum-approvals",
+        "2",
+        "--minimum-distinct-providers",
+        "2",
+        "--minimum-distinct-models",
+        "2",
+        "--baseline-schematic",
+        path(&baseline),
+        "--current-schematic",
+        path(&schematic),
+        "--reviewer-routing-policy",
+        path(&routing_policy),
+        "--output",
+        path(&missing_report),
+        "--require-quorum",
+    ]);
+    assert!(!missing.status.success());
+    let missing: Value = serde_json::from_slice(&fs::read(&missing_report).unwrap()).unwrap();
+    assert_eq!(missing["quorum"]["quorum_met"], true);
+    assert_eq!(missing["routed_quorum_met"], false);
+    assert!(
+        missing["routed_quorum_failures"][0]
+            .as_str()
+            .unwrap()
+            .contains("general")
+    );
+    let mismatched_report = directory.join("mismatched-schematic.json");
+    assert!(
+        !run(&[
+            "verify-ai-quorum",
+            path(&request),
+            "--approval",
+            path(&approval_a),
+            "--response",
+            path(&response_a),
+            "--policy-pack",
+            path(&policy_pack),
+            "--minimum-approvals",
+            "1",
+            "--minimum-distinct-providers",
+            "1",
+            "--minimum-distinct-models",
+            "1",
+            "--baseline-schematic",
+            path(&schematic),
+            "--current-schematic",
+            path(&baseline),
+            "--reviewer-routing-policy",
+            path(&routing_policy),
+            "--output",
+            path(&mismatched_report),
+        ])
+        .status
+        .success()
+    );
+    assert!(!mismatched_report.exists());
+
     let failed_report = directory.join("failed-quorum.json");
     let failed_summary = directory.join("failed-quorum.md");
     let failed = run(&[
@@ -305,6 +455,18 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
     );
     let schema_value: Value = serde_json::from_slice(&fs::read(schema).unwrap()).unwrap();
     assert_eq!(schema_value["additionalProperties"], false);
+    let routed_schema = directory.join("routed-quorum.schema.json");
+    assert!(
+        run(&[
+            "routed-ai-approval-quorum-schema",
+            "--output",
+            path(&routed_schema),
+        ])
+        .status
+        .success()
+    );
+    let routed_schema: Value = serde_json::from_slice(&fs::read(routed_schema).unwrap()).unwrap();
+    assert_eq!(routed_schema["additionalProperties"], false);
 
     fs::remove_dir_all(directory).unwrap();
 }

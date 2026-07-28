@@ -227,6 +227,12 @@ if ((ai_quorum_inputs == 3)); then
     --minimum-distinct-models "${PCBEX_AI_QUORUM_MINIMUM_DISTINCT_MODELS:-2}" \
     --output "$ai_approval_quorum" \
     --summary-output "$ai_approval_quorum_summary")
+  if [[ -n "${PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY:-}" ]]; then
+    quorum_arguments+=( \
+      --baseline-schematic "$PCBEX_BASELINE_SCHEMATIC" \
+      --current-schematic "$PCBEX_SCHEMATIC" \
+      --reviewer-routing-policy "$PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY")
+  fi
   while IFS= read -r approval; do
     if [[ -n "$approval" ]]; then
       quorum_arguments+=(--approval "$approval")
@@ -240,7 +246,7 @@ if ((ai_quorum_inputs == 3)); then
   "$PCBEX_BINARY" "${quorum_arguments[@]}"
   ai_approval_quorum_met="$(
     python3 -c \
-      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["quorum_met"]).lower())' \
+      'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(str(data.get("routed_quorum_met", data.get("quorum_met"))).lower())' \
       "$ai_approval_quorum"
   )"
   {

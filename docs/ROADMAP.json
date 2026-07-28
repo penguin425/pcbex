@@ -149,6 +149,11 @@
     {
       "id": "risk-based-ai-reviewer-routing",
       "release": "v1.326.0",
+      "status": "released"
+    },
+    {
+      "id": "profile-aware-ai-approval-quorum",
+      "release": "v1.327.0",
       "status": "current"
     }
   ]
