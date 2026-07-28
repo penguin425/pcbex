@@ -759,8 +759,9 @@ radii must fit the source pad, and trapezoid deltas must leave a non-degenerate
 shape.
 Pads must also name at least one unique layer present in the board copper
 stackup; invalid or duplicate layer memberships are rejected by normal DRC.
-When a pad carries a net identifier, that identifier must exist in the board
-net table; normal DRC reports undeclared pad-net references explicitly.
+When a pad carries a net identifier, its `net` field must contain exactly one
+identifier and name, and that identifier must exist in the board net table;
+normal DRC reports malformed or undeclared pad-net references explicitly.
 Imported KiCad track segments, route arcs, vias, and copper zones with non-zero
 net identifiers must likewise reference entries declared in that table.
 When any of those copper primitives supplies a `net` field, its identifier must

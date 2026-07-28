@@ -1937,6 +1937,14 @@ fn import_footprint(
                 "KiCad pad {number} net {id} is missing a scalar name"
             ));
         }
+        if let Some(values) = net_values
+            && values.len() > 3
+        {
+            let number = atom(pad.get(1)).unwrap_or("");
+            return Err(format!(
+                "KiCad pad {number} net field must contain exactly one ID and name"
+            ));
+        }
         if let Some(id) = net_id.filter(|id| *id != 0)
             && !nets.contains_key(&id)
         {
@@ -3343,6 +3351,29 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "KiCad pad A1 net fields must not be repeated"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_extra_values_in_kicad_pad_net_fields() {
+        for net in [
+            r#"(net 1 "SIGNAL" extra)"#,
+            r#"(net 1 "SIGNAL" (alias "OTHER"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIGNAL")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (footprint "P" (layer "F.Cu") (at 2 2)
+                    (pad "A1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+                      {net}))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad pad A1 net field must contain exactly one ID and name"
             );
         }
     }
