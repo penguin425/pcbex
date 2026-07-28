@@ -1112,7 +1112,9 @@ intent:
 
 ```sh
 pcbex check-schematic design.kicad_sch \
-  --output electrical-review.json --require-approved
+  --output electrical-review.json \
+  --explain electrical-explanations.json \
+  --require-approved
 pcbex electrical-policy --output electrical-policy.json
 pcbex check-schematic design.kicad_sch \
   --policy electrical-policy.json \
@@ -1125,6 +1127,12 @@ unconnected pins, conflicting signal and power drivers, undriven signal and
 power inputs, and nets with multiple names. DNP symbols are excluded. Every
 finding has a stable identity and structured symbol/pin references.
 
+`--explain` writes a separate policy-bound report covering all 12 rules,
+including each rule's purpose, exact trigger, remediation guidance, effective
+severity and enablement, and the stable IDs of findings it produced. This keeps
+the signed electrical-review contract unchanged while making CI failures and
+AI hand-offs directly explainable.
+
 Reports are deterministic and contain canonical SHA-256 identities for both
 the normalized schematic and effective policy. An approval is granted only
 when no enabled error-severity finding remains. A policy may explicitly
@@ -1133,7 +1141,8 @@ schema versions fail closed. `--require-approved` writes the report before
 returning nonzero so CI and later AI-review stages retain evidence.
 
 Closed Draft 2020-12 contracts are available through
-`electrical-policy-schema` and `electrical-review-schema`.
+`electrical-policy-schema`, `electrical-review-schema`, and
+`electrical-explanation-schema`.
 
 ## Bound simulation evidence
 

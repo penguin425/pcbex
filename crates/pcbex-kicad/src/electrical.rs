@@ -125,6 +125,29 @@ pub struct ElectricalReview {
     pub findings: Vec<ElectricalFinding>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElectricalRuleExplanation {
+    pub id: String,
+    pub enabled: bool,
+    pub severity: ElectricalSeverity,
+    pub title: String,
+    pub purpose: String,
+    pub trigger: String,
+    pub remediation: String,
+    pub finding_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElectricalExplanationReport {
+    pub schema_version: u32,
+    pub schematic_sha256: String,
+    pub policy_sha256: String,
+    pub policy_id: String,
+    pub rules: Vec<ElectricalRuleExplanation>,
+}
+
 struct PinContext<'a> {
     symbol: &'a SchematicSymbol,
     pin: &'a SchematicPin,
@@ -252,6 +275,135 @@ pub fn check_schematic(
         counts,
         findings,
     })
+}
+
+pub fn explain_electrical_review(
+    review: &ElectricalReview,
+    policy: &ElectricalPolicy,
+) -> Result<ElectricalExplanationReport, String> {
+    if review.schema_version != 1 {
+        return Err(format!(
+            "unsupported electrical review schema version {}",
+            review.schema_version
+        ));
+    }
+    let policy = effective_policy(policy)?;
+    let policy_bytes = serde_json::to_vec(&policy)
+        .map_err(|error| format!("serializing electrical policy: {error}"))?;
+    let policy_sha256 = hex_digest(&policy_bytes);
+    if review.policy_id != policy.id || review.policy_sha256 != policy_sha256 {
+        return Err("electrical review does not match the effective policy".into());
+    }
+    let rules = RULES
+        .iter()
+        .map(|(id, _)| {
+            let setting = policy
+                .rules
+                .get(*id)
+                .expect("effective policy contains every built-in rule");
+            let (title, purpose, trigger, remediation) = rule_explanation(id);
+            ElectricalRuleExplanation {
+                id: (*id).to_string(),
+                enabled: setting.enabled,
+                severity: setting.severity,
+                title: title.into(),
+                purpose: purpose.into(),
+                trigger: trigger.into(),
+                remediation: remediation.into(),
+                finding_ids: review
+                    .findings
+                    .iter()
+                    .filter(|finding| finding.rule == *id)
+                    .map(|finding| finding.id.clone())
+                    .collect(),
+            }
+        })
+        .collect();
+    Ok(ElectricalExplanationReport {
+        schema_version: 1,
+        schematic_sha256: review.schematic_sha256.clone(),
+        policy_sha256,
+        policy_id: policy.id,
+        rules,
+    })
+}
+
+fn rule_explanation(rule: &str) -> (&'static str, &'static str, &'static str, &'static str) {
+    match rule {
+        RULE_COVERAGE_INCOMPLETE => (
+            "Incomplete schematic coverage",
+            "Prevent approval when unsupported KiCad constructs could hide electrical intent.",
+            "The normalized schematic reports one or more unsupported features.",
+            "Remove the unsupported construct or use a pcbex version that imports it completely.",
+        ),
+        RULE_DUPLICATE_REFERENCE_UNIT => (
+            "Duplicate reference unit",
+            "Keep each annotated multi-unit symbol identity unambiguous.",
+            "More than one symbol uses the same reference designator and unit number.",
+            "Re-annotate the duplicate or assign the correct unit number.",
+        ),
+        RULE_UNANNOTATED_REFERENCE => (
+            "Unannotated reference",
+            "Ensure every fitted component has a stable design identity.",
+            "A non-DNP symbol reference still contains a question mark.",
+            "Run schematic annotation and verify references before approval.",
+        ),
+        RULE_MISSING_FOOTPRINT => (
+            "Missing footprint",
+            "Ensure each on-board component can be transferred into PCB layout.",
+            "A fitted on-board symbol has no footprint assignment.",
+            "Assign a verified footprint or mark the symbol as off-board or DNP.",
+        ),
+        RULE_NO_CONNECT_CONNECTED => (
+            "Connected no-connect marker",
+            "Prevent intentional no-connect declarations from masking real connectivity.",
+            "A pin marked no-connect belongs to an electrical net.",
+            "Remove the no-connect marker or disconnect the pin from the net.",
+        ),
+        RULE_PIN_TYPE_NO_CONNECT_CONNECTED => (
+            "Connected no-connect pin type",
+            "Keep library-declared no-connect pins electrically isolated.",
+            "A library pin with no-connect electrical type belongs to a net.",
+            "Correct the symbol pin type or remove the electrical connection.",
+        ),
+        RULE_UNCONNECTED_PIN => (
+            "Unmarked unconnected pin",
+            "Require unused pins to be explicitly reviewed instead of silently floating.",
+            "A pin has no peer connection and is not marked no-connect.",
+            "Connect the pin or add an intentional no-connect marker.",
+        ),
+        RULE_MULTIPLE_OUTPUT_DRIVERS => (
+            "Multiple output drivers",
+            "Prevent ordinary actively driven outputs from contending on one net.",
+            "A net contains more than one output pin.",
+            "Separate the outputs or use a topology and pin types that explicitly permit sharing.",
+        ),
+        RULE_MULTIPLE_POWER_OUTPUTS => (
+            "Multiple power outputs",
+            "Prevent independent power sources from being shorted together.",
+            "A net contains more than one power-output pin.",
+            "Separate the rails or document the intended power-sharing topology with corrected symbols.",
+        ),
+        RULE_POWER_INPUT_NOT_DRIVEN => (
+            "Undriven power input",
+            "Ensure every power-input pin has an identified source.",
+            "A net has power-input pins but no power-output pin.",
+            "Connect a valid source or correct the source pin electrical type.",
+        ),
+        RULE_INPUT_NOT_DRIVEN => (
+            "Undriven signal input",
+            "Detect signal inputs that have no active driver.",
+            "A net has input pins but no output or bidirectional driver.",
+            "Connect a driver, add the required bias network, or correct pin electrical types.",
+        ),
+        RULE_MULTIPLE_NET_NAMES => (
+            "Multiple net names",
+            "Prevent aliasing from hiding accidental net merges.",
+            "One electrical net resolves to more than one distinct label.",
+            "Use one canonical name or split connections that should be separate.",
+        ),
+        _ => unreachable!("all effective electrical rules have explanations"),
+    }
 }
 
 fn effective_policy(policy: &ElectricalPolicy) -> Result<ElectricalPolicy, String> {
@@ -682,6 +834,54 @@ pub fn electrical_review_json_schema() -> Value {
     })
 }
 
+pub fn electrical_explanation_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/electrical-explanation-v1.json",
+        "title": "pcbex electrical rule explanation report",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schema_version", "schematic_sha256", "policy_sha256", "policy_id", "rules"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "schematic_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "policy_id": {"type": "string", "minLength": 1},
+            "rules": {
+                "type": "array",
+                "minItems": RULES.len(),
+                "maxItems": RULES.len(),
+                "items": {"$ref": "#/$defs/rule"}
+            }
+        },
+        "$defs": {
+            "rule": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "id", "enabled", "severity", "title", "purpose", "trigger",
+                    "remediation", "finding_ids"
+                ],
+                "properties": {
+                    "id": {"enum": RULES.map(|(id, _)| id)},
+                    "enabled": {"type": "boolean"},
+                    "severity": {"enum": ["info", "warning", "error"]},
+                    "title": {"type": "string", "minLength": 1},
+                    "purpose": {"type": "string", "minLength": 1},
+                    "trigger": {"type": "string", "minLength": 1},
+                    "remediation": {"type": "string", "minLength": 1},
+                    "finding_ids": {
+                        "type": "array",
+                        "items": {"type": "string", "pattern": "^pcbex-er-[0-9a-f]{16}$"}
+                    }
+                }
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -872,6 +1072,7 @@ mod tests {
         for schema in [
             electrical_policy_json_schema(),
             electrical_review_json_schema(),
+            electrical_explanation_json_schema(),
         ] {
             assert_eq!(schema["type"], "object");
             assert_eq!(schema["additionalProperties"], false);
@@ -881,5 +1082,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn explanations_bind_every_rule_to_the_review_and_effective_policy() {
+        let schematic = import_schematic(SOURCE).unwrap();
+        let mut policy = ElectricalPolicy::default();
+        policy
+            .rules
+            .get_mut(RULE_INPUT_NOT_DRIVEN)
+            .unwrap()
+            .severity = ElectricalSeverity::Error;
+        let review = check_schematic(&schematic, &policy).unwrap();
+        let explanations = explain_electrical_review(&review, &policy).unwrap();
+        assert_eq!(explanations.schema_version, 1);
+        assert_eq!(explanations.schematic_sha256, review.schematic_sha256);
+        assert_eq!(explanations.policy_sha256, review.policy_sha256);
+        assert_eq!(explanations.rules.len(), RULES.len());
+        let input = explanations
+            .rules
+            .iter()
+            .find(|explanation| explanation.id == RULE_INPUT_NOT_DRIVEN)
+            .unwrap();
+        assert_eq!(input.severity, ElectricalSeverity::Error);
+        assert!(!input.purpose.is_empty());
+        assert_eq!(
+            input.finding_ids,
+            review
+                .findings
+                .iter()
+                .filter(|finding| finding.rule == RULE_INPUT_NOT_DRIVEN)
+                .map(|finding| finding.id.clone())
+                .collect::<Vec<_>>()
+        );
+
+        let mismatched = ElectricalPolicy {
+            id: "different-policy".into(),
+            ..ElectricalPolicy::default()
+        };
+        assert!(explain_electrical_review(&review, &mismatched).is_err());
     }
 }

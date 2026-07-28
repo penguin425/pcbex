@@ -18,11 +18,12 @@ use pcbex_kicad::{
     AiRequirement, AiReviewRequest, AiReviewResponse, ElectricalPolicy, ElectricalReview,
     SignedAiApproval, SimulationArtifact, SimulationEvidence, ai_review_request_json_schema,
     ai_review_response_json_schema, apply_custom_design_rules, apply_project_net_settings,
-    approval_public_key, build_ai_review_request, check_schematic, electrical_policy_json_schema,
-    electrical_review_json_schema, import as import_kicad, import_schematic,
-    parse_ai_review_response, parse_electrical_policy, parse_simulation_declaration,
-    record_simulation_evidence, schematic_json_schema, sign_ai_review,
-    signed_ai_approval_json_schema, simulation_declaration_json_schema,
+    approval_public_key, build_ai_review_request, check_schematic,
+    electrical_explanation_json_schema, electrical_policy_json_schema,
+    electrical_review_json_schema, explain_electrical_review, import as import_kicad,
+    import_schematic, parse_ai_review_response, parse_electrical_policy,
+    parse_simulation_declaration, record_simulation_evidence, schematic_json_schema,
+    sign_ai_review, signed_ai_approval_json_schema, simulation_declaration_json_schema,
     simulation_evidence_json_schema, verify_signed_ai_approval,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -198,6 +199,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed electrical-rule explanation JSON Schema.
+    ElectricalExplanationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the complete built-in electrical approval policy.
     ElectricalPolicy {
         #[arg(short, long)]
@@ -208,6 +214,9 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
+        /// Write a policy-bound explanation for every electrical rule.
+        #[arg(long, value_name = "PATH")]
+        explain: Option<PathBuf>,
         /// Override built-in rule enablement and severities with a JSON policy.
         #[arg(long)]
         policy: Option<PathBuf>,
@@ -849,6 +858,14 @@ fn main() -> Result<()> {
                 println!("{schema}");
             }
         }
+        Command::ElectricalExplanationSchema { output } => {
+            let schema = serde_json::to_string_pretty(&electrical_explanation_json_schema())?;
+            if let Some(path) = output {
+                fs::write(path, schema)?;
+            } else {
+                println!("{schema}");
+            }
+        }
         Command::ElectricalPolicy { output } => {
             let policy = serde_json::to_string_pretty(&ElectricalPolicy::default())?;
             if let Some(path) = output {
@@ -860,6 +877,7 @@ fn main() -> Result<()> {
         Command::CheckSchematic {
             input,
             output,
+            explain,
             policy,
             require_approved,
         } => {
@@ -881,6 +899,12 @@ fn main() -> Result<()> {
             let review = check_schematic(&schematic, &policy).map_err(anyhow::Error::msg)?;
             fs::write(&output, serde_json::to_string_pretty(&review)?)
                 .with_context(|| format!("writing {}", output.display()))?;
+            if let Some(path) = explain {
+                let explanations =
+                    explain_electrical_review(&review, &policy).map_err(anyhow::Error::msg)?;
+                fs::write(&path, serde_json::to_string_pretty(&explanations)?)
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
             eprintln!(
                 "electrical review: {}; {} error(s), {} warning(s), {} info finding(s)",
                 if review.approved {

@@ -33,16 +33,20 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
     let directory = temp_dir();
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/simple.kicad_sch");
     let first = directory.join("first.json");
+    let explanations = directory.join("explanations.json");
     let second = directory.join("second.json");
     let rejected = run(&[
         "check-schematic",
         path(&source),
         "--output",
         path(&first),
+        "--explain",
+        path(&explanations),
         "--require-approved",
     ]);
     assert!(!rejected.status.success());
     assert!(first.is_file());
+    assert!(explanations.is_file());
     assert!(
         run(&["check-schematic", path(&source), "--output", path(&second),])
             .status
@@ -53,6 +57,20 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
     assert_eq!(review["schema_version"], 1);
     assert_eq!(review["approved"], false);
     assert!(review["counts"]["errors"].as_u64().unwrap() > 0);
+    let explanation_report: Value =
+        serde_json::from_slice(&fs::read(&explanations).unwrap()).unwrap();
+    assert_eq!(explanation_report["schema_version"], 1);
+    assert_eq!(
+        explanation_report["schematic_sha256"],
+        review["schematic_sha256"]
+    );
+    assert_eq!(explanation_report["policy_sha256"], review["policy_sha256"]);
+    assert_eq!(explanation_report["rules"].as_array().unwrap().len(), 12);
+    for rule in explanation_report["rules"].as_array().unwrap() {
+        for field in ["title", "purpose", "trigger", "remediation"] {
+            assert!(!rule[field].as_str().unwrap().is_empty());
+        }
+    }
 
     let policy = directory.join("policy.json");
     assert!(
@@ -87,6 +105,7 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
     for (command, filename) in [
         ("electrical-policy-schema", "policy.schema.json"),
         ("electrical-review-schema", "review.schema.json"),
+        ("electrical-explanation-schema", "explanation.schema.json"),
     ] {
         let output = directory.join(filename);
         assert!(run(&[command, "--output", path(&output)]).status.success());
