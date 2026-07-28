@@ -17,26 +17,28 @@ use pcbex_core::{
 use pcbex_kicad::{
     AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiRequirement, AiReviewRequest,
     AiReviewResponse, AiReviewSession, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet,
-    SignedAiApproval, SimulationArtifact, SimulationEvidence,
-    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
+    HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
+    SessionAiQuorumEvidence, SignedAiApproval, SignedHumanEscalation, SimulationArtifact,
+    SimulationEvidence, ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
     ai_review_response_json_schema, apply_custom_design_rules, apply_electrical_waivers,
     apply_project_net_settings, approval_public_key, build_ai_review_request,
     build_ai_review_session, check_schematic, compare_electrical_reviews, compare_schematics,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
-    electrical_waiver_set_json_schema, explain_electrical_review, import as import_kicad,
-    import_schematic, parse_ai_review_response, parse_electrical_policy,
-    parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
-    record_simulation_evidence, render_ai_approval_quorum_summary,
-    render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
-    render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
-    route_schematic_review, routed_ai_approval_quorum_report_json_schema,
-    schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
-    schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
-    sign_ai_review, sign_ai_review_for_session, signed_ai_approval_json_schema,
+    electrical_waiver_set_json_schema, explain_electrical_review,
+    human_escalation_report_json_schema, import as import_kicad, import_schematic,
+    parse_ai_review_response, parse_electrical_policy, parse_schematic_reviewer_routing_policy,
+    parse_simulation_declaration, record_simulation_evidence, render_ai_approval_quorum_summary,
+    render_human_escalation_summary, render_routed_ai_approval_quorum_summary,
+    render_schematic_diff_summary, render_schematic_reviewer_routing_summary,
+    render_session_routed_ai_approval_quorum_summary, route_schematic_review,
+    routed_ai_approval_quorum_report_json_schema, schematic_diff_json_schema,
+    schematic_diff_to_sarif, schematic_json_schema, schematic_reviewer_routing_plan_json_schema,
+    schematic_reviewer_routing_policy_json_schema, sign_ai_review, sign_ai_review_for_session,
+    sign_human_escalation, signed_ai_approval_json_schema, signed_human_escalation_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
-    verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
+    verify_human_escalation, verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
     verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
     verify_signed_ai_approval,
 };
@@ -102,6 +104,21 @@ impl std::ops::Deref for CompactPath {
 enum ReportFormat {
     Json,
     Sarif,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum HumanDecisionArg {
+    Approve,
+    Reject,
+}
+
+impl From<HumanDecisionArg> for HumanEscalationDecision {
+    fn from(value: HumanDecisionArg) -> Self {
+        match value {
+            HumanDecisionArg::Approve => Self::Approve,
+            HumanDecisionArg::Reject => Self::Reject,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -469,6 +486,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed human-escalation JSON Schema.
+    SignedHumanEscalationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed human-escalation report JSON Schema.
+    HumanEscalationReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Prepare a complete, digest-bound request for an AI schematic reviewer.
     PrepareAiReview {
         input: PathBuf,
@@ -575,6 +602,47 @@ enum Command {
         /// Fail after writing reports unless every quorum threshold passes.
         #[arg(long)]
         require_quorum: bool,
+    },
+    /// Sign a human decision for eligible, time-bound AI needs-human evidence.
+    SignHumanEscalation {
+        request: CompactPath,
+        #[arg(long)]
+        session: CompactPath,
+        #[arg(long)]
+        ai_quorum: CompactPath,
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(long, value_enum)]
+        decision: HumanDecisionArg,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify dual-control human decisions for eligible AI needs-human evidence.
+    VerifyHumanEscalation {
+        request: CompactPath,
+        #[arg(long)]
+        session: CompactPath,
+        #[arg(long)]
+        ai_quorum: CompactPath,
+        #[arg(long = "escalation", required = true)]
+        escalations: Vec<PathBuf>,
+        #[arg(long)]
+        policy_pack: CompactPath,
+        #[arg(long, default_value_t = 2)]
+        minimum_approvals: u32,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        summary_output: Option<CompactPath>,
+        /// Fail after writing evidence unless dual control approves.
+        #[arg(long)]
+        require_approved: bool,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -1770,6 +1838,12 @@ fn main() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::SignedHumanEscalationSchema { output } => {
+            write_or_print_json(&signed_human_escalation_json_schema(), output.as_ref())?;
+        }
+        Command::HumanEscalationReportSchema { output } => {
+            write_or_print_json(&human_escalation_report_json_schema(), output.as_ref())?;
+        }
         Command::PrepareAiReview {
             input,
             electrical_review,
@@ -2210,6 +2284,119 @@ fn main() -> Result<()> {
                         bail!("AI approval quorum did not meet every threshold");
                     }
                 }
+            }
+        }
+        Command::SignHumanEscalation {
+            request,
+            session,
+            ai_quorum,
+            private_key,
+            signer_id,
+            decision,
+            reason,
+            ticket,
+            output,
+        } => {
+            let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            let (session, _) = read_described_json::<AiReviewSession>(&session)?;
+            let (evidence, _) = read_described_json::<SessionAiQuorumEvidence>(&ai_quorum)?;
+            let secret = read_hex_key(&private_key, "human escalation private key")?;
+            let signed = sign_human_escalation(
+                &request,
+                &session,
+                &evidence,
+                decision.into(),
+                &reason,
+                &ticket,
+                &signer_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&signed)?, false)?;
+            eprintln!(
+                "signed human escalation for {} as {}",
+                signed.ai_quorum_sha256, signed.signer_id
+            );
+        }
+        Command::VerifyHumanEscalation {
+            request,
+            session,
+            ai_quorum,
+            escalations,
+            policy_pack,
+            minimum_approvals,
+            output,
+            summary_output,
+            require_approved,
+        } => {
+            if summary_output
+                .as_ref()
+                .is_some_and(|summary| summary.0.as_ref() == output.0.as_ref())
+            {
+                bail!("human escalation JSON and Markdown output paths must differ");
+            }
+            let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            let (session, _) = read_described_json::<AiReviewSession>(&session)?;
+            let (evidence, _) = read_described_json::<SessionAiQuorumEvidence>(&ai_quorum)?;
+            let (pack, _) = load_policy_pack(&policy_pack)?;
+            let signed = escalations
+                .iter()
+                .map(|path| read_described_json::<SignedHumanEscalation>(path).map(|value| value.0))
+                .collect::<Result<Vec<_>>>()?;
+            let mut trusted_keys = Vec::with_capacity(signed.len());
+            for escalation in &signed {
+                let trusted = pack
+                    .trusted_human_escalation_keys
+                    .iter()
+                    .find(|trusted| trusted.signer_id == escalation.signer_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "human escalation signer {:?} is not trusted by policy pack {}",
+                            escalation.signer_id,
+                            policy_pack.display()
+                        )
+                    })?;
+                trusted_keys.push(decode_hex_key(
+                    &trusted.public_key,
+                    "trusted human escalation public key",
+                )?);
+            }
+            let candidates = signed
+                .iter()
+                .zip(&trusted_keys)
+                .map(
+                    |(escalation, trusted_public_key)| HumanEscalationCandidate {
+                        escalation,
+                        trusted_public_key,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let report = verify_human_escalation(
+                &request,
+                &session,
+                &evidence,
+                current_unix_seconds()?,
+                &candidates,
+                HumanEscalationPolicy { minimum_approvals },
+            )
+            .map_err(anyhow::Error::msg)?;
+            fs::write(&*output, serde_json::to_string_pretty(&report)?)?;
+            if let Some(path) = summary_output {
+                fs::write(&*path, render_human_escalation_summary(&report))?;
+            }
+            eprintln!(
+                "human escalation: {}/{} approval(s), {} rejection(s): {}",
+                report.approvals,
+                report.policy.minimum_approvals,
+                report.rejections,
+                if report.escalation_approved {
+                    "approved"
+                } else {
+                    "not approved"
+                }
+            );
+            if require_approved && !report.escalation_approved {
+                bail!("human escalation did not receive dual-control approval");
             }
         }
         Command::DfmProfiles { output } => {

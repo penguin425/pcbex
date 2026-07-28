@@ -49,6 +49,9 @@ write_output schematic-reviewer-routing ""
 write_output schematic-review-all-routed ""
 write_output ai-approval-quorum ""
 write_output ai-approval-quorum-met ""
+write_output human-escalation ""
+write_output human-escalation-approved ""
+write_output schematic-approval-met ""
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -262,6 +265,64 @@ if ((ai_quorum_inputs == 3)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+human_escalation=""
+human_escalation_approved=""
+if [[ -n "${PCBEX_HUMAN_ESCALATION_AI_QUORUM:-}" && -z "${PCBEX_HUMAN_ESCALATION_FILES:-}" ]]; then
+  echo "PCBEX_HUMAN_ESCALATION_AI_QUORUM requires human escalation files" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_HUMAN_ESCALATION_FILES:-}" ]]; then
+  if [[ -z "$ai_approval_quorum" || -z "${PCBEX_AI_REVIEW_SESSION:-}" || -z "${PCBEX_HUMAN_ESCALATION_AI_QUORUM:-}" ]]; then
+    echo "human escalation requires a complete time-bound AI quorum set and its exact retained evidence" >&2
+    exit 2
+  fi
+  python3 -c '
+import json,sys
+retained=json.load(open(sys.argv[1], encoding="utf-8"))
+fresh=json.load(open(sys.argv[2], encoding="utf-8"))
+def session(value):
+    return value.get("session", value)
+def core(value):
+    return value.get("routed_quorum", value.get("quorum"))
+if session(retained)["session_sha256"] != session(fresh)["session_sha256"]:
+    raise SystemExit("retained AI quorum uses a different review session")
+if session(retained)["request_sha256"] != session(fresh)["request_sha256"]:
+    raise SystemExit("retained AI quorum uses a different review request")
+if core(retained) != core(fresh):
+    raise SystemExit("retained AI quorum does not match freshly verified AI evidence")
+' "$PCBEX_HUMAN_ESCALATION_AI_QUORUM" "$ai_approval_quorum"
+  human_escalation="${artifact_dir}/human-escalation.json"
+  human_escalation_summary="${artifact_dir}/human-escalation.md"
+  human_arguments=(verify-human-escalation \
+    "$PCBEX_AI_REVIEW_REQUEST" \
+    --session "$PCBEX_AI_REVIEW_SESSION" \
+    --ai-quorum "$PCBEX_HUMAN_ESCALATION_AI_QUORUM" \
+    --policy-pack "$effective_policy_pack" \
+    --minimum-approvals "${PCBEX_HUMAN_ESCALATION_MINIMUM_APPROVALS:-2}" \
+    --output "$human_escalation" \
+    --summary-output "$human_escalation_summary")
+  while IFS= read -r escalation; do
+    if [[ -n "$escalation" ]]; then
+      human_arguments+=(--escalation "$escalation")
+    fi
+  done <<< "${PCBEX_HUMAN_ESCALATION_FILES:-}"
+  "$PCBEX_BINARY" "${human_arguments[@]}"
+  human_escalation_approved="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["escalation_approved"]).lower())' \
+      "$human_escalation"
+  )"
+  {
+    printf '\n'
+    cat "$human_escalation_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+schematic_approval_met=false
+if [[ "$ai_approval_quorum_met" == "true" || "$human_escalation_approved" == "true" ]]; then
+  schematic_approval_met=true
+fi
+
 comparison_sarif=""
 regression=false
 if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
@@ -309,4 +370,7 @@ write_output schematic-reviewer-routing "$schematic_reviewer_routing"
 write_output schematic-review-all-routed "$schematic_review_all_routed"
 write_output ai-approval-quorum "$ai_approval_quorum"
 write_output ai-approval-quorum-met "$ai_approval_quorum_met"
+write_output human-escalation "$human_escalation"
+write_output human-escalation-approved "$human_escalation_approved"
+write_output schematic-approval-met "$schematic_approval_met"
 write_output status ok

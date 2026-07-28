@@ -86,6 +86,18 @@ inputs:
     description: Minimum distinct approved model identities required.
     required: false
     default: "2"
+  human-escalation-files:
+    description: Newline-separated signed human decisions for an AI needs-human quorum.
+    required: false
+    default: ""
+  human-escalation-ai-quorum:
+    description: Exact retained time-bound AI quorum evidence bound by the human signatures.
+    required: false
+    default: ""
+  human-escalation-minimum-approvals:
+    description: Minimum distinct human approvals required; cannot be less than two.
+    required: false
+    default: "2"
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -112,6 +124,10 @@ inputs:
     default: "false"
   fail-on-ai-quorum:
     description: Fail after publishing evidence unless the configured AI approval quorum passes.
+    required: false
+    default: "false"
+  fail-on-schematic-approval:
+    description: Fail unless either AI quorum passes or an eligible dual-control human escalation passes.
     required: false
     default: "false"
   upload-artifact:
@@ -193,6 +209,15 @@ outputs:
   ai-approval-quorum-met:
     description: Whether every configured AI approval-quorum threshold passed.
     value: ${{ steps.analyze.outputs.ai-approval-quorum-met }}
+  human-escalation:
+    description: Verified dual-control human-escalation JSON path, when supplied.
+    value: ${{ steps.analyze.outputs.human-escalation }}
+  human-escalation-approved:
+    description: Whether eligible AI needs-human evidence received dual-control approval.
+    value: ${{ steps.analyze.outputs.human-escalation-approved }}
+  schematic-approval-met:
+    description: Whether AI quorum or its governed human escalation approved the schematic.
+    value: ${{ steps.analyze.outputs.schematic-approval-met }}
 
 runs:
   using: composite
@@ -235,6 +260,9 @@ runs:
         PCBEX_AI_QUORUM_MINIMUM_APPROVALS: ${{ inputs.ai-quorum-minimum-approvals }}
         PCBEX_AI_QUORUM_MINIMUM_DISTINCT_PROVIDERS: ${{ inputs.ai-quorum-minimum-distinct-providers }}
         PCBEX_AI_QUORUM_MINIMUM_DISTINCT_MODELS: ${{ inputs.ai-quorum-minimum-distinct-models }}
+        PCBEX_HUMAN_ESCALATION_FILES: ${{ inputs.human-escalation-files }}
+        PCBEX_HUMAN_ESCALATION_AI_QUORUM: ${{ inputs.human-escalation-ai-quorum }}
+        PCBEX_HUMAN_ESCALATION_MINIMUM_APPROVALS: ${{ inputs.human-escalation-minimum-approvals }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 
@@ -278,12 +306,14 @@ runs:
         PCBEX_SCHEMATIC_REVIEW_REQUIRED: ${{ steps.analyze.outputs.schematic-review-required }}
         PCBEX_SCHEMATIC_REVIEW_ALL_ROUTED: ${{ steps.analyze.outputs.schematic-review-all-routed }}
         PCBEX_AI_APPROVAL_QUORUM_MET: ${{ steps.analyze.outputs.ai-approval-quorum-met }}
+        PCBEX_SCHEMATIC_APPROVAL_MET: ${{ steps.analyze.outputs.schematic-approval-met }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
         PCBEX_FAIL_ON_SCHEMATIC_REVIEW: ${{ inputs.fail-on-schematic-review }}
         PCBEX_FAIL_ON_UNROUTED_SCHEMATIC_REVIEW: ${{ inputs.fail-on-unrouted-schematic-review }}
         PCBEX_FAIL_ON_AI_QUORUM: ${{ inputs.fail-on-ai-quorum }}
+        PCBEX_FAIL_ON_SCHEMATIC_APPROVAL: ${{ inputs.fail-on-schematic-approval }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -312,5 +342,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_AI_QUORUM" == "true" && "$PCBEX_AI_APPROVAL_QUORUM_MET" != "true" ]]; then
           echo "::error::pcbex AI schematic approval quorum is absent or did not pass"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_SCHEMATIC_APPROVAL" == "true" && "$PCBEX_SCHEMATIC_APPROVAL_MET" != "true" ]]; then
+          echo "::error::pcbex schematic has neither AI quorum nor governed human approval"
           exit 1
         fi

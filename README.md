@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.328.0
+    uses: penguin425/pcbex@v1.329.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1666,6 +1666,44 @@ signature tampering or an untrusted signer fails closed without producing a
 misleading report. The closed report schema is emitted by
 `ai-approval-quorum-schema`.
 
+An AI `needs_human` result can enter a governed dual-control path without
+turning human review into an unrestricted safety override. Add dedicated
+`trusted_human_escalation_keys` to the organization policy pack, using signer
+IDs and public keys that do not appear in `trusted_approval_keys`. Each human
+decision is signed over the exact request, active session, normalized AI quorum
+evidence, reason, and ticket:
+
+```sh
+pcbex sign-human-escalation ai-review-request.json \
+  --session ai-review-session.json \
+  --ai-quorum approval-quorum.json \
+  --private-key .secrets/engineer-a.key \
+  --signer-id engineer-a \
+  --decision approve \
+  --reason 'Independent review confirmed the intended power-up behavior.' \
+  --ticket HW-42 \
+  --output engineer-a.escalation.json
+
+pcbex verify-human-escalation ai-review-request.json \
+  --session ai-review-session.json \
+  --ai-quorum approval-quorum.json \
+  --escalation engineer-a.escalation.json \
+  --escalation engineer-b.escalation.json \
+  --policy-pack organization-policy-pack.json \
+  --minimum-approvals 2 \
+  --output human-escalation.json \
+  --summary-output human-escalation.md \
+  --require-approved
+```
+
+The verifier requires at least two distinct trusted human keys, rejects any
+human rejection, and rechecks session expiration and all evidence digests.
+Escalation is eligible only when at least one verified AI member explicitly
+returned `needs_human`. AI rejection, ERC or simulation failure, unknown/failed
+requirements, and error/critical risks remain non-overridable. The closed
+contracts are emitted by `signed-human-escalation-schema` and
+`human-escalation-report-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -1688,10 +1726,14 @@ Rust validation, and tells the model to use `unknown`/`needs_human` instead of
 guessing. The MCP server exposes `route_schematic_reviewers`,
 `prepare_schematic_review`,
 `sign_schematic_approval`, `verify_schematic_approval`, and
-`verify_schematic_approval_quorum`; signing and report writes are marked as
-destructive actions so MCP hosts can retain their user-approval boundary. The
-GitHub Action accepts `ai-review-session` alongside its quorum inputs and
-publishes the time-bound result using the existing quorum outputs. Closed
+`verify_schematic_approval_quorum`, plus signed human escalation tools; signing
+and report writes are marked as destructive actions so MCP hosts can retain
+their user-approval boundary. The GitHub Action accepts `ai-review-session`
+alongside its quorum inputs, optionally verifies `human-escalation-files`, and
+publishes `schematic-approval-met` as the AI-or-governed-human result. The
+human path also requires `human-escalation-ai-quorum`, the exact retained
+report the humans signed; the Action freshly verifies the AI inputs and
+requires their stable quorum content to match that retained report. Closed
 request, response, and signature contracts are emitted by
 `ai-review-request-schema`, `ai-review-response-schema`,
 and `signed-ai-approval-schema`; the Rust API exposes the session contract.

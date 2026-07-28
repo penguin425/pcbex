@@ -40,7 +40,16 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
     let public_a = directory.join("reviewer-a.pub");
     let private_b = directory.join("reviewer-b.key");
     let public_b = directory.join("reviewer-b.pub");
-    for (private, public) in [(&private_a, &public_a), (&private_b, &public_b)] {
+    let human_private_a = directory.join("engineer-a.key");
+    let human_public_a = directory.join("engineer-a.pub");
+    let human_private_b = directory.join("engineer-b.key");
+    let human_public_b = directory.join("engineer-b.pub");
+    for (private, public) in [
+        (&private_a, &public_a),
+        (&private_b, &public_b),
+        (&human_private_a, &human_public_a),
+        (&human_private_b, &human_public_b),
+    ] {
         assert!(
             run(&[
                 "approval-keygen",
@@ -87,6 +96,16 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
         {
             "signer_id": "reviewer-b",
             "public_key": fs::read_to_string(&public_b).unwrap().trim()
+        }
+    ]);
+    pack["trusted_human_escalation_keys"] = json!([
+        {
+            "signer_id": "engineer-a",
+            "public_key": fs::read_to_string(&human_public_a).unwrap().trim()
+        },
+        {
+            "signer_id": "engineer-b",
+            "public_key": fs::read_to_string(&human_public_b).unwrap().trim()
         }
     ]);
     let policy_pack = directory.join("policy-pack.json");
@@ -285,6 +304,126 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
         serde_json::from_slice(&fs::read(&session_report).unwrap()).unwrap();
     assert!(session_report_value["evaluated_at_unix"].as_u64().is_some());
     assert_eq!(session_report_value["quorum"]["quorum_met"], true);
+
+    let mut needs_human = response("provider-a", "model-a");
+    needs_human["decision"] = "needs_human".into();
+    needs_human["summary"] = "Engineering judgment is required.".into();
+    let needs_human_response = directory.join("needs-human-response.json");
+    fs::write(
+        &needs_human_response,
+        serde_json::to_vec_pretty(&needs_human).unwrap(),
+    )
+    .unwrap();
+    let needs_human_approval = directory.join("needs-human-approval.json");
+    assert!(
+        run(&[
+            "sign-ai-review",
+            path(&request),
+            path(&needs_human_response),
+            "--private-key",
+            path(&private_a),
+            "--signer-id",
+            "reviewer-a",
+            "--session",
+            path(&session),
+            "--output",
+            path(&needs_human_approval),
+        ])
+        .status
+        .success()
+    );
+    let needs_human_quorum = directory.join("needs-human-quorum.json");
+    assert!(
+        run(&[
+            "verify-ai-quorum",
+            path(&request),
+            "--approval",
+            path(&needs_human_approval),
+            "--response",
+            path(&needs_human_response),
+            "--policy-pack",
+            path(&policy_pack),
+            "--minimum-approvals",
+            "1",
+            "--minimum-distinct-providers",
+            "1",
+            "--minimum-distinct-models",
+            "1",
+            "--session",
+            path(&session),
+            "--output",
+            path(&needs_human_quorum),
+        ])
+        .status
+        .success()
+    );
+    let human_a = directory.join("human-a.json");
+    let human_b = directory.join("human-b.json");
+    for (private, signer, output) in [
+        (&human_private_a, "engineer-a", &human_a),
+        (&human_private_b, "engineer-b", &human_b),
+    ] {
+        assert!(
+            run(&[
+                "sign-human-escalation",
+                path(&request),
+                "--session",
+                path(&session),
+                "--ai-quorum",
+                path(&needs_human_quorum),
+                "--private-key",
+                path(private),
+                "--signer-id",
+                signer,
+                "--decision",
+                "approve",
+                "--reason",
+                "Independent engineering review passed.",
+                "--ticket",
+                "HW-42",
+                "--output",
+                path(output),
+            ])
+            .status
+            .success()
+        );
+    }
+    let human_report = directory.join("human-report.json");
+    let human_summary = directory.join("human-report.md");
+    assert!(
+        run(&[
+            "verify-human-escalation",
+            path(&request),
+            "--session",
+            path(&session),
+            "--ai-quorum",
+            path(&needs_human_quorum),
+            "--escalation",
+            path(&human_b),
+            "--escalation",
+            path(&human_a),
+            "--policy-pack",
+            path(&policy_pack),
+            "--output",
+            path(&human_report),
+            "--summary-output",
+            path(&human_summary),
+            "--require-approved",
+        ])
+        .status
+        .success()
+    );
+    let human_report_value: Value =
+        serde_json::from_slice(&fs::read(&human_report).unwrap()).unwrap();
+    assert_eq!(human_report_value["escalation_eligible"], true);
+    assert_eq!(human_report_value["escalation_approved"], true);
+    assert_eq!(human_report_value["approvals"], 2);
+    assert_eq!(human_report_value["members"][0]["signer_id"], "engineer-a");
+    assert!(
+        fs::read_to_string(&human_summary)
+            .unwrap()
+            .contains("approved by dual control")
+    );
 
     let baseline = directory.join("baseline.kicad_sch");
     fs::write(

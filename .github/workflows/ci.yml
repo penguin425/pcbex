@@ -56,6 +56,12 @@ jobs:
           target/release/pcbex approval-keygen \
             --private-key build/action-quorum/reviewer-b.key \
             --public-key build/action-quorum/reviewer-b.pub
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/engineer-a.key \
+            --public-key build/action-quorum/engineer-a.pub
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/engineer-b.key \
+            --public-key build/action-quorum/engineer-b.pub
           target/release/pcbex electrical-policy \
             --output build/action-quorum/electrical-policy.json
           jq '
@@ -71,6 +77,8 @@ jobs:
             --slurpfile electrical build/action-quorum/electrical-policy.approved.json \
             --arg key_a "$(tr -d '\n' < build/action-quorum/reviewer-a.pub)" \
             --arg key_b "$(tr -d '\n' < build/action-quorum/reviewer-b.pub)" \
+            --arg human_key_a "$(tr -d '\n' < build/action-quorum/engineer-a.pub)" \
+            --arg human_key_b "$(tr -d '\n' < build/action-quorum/engineer-b.pub)" \
             '
               .electrical_policy = $electrical[0]
               | .require_simulation_evidence = false
@@ -81,6 +89,10 @@ jobs:
               | .trusted_approval_keys = [
                   {signer_id: "reviewer-a", public_key: $key_a},
                   {signer_id: "reviewer-b", public_key: $key_b}
+                ]
+              | .trusted_human_escalation_keys = [
+                  {signer_id: "engineer-a", public_key: $human_key_a},
+                  {signer_id: "engineer-b", public_key: $human_key_b}
                 ]
             ' examples/acme-policy-pack.json > build/action-quorum/policy-pack.json
           target/release/pcbex check-schematic examples/simple.kicad_sch \
@@ -98,12 +110,16 @@ jobs:
               --arg request_sha256 "$request_sha256" \
               --arg provider "provider-$reviewer" \
               --arg model "model-$reviewer" \
+              --arg decision "$([[ "$reviewer" == "b" ]] && printf needs_human || printf approve)" \
               '{
                 schema_version: 1,
                 request_sha256: $request_sha256,
                 model: {provider: $provider, model: $model, version: "1"},
-                decision: "approve",
-                summary: "Bound deterministic evidence supports approval.",
+                decision: $decision,
+                summary: (if $decision == "approve"
+                  then "Bound deterministic evidence supports approval."
+                  else "Independent engineering judgment is required."
+                end),
                 requirements: [{
                   id: "power",
                   status: "pass",
@@ -118,8 +134,31 @@ jobs:
               --private-key "build/action-quorum/reviewer-$reviewer.key" \
               --signer-id "reviewer-$reviewer" \
               --session build/action-quorum/session.json \
-              --output "build/action-quorum/approval-$reviewer.json" \
-              --require-approved
+              --output "build/action-quorum/approval-$reviewer.json"
+          done
+          target/release/pcbex verify-ai-quorum \
+            build/action-quorum/request.json \
+            --approval build/action-quorum/approval-a.json \
+            --approval build/action-quorum/approval-b.json \
+            --response build/action-quorum/response-a.json \
+            --response build/action-quorum/response-b.json \
+            --policy-pack build/action-quorum/policy-pack.json \
+            --baseline-schematic examples/simple.kicad_sch \
+            --current-schematic examples/simple.kicad_sch \
+            --reviewer-routing-policy examples/reviewer-routing-policy.json \
+            --session build/action-quorum/session.json \
+            --output build/action-quorum/retained-quorum.json
+          for engineer in a b; do
+            target/release/pcbex sign-human-escalation \
+              build/action-quorum/request.json \
+              --session build/action-quorum/session.json \
+              --ai-quorum build/action-quorum/retained-quorum.json \
+              --private-key "build/action-quorum/engineer-$engineer.key" \
+              --signer-id "engineer-$engineer" \
+              --decision approve \
+              --reason "Independent engineering review passed." \
+              --ticket HW-42 \
+              --output "build/action-quorum/human-$engineer.json"
           done
       - name: Exercise the public composite action
         id: pcbex
@@ -141,7 +180,11 @@ jobs:
           ai-response-files: |
             build/action-quorum/response-a.json
             build/action-quorum/response-b.json
-          fail-on-ai-quorum: "true"
+          human-escalation-ai-quorum: build/action-quorum/retained-quorum.json
+          human-escalation-files: |
+            build/action-quorum/human-a.json
+            build/action-quorum/human-b.json
+          fail-on-schematic-approval: "true"
           manufacturing-feedback-declaration: build/action-feedback/declaration.json
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
           fail-on-manufacturing-feedback: "true"
@@ -166,6 +209,9 @@ jobs:
           SCHEMATIC_REVIEW_ALL_ROUTED: ${{ steps.pcbex.outputs.schematic-review-all-routed }}
           AI_APPROVAL_QUORUM: ${{ steps.pcbex.outputs.ai-approval-quorum }}
           AI_APPROVAL_QUORUM_MET: ${{ steps.pcbex.outputs.ai-approval-quorum-met }}
+          HUMAN_ESCALATION: ${{ steps.pcbex.outputs.human-escalation }}
+          HUMAN_ESCALATION_APPROVED: ${{ steps.pcbex.outputs.human-escalation-approved }}
+          SCHEMATIC_APPROVAL_MET: ${{ steps.pcbex.outputs.schematic-approval-met }}
           SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           test -s "$ARTIFACT_DIR/pr-comment.md"
@@ -187,11 +233,15 @@ jobs:
           test "$SCHEMATIC_REVIEW_ALL_ROUTED" = "true"
           test "$(jq -r '.route_count' "$SCHEMATIC_REVIEWER_ROUTING")" = "0"
           test -s "$AI_APPROVAL_QUORUM"
-          test "$AI_APPROVAL_QUORUM_MET" = "true"
-          test "$(jq -r '.routed_quorum.quorum.counts.approvals' "$AI_APPROVAL_QUORUM")" = "2"
-          test "$(jq -r '.routed_quorum.quorum.counts.distinct_providers' "$AI_APPROVAL_QUORUM")" = "2"
-          test "$(jq -r '.routed_quorum.routed_quorum_met' "$AI_APPROVAL_QUORUM")" = "true"
+          test "$AI_APPROVAL_QUORUM_MET" = "false"
+          test "$(jq -r '.routed_quorum.quorum.counts.approvals' "$AI_APPROVAL_QUORUM")" = "1"
+          test "$(jq -r '.routed_quorum.quorum.counts.distinct_providers' "$AI_APPROVAL_QUORUM")" = "1"
+          test "$(jq -r '.routed_quorum.routed_quorum_met' "$AI_APPROVAL_QUORUM")" = "false"
           test "$(jq -r '.session.session_sha256 | length' "$AI_APPROVAL_QUORUM")" = "64"
+          test -s "$HUMAN_ESCALATION"
+          test "$HUMAN_ESCALATION_APPROVED" = "true"
+          test "$SCHEMATIC_APPROVAL_MET" = "true"
+          test "$(jq -r '.approvals' "$HUMAN_ESCALATION")" = "2"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then
             [[ "$COMMENT_URL" == https://github.com/* ]]
           else
