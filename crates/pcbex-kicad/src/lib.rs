@@ -122,14 +122,17 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                 validate_declared_copper_net(xs, "route arc", &nets)?;
                 import_route_arc(xs, min, &rules, &mut obstacles, &mut route_candidates)
             }
-            Some("via") => import_via(
-                xs,
-                min,
-                &rules,
-                &mut obstacles,
-                &mut route_candidates,
-                &copper_layers,
-            ),
+            Some("via") => {
+                validate_declared_copper_net(xs, "via", &nets)?;
+                import_via(
+                    xs,
+                    min,
+                    &rules,
+                    &mut obstacles,
+                    &mut route_candidates,
+                    &copper_layers,
+                )
+            }
             Some("zone") => {
                 import_keepout(xs, min, &mut keepouts, &copper_layers);
                 import_copper_zone(
@@ -3279,6 +3282,21 @@ mod tests {
         assert_eq!(
             import(pcb, rules()).unwrap_err(),
             "KiCad route arc references undeclared net ID 2"
+        );
+    }
+
+    #[test]
+    fn rejects_vias_referencing_undeclared_kicad_nets() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "KNOWN")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (via (at 3 3) (size 0.6) (drill 0.3)
+            (layers "F.Cu" "B.Cu") (net 2))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "KiCad via references undeclared net ID 2"
         );
     }
 
