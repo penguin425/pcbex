@@ -774,8 +774,9 @@ name remains valid for unconnected net 0 zones, while every other name must
 match the net table declaration for its identifier. At most one `net_name`
 field is permitted, and that field must contain exactly one name, so duplicate,
 conflicting, or trailing values cannot be hidden.
-The net table itself requires unique non-zero identifiers and unique non-empty
-names, preventing ambiguous routing, rule lookup, and pad ownership.
+Each net-table declaration must contain exactly one identifier and one name.
+The table requires unique non-zero identifiers and unique non-empty names,
+preventing trailing metadata, ambiguous routing, rule lookup, and pad ownership.
 Every route must likewise reference a declared net; normal DRC reports unknown
 route ownership before applying connectivity, width, or clearance rules.
 Normal DRC also permits at most one route record per net, preventing map
