@@ -766,7 +766,9 @@ net identifiers must likewise reference entries declared in that table.
 When any of those copper primitives supplies a `net` field, its identifier must
 be a non-negative integer rather than malformed data that loses net ownership.
 Each primitive may supply at most one such field, preventing duplicate or
-conflicting declarations from being silently resolved by source order.
+conflicting declarations from being silently resolved by source order. The
+field must contain exactly one identifier, so trailing values cannot be
+silently ignored.
 Copper zones with a net field must also provide a scalar `net_name`; the empty
 name remains valid for unconnected net 0 zones, while every other name must
 match the net table declaration for its identifier. At most one `net_name`
