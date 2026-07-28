@@ -43,6 +43,13 @@ pub use schematic::{
     SchematicMarker, SchematicNet, SchematicPin, SchematicPinRef, SchematicSymbol,
     SchematicUnsupportedFeature, SchematicWire, import_schematic, schematic_json_schema,
 };
+mod schematic_diff;
+pub use schematic_diff::{
+    SchematicDiffCounts, SchematicDiffIdentity, SchematicNetChange, SchematicNetSummary,
+    SchematicPinChange, SchematicPinSummary, SchematicSemanticDiff, SchematicSymbolChange,
+    SchematicSymbolSummary, compare_schematics, render_schematic_diff_summary,
+    schematic_diff_json_schema, schematic_diff_to_sarif,
+};
 mod waiver;
 pub use waiver::{
     ElectricalFindingDisposition, ElectricalWaiver, ElectricalWaiverCounts,

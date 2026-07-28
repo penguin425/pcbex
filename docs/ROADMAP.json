@@ -134,6 +134,11 @@
     {
       "id": "manufacturing-feedback-ingestion",
       "release": "v1.323.0",
+      "status": "released"
+    },
+    {
+      "id": "schematic-semantic-diff",
+      "release": "v1.324.0",
       "status": "current"
     }
   ]

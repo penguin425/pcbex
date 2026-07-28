@@ -14,6 +14,14 @@ inputs:
     description: Optional path to a baseline .kicad_pcb file.
     required: false
     default: ""
+  schematic:
+    description: Optional current .kicad_sch file for semantic review.
+    required: false
+    default: ""
+  baseline-schematic:
+    description: Optional accepted .kicad_sch file; required together with schematic.
+    required: false
+    default: ""
   fab:
     description: Optional built-in fabrication profile ID or stable alias.
     required: false
@@ -60,6 +68,10 @@ inputs:
     default: "true"
   fail-on-manufacturing-feedback:
     description: Fail after publishing evidence unless supplied manufacturing feedback passes.
+    required: false
+    default: "false"
+  fail-on-schematic-review:
+    description: Fail after publishing evidence when the schematic semantic diff requires review.
     required: false
     default: "false"
   upload-artifact:
@@ -123,6 +135,12 @@ outputs:
   manufacturing-feedback-passed:
     description: Whether supplied manufacturing feedback passed.
     value: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
+  schematic-diff:
+    description: Schematic semantic-diff JSON path, when both schematics are supplied.
+    value: ${{ steps.analyze.outputs.schematic-diff }}
+  schematic-review-required:
+    description: Whether supplied schematics contain electrical changes requiring review.
+    value: ${{ steps.analyze.outputs.schematic-review-required }}
 
 runs:
   using: composite
@@ -147,6 +165,8 @@ runs:
         PCBEX_BINARY: ${{ steps.build.outputs.binary }}
         PCBEX_BOARD: ${{ inputs.board }}
         PCBEX_BASELINE_BOARD: ${{ inputs.baseline-board }}
+        PCBEX_SCHEMATIC: ${{ inputs.schematic }}
+        PCBEX_BASELINE_SCHEMATIC: ${{ inputs.baseline-schematic }}
         PCBEX_FAB: ${{ inputs.fab }}
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
         PCBEX_POLICY_PACK: ${{ inputs.policy-pack }}
@@ -195,9 +215,11 @@ runs:
         PCBEX_VIOLATION_COUNT: ${{ steps.analyze.outputs.violation-count }}
         PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
         PCBEX_MANUFACTURING_FEEDBACK_PASSED: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
+        PCBEX_SCHEMATIC_REVIEW_REQUIRED: ${{ steps.analyze.outputs.schematic-review-required }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
+        PCBEX_FAIL_ON_SCHEMATIC_REVIEW: ${{ inputs.fail-on-schematic-review }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -214,5 +236,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK" == "true" && "$PCBEX_MANUFACTURING_FEEDBACK_PASSED" != "true" ]]; then
           echo "::error::pcbex manufacturing feedback is absent or did not pass"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_SCHEMATIC_REVIEW" == "true" && "$PCBEX_SCHEMATIC_REVIEW_REQUIRED" != "false" ]]; then
+          echo "::error::pcbex schematic semantic diff requires review or was not produced"
           exit 1
         fi
