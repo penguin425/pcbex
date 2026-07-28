@@ -610,6 +610,8 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                 "properties": {
                     "input": {"type": "string"},
                     "public_key": {"type": "string"},
+                    "baseline_state": {"type": "string"},
+                    "state_output": {"type": "string"},
                     "output": {"type": "string"}
                 }
             }),
@@ -848,11 +850,20 @@ fn verify_policy_pack(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
 ) -> std::result::Result<Value, Value> {
-    reject_unknown(&arguments, &["input", "public_key", "output"])?;
+    reject_unknown(
+        &arguments,
+        &[
+            "input",
+            "public_key",
+            "baseline_state",
+            "state_output",
+            "output",
+        ],
+    )?;
     let input = required_string(&arguments, "input")?;
     let public_key = required_string(&arguments, "public_key")?;
     let output = required_string(&arguments, "output")?;
-    let command = vec![
+    let mut command = vec![
         "verify-policy-pack".into(),
         input,
         "--public-key".into(),
@@ -860,11 +871,24 @@ fn verify_policy_pack(
         "--output".into(),
         output.clone(),
     ];
+    optional_option(
+        &arguments,
+        "baseline_state",
+        "--baseline-state",
+        &mut command,
+    )?;
+    optional_option(&arguments, "state_output", "--state-output", &mut command)?;
     let execution = execute(&command, cancellation)?;
     let policy_pack = read_json_if_present(Path::new(&output));
+    let trust_state = arguments
+        .get("state_output")
+        .and_then(Value::as_str)
+        .map(Path::new)
+        .map(read_json_if_present)
+        .unwrap_or(Value::Null);
     Ok(execution_result(
         execution,
-        json!({"output": output, "policy_pack": policy_pack}),
+        json!({"output": output, "policy_pack": policy_pack, "trust_state": trust_state}),
     ))
 }
 
@@ -1374,6 +1398,20 @@ mod tests {
         assert_eq!(
             response["result"]["tools"][7]["annotations"]["readOnlyHint"],
             true
+        );
+        let verify_policy = response["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "verify_policy_pack")
+            .unwrap();
+        assert_eq!(
+            verify_policy["inputSchema"]["properties"]["baseline_state"]["type"],
+            "string"
+        );
+        assert_eq!(
+            verify_policy["inputSchema"]["properties"]["state_output"]["type"],
+            "string"
         );
     }
 

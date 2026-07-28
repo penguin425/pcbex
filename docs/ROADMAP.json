@@ -124,6 +124,11 @@
     {
       "id": "signed-policy-pack-distribution",
       "release": "v1.321.0",
+      "status": "released"
+    },
+    {
+      "id": "monotonic-policy-trust-state",
+      "release": "v1.322.0",
       "status": "current"
     }
   ]

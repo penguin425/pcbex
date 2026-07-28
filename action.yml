@@ -34,6 +34,10 @@ inputs:
     description: Trusted Ed25519 public-key file used only with signed-policy-pack.
     required: false
     default: ""
+  policy-trust-state:
+    description: Optional previously accepted trust state used to reject signed-pack rollback or equivocation.
+    required: false
+    default: ""
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -98,6 +102,9 @@ outputs:
   comment-url:
     description: URL of the created or updated pull-request comment, when enabled.
     value: ${{ steps.comment.outputs.comment-url }}
+  verified-policy-trust-state:
+    description: Newly accepted policy trust-state path when signed-policy-pack is used.
+    value: ${{ steps.analyze.outputs.verified-policy-trust-state }}
 
 runs:
   using: composite
@@ -127,6 +134,7 @@ runs:
         PCBEX_POLICY_PACK: ${{ inputs.policy-pack }}
         PCBEX_SIGNED_POLICY_PACK: ${{ inputs.signed-policy-pack }}
         PCBEX_POLICY_PUBLIC_KEY: ${{ inputs.policy-public-key }}
+        PCBEX_POLICY_TRUST_STATE: ${{ inputs.policy-trust-state }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 

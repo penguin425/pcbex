@@ -40,6 +40,7 @@ write_output comparison-sarif ""
 write_output comment-body ""
 write_output violation-count ""
 write_output regression false
+write_output verified-policy-trust-state ""
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -59,13 +60,24 @@ if [[ "$has_signed_policy_pack" != "$has_policy_public_key" ]]; then
   echo "PCBEX_SIGNED_POLICY_PACK and PCBEX_POLICY_PUBLIC_KEY must be supplied together" >&2
   exit 2
 fi
+if [[ -n "${PCBEX_POLICY_TRUST_STATE:-}" && "$has_signed_policy_pack" != "true" ]]; then
+  echo "PCBEX_POLICY_TRUST_STATE requires PCBEX_SIGNED_POLICY_PACK" >&2
+  exit 2
+fi
 effective_policy_pack="${PCBEX_POLICY_PACK:-}"
+verified_policy_trust_state=""
 if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then
   effective_policy_pack="${artifact_dir}/verified-policy-pack.json"
-  "$PCBEX_BINARY" verify-policy-pack \
+  verified_policy_trust_state="${artifact_dir}/verified-policy-trust-state.json"
+  verify_arguments=(verify-policy-pack \
     "$PCBEX_SIGNED_POLICY_PACK" \
     --public-key "$PCBEX_POLICY_PUBLIC_KEY" \
-    --output "$effective_policy_pack"
+    --output "$effective_policy_pack" \
+    --state-output "$verified_policy_trust_state")
+  if [[ -n "${PCBEX_POLICY_TRUST_STATE:-}" ]]; then
+    verify_arguments+=(--baseline-state "$PCBEX_POLICY_TRUST_STATE")
+  fi
+  "$PCBEX_BINARY" "${verify_arguments[@]}"
 fi
 if [[ -n "${PCBEX_FAB:-}" ]]; then
   analysis_arguments+=(--fab "$PCBEX_FAB")
@@ -129,4 +141,5 @@ write_output comparison-sarif "$comparison_sarif"
 write_output comment-body "$comment_body"
 write_output violation-count "$violation_count"
 write_output regression "$regression"
+write_output verified-policy-trust-state "$verified_policy_trust_state"
 write_output status ok
