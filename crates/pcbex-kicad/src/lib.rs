@@ -443,6 +443,7 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
         .ok_or_else(|| "KiCad custom rules are not an s-expression".to_string())?;
     let mut net_classes = board.net_classes.clone();
     let mut applied = 0;
+    let mut via_modified_classes = Vec::new();
     for item in top {
         let Some(rule) = item.as_list() else { continue };
         if atom(rule.first()) != Some("rule") {
@@ -479,7 +480,10 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
                     class.track_width_nm = value;
                 }
                 "via_diameter" => {
-                    class.via_diameter_nm = constraint_value(constraint, &["opt", "min"])?
+                    class.via_diameter_nm = constraint_value(constraint, &["opt", "min"])?;
+                    if !via_modified_classes.contains(&class_name) {
+                        via_modified_classes.push(class_name.clone());
+                    }
                 }
                 "hole_size" => {
                     let value = constraint_value(constraint, &["opt", "min"])?;
@@ -487,6 +491,9 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
                         return Err("custom rule hole_size must be positive".into());
                     }
                     class.via_drill_nm = value;
+                    if !via_modified_classes.contains(&class_name) {
+                        via_modified_classes.push(class_name.clone());
+                    }
                 }
                 "diff_pair_gap" => {
                     class.differential_gap_nm = Some(constraint_value(constraint, &["opt", "min"])?)
@@ -498,6 +505,14 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
                 _ => continue,
             }
             applied += 1;
+        }
+    }
+    for class_name in via_modified_classes {
+        let class = &net_classes[&class_name];
+        if class.via_diameter_nm <= class.via_drill_nm {
+            return Err(format!(
+                "custom rules leave net class {class_name} via_diameter not greater than hole_size"
+            ));
         }
     }
     board.differential_pairs = infer_differential_pairs(&board.nets, &net_classes);
@@ -6169,6 +6184,59 @@ mod tests {
         let class = &imported.board.net_classes["Signal"];
         assert_eq!(class.clearance_nm, 0);
         assert_eq!(class.differential_gap_nm, Some(0));
+    }
+
+    #[test]
+    fn rejects_inconsistent_custom_rule_via_dimensions_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for (via_diameter, hole_size) in [(0.3, 0.3), (0.2, 0.3)] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Invalid"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm))
+                    (constraint via_diameter (min {via_diameter}mm))
+                    (constraint hole_size (min {hole_size}mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom rules leave net class Signal via_diameter not greater than hole_size"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.via_diameter_nm, 600_000);
+            assert_eq!(class.via_drill_nm, 300_000);
+        }
+
+        let mut imported = import(pcb, rules()).unwrap();
+        let applied = apply_custom_design_rules(
+            &mut imported.board,
+            r#"
+              (rule "Diameter first"
+                (condition "A.NetClass == 'Signal'")
+                (constraint via_diameter (min 0.2mm)))
+              (rule "Smaller hole later"
+                (condition "A.NetClass == 'Signal'")
+                (constraint hole_size (min 0.1mm)))
+            "#,
+        )
+        .unwrap();
+        assert_eq!(applied, 2);
+        let class = &imported.board.net_classes["Signal"];
+        assert_eq!(class.via_diameter_nm, 200_000);
+        assert_eq!(class.via_drill_nm, 100_000);
     }
 
     #[test]
