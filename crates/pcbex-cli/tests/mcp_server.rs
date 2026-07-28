@@ -1,11 +1,24 @@
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::Write,
+    io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::{ChildStdin, ChildStdout, Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+fn send(stdin: &mut ChildStdin, message: Value) {
+    serde_json::to_writer(&mut *stdin, &message).unwrap();
+    stdin.write_all(b"\n").unwrap();
+    stdin.flush().unwrap();
+}
+
+fn receive(stdout: &mut BufReader<ChildStdout>) -> Value {
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    assert!(!line.is_empty(), "MCP server closed stdout unexpectedly");
+    serde_json::from_str(&line).unwrap()
+}
 
 fn temporary_directory(name: &str) -> PathBuf {
     let unique = SystemTime::now()
@@ -28,7 +41,11 @@ fn stdio_server_negotiates_and_returns_failed_gate_artifacts() {
         .spawn()
         .unwrap();
 
-    let messages = [
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    send(
+        &mut stdin,
         json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -39,10 +56,27 @@ fn stdio_server_negotiates_and_returns_failed_gate_artifacts() {
                 "clientInfo": {"name": "integration-test", "version": "1"}
             }
         }),
+    );
+    send(
+        &mut stdin,
         json!({
             "jsonrpc": "2.0",
             "method": "notifications/initialized"
         }),
+    );
+    let initialized = receive(&mut stdout);
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+    assert_eq!(
+        initialized["result"]["capabilities"]["tasks"],
+        json!({
+            "list": {},
+            "cancel": {},
+            "requests": {"tools": {"call": {}}}
+        })
+    );
+
+    send(
+        &mut stdin,
         json!({
             "jsonrpc": "2.0",
             "id": "analysis",
@@ -54,44 +88,61 @@ fn stdio_server_negotiates_and_returns_failed_gate_artifacts() {
                     "output_dir": output,
                     "fab": "jlcpcb-2layer",
                     "fail_on_violations": true
-                }
+                },
+                "task": {"ttl": 60_000}
             }
         }),
-    ];
-    {
-        let stdin = child.stdin.as_mut().unwrap();
-        for message in messages {
-            serde_json::to_writer(&mut *stdin, &message).unwrap();
-            stdin.write_all(b"\n").unwrap();
-        }
-    }
-    drop(child.stdin.take());
-    let process = child.wait_with_output().unwrap();
-    assert!(process.status.success());
-    assert!(
-        process.stderr.is_empty(),
-        "MCP server stderr: {}",
-        String::from_utf8_lossy(&process.stderr)
     );
-
-    let responses = String::from_utf8(process.stdout)
+    let created = receive(&mut stdout);
+    let task_id = created["result"]["task"]["taskId"]
+        .as_str()
         .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).unwrap())
-        .collect::<Vec<_>>();
-    assert_eq!(responses.len(), 2, "notifications must not get responses");
-    assert_eq!(responses[0]["result"]["protocolVersion"], "2025-11-25");
-    assert_eq!(
-        responses[0]["result"]["capabilities"]["tools"],
+        .to_string();
+    assert_eq!(created["result"]["task"]["status"], "working");
+
+    send(
+        &mut stdin,
         json!({
-            "listChanged": false
-        })
+            "jsonrpc": "2.0",
+            "id": "status",
+            "method": "tasks/get",
+            "params": {"taskId": task_id}
+        }),
     );
-    assert_eq!(responses[1]["id"], "analysis");
-    assert_eq!(responses[1]["result"]["isError"], true);
+    let status = receive(&mut stdout);
+    assert!(matches!(
+        status["result"]["status"].as_str(),
+        Some("working" | "failed")
+    ));
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "result",
+            "method": "tasks/result",
+            "params": {"taskId": task_id}
+        }),
+    );
+    let result = receive(&mut stdout);
+    drop(stdin);
+    let process_status = child.wait().unwrap();
+    assert!(process_status.success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert_eq!(result["id"], "result");
+    assert_eq!(result["result"]["isError"], true);
     assert_eq!(
-        responses[1]["result"]["structuredContent"]["manifest"]["configuration"]["dfm_profile"]["id"],
+        result["result"]["structuredContent"]["manifest"]["configuration"]["dfm_profile"]["id"],
         "jlcpcb-standard-2layer-1oz-v1"
+    );
+    assert_eq!(
+        result["result"]["_meta"]["io.modelcontextprotocol/related-task"]["taskId"],
+        task_id
     );
     assert!(output.join("run.json").is_file());
     assert!(output.join("report.sarif").is_file());
