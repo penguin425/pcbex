@@ -470,6 +470,9 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
             }
             let kind = atom(constraint.get(1))
                 .ok_or_else(|| "custom constraint must contain one scalar type".to_string())?;
+            if kind.trim().is_empty() {
+                return Err("custom constraint type must not be blank".to_string());
+            }
             if constraint
                 .iter()
                 .skip(2)
@@ -6896,6 +6899,41 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 "custom constraint must not contain extra scalar values"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
+    }
+
+    #[test]
+    fn rejects_blank_custom_constraint_types_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for kind in ["", "   "] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "Blank type"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint "{kind}" (min 0.4mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom constraint type must not be blank"
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);
