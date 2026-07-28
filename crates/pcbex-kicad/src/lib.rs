@@ -112,7 +112,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
         let Some(xs) = item.as_list() else { continue };
         match atom(xs.first()) {
             Some("footprint") => {
-                import_footprint(xs, min, &mut nets, &mut footprint_geometry, &copper_layers)
+                import_footprint(xs, min, &mut nets, &mut footprint_geometry, &copper_layers)?
             }
             Some("segment") => {
                 import_segment(xs, min, &rules, &mut obstacles, &mut route_candidates)
@@ -1841,7 +1841,7 @@ fn import_footprint(
     nets: &mut HashMap<u32, Net>,
     geometry: &mut FootprintGeometry,
     copper_layers: &[Layer],
-) {
+) -> Result<(), String> {
     let footprint_at = child_values(xs, "at");
     let fx = footprint_at.and_then(|v| number(v.get(1))).unwrap_or(0.0);
     let fy = footprint_at.and_then(|v| number(v.get(2))).unwrap_or(0.0);
@@ -1891,6 +1891,14 @@ fn import_footprint(
             custom_pad_polygon(pad, position, angle + pad_angle).unwrap_or_default();
         let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
         let net_id = child_values(pad, "net").and_then(|values| number_u32(values.get(1)));
+        if let Some(id) = net_id.filter(|id| *id != 0)
+            && !nets.contains_key(&id)
+        {
+            let number = atom(pad.get(1)).unwrap_or("");
+            return Err(format!(
+                "KiCad pad {number} references undeclared net ID {id}"
+            ));
+        }
         let drill = child_values(pad, "drill").and_then(|values| {
             let (width, height) = if atom(values.get(1)) == Some("oval") {
                 (
@@ -1986,6 +1994,7 @@ fn import_footprint(
         );
     }
     geometry.footprints.push(model);
+    Ok(())
 }
 
 fn footprint_reference(xs: &[Sexp]) -> String {
@@ -3065,6 +3074,22 @@ mod tests {
                 "KiCad board net 0 name must be empty"
             );
         }
+    }
+
+    #[test]
+    fn rejects_pads_referencing_undeclared_kicad_nets() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "KNOWN")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "A1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+              (net 2 "MISSING")))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "KiCad pad A1 references undeclared net ID 2"
+        );
     }
 
     #[test]
