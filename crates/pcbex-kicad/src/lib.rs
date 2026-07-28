@@ -577,6 +577,11 @@ fn constraint_optional_value(constraint: &[Sexp], name: &str) -> Result<Option<i
             "custom constraint {name} value must not be repeated"
         ));
     }
+    if values.len() > 2 {
+        return Err(format!(
+            "custom constraint {name} value must contain exactly one dimension"
+        ));
+    }
     let token =
         atom(values.get(1)).ok_or_else(|| format!("custom constraint {name} value is missing"))?;
     let millimetres = if let Some(value) = token.strip_suffix("mm") {
@@ -6418,6 +6423,52 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 format!("custom constraint {repeated_name} value must not be repeated")
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+            assert_eq!(class.minimum_length_nm, None);
+            assert_eq!(class.maximum_length_nm, None);
+        }
+    }
+
+    #[test]
+    fn rejects_extra_custom_constraint_dimensions_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let cases = [
+            ("(constraint clearance (min 0.3mm 0.4mm))", "min"),
+            ("(constraint track_width (opt 0.3mm 0.4mm))", "opt"),
+            (
+                "(constraint track_width (opt 0.3mm) (min 0.2mm 0.25mm))",
+                "min",
+            ),
+            ("(constraint length (max 2mm 3mm))", "max"),
+        ];
+
+        for (constraint, malformed_name) in cases {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Extra dimension"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm))
+                    {constraint})
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                format!(
+                    "custom constraint {malformed_name} value must contain exactly one dimension"
+                )
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);
