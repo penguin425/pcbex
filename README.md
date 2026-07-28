@@ -450,6 +450,25 @@ Footprints marked `locked` remain fixed. Pad nets become weighted placement
 connections, and `Reference`, position, rotation, and the board origin survive
 the KiCad round trip.
 
+Generate several deterministic trade-off candidates in parallel:
+
+```sh
+pcbex place-candidates examples/placement.json \
+  --output-dir placement-candidates --candidates 10 --workers 4
+
+pcbex place-kicad-candidates input.kicad_pcb \
+  --output-dir kicad-candidates --candidates 10 --workers 4
+```
+
+Candidates cycle through balanced, wirelength, routability, constraint, and
+legalization objectives with distinct reproducible seeds. `candidates.json`
+records every objective, seed, weight set, raw score, base-weight comparison
+score, Pareto membership, and the deterministically selected candidate.
+Per-candidate JSON files and `selected.json` are emitted alongside the manifest;
+KiCad mode also writes each candidate board and `selected.kicad_pcb`. Candidate
+generation accepts 1–32 candidates and 1–8 workers. Worker count does not change
+candidate geometry, scores, Pareto membership, or selection.
+
 ## Multilayer routing
 
 Boards may declare `F.Cu`, `In1.Cu` through `In30.Cu`, and `B.Cu` in
@@ -629,7 +648,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.302.0
+    uses: penguin425/pcbex@v1.303.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb

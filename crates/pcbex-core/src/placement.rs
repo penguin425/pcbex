@@ -1,6 +1,13 @@
 use crate::{Nm, Point, geometry};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
+    thread,
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlacementProblem {
@@ -178,6 +185,152 @@ pub struct PlacementResult {
     pub iterations: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateObjective {
+    Balanced,
+    Wirelength,
+    Routability,
+    Constraints,
+    Legalization,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlacementCandidateOptions {
+    #[serde(default = "candidate_count")]
+    pub candidates: usize,
+    #[serde(default = "candidate_workers")]
+    pub workers: usize,
+    #[serde(default)]
+    pub placement: PlacementOptions,
+}
+
+impl Default for PlacementCandidateOptions {
+    fn default() -> Self {
+        Self {
+            candidates: candidate_count(),
+            workers: candidate_workers(),
+            placement: PlacementOptions::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlacementCandidate {
+    pub id: String,
+    pub objective: CandidateObjective,
+    pub seed: u64,
+    pub weights: ScoreWeights,
+    pub result: PlacementResult,
+    /// Score under the caller's base weights, used for deterministic selection.
+    pub comparison_score: Score,
+    pub pareto_optimal: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PlacementCandidateSet {
+    pub schema_version: u32,
+    pub options: PlacementCandidateOptions,
+    pub candidates: Vec<PlacementCandidate>,
+    pub pareto_front: Vec<String>,
+    pub selected_candidate_id: String,
+}
+
+impl PlacementCandidateSet {
+    pub fn selected(&self) -> &PlacementCandidate {
+        self.candidates
+            .iter()
+            .find(|candidate| candidate.id == self.selected_candidate_id)
+            .expect("selected placement candidate is present")
+    }
+}
+
+pub fn place_candidates(
+    problem: &PlacementProblem,
+    options: &PlacementCandidateOptions,
+) -> Result<PlacementCandidateSet, String> {
+    if !(1..=32).contains(&options.candidates) {
+        return Err("placement candidate count must be between 1 and 32".into());
+    }
+    if !(1..=8).contains(&options.workers) {
+        return Err("placement candidate workers must be between 1 and 8".into());
+    }
+    validate(problem, &options.placement)?;
+
+    let next = AtomicUsize::new(0);
+    let worker_count = options.workers.min(options.candidates);
+    let (sender, receiver) = mpsc::channel();
+    thread::scope(|scope| {
+        for _ in 0..worker_count {
+            let sender = sender.clone();
+            let next = &next;
+            scope.spawn(move || {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    if index >= options.candidates {
+                        break;
+                    }
+                    let objective = candidate_objective(index);
+                    let mut placement = options.placement.clone();
+                    placement.seed = candidate_seed(options.placement.seed, index);
+                    placement.weights = objective_weights(&options.placement.weights, objective);
+                    let result = place(problem, &placement);
+                    if sender
+                        .send((index, objective, placement.seed, placement.weights, result))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    drop(sender);
+
+    let mut generated = receiver.into_iter().collect::<Vec<_>>();
+    generated.sort_by_key(|candidate| candidate.0);
+    let mut candidates = Vec::with_capacity(generated.len());
+    for (index, objective, seed, weights, result) in generated {
+        let result = result?;
+        let comparison_score = evaluate(problem, &result.components, &options.placement.weights)?;
+        candidates.push(PlacementCandidate {
+            id: format!("candidate-{:03}", index + 1),
+            objective,
+            seed,
+            weights,
+            result,
+            comparison_score,
+            pareto_optimal: false,
+        });
+    }
+
+    let front = pareto_indices(&candidates);
+    for &index in &front {
+        candidates[index].pareto_optimal = true;
+    }
+    let selected_index = front
+        .iter()
+        .copied()
+        .min_by(|left, right| {
+            candidates[*left]
+                .comparison_score
+                .total
+                .total_cmp(&candidates[*right].comparison_score.total)
+                .then_with(|| candidates[*left].id.cmp(&candidates[*right].id))
+        })
+        .expect("at least one placement candidate");
+    Ok(PlacementCandidateSet {
+        schema_version: 1,
+        options: options.clone(),
+        pareto_front: front
+            .iter()
+            .map(|index| candidates[*index].id.clone())
+            .collect(),
+        selected_candidate_id: candidates[selected_index].id.clone(),
+        candidates,
+    })
+}
+
 pub fn place(
     problem: &PlacementProblem,
     options: &PlacementOptions,
@@ -251,6 +404,76 @@ pub fn place(
     })
 }
 
+fn candidate_count() -> usize {
+    5
+}
+
+fn candidate_workers() -> usize {
+    4
+}
+
+fn candidate_objective(index: usize) -> CandidateObjective {
+    match index % 5 {
+        0 => CandidateObjective::Balanced,
+        1 => CandidateObjective::Wirelength,
+        2 => CandidateObjective::Routability,
+        3 => CandidateObjective::Constraints,
+        _ => CandidateObjective::Legalization,
+    }
+}
+
+fn candidate_seed(base: u64, index: usize) -> u64 {
+    base.wrapping_add((index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15))
+}
+
+fn objective_weights(base: &ScoreWeights, objective: CandidateObjective) -> ScoreWeights {
+    let mut weights = base.clone();
+    match objective {
+        CandidateObjective::Balanced => {}
+        CandidateObjective::Wirelength => weights.hpwl *= 3.0,
+        CandidateObjective::Routability => weights.congestion *= 4.0,
+        CandidateObjective::Constraints => weights.constraint_violation *= 4.0,
+        CandidateObjective::Legalization => {
+            weights.overlap *= 4.0;
+            weights.boundary *= 4.0;
+        }
+    }
+    weights
+}
+
+fn pareto_indices(candidates: &[PlacementCandidate]) -> Vec<usize> {
+    (0..candidates.len())
+        .filter(|&candidate| {
+            !(0..candidates.len()).any(|other| {
+                other != candidate
+                    && dominates(
+                        &candidates[other].comparison_score,
+                        &candidates[candidate].comparison_score,
+                    )
+            })
+        })
+        .collect()
+}
+
+fn dominates(left: &Score, right: &Score) -> bool {
+    let left = [
+        left.hpwl,
+        left.overlap,
+        left.boundary,
+        left.congestion,
+        left.constraint_violation,
+    ];
+    let right = [
+        right.hpwl,
+        right.overlap,
+        right.boundary,
+        right.congestion,
+        right.constraint_violation,
+    ];
+    left.iter().zip(&right).all(|(left, right)| left <= right)
+        && left.iter().zip(&right).any(|(left, right)| left < right)
+}
+
 pub fn evaluate(
     problem: &PlacementProblem,
     components: &[Component],
@@ -297,6 +520,22 @@ fn validate(problem: &PlacementProblem, options: &PlacementOptions) -> Result<()
             || options.cooling == 0.0)
     {
         return Err("invalid annealing temperature or cooling rate".into());
+    }
+    let weights = [
+        options.weights.hpwl,
+        options.weights.overlap,
+        options.weights.boundary,
+        options.weights.congestion,
+        options.weights.constraint_violation,
+    ];
+    if weights
+        .iter()
+        .any(|weight| !weight.is_finite() || *weight < 0.0)
+        || weights.iter().all(|weight| *weight == 0.0)
+    {
+        return Err(
+            "placement score weights must be finite, non-negative, and not all zero".into(),
+        );
     }
     Ok(())
 }
@@ -1245,6 +1484,21 @@ mod tests {
             anchors: HashMap::new(),
         }
     }
+
+    fn connection(from: &str, to: &str) -> Connection {
+        Connection {
+            from: PinRef {
+                component: from.to_string(),
+                offset: Point::default(),
+            },
+            to: PinRef {
+                component: to.to_string(),
+                offset: Point::default(),
+            },
+            weight: 1.0,
+        }
+    }
+
     #[test]
     fn annealing_improves_overlapping_placement() {
         let p = PlacementProblem {
@@ -1521,5 +1775,87 @@ mod tests {
                 .overlap,
             0.0
         );
+    }
+
+    #[test]
+    fn parallel_candidate_generation_is_deterministic_and_selects_pareto_result() {
+        let problem = PlacementProblem {
+            width_nm: 30_000_000,
+            height_nm: 20_000_000,
+            grid_nm: 500_000,
+            components: vec![
+                component("U1", None),
+                component("U2", None),
+                component("U3", None),
+                component("U4", None),
+            ],
+            connections: vec![
+                connection("U1", "U2"),
+                connection("U1", "U3"),
+                connection("U2", "U4"),
+                connection("U3", "U4"),
+            ],
+            constraints: vec![],
+        };
+        let mut options = PlacementCandidateOptions {
+            candidates: 7,
+            workers: 1,
+            placement: PlacementOptions {
+                iterations: 300,
+                ..PlacementOptions::default()
+            },
+        };
+        let sequential = place_candidates(&problem, &options).unwrap();
+        options.workers = 4;
+        let parallel = place_candidates(&problem, &options).unwrap();
+        assert_eq!(
+            serde_json::to_value(&sequential.candidates).unwrap(),
+            serde_json::to_value(&parallel.candidates).unwrap()
+        );
+        assert_eq!(sequential.pareto_front, parallel.pareto_front);
+        assert_eq!(
+            sequential.selected_candidate_id,
+            parallel.selected_candidate_id
+        );
+        assert_eq!(parallel.candidates.len(), 7);
+        assert!(parallel.selected().pareto_optimal);
+        assert!(
+            parallel
+                .pareto_front
+                .contains(&parallel.selected_candidate_id)
+        );
+        assert_eq!(
+            parallel.candidates[0].objective,
+            CandidateObjective::Balanced
+        );
+        assert_eq!(
+            parallel.candidates[1].objective,
+            CandidateObjective::Wirelength
+        );
+    }
+
+    #[test]
+    fn pareto_dominance_requires_no_worse_and_one_better_metric() {
+        let baseline = Score {
+            hpwl: 10.0,
+            overlap: 0.0,
+            boundary: 0.0,
+            congestion: 5.0,
+            constraint_violation: 0.0,
+            total: 15.0,
+        };
+        let better = Score {
+            hpwl: 9.0,
+            ..baseline.clone()
+        };
+        let tradeoff = Score {
+            hpwl: 8.0,
+            congestion: 6.0,
+            ..baseline.clone()
+        };
+        assert!(dominates(&better, &baseline));
+        assert!(!dominates(&baseline, &better));
+        assert!(!dominates(&tradeoff, &baseline));
+        assert!(!dominates(&baseline, &tradeoff));
     }
 }
