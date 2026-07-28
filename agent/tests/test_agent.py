@@ -1,3 +1,4 @@
+import json
 import unittest
 import tempfile
 from pathlib import Path
@@ -13,6 +14,7 @@ from pcbex_agent.repair import propose_repairs
 from pcbex_agent.repair_loop import run_repair_loop
 from pcbex_agent.llm import build_plan_with_llm
 from pcbex_agent.ipc import apply_routes_to_open_board
+from pcbex_agent.review import review_schematic_with_llm
 
 
 class PlannerTests(unittest.TestCase):
@@ -132,6 +134,58 @@ class AdapterTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             build_plan_with_llm("place C1", lambda _prompt: response)
+
+    def test_schematic_review_adapter_accepts_only_bound_complete_evidence(self):
+        request = {
+            "schema_version": 1,
+            "request_sha256": "a" * 64,
+            "requirements": [{"id": "power", "text": "Power is valid"}],
+            "evidence_ids": ["electrical-review"],
+        }
+        response = {
+            "schema_version": 1,
+            "request_sha256": "a" * 64,
+            "model": {"provider": "test", "model": "reviewer", "version": "1"},
+            "decision": "approve",
+            "summary": "Evidence is complete.",
+            "requirements": [{
+                "id": "power",
+                "status": "pass",
+                "rationale": "The deterministic review passed.",
+                "evidence_refs": ["electrical-review"],
+            }],
+            "risks": [],
+        }
+        result = review_schematic_with_llm(
+            request, lambda _prompt: json.dumps(response)
+        )
+        self.assertEqual(result["decision"], "approve")
+
+    def test_schematic_review_adapter_rejects_invented_evidence(self):
+        request = {
+            "schema_version": 1,
+            "request_sha256": "a" * 64,
+            "requirements": [{"id": "power", "text": "Power is valid"}],
+            "evidence_ids": ["electrical-review"],
+        }
+        response = {
+            "schema_version": 1,
+            "request_sha256": "a" * 64,
+            "model": {"provider": "test", "model": "reviewer", "version": None},
+            "decision": "approve",
+            "summary": "Evidence is complete.",
+            "requirements": [{
+                "id": "power",
+                "status": "pass",
+                "rationale": "Claimed evidence.",
+                "evidence_refs": ["invented"],
+            }],
+            "risks": [],
+        }
+        with self.assertRaises(ValueError):
+            review_schematic_with_llm(
+                request, lambda _prompt: json.dumps(response)
+            )
 
     def test_catalog_search_is_ranked_and_filtered(self):
         parts = [

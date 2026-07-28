@@ -8,6 +8,14 @@ use pcbex_core::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
+mod approval;
+pub use approval::{
+    AiApprovalPolicy, AiModelIdentity, AiRequirement, AiRequirementAssessment, AiRequirementStatus,
+    AiReviewDecision, AiReviewRequest, AiReviewResponse, AiRisk, AiRiskSeverity, SignedAiApproval,
+    ai_review_request_json_schema, ai_review_request_sha256, ai_review_response_json_schema,
+    approval_public_key, build_ai_review_request, parse_ai_review_response, sign_ai_review,
+    signed_ai_approval_json_schema, verify_signed_ai_approval,
+};
 mod electrical;
 pub use electrical::{
     ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy, ElectricalReview,
@@ -19,7 +27,7 @@ pub use evidence::{
     SimulationAnalysisKind, SimulationArtifact, SimulationAssertion, SimulationAssertionResult,
     SimulationDeclaration, SimulationEngine, SimulationEvidence, SimulationEvidenceCounts,
     parse_simulation_declaration, record_simulation_evidence, simulation_declaration_json_schema,
-    simulation_evidence_json_schema,
+    simulation_evidence_json_schema, validate_simulation_evidence,
 };
 mod schematic;
 pub use schematic::{

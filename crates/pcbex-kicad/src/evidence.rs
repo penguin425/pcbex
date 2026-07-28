@@ -184,6 +184,98 @@ pub fn record_simulation_evidence(
     })
 }
 
+pub fn validate_simulation_evidence(evidence: &SimulationEvidence) -> Result<(), String> {
+    if evidence.schema_version != 1 {
+        return Err(format!(
+            "unsupported simulation evidence schema version {}",
+            evidence.schema_version
+        ));
+    }
+    validate_nonblank(&evidence.id, "simulation evidence id")?;
+    validate_nonblank(&evidence.simulator.name, "simulator name")?;
+    validate_nonblank(&evidence.simulator.version, "simulator version")?;
+    validate_sha256(&evidence.schematic_sha256, "schematic SHA-256")?;
+    validate_sha256(
+        &evidence.electrical_review_sha256,
+        "electrical review SHA-256",
+    )?;
+    validate_sha256(&evidence.declaration_sha256, "declaration SHA-256")?;
+    if evidence.assertions.is_empty() || evidence.assertions.len() > MAX_ASSERTIONS {
+        return Err(format!(
+            "simulation evidence must contain 1 to {MAX_ASSERTIONS} assertions"
+        ));
+    }
+    if evidence.artifacts.is_empty() || evidence.artifacts.len() > MAX_ARTIFACTS {
+        return Err(format!(
+            "simulation evidence must contain 1 to {MAX_ARTIFACTS} artifacts"
+        ));
+    }
+    let mut assertion_ids = BTreeSet::new();
+    for assertion in &evidence.assertions {
+        validate_nonblank(&assertion.id, "simulation assertion id")?;
+        validate_nonblank(&assertion.description, "simulation assertion description")?;
+        validate_nonblank(&assertion.unit, "simulation assertion unit")?;
+        if !assertion_ids.insert(assertion.id.as_str()) {
+            return Err(format!(
+                "duplicate simulation assertion id {}",
+                assertion.id
+            ));
+        }
+        if !assertion.measured.is_finite()
+            || assertion.minimum.is_some_and(|value| !value.is_finite())
+            || assertion.maximum.is_some_and(|value| !value.is_finite())
+            || assertion
+                .minimum
+                .zip(assertion.maximum)
+                .is_some_and(|(minimum, maximum)| minimum > maximum)
+            || (assertion.minimum.is_none() && assertion.maximum.is_none())
+        {
+            return Err(format!(
+                "simulation assertion {} has invalid bounds or values",
+                assertion.id
+            ));
+        }
+        let expected_pass = assertion
+            .minimum
+            .is_none_or(|minimum| assertion.measured >= minimum)
+            && assertion
+                .maximum
+                .is_none_or(|maximum| assertion.measured <= maximum);
+        if assertion.passed != expected_pass {
+            return Err(format!(
+                "simulation assertion {} pass state does not match its bounds",
+                assertion.id
+            ));
+        }
+    }
+    let mut artifact_names = BTreeSet::new();
+    for artifact in &evidence.artifacts {
+        validate_nonblank(&artifact.name, "artifact name")?;
+        validate_nonblank(&artifact.media_type, "artifact media type")?;
+        validate_sha256(&artifact.sha256, "artifact SHA-256")?;
+        if artifact.bytes == 0 || !artifact_names.insert(artifact.name.as_str()) {
+            return Err(format!(
+                "simulation artifact {} is empty or duplicated",
+                artifact.name
+            ));
+        }
+    }
+    let expected_passed = evidence
+        .assertions
+        .iter()
+        .filter(|assertion| assertion.passed)
+        .count();
+    let expected_failed = evidence.assertions.len() - expected_passed;
+    if evidence.counts.assertions != evidence.assertions.len()
+        || evidence.counts.passed != expected_passed
+        || evidence.counts.failed != expected_failed
+        || evidence.passed != (evidence.electrical_review_approved && expected_failed == 0)
+    {
+        return Err("simulation evidence counts or overall pass state are inconsistent".into());
+    }
+    Ok(())
+}
+
 fn validate_declaration(declaration: &SimulationDeclaration) -> Result<(), String> {
     if declaration.schema_version != 1 {
         return Err(format!(

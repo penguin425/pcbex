@@ -662,6 +662,75 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("optional"),
         ),
+        tool(
+            "prepare_schematic_review",
+            "Prepare AI schematic review",
+            "Recompute and bind schematic, electrical, simulation, and requirement evidence into a review request.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "electrical_review", "requirements", "output"],
+                "properties": {
+                    "input": {"type": "string"},
+                    "electrical_review": {"type": "string"},
+                    "policy": {"type": "string"},
+                    "simulation_evidence": {
+                        "type": "array", "items": {"type": "string"}
+                    },
+                    "requirements": {
+                        "type": "array", "minItems": 1, "items": {"type": "string"}
+                    },
+                    "allow_no_simulation": {"type": "boolean", "default": false},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_schematic_approval",
+            "Sign AI schematic approval",
+            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Requires an explicit private-key path.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "request", "response", "private_key", "signer_id", "output"
+                ],
+                "properties": {
+                    "request": {"type": "string"},
+                    "response": {"type": "string"},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "output": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_schematic_approval",
+            "Verify AI schematic approval",
+            "Strictly verify an Ed25519 approval against its exact request and AI response.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["approval", "request", "response", "public_key"],
+                "properties": {
+                    "approval": {"type": "string"},
+                    "request": {"type": "string"},
+                    "response": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            true,
+            false,
+            tasks_supported.then_some("forbidden"),
+        ),
     ]
 }
 
@@ -727,6 +796,9 @@ fn call_tool(
         "analyze_kicad" => analyze_kicad(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
+        "prepare_schematic_review" => prepare_schematic_review(arguments, cancellation)?,
+        "sign_schematic_approval" => sign_schematic_approval(arguments, cancellation)?,
+        "verify_schematic_approval" => verify_schematic_approval(arguments, cancellation)?,
         _ => return Err(json!({"detail": format!("unknown tool {name:?}")})),
     };
     let is_error = structured.get("ok").and_then(Value::as_bool) == Some(false);
@@ -856,6 +928,139 @@ fn route_kicad(
     Ok(execution_result(execution, json!({"output": output})))
 }
 
+fn prepare_schematic_review(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "input",
+            "electrical_review",
+            "policy",
+            "simulation_evidence",
+            "requirements",
+            "allow_no_simulation",
+            "output",
+        ],
+    )?;
+    let input = required_string(&arguments, "input")?;
+    let review = required_string(&arguments, "electrical_review")?;
+    let output = required_string(&arguments, "output")?;
+    let requirements = required_string_array(&arguments, "requirements", false)?;
+    let simulations = required_string_array(&arguments, "simulation_evidence", true)?;
+    let mut command = vec![
+        "prepare-ai-review".into(),
+        input,
+        "--electrical-review".into(),
+        review,
+    ];
+    optional_option(&arguments, "policy", "--policy", &mut command)?;
+    for value in simulations {
+        command.push("--simulation-evidence".into());
+        command.push(value);
+    }
+    for value in requirements {
+        command.push("--requirement".into());
+        command.push(value);
+    }
+    optional_flag(
+        &arguments,
+        "allow_no_simulation",
+        "--allow-no-simulation",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let request = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "request": request}),
+    ))
+}
+
+fn sign_schematic_approval(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "request",
+            "response",
+            "private_key",
+            "signer_id",
+            "output",
+            "require_approved",
+        ],
+    )?;
+    let request = required_string(&arguments, "request")?;
+    let response = required_string(&arguments, "response")?;
+    let private_key = required_string(&arguments, "private_key")?;
+    let signer_id = required_string(&arguments, "signer_id")?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-ai-review".into(),
+        request,
+        response,
+        "--private-key".into(),
+        private_key,
+        "--signer-id".into(),
+        signer_id,
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let approval = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "approval": approval}),
+    ))
+}
+
+fn verify_schematic_approval(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "approval",
+            "request",
+            "response",
+            "public_key",
+            "require_approved",
+        ],
+    )?;
+    let approval = required_string(&arguments, "approval")?;
+    let request = required_string(&arguments, "request")?;
+    let response = required_string(&arguments, "response")?;
+    let public_key = required_string(&arguments, "public_key")?;
+    let mut command = vec![
+        "verify-ai-approval".into(),
+        approval,
+        request,
+        response,
+        "--public-key".into(),
+        public_key,
+    ];
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let verified = execution.success;
+    Ok(execution_result(execution, json!({"verified": verified})))
+}
+
 struct Execution {
     success: bool,
     exit_code: Option<i32>,
@@ -975,6 +1180,38 @@ fn optional_flag(
     Ok(())
 }
 
+fn required_string_array(
+    arguments: &Map<String, Value>,
+    name: &str,
+    allow_missing: bool,
+) -> std::result::Result<Vec<String>, Value> {
+    let Some(value) = arguments.get(name) else {
+        return if allow_missing {
+            Ok(Vec::new())
+        } else {
+            Err(json!({"detail": format!("{name} must be a non-empty string array")}))
+        };
+    };
+    let values = value
+        .as_array()
+        .ok_or_else(|| json!({"detail": format!("{name} must be a string array")}))?;
+    if !allow_missing && values.is_empty() {
+        return Err(json!({"detail": format!("{name} must not be empty")}));
+    }
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(
+                    || json!({"detail": format!("{name} entries must be non-empty strings")}),
+                )
+        })
+        .collect()
+}
+
 fn reject_unknown(
     arguments: &Map<String, Value>,
     allowed: &[&str],
@@ -1036,7 +1273,7 @@ mod tests {
         let response = server
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
-        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 4);
+        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 7);
         assert_eq!(
             response["result"]["tools"][0]["annotations"]["readOnlyHint"],
             true
@@ -1048,6 +1285,14 @@ mod tests {
         assert_eq!(
             response["result"]["tools"][1]["execution"]["taskSupport"],
             "optional"
+        );
+        assert_eq!(
+            response["result"]["tools"][5]["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            response["result"]["tools"][6]["annotations"]["readOnlyHint"],
+            true
         );
     }
 
