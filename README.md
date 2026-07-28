@@ -768,7 +768,8 @@ be a non-negative integer rather than malformed data that loses net ownership.
 Each primitive may supply at most one such field, preventing duplicate or
 conflicting declarations from being silently resolved by source order.
 Copper zones with a net field must also provide a scalar `net_name`; the empty
-name remains valid for unconnected net 0 zones.
+name remains valid for unconnected net 0 zones, while every other name must
+match the net table declaration for its identifier.
 The net table itself requires unique non-zero identifiers and unique non-empty
 names, preventing ambiguous routing, rule lookup, and pad ownership.
 Every route must likewise reference a declared net; normal DRC reports unknown

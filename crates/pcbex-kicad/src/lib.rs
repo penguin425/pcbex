@@ -140,7 +140,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                         .is_none()
                 {
                     validate_declared_copper_net(xs, "copper zone", &nets)?;
-                    validate_copper_zone_net_name(xs)?;
+                    validate_copper_zone_net_name(xs, &nets)?;
                 }
                 import_keepout(xs, min, &mut keepouts, &copper_layers);
                 import_copper_zone(
@@ -2088,16 +2088,26 @@ fn validate_declared_copper_net(
     Ok(())
 }
 
-fn validate_copper_zone_net_name(xs: &[Sexp]) -> Result<(), String> {
+fn validate_copper_zone_net_name(xs: &[Sexp], nets: &HashMap<u32, Net>) -> Result<(), String> {
     let Some(id) = child_values(xs, "net").and_then(|values| number_u32(values.get(1))) else {
         return Ok(());
     };
-    if child_values(xs, "net_name")
-        .and_then(|values| atom(values.get(1)))
-        .is_none()
-    {
+    let Some(name) = child_values(xs, "net_name").and_then(|values| atom(values.get(1))) else {
         return Err(format!(
             "KiCad copper zone net {id} is missing a scalar name"
+        ));
+    };
+    let declared = if id == 0 {
+        ""
+    } else {
+        nets.get(&id)
+            .expect("copper zone net ID was validated")
+            .name
+            .as_str()
+    };
+    if name != declared {
+        return Err(format!(
+            "KiCad copper zone net {id} name \"{name}\" does not match declared name \"{declared}\""
         ));
     }
     Ok(())
@@ -3459,6 +3469,35 @@ mod tests {
             (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))
         )"#;
         assert!(import(unconnected, rules()).is_ok());
+    }
+
+    #[test]
+    fn rejects_copper_zone_net_names_that_mismatch_the_declaration() {
+        for (declaration, net, net_name, error) in [
+            (
+                r#"(net 1 "SIGNAL")"#,
+                1,
+                "OTHER",
+                r#"KiCad copper zone net 1 name "OTHER" does not match declared name "SIGNAL""#,
+            ),
+            (
+                r#"(net 0 "")"#,
+                0,
+                "SIGNAL",
+                r#"KiCad copper zone net 0 name "SIGNAL" does not match declared name """#,
+            ),
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {declaration}
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (zone (net {net}) (net_name "{net_name}") (layer "F.Cu")
+                    (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))
+                )"#
+            );
+
+            assert_eq!(import(&pcb, rules()).unwrap_err(), error);
+        }
     }
 
     #[test]
