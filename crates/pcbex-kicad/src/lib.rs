@@ -140,6 +140,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                         .is_none()
                 {
                     validate_declared_copper_net(xs, "copper zone", &nets)?;
+                    validate_copper_zone_net_name(xs)?;
                 }
                 import_keepout(xs, min, &mut keepouts, &copper_layers);
                 import_copper_zone(
@@ -2087,6 +2088,21 @@ fn validate_declared_copper_net(
     Ok(())
 }
 
+fn validate_copper_zone_net_name(xs: &[Sexp]) -> Result<(), String> {
+    let Some(id) = child_values(xs, "net").and_then(|values| number_u32(values.get(1))) else {
+        return Ok(());
+    };
+    if child_values(xs, "net_name")
+        .and_then(|values| atom(values.get(1)))
+        .is_none()
+    {
+        return Err(format!(
+            "KiCad copper zone net {id} is missing a scalar name"
+        ));
+    }
+    Ok(())
+}
+
 fn import_segment(
     xs: &[Sexp],
     origin: Point,
@@ -3417,6 +3433,32 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn rejects_missing_and_non_scalar_copper_zone_net_names() {
+        for net_name in ["", "(net_name)", r#"(net_name (name "SIGNAL"))"#] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIGNAL")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (zone (net 1) {net_name} (layer "F.Cu")
+                    (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad copper zone net 1 is missing a scalar name"
+            );
+        }
+
+        let unconnected = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (zone (net 0) (net_name "") (layer "F.Cu")
+            (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))
+        )"#;
+        assert!(import(unconnected, rules()).is_ok());
     }
 
     #[test]
