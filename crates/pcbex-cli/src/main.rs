@@ -19,13 +19,15 @@ use pcbex_kicad::{
     ElectricalWaiverSet, SignedAiApproval, SimulationArtifact, SimulationEvidence,
     ai_review_request_json_schema, ai_review_response_json_schema, apply_custom_design_rules,
     apply_electrical_waivers, apply_project_net_settings, approval_public_key,
-    build_ai_review_request, check_schematic, electrical_explanation_json_schema,
-    electrical_policy_json_schema, electrical_review_json_schema, electrical_review_to_junit,
-    electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
-    explain_electrical_review, import as import_kicad, import_schematic, parse_ai_review_response,
-    parse_electrical_policy, parse_simulation_declaration, record_simulation_evidence,
-    schematic_json_schema, sign_ai_review, signed_ai_approval_json_schema,
-    simulation_declaration_json_schema, simulation_evidence_json_schema, verify_signed_ai_approval,
+    build_ai_review_request, check_schematic, compare_electrical_reviews,
+    electrical_explanation_json_schema, electrical_policy_json_schema,
+    electrical_review_comparison_json_schema, electrical_review_json_schema,
+    electrical_review_to_junit, electrical_waiver_report_json_schema,
+    electrical_waiver_set_json_schema, explain_electrical_review, import as import_kicad,
+    import_schematic, parse_ai_review_response, parse_electrical_policy,
+    parse_simulation_declaration, record_simulation_evidence, schematic_json_schema,
+    sign_ai_review, signed_ai_approval_json_schema, simulation_declaration_json_schema,
+    simulation_evidence_json_schema, verify_signed_ai_approval,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -200,6 +202,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed electrical-review comparison JSON Schema.
+    ElectricalReviewComparisonSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed electrical-rule explanation JSON Schema.
     ElectricalExplanationSchema {
         #[arg(short, long)]
@@ -237,6 +244,16 @@ enum Command {
         /// Fail after writing the report when error-severity findings remain.
         #[arg(long)]
         require_approved: bool,
+    },
+    /// Compare current electrical findings with an accepted baseline.
+    CompareElectricalReviews {
+        baseline: PathBuf,
+        current: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fail after writing the report when a new or escalated error is found.
+        #[arg(long)]
+        require_no_new_errors: bool,
     },
     /// Apply explicit, expiring waivers to a deterministic electrical review.
     ApplyElectricalWaivers {
@@ -885,6 +902,9 @@ fn main() -> Result<()> {
                 println!("{schema}");
             }
         }
+        Command::ElectricalReviewComparisonSchema { output } => {
+            write_or_print_json(&electrical_review_comparison_json_schema(), output.as_ref())?;
+        }
         Command::ElectricalExplanationSchema { output } => {
             let schema = serde_json::to_string_pretty(&electrical_explanation_json_schema())?;
             if let Some(path) = output {
@@ -960,6 +980,36 @@ fn main() -> Result<()> {
                     "electrical approval rejected by policy {} with {} error(s)",
                     review.policy_id,
                     review.counts.errors
+                );
+            }
+        }
+        Command::CompareElectricalReviews {
+            baseline,
+            current,
+            output,
+            require_no_new_errors,
+        } => {
+            let (baseline_review, _) = read_described_json::<ElectricalReview>(&baseline)?;
+            let (current_review, _) = read_described_json::<ElectricalReview>(&current)?;
+            let comparison = compare_electrical_reviews(&baseline_review, &current_review)
+                .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&comparison)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "electrical baseline comparison: {}; {} new error(s), {} escalated error(s), {} resolved finding(s)",
+                if comparison.passed {
+                    "no error regressions"
+                } else {
+                    "error regressions found"
+                },
+                comparison.counts.new_errors,
+                comparison.counts.escalated_errors,
+                comparison.resolved_findings.len(),
+            );
+            if require_no_new_errors && !comparison.passed {
+                bail!(
+                    "electrical baseline comparison found {} error regression(s)",
+                    comparison.counts.error_regressions
                 );
             }
         }

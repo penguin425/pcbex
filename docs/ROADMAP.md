@@ -24,6 +24,7 @@ auditable release.
 | v1.312.0 | Electrical rule explanations | Policy-bound triggers and remediation for every finding |
 | v1.313.0 | Expiring electrical waivers | Audited exceptions that fail closed after a fixed date |
 | v1.314.0 | Electrical JUnit reporting | Native rule results for standard CI test viewers |
+| v1.315.0 | Electrical baseline gate | Fail CI only for new or severity-escalated electrical errors |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing

@@ -24,6 +24,12 @@ pub use electrical::{
     electrical_policy_json_schema, electrical_review_json_schema, electrical_review_to_junit,
     explain_electrical_review, parse_electrical_policy,
 };
+mod electrical_comparison;
+pub use electrical_comparison::{
+    ElectricalComparisonCounts, ElectricalFindingSummary, ElectricalReviewComparison,
+    ElectricalReviewIdentity, ElectricalSeverityChange, compare_electrical_reviews,
+    electrical_review_comparison_json_schema,
+};
 mod evidence;
 pub use evidence::{
     SimulationAnalysisKind, SimulationArtifact, SimulationAssertion, SimulationAssertionResult,
