@@ -622,23 +622,29 @@ fn import_net_classes(
                     .map(Some)
                     .ok_or_else(|| format!("net class {name} has invalid {key}"))
             };
-            classes.insert(
-                name.to_string(),
-                NetClassRules {
-                    track_width_nm: dimension("trace_width", defaults.track_width_nm)?,
-                    clearance_nm: dimension("clearance", defaults.clearance_nm)?,
-                    via_diameter_nm: dimension("via_dia", defaults.via_diameter_nm)?,
-                    via_drill_nm: dimension("via_drill", defaults.via_drill_nm)?,
-                    layers: None,
-                    differential_width_nm: optional_dimension("diff_pair_width")?,
-                    differential_gap_nm: optional_dimension("diff_pair_gap")?,
-                    minimum_length_nm: None,
-                    maximum_length_nm: None,
-                    target_impedance_ohms: None,
-                    impedance_tolerance_ohms: None,
-                    maximum_impedance_step_ohms: None,
-                },
-            );
+            let class_rules = NetClassRules {
+                track_width_nm: dimension("trace_width", defaults.track_width_nm)?,
+                clearance_nm: dimension("clearance", defaults.clearance_nm)?,
+                via_diameter_nm: dimension("via_dia", defaults.via_diameter_nm)?,
+                via_drill_nm: dimension("via_drill", defaults.via_drill_nm)?,
+                layers: None,
+                differential_width_nm: optional_dimension("diff_pair_width")?,
+                differential_gap_nm: optional_dimension("diff_pair_gap")?,
+                minimum_length_nm: None,
+                maximum_length_nm: None,
+                target_impedance_ohms: None,
+                impedance_tolerance_ohms: None,
+                maximum_impedance_step_ohms: None,
+            };
+            for (key, value) in [
+                ("trace_width", class_rules.track_width_nm),
+                ("via_drill", class_rules.via_drill_nm),
+            ] {
+                if value <= 0 {
+                    return Err(format!("net class {name} has invalid {key}"));
+                }
+            }
+            classes.insert(name.to_string(), class_rules);
             for child in values {
                 let Some(assignment) = child.as_list() else {
                     continue;
@@ -5605,6 +5611,34 @@ mod tests {
                 format!("net class Invalid has invalid {key}")
             );
         }
+    }
+
+    #[test]
+    fn rejects_zero_legacy_track_widths_and_via_drills() {
+        for key in ["trace_width", "via_drill"] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup
+                    (net_class "Invalid" ""
+                      ({key} 0)))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                format!("net class Invalid has invalid {key}")
+            );
+        }
+
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Valid" ""
+              (clearance 0)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let imported = import(pcb, rules()).unwrap();
+        assert_eq!(imported.board.net_classes["Valid"].clearance_nm, 0);
     }
 
     #[test]
