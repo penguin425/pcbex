@@ -55,6 +55,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | MCP asynchronous tasks | MCP 2025-11-25 Tasks provide bounded deferred execution, status polling, listing, blocking result retrieval, TTL expiry, and process cancellation for analysis, comparison, and routing while older clients remain synchronous | Unit tests cover capability negotiation, task support metadata, state transitions, original error propagation, cancellation, listing, and compatibility; subprocess E2E retrieves a failed-gate artifact bundle through a task |
 | Placement candidate portfolio | Parallel deterministic generation explores balanced, wirelength, routability, constraint, and legalization objectives, computes the raw five-metric Pareto front, selects under caller base weights, and writes JSON plus KiCad candidate bundles | Core tests prove 1-vs-4-worker identity and Pareto dominance; subprocess E2E verifies reproducible JSON portfolios, selected artifacts, and KiCad boards |
 | Routing candidate portfolio | Bounded parallel N-best routing explores balanced, shortest, via-minimized, bend-minimized, and alternate-order searches, removes route duplicates from a four-metric Pareto front, selects under caller base costs, and writes JSON plus KiCad candidate bundles | Core tests prove 1-vs-4-worker identity, duplicate handling, Pareto dominance, and thread ceilings; subprocess E2E verifies reproducible JSON portfolios, selected artifacts, and KiCad boards |
+| KiCad schematic electrical IR | KiCad 6–10 symbols, unit/convert pin definitions, electrical types, transformed coordinates, wires, junctions, labels, power symbols, no-connects, and deterministic connectivity normalize into a closed versioned JSON boundary with explicit hierarchy/bus/directive coverage gaps | Importer tests cover topology, crossing junctions, transforms, UUID identity, future formats, closed schema, and coverage; CLI E2E proves byte reproducibility and complete gating writes inspectable output, while the example loads under KiCad 10.0.5 |
 | Performance regression gate | Deterministic search-state budgets for 10 parallel nets and a 100 mm board with 200 obstacles | Dedicated `performance_budget` target runs on every PR |
 | Deterministic parallel candidate search | Configurable 1–8 bounded workers explore first-pass A* candidates; ordered validation reuses one board snapshot per pass and sequential conflict fallback controls commits | Ten-net 1-vs-8-worker regression is byte-identical; Criterion measures actual 1/2/4/8-worker wall time |
 | Automatic local push-and-shove | Grid-aligned route-interior translation keeps terminal anchors fixed; failed nets try bounded blocker shoves before selective rip-up and atomically accept only checked combined routes | Successful manual shove preserves terminals, invalid edits roll back, and automatic blocker recovery produces a clean two-route board |
@@ -161,7 +162,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.304.0 exposes 390 Rust tests and 11 Python tests. The release workflow
+Version 1.305.0 exposes 400 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

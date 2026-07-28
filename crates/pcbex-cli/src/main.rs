@@ -13,7 +13,10 @@ use pcbex_core::{
     parse_board_json, render_svg, repair_routes, repairable_net_ids, route_board, route_candidates,
     routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
-use pcbex_kicad::{apply_custom_design_rules, apply_project_net_settings, import as import_kicad};
+use pcbex_kicad::{
+    apply_custom_design_rules, apply_project_net_settings, import as import_kicad,
+    import_schematic, schematic_json_schema,
+};
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
@@ -113,6 +116,20 @@ enum Command {
     Schema {
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+    /// Print the closed schematic electrical-IR JSON Schema.
+    SchematicSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Normalize a KiCad schematic into the versioned electrical-design IR.
+    ImportSchematic {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fail after writing the IR when buses or hierarchy prevent complete coverage.
+        #[arg(long)]
+        require_complete: bool,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -437,6 +454,54 @@ fn main() -> Result<()> {
                 fs::write(path, schema)?;
             } else {
                 println!("{schema}");
+            }
+        }
+        Command::SchematicSchema { output } => {
+            let schema = serde_json::to_string_pretty(&schematic_json_schema())?;
+            if let Some(path) = output {
+                fs::write(path, schema)?;
+            } else {
+                println!("{schema}");
+            }
+        }
+        Command::ImportSchematic {
+            input,
+            output,
+            require_complete,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let schematic = import_schematic(&source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", input.display()))?;
+            fs::write(&output, serde_json::to_string_pretty(&schematic)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "imported {} symbol(s), {} pin(s), {} net(s); coverage: {}",
+                schematic.symbols.len(),
+                schematic
+                    .symbols
+                    .iter()
+                    .map(|symbol| symbol.pins.len())
+                    .sum::<usize>(),
+                schematic.nets.len(),
+                if schematic.coverage.complete {
+                    "complete"
+                } else {
+                    "incomplete"
+                }
+            );
+            if require_complete && !schematic.coverage.complete {
+                bail!(
+                    "schematic coverage is incomplete: {}",
+                    schematic
+                        .coverage
+                        .unsupported_features
+                        .iter()
+                        .map(|feature| format!("{} ({})", feature.kind, feature.count))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
         }
         Command::DfmProfiles { output } => {
@@ -1799,6 +1864,29 @@ mod tests {
                 fab: Some(fab),
                 ..
             } if fab == "jlcpcb-2layer"
+        ));
+    }
+
+    #[test]
+    fn parses_schematic_import_coverage_gate() {
+        let cli = Cli::try_parse_from([
+            "pcbex",
+            "import-schematic",
+            "design.kicad_sch",
+            "--output",
+            "design.schematic.json",
+            "--require-complete",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::ImportSchematic {
+                input,
+                output,
+                require_complete: true,
+            } if input.as_os_str() == "design.kicad_sch"
+                && output.as_os_str() == "design.schematic.json"
         ));
     }
 
