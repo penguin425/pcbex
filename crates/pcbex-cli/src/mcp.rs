@@ -840,6 +840,45 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             false,
             tasks_supported.then_some("forbidden"),
         ),
+        tool(
+            "verify_schematic_approval_quorum",
+            "Verify AI schematic approval quorum",
+            "Verify independent signed reviews against one bound request and enforce approval, provider, and model thresholds.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "request", "approvals", "responses", "policy_pack", "output"
+                ],
+                "properties": {
+                    "request": {"type": "string"},
+                    "approvals": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "responses": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "policy_pack": {"type": "string"},
+                    "minimum_approvals": {
+                        "type": "integer", "minimum": 1, "maximum": 100, "default": 2
+                    },
+                    "minimum_distinct_providers": {
+                        "type": "integer", "minimum": 1, "maximum": 100, "default": 2
+                    },
+                    "minimum_distinct_models": {
+                        "type": "integer", "minimum": 1, "maximum": 100, "default": 2
+                    },
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_quorum": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
     ]
 }
 
@@ -914,6 +953,9 @@ fn call_tool(
         "prepare_schematic_review" => prepare_schematic_review(arguments, cancellation)?,
         "sign_schematic_approval" => sign_schematic_approval(arguments, cancellation)?,
         "verify_schematic_approval" => verify_schematic_approval(arguments, cancellation)?,
+        "verify_schematic_approval_quorum" => {
+            verify_schematic_approval_quorum(arguments, cancellation)?
+        }
         _ => return Err(json!({"detail": format!("unknown tool {name:?}")})),
     };
     let is_error = structured.get("ok").and_then(Value::as_bool) == Some(false);
@@ -1385,6 +1427,82 @@ fn verify_schematic_approval(
     Ok(execution_result(execution, json!({"verified": verified})))
 }
 
+fn verify_schematic_approval_quorum(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "request",
+            "approvals",
+            "responses",
+            "policy_pack",
+            "minimum_approvals",
+            "minimum_distinct_providers",
+            "minimum_distinct_models",
+            "output",
+            "summary_output",
+            "require_quorum",
+        ],
+    )?;
+    let request = required_string(&arguments, "request")?;
+    let approvals = required_string_array(&arguments, "approvals", false)?;
+    let responses = required_string_array(&arguments, "responses", false)?;
+    if approvals.len() != responses.len() {
+        return Err(json!({
+            "detail": "approvals and responses must contain the same number of paths"
+        }));
+    }
+    let policy_pack = required_string(&arguments, "policy_pack")?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec!["verify-ai-quorum".into(), request];
+    for approval in approvals {
+        command.extend(["--approval".into(), approval]);
+    }
+    for response in responses {
+        command.extend(["--response".into(), response]);
+    }
+    command.extend(["--policy-pack".into(), policy_pack]);
+    optional_positive_integer(
+        &arguments,
+        "minimum_approvals",
+        "--minimum-approvals",
+        &mut command,
+    )?;
+    optional_positive_integer(
+        &arguments,
+        "minimum_distinct_providers",
+        "--minimum-distinct-providers",
+        &mut command,
+    )?;
+    optional_positive_integer(
+        &arguments,
+        "minimum_distinct_models",
+        "--minimum-distinct-models",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_quorum",
+        "--require-quorum",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 struct Execution {
     success: bool,
     exit_code: Option<i32>,
@@ -1504,6 +1622,23 @@ fn optional_flag(
     Ok(())
 }
 
+fn optional_positive_integer(
+    arguments: &Map<String, Value>,
+    name: &str,
+    option: &str,
+    command: &mut Vec<String>,
+) -> std::result::Result<(), Value> {
+    if let Some(value) = arguments.get(name) {
+        let value = value
+            .as_u64()
+            .filter(|value| (1..=100).contains(value))
+            .ok_or_else(|| json!({"detail": format!("{name} must be an integer from 1 to 100")}))?;
+        command.push(option.into());
+        command.push(value.to_string());
+    }
+    Ok(())
+}
+
 fn required_string_array(
     arguments: &Map<String, Value>,
     name: &str,
@@ -1598,7 +1733,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 11);
+        assert_eq!(tools.len(), 12);
         let named = |name: &str| {
             tools
                 .iter()
@@ -1639,6 +1774,14 @@ mod tests {
         );
         assert_eq!(
             named("verify_schematic_approval")["annotations"]["readOnlyHint"],
+            true
+        );
+        assert_eq!(
+            named("verify_schematic_approval_quorum")["inputSchema"]["properties"]["approvals"]["type"],
+            "array"
+        );
+        assert_eq!(
+            named("verify_schematic_approval_quorum")["annotations"]["destructiveHint"],
             true
         );
         let verify_policy = tools

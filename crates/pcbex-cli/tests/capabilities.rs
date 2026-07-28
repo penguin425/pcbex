@@ -29,6 +29,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "compare-schematics",
         "check-schematic",
         "prepare-ai-review",
+        "verify-ai-quorum",
         "mcp-server",
         "fabricate",
     ] {

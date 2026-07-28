@@ -46,6 +46,79 @@ jobs:
               }]
             }' > build/action-feedback/declaration.json
           printf '%s\n' 'inspection passed' > build/action-feedback/inspection.txt
+      - name: Prepare AI approval quorum fixture
+        run: |
+          cargo build --package pcbex --release --locked
+          mkdir -p build/action-quorum
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/reviewer-a.key \
+            --public-key build/action-quorum/reviewer-a.pub
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/reviewer-b.key \
+            --public-key build/action-quorum/reviewer-b.pub
+          target/release/pcbex electrical-policy \
+            --output build/action-quorum/electrical-policy.json
+          jq '
+            .rules |= with_entries(
+              if .value.severity == "error"
+              then .value.enabled = false
+              else .
+              end
+            )
+          ' build/action-quorum/electrical-policy.json \
+            > build/action-quorum/electrical-policy.approved.json
+          jq \
+            --slurpfile electrical build/action-quorum/electrical-policy.approved.json \
+            --arg key_a "$(tr -d '\n' < build/action-quorum/reviewer-a.pub)" \
+            --arg key_b "$(tr -d '\n' < build/action-quorum/reviewer-b.pub)" \
+            '
+              .electrical_policy = $electrical[0]
+              | .require_simulation_evidence = false
+              | .ai_requirements = [{
+                  id: "power",
+                  text: "Power input treatment is intentional"
+                }]
+              | .trusted_approval_keys = [
+                  {signer_id: "reviewer-a", public_key: $key_a},
+                  {signer_id: "reviewer-b", public_key: $key_b}
+                ]
+            ' examples/acme-policy-pack.json > build/action-quorum/policy-pack.json
+          target/release/pcbex check-schematic examples/simple.kicad_sch \
+            --policy-pack build/action-quorum/policy-pack.json \
+            --output build/action-quorum/electrical-review.json \
+            --require-approved
+          target/release/pcbex prepare-ai-review examples/simple.kicad_sch \
+            --electrical-review build/action-quorum/electrical-review.json \
+            --policy-pack build/action-quorum/policy-pack.json \
+            --output build/action-quorum/request.json
+          request_sha256="$(jq -r '.request_sha256' build/action-quorum/request.json)"
+          for reviewer in a b; do
+            jq -n \
+              --arg request_sha256 "$request_sha256" \
+              --arg provider "provider-$reviewer" \
+              --arg model "model-$reviewer" \
+              '{
+                schema_version: 1,
+                request_sha256: $request_sha256,
+                model: {provider: $provider, model: $model, version: "1"},
+                decision: "approve",
+                summary: "Bound deterministic evidence supports approval.",
+                requirements: [{
+                  id: "power",
+                  status: "pass",
+                  rationale: "The deterministic electrical review is approved.",
+                  evidence_refs: ["electrical-review"]
+                }],
+                risks: []
+              }' > "build/action-quorum/response-$reviewer.json"
+            target/release/pcbex sign-ai-review \
+              build/action-quorum/request.json \
+              "build/action-quorum/response-$reviewer.json" \
+              --private-key "build/action-quorum/reviewer-$reviewer.key" \
+              --signer-id "reviewer-$reviewer" \
+              --output "build/action-quorum/approval-$reviewer.json" \
+              --require-approved
+          done
       - name: Exercise the public composite action
         id: pcbex
         uses: ./
@@ -55,7 +128,15 @@ jobs:
           schematic: examples/simple.kicad_sch
           baseline-schematic: examples/simple.kicad_sch
           fail-on-schematic-review: "true"
-          policy-pack: examples/acme-policy-pack.json
+          policy-pack: build/action-quorum/policy-pack.json
+          ai-review-request: build/action-quorum/request.json
+          ai-approval-files: |
+            build/action-quorum/approval-a.json
+            build/action-quorum/approval-b.json
+          ai-response-files: |
+            build/action-quorum/response-a.json
+            build/action-quorum/response-b.json
+          fail-on-ai-quorum: "true"
           manufacturing-feedback-declaration: build/action-feedback/declaration.json
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
           fail-on-manufacturing-feedback: "true"
@@ -76,6 +157,8 @@ jobs:
           MANUFACTURING_FEEDBACK_PASSED: ${{ steps.pcbex.outputs.manufacturing-feedback-passed }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
+          AI_APPROVAL_QUORUM: ${{ steps.pcbex.outputs.ai-approval-quorum }}
+          AI_APPROVAL_QUORUM_MET: ${{ steps.pcbex.outputs.ai-approval-quorum-met }}
           SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           test -s "$ARTIFACT_DIR/pr-comment.md"
@@ -93,6 +176,10 @@ jobs:
           test -s "$SCHEMATIC_DIFF"
           test "$SCHEMATIC_REVIEW_REQUIRED" = "false"
           test "$(jq -r '.changed' "$SCHEMATIC_DIFF")" = "false"
+          test -s "$AI_APPROVAL_QUORUM"
+          test "$AI_APPROVAL_QUORUM_MET" = "true"
+          test "$(jq -r '.counts.approvals' "$AI_APPROVAL_QUORUM")" = "2"
+          test "$(jq -r '.counts.distinct_providers' "$AI_APPROVAL_QUORUM")" = "2"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then
             [[ "$COMMENT_URL" == https://github.com/* ]]
           else
