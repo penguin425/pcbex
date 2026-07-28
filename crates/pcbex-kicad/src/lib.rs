@@ -65,9 +65,13 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let mut nets = HashMap::<u32, Net>::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
-        if atom(xs.first()) == Some("net")
-            && let (Some(id), Some(name)) = (number_u32(xs.get(1)), atom(xs.get(2)))
-        {
+        if atom(xs.first()) == Some("net") {
+            let Some(id) = number_u32(xs.get(1)) else {
+                return Err("KiCad board net is missing a valid numeric ID".into());
+            };
+            let Some(name) = atom(xs.get(2)) else {
+                continue;
+            };
             if let Some(existing) = nets.get(&id) {
                 return Err(format!(
                     "KiCad board contains duplicate net ID {id}: {} and {name}",
@@ -2981,6 +2985,23 @@ mod tests {
             import(pcb, rules()).unwrap_err(),
             "KiCad board contains duplicate net name SIG: IDs 1 and 2"
         );
+    }
+
+    #[test]
+    fn rejects_missing_and_invalid_kicad_net_ids() {
+        for declaration in [r#"(net)"#, r#"(net -1 "SIG")"#, r#"(net invalid "SIG")"#] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {declaration}
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad board net is missing a valid numeric ID"
+            );
+        }
     }
 
     #[test]
