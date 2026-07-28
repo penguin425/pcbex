@@ -219,9 +219,10 @@ maximum. A custom constraint may specify each supported `min`, `max`, or `opt`
 value at most once; repeated values are rejected instead of silently selecting
 the first, and each value must contain exactly one dimension. Custom-rule
 types supported by pcbex may each appear only once within a rule, while later
-rules may deliberately override earlier rules. Custom-rule application is
-atomic, so an invalid later constraint or unknown net class cannot leave
-earlier rule updates partially applied.
+rules may deliberately override earlier rules. Each rule may contain at most
+one `condition`; repeated conditions are rejected instead of silently selecting
+the first. Custom-rule application is atomic, so an invalid later constraint or
+unknown net class cannot leave earlier rule updates partially applied.
 
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.
