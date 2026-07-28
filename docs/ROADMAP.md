@@ -31,6 +31,7 @@ auditable release.
 | v1.319.0 | Review-provider command adapter | Bounded shell-free AI execution with hash-bound audit receipts |
 | v1.320.0 | Organization policy packs | One strict contract for physical, electrical, AI, simulation, and signer policy |
 | v1.321.0 | Signed policy-pack distribution | Ed25519-authenticated organization policy before CI application |
+| v1.322.0 | Monotonic policy trust state | Reject signed-pack rollback, equivocation, and identity substitution |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -41,6 +42,5 @@ resolution, and force-push/deletion protection.
 
 The next roadmap should focus on production adoption: managed
 provider-specific adapters, manufacturing feedback ingestion, and centralized
-policy-pack retrieval and rollback controls. Those are intentionally not
-marked complete until each has an executable acceptance contract and its own
-release.
+policy-pack retrieval. Those are intentionally not marked complete until each
+has an executable acceptance contract and its own release.

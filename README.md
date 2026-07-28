@@ -685,12 +685,13 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.321.0
+    uses: penguin425/pcbex@v1.322.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
       signed-policy-pack: hardware/organization-policy-pack.signed.json
       policy-public-key: ${{ runner.temp }}/pcbex-policy-root.pub
+      policy-trust-state: .pcbex-baseline/hardware/organization-policy-pack.trust.json
       fail-on-regressions: "true"
       upload-sarif: "true"
       pr-comment: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
@@ -714,9 +715,11 @@ while still producing their Job Summary and evidence artifact.
 
 Callers select exactly one of `fab`, `fab-profile`, `policy-pack`, or
 `signed-policy-pack`. A signed pack additionally requires
-`policy-public-key`. The same authenticated physical policy is applied to
-current and baseline analysis, and the exact verified source digest is
-retained in each run manifest.
+`policy-public-key`; `policy-trust-state` optionally pins the accepted state
+from the protected base revision. The same authenticated physical policy is
+applied to current and baseline analysis, and the exact verified source digest
+is retained in each run manifest. The Action also outputs and uploads
+`verified-policy-trust-state.json` for review and later adoption.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -993,7 +996,11 @@ pcbex signed-policy-pack-schema \
   --output signed-policy-pack.schema.json
 pcbex verify-policy-pack organization-policy-pack.signed.json \
   --public-key policy-root.pub \
-  --output build/verified-policy-pack.json
+  --baseline-state accepted-policy.trust.json \
+  --output build/verified-policy-pack.json \
+  --state-output build/candidate-policy.trust.json
+pcbex policy-trust-state-schema \
+  --output policy-trust-state.schema.json
 ```
 
 The signed envelope embeds the normalized pack and authenticates its SHA-256,
@@ -1002,8 +1009,17 @@ fields, digest mismatch, altered content, unsupported algorithms, invalid
 signatures, and a key other than the separately trusted public key fail
 closed. Key generation, signing, and verified extraction refuse to overwrite
 existing files.
+
+The optional baseline trust state records the accepted pack ID, highest
+revision, exact canonical digest, signer ID, and signing public key. An
+identical replay remains valid and a higher revision advances the candidate
+state. A lower revision, different content under the same revision, or a
+changed ID, signer, or key fails before extraction. The candidate state is
+written separately and never mutates the accepted baseline; promote it through
+the normal protected-branch review process.
 The MCP server exposes the same authenticated extraction boundary as
-`verify_policy_pack`; it never receives or exposes the signing private key.
+`verify_policy_pack`, including `baseline_state` and `state_output`; it never
+receives or exposes the signing private key.
 
 For the composite Action, write the trusted public key from a protected
 repository variable or secret into a runner-temporary file before invoking

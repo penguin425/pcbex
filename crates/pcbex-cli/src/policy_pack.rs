@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 pub const POLICY_PACK_SCHEMA_VERSION: u32 = 1;
 pub const SIGNED_POLICY_PACK_SCHEMA_VERSION: u32 = 1;
+pub const POLICY_TRUST_STATE_SCHEMA_VERSION: u32 = 1;
 const SIGNATURE_DOMAIN: &str = "pcbex-organization-policy-pack-v1";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -43,6 +44,17 @@ pub struct SignedPolicyPack {
     pub algorithm: String,
     pub public_key: String,
     pub signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyTrustState {
+    pub schema_version: u32,
+    pub policy_pack_id: String,
+    pub accepted_revision: u32,
+    pub policy_pack_sha256: String,
+    pub signer_id: String,
+    pub public_key: String,
 }
 
 #[derive(Serialize)]
@@ -229,6 +241,88 @@ pub fn signed_policy_pack_json_schema() -> Value {
     })
 }
 
+pub fn parse_policy_trust_state(source: &str) -> Result<PolicyTrustState, String> {
+    let state: PolicyTrustState = serde_json::from_str(source)
+        .map_err(|error| format!("invalid policy trust state JSON: {error}"))?;
+    validate_policy_trust_state(&state)?;
+    Ok(state)
+}
+
+pub fn advance_policy_trust_state(
+    signed: &SignedPolicyPack,
+    baseline: Option<&PolicyTrustState>,
+) -> Result<PolicyTrustState, String> {
+    validate_signed_policy_pack(signed)?;
+    if let Some(baseline) = baseline {
+        validate_policy_trust_state(baseline)?;
+        if baseline.policy_pack_id != signed.policy_pack.id {
+            return Err(format!(
+                "policy pack id {:?} does not match trusted id {:?}",
+                signed.policy_pack.id, baseline.policy_pack_id
+            ));
+        }
+        if baseline.public_key != signed.public_key {
+            return Err("policy pack signing key does not match trust state".into());
+        }
+        if baseline.signer_id != signed.signer_id {
+            return Err(format!(
+                "policy pack signer {:?} does not match trusted signer {:?}",
+                signed.signer_id, baseline.signer_id
+            ));
+        }
+        if signed.policy_pack.revision < baseline.accepted_revision {
+            return Err(format!(
+                "policy pack revision {} rolls back trusted revision {}",
+                signed.policy_pack.revision, baseline.accepted_revision
+            ));
+        }
+        if signed.policy_pack.revision == baseline.accepted_revision
+            && signed.policy_pack_sha256 != baseline.policy_pack_sha256
+        {
+            return Err(format!(
+                "policy pack revision {} has a different digest than the trusted revision",
+                signed.policy_pack.revision
+            ));
+        }
+    }
+    Ok(PolicyTrustState {
+        schema_version: POLICY_TRUST_STATE_SCHEMA_VERSION,
+        policy_pack_id: signed.policy_pack.id.clone(),
+        accepted_revision: signed.policy_pack.revision,
+        policy_pack_sha256: signed.policy_pack_sha256.clone(),
+        signer_id: signed.signer_id.clone(),
+        public_key: signed.public_key.clone(),
+    })
+}
+
+pub fn policy_trust_state_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/policy-trust-state-v1.json",
+        "title": "pcbex organization policy trust state",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schema_version", "policy_pack_id", "accepted_revision",
+            "policy_pack_sha256", "signer_id", "public_key"
+        ],
+        "properties": {
+            "schema_version": {"const": POLICY_TRUST_STATE_SCHEMA_VERSION},
+            "policy_pack_id": {
+                "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+            },
+            "accepted_revision": {
+                "type": "integer", "minimum": 1, "maximum": 4294967295_u64
+            },
+            "policy_pack_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "signer_id": {
+                "type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+            },
+            "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+    })
+}
+
 pub fn policy_pack_json_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -329,6 +423,22 @@ fn validate_date(value: &str) -> Result<(), String> {
 
 fn validate_public_key(value: &str) -> Result<(), String> {
     validate_hex(value, 64, "trusted approval public key")
+}
+
+fn validate_policy_trust_state(state: &PolicyTrustState) -> Result<(), String> {
+    if state.schema_version != POLICY_TRUST_STATE_SCHEMA_VERSION {
+        return Err(format!(
+            "unsupported policy trust state schema_version {}; expected {}",
+            state.schema_version, POLICY_TRUST_STATE_SCHEMA_VERSION
+        ));
+    }
+    validate_slug("trusted policy pack id", &state.policy_pack_id)?;
+    if state.accepted_revision == 0 {
+        return Err("accepted policy revision must be greater than zero".into());
+    }
+    validate_hex(&state.policy_pack_sha256, 64, "trusted policy pack SHA-256")?;
+    validate_slug("trusted policy signer id", &state.signer_id)?;
+    validate_public_key(&state.public_key)
 }
 
 fn validate_hex(value: &str, length: usize, label: &str) -> Result<(), String> {
@@ -447,5 +557,44 @@ mod tests {
             schema["properties"]["policy_pack"]["additionalProperties"],
             false
         );
+    }
+
+    #[test]
+    fn trust_state_rejects_rollback_equivocation_and_identity_changes() {
+        let signed = sign_policy_pack(sample(), "hardware-security", &[7; 32]).unwrap();
+        let baseline = advance_policy_trust_state(&signed, None).unwrap();
+        assert_eq!(
+            advance_policy_trust_state(&signed, Some(&baseline)).unwrap(),
+            baseline
+        );
+
+        let mut rollback_pack = sample();
+        rollback_pack.revision = 2;
+        let newer = sign_policy_pack(rollback_pack, "hardware-security", &[7; 32]).unwrap();
+        let newer_state = advance_policy_trust_state(&newer, Some(&baseline)).unwrap();
+        assert_eq!(newer_state.accepted_revision, 2);
+        assert!(advance_policy_trust_state(&signed, Some(&newer_state)).is_err());
+
+        let mut changed_pack = newer.policy_pack.clone();
+        changed_pack.description = "different content at the same revision".into();
+        let changed = sign_policy_pack(changed_pack, "hardware-security", &[7; 32]).unwrap();
+        assert!(advance_policy_trust_state(&changed, Some(&newer_state)).is_err());
+
+        let changed_signer =
+            sign_policy_pack(newer.policy_pack.clone(), "another-security-team", &[7; 32]).unwrap();
+        assert!(advance_policy_trust_state(&changed_signer, Some(&newer_state)).is_err());
+    }
+
+    #[test]
+    fn trust_state_schema_is_closed_and_strictly_parsed() {
+        let schema = policy_trust_state_json_schema();
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+
+        let signed = sign_policy_pack(sample(), "hardware-security", &[7; 32]).unwrap();
+        let state = advance_policy_trust_state(&signed, None).unwrap();
+        let mut value = serde_json::to_value(state).unwrap();
+        value["unexpected"] = true.into();
+        assert!(parse_policy_trust_state(&value.to_string()).is_err());
     }
 }

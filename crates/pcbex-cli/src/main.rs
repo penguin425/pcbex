@@ -42,8 +42,9 @@ mod mcp;
 mod policy_pack;
 
 use policy_pack::{
-    OrganizationPolicyPack, SignedPolicyPack, parse_policy_pack, parse_signed_policy_pack,
-    policy_pack_json_schema, sign_policy_pack, signed_policy_pack_json_schema,
+    OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
+    parse_policy_pack, parse_policy_trust_state, parse_signed_policy_pack, policy_pack_json_schema,
+    policy_trust_state_json_schema, sign_policy_pack, signed_policy_pack_json_schema,
     verify_signed_policy_pack,
 };
 
@@ -415,6 +416,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Write the closed monotonic policy trust-state JSON Schema.
+    PolicyTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Create an Ed25519 keypair for signing organization policy packs.
     PolicyKeygen {
         #[arg(long)]
@@ -437,6 +443,12 @@ enum Command {
         input: PathBuf,
         #[arg(long)]
         public_key: PathBuf,
+        /// Previously accepted state used to reject revision rollback and equivocation.
+        #[arg(long)]
+        baseline_state: Option<PathBuf>,
+        /// Write the newly accepted state without overwriting an existing file.
+        #[arg(long)]
+        state_output: Option<PathBuf>,
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -798,6 +810,13 @@ fn load_signed_policy_pack(path: &Path) -> Result<SignedPolicyPack> {
     parse_signed_policy_pack(&source)
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("validating signed policy pack {}", path.display()))
+}
+
+fn load_policy_trust_state(path: &Path) -> Result<PolicyTrustState> {
+    let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    parse_policy_trust_state(&source)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("validating policy trust state {}", path.display()))
 }
 
 fn validate_ai_request_against_policy_pack(
@@ -1511,6 +1530,9 @@ fn main() -> Result<()> {
         Command::SignedPolicyPackSchema { output } => {
             write_or_print_json(&signed_policy_pack_json_schema(), output.as_ref())?;
         }
+        Command::PolicyTrustStateSchema { output } => {
+            write_or_print_json(&policy_trust_state_json_schema(), output.as_ref())?;
+        }
         Command::PolicyKeygen {
             private_key,
             public_key,
@@ -1558,18 +1580,42 @@ fn main() -> Result<()> {
         Command::VerifyPolicyPack {
             input,
             public_key,
+            baseline_state,
+            state_output,
             output,
         } => {
+            if output.is_some() && output == state_output {
+                bail!("verified policy pack and trust-state output paths must differ");
+            }
+            for path in output.iter().chain(state_output.iter()) {
+                if path.exists() {
+                    bail!("refusing to overwrite existing output {}", path.display());
+                }
+            }
             let signed = load_signed_policy_pack(&input)?;
             let public_key = read_hex_key(&public_key, "trusted policy public key")?;
             verify_signed_policy_pack(&signed, &public_key)
                 .map_err(anyhow::Error::msg)
                 .context("verifying signed organization policy pack")?;
+            let baseline = baseline_state
+                .as_deref()
+                .map(load_policy_trust_state)
+                .transpose()?;
+            let state = advance_policy_trust_state(&signed, baseline.as_ref())
+                .map_err(anyhow::Error::msg)
+                .context("checking monotonic organization policy state")?;
             let normalized = format!("{}\n", serde_json::to_string_pretty(&signed.policy_pack)?);
             if let Some(path) = output {
                 write_new_file(&path, &normalized, false)?;
             } else {
                 print!("{normalized}");
+            }
+            if let Some(path) = state_output {
+                write_new_file(
+                    &path,
+                    &format!("{}\n", serde_json::to_string_pretty(&state)?),
+                    false,
+                )?;
             }
             eprintln!(
                 "verified policy pack {} revision {} signed by {}",

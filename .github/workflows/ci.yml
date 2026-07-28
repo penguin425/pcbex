@@ -57,6 +57,39 @@ jobs:
           else
             test -z "$COMMENT_URL"
           fi
+      - name: Prepare signed policy trust fixture
+        run: |
+          mkdir -p build/action-policy
+          target/release/pcbex policy-keygen \
+            --private-key build/action-policy/policy.key \
+            --public-key build/action-policy/policy.pub
+          target/release/pcbex sign-policy-pack examples/acme-policy-pack.json \
+            --private-key build/action-policy/policy.key \
+            --signer-id hardware-security \
+            --output build/action-policy/policy.signed.json
+          target/release/pcbex verify-policy-pack \
+            build/action-policy/policy.signed.json \
+            --public-key build/action-policy/policy.pub \
+            --output build/action-policy/accepted-policy.json \
+            --state-output build/action-policy/accepted-state.json
+      - name: Exercise signed policy rollback protection
+        id: signed-pcbex
+        uses: ./
+        with:
+          board: examples/simple.kicad_pcb
+          signed-policy-pack: build/action-policy/policy.signed.json
+          policy-public-key: build/action-policy/policy.pub
+          policy-trust-state: build/action-policy/accepted-state.json
+          output-dir: build/signed-action-analysis
+          fail-on-violations: "false"
+          artifact-name: pcbex-signed-action-smoke
+      - name: Verify signed policy trust output
+        env:
+          TRUST_STATE: ${{ steps.signed-pcbex.outputs.verified-policy-trust-state }}
+        run: |
+          test -s "$TRUST_STATE"
+          test "$(jq -r '.accepted_revision' "$TRUST_STATE")" = "1"
+          test "$(jq -r '.policy_pack_id' "$TRUST_STATE")" = "acme-production-v1"
 
   rust:
     name: Rust
