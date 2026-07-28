@@ -174,13 +174,14 @@ Project net-class dimensions must be non-negative and fit the signed nanometer
 range; oversized values are rejected instead of saturating at the integer limit.
 Legacy net classes embedded in `.kicad_pcb` files follow the same finite,
 non-negative, signed-nanometer range contract; `trace_width` and `via_drill`
-must be positive. Their names must be present as scalar values, non-blank, and
-unique, and their descriptions must be scalar values (an empty description
-remains valid). All following values must be setting lists, and each supported
-dimension setting must contain exactly one finite scalar value and appear at
-most once. Missing, malformed, blank, duplicate, trailing, or stray scalar
-values are rejected instead of being ignored, retaining an unusable class, or
-silently selecting the first or last value.
+must be positive, and `via_dia` must be greater than `via_drill`. Their names
+must be present as scalar values, non-blank, and unique, and their descriptions
+must be scalar values (an empty description remains valid). All following
+values must be setting lists, and each supported dimension setting must contain
+exactly one finite scalar value and appear at most once. Missing, malformed,
+blank, duplicate, trailing, or stray scalar values are rejected instead of
+being ignored, retaining an unusable class, or silently selecting the first or
+last value.
 Legacy `add_net` assignments must contain exactly one non-blank scalar name for
 a nonzero net present in the board; malformed, trailing, stale, blank, reserved,
 or misspelled references are rejected instead of being silently ignored. Each
