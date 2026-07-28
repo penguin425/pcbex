@@ -72,6 +72,9 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
             let Some(name) = atom(xs.get(2)) else {
                 return Err(format!("KiCad board net {id} is missing a scalar name"));
             };
+            if id != 0 && name.trim().is_empty() {
+                return Err(format!("KiCad board net {id} name must not be blank"));
+            }
             if let Some(existing) = nets.get(&id) {
                 return Err(format!(
                     "KiCad board contains duplicate net ID {id}: {} and {name}",
@@ -3017,6 +3020,29 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "KiCad board net 1 is missing a scalar name"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_blank_nonzero_kicad_net_names() {
+        let unconnected = r#"(kicad_pcb
+          (net 0 "")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        assert!(import(unconnected, rules()).is_ok());
+
+        for (declaration, id) in [(r#"(net 1 "")"#, 1), (r#"(net 2 "   ")"#, 2)] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  {declaration}
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                format!("KiCad board net {id} name must not be blank")
             );
         }
     }
