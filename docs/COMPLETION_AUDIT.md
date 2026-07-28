@@ -52,6 +52,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | GitHub Actions hardware CI | Versioned composite action emits Job Summary, artifact bundles, SARIF, and post-upload violation/regression gates without privileged PR execution | CI exercises the public action contract, unchanged baseline comparison, outputs, and artifact upload |
 | Versioned fabrication profiles | Immutable JLCPCB/PCBWay standard 2-layer profiles retain aliases, revisions, verification dates, official sources, exact DFM rules, and non-lowering routing corrections in the run manifest | Profile resolution/application unit tests plus KiCad bundle/listing integration and public Action smoke test |
 | Distributable DFM profiles | Strict schema-versioned organization profiles apply across CLI, Action, and MCP paths while rejecting malformed, ambiguous, or built-in-colliding identities; analysis binds the source digest | Closed-schema validation unit tests plus normalized-profile and SHA-256-addressed KiCad bundle integration |
+| Review-provider command adapter | Provider-neutral schematic review runs without a shell under timeout and streaming output limits, validates before atomic writes, refuses overwrites, and emits a closed hash-bound receipt | Injected provider success, oversized-output rejection, closed-schema, and exact CLI argument-boundary tests |
 | MCP stdio server | MCP 2025-11-25 lifecycle with older-version negotiation exposes typed DFM discovery, KiCad analysis, bundle comparison, and routing tools with structured results and safety annotations | Protocol lifecycle/error unit tests plus subprocess E2E proving clean JSON-RPC output and retained artifacts after a failed analysis gate |
 | MCP asynchronous tasks | MCP 2025-11-25 Tasks provide bounded deferred execution, status polling, listing, blocking result retrieval, TTL expiry, and process cancellation for analysis, comparison, and routing while older clients remain synchronous | Unit tests cover capability negotiation, task support metadata, state transitions, original error propagation, cancellation, listing, and compatibility; subprocess E2E retrieves a failed-gate artifact bundle through a task |
 | Placement candidate portfolio | Parallel deterministic generation explores balanced, wirelength, routability, constraint, and legalization objectives, computes the raw five-metric Pareto front, selects under caller base weights, and writes JSON plus KiCad candidate bundles | Core tests prove 1-vs-4-worker identity and Pareto dominance; subprocess E2E verifies reproducible JSON portfolios, selected artifacts, and KiCad boards |
@@ -167,7 +168,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.318.0 exposes 438 Rust tests and 13 Python tests. The release workflow
+Version 1.319.0 exposes 438 Rust tests and 18 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

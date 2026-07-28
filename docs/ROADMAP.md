@@ -28,6 +28,7 @@ auditable release.
 | v1.316.0 | Electrical SARIF reporting | Stable schematic findings for code-scanning review tools |
 | v1.317.0 | Idempotent PR comments | Update one stable hardware-analysis comment per PR |
 | v1.318.0 | Distributable DFM profiles | Strict organization-owned manufacturing constraints with provenance |
+| v1.319.0 | Review-provider command adapter | Bounded shell-free AI execution with hash-bound audit receipts |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -37,6 +38,6 @@ that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
 The next roadmap should focus on production adoption: broader organization
-policy packs, review-provider adapters, and manufacturing feedback ingestion.
-Those are intentionally not marked complete until each has an executable
-acceptance contract and its own release.
+policy packs, managed provider-specific adapters, and manufacturing feedback
+ingestion. Those are intentionally not marked complete until each has an
+executable acceptance contract and its own release.

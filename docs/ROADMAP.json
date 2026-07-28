@@ -109,6 +109,11 @@
     {
       "id": "distributable-dfm-profiles",
       "release": "v1.318.0",
+      "status": "released"
+    },
+    {
+      "id": "review-provider-command-adapter",
+      "release": "v1.319.0",
       "status": "current"
     }
   ]

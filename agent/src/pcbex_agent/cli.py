@@ -9,8 +9,14 @@ from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
 from .models import PlanLimits
 from .planner import build_plan
+from .provider import (
+    ProviderError,
+    provider_receipt_json_schema,
+    review_schematic_with_command,
+)
 from .repair import propose_repairs
 from .repair_loop import repair_kicad_board, write_repair_report
+from .review import ReviewError
 
 
 def main() -> None:
@@ -31,6 +37,26 @@ def main() -> None:
     ipc = sub.add_parser("apply-ipc", help="apply routed JSON to the open KiCad board")
     ipc.add_argument("routes", type=Path)
     ipc.add_argument("--max-items", type=int, default=10000)
+    review = sub.add_parser(
+        "review-schematic",
+        help="run a bounded external AI review provider and retain an audit receipt",
+    )
+    review.add_argument("request", type=Path)
+    review.add_argument("-o", "--output", type=Path, required=True)
+    review.add_argument("--receipt", type=Path, required=True)
+    review.add_argument("--timeout-seconds", type=int, default=120)
+    review.add_argument("--maximum-output-bytes", type=int, default=1024 * 1024)
+    review.add_argument(
+        "--provider-command",
+        nargs=argparse.REMAINDER,
+        required=True,
+        help="executable and arguments; must be the final pcbex-agent option",
+    )
+    receipt_schema = sub.add_parser(
+        "provider-receipt-schema",
+        help="write the closed provider-command receipt JSON Schema",
+    )
+    receipt_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -81,6 +107,31 @@ def main() -> None:
             f"created {result.tracks_created} tracks and "
             f"{result.vias_created} vias in KiCad"
         )
+    elif args.command == "review-schematic":
+        try:
+            receipt = review_schematic_with_command(
+                args.request,
+                args.output,
+                args.receipt,
+                args.provider_command,
+                timeout_seconds=args.timeout_seconds,
+                max_output_bytes=args.maximum_output_bytes,
+            )
+        except (OSError, ProviderError, ReviewError) as error:
+            raise SystemExit(f"schematic review failed: {error}") from error
+        print(
+            "AI review response written with request "
+            f"{receipt['request']['sha256']} and response "
+            f"{receipt['response']['sha256']}"
+        )
+    elif args.command == "provider-receipt-schema":
+        rendered = json.dumps(
+            provider_receipt_json_schema(), indent=2, ensure_ascii=False
+        ) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
     else:
         result = repair_kicad_board(
             args.input,
