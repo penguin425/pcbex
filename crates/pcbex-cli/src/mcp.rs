@@ -373,7 +373,10 @@ impl McpServer {
             }),
             changed: Condvar::new(),
         });
-        self.tasks.insert(task_id.clone(), Arc::clone(&record));
+        // CreateTaskResult must describe the initial state even when a very
+        // short operation reaches a terminal state before this method returns.
+        let create_result = success_response(id, json!({"task": task_json(&record)}));
+        self.tasks.insert(task_id, Arc::clone(&record));
         let params = Value::Object(params.clone());
         let active_tasks = Arc::clone(&self.active_tasks);
         thread::spawn(move || {
@@ -406,7 +409,7 @@ impl McpServer {
             record.changed.notify_all();
             active_tasks.fetch_sub(1, Ordering::SeqCst);
         });
-        success_response(id, json!({"task": task_json(&self.tasks[&task_id])}))
+        create_result
     }
 
     fn get_task(&mut self, id: Value, params: Option<&Value>) -> Value {
