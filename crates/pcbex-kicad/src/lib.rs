@@ -8,6 +8,12 @@ use pcbex_core::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
+mod electrical;
+pub use electrical::{
+    ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy, ElectricalReview,
+    ElectricalRulePolicy, ElectricalSeverity, ElectricalSymbolRef, check_schematic,
+    electrical_policy_json_schema, electrical_review_json_schema, parse_electrical_policy,
+};
 mod schematic;
 pub use schematic::{
     ElectricalPinType, SchematicCoverage, SchematicDocument, SchematicLabel, SchematicLabelKind,
