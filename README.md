@@ -199,7 +199,7 @@ positive, and each via diameter must be greater than its drill; zero or
 physically inconsistent dimensions are rejected before any project settings
 are applied. Differential-pair widths must likewise be positive, while a zero
 gap remains valid. Optional project minimum and maximum track lengths must also
-be positive when present.
+be positive when present, and the minimum must not exceed the maximum.
 Ordered `netclass_patterns` support hierarchical names, `*`/`?` wildcards, and
 regular expressions; patterns and their class references must be non-blank,
 exactly repeated patterns are rejected, and exact assignments retain

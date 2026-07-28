@@ -316,6 +316,17 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 return Err(format!("net class {name} has invalid {key}"));
             }
         }
+        if matches!(
+            (
+                class_rules.minimum_length_nm,
+                class_rules.maximum_length_nm
+            ),
+            (Some(minimum), Some(maximum)) if minimum > maximum
+        ) {
+            return Err(format!(
+                "net class {name} min_track_length must not exceed max_track_length"
+            ));
+        }
         net_classes.insert(name.to_string(), class_rules);
     }
 
@@ -6517,6 +6528,48 @@ mod tests {
             assert_eq!(imported.board.net_classes.len(), 1);
             assert!(imported.board.net_classes.contains_key("Existing"));
         }
+    }
+
+    #[test]
+    fn rejects_reversed_project_net_class_length_limits_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let mut imported = import(pcb, rules()).unwrap();
+        let project = serde_json::json!({
+            "net_settings": {
+                "classes": [
+                    {"name": "Valid", "min_track_length": 1.0},
+                    {
+                        "name": "Reversed",
+                        "min_track_length": 2.0,
+                        "max_track_length": 1.0
+                    }
+                ]
+            }
+        });
+
+        assert_eq!(
+            apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
+            "net class Reversed min_track_length must not exceed max_track_length"
+        );
+        assert_eq!(imported.board.net_classes.len(), 1);
+        assert!(imported.board.net_classes.contains_key("Existing"));
+
+        let mut imported = import(pcb, rules()).unwrap();
+        apply_project_net_settings(
+            &mut imported.board,
+            r#"{"net_settings":{"classes":[{
+              "name":"Exact","min_track_length":1.0,"max_track_length":1.0
+            }]}}"#,
+        )
+        .unwrap();
+        let exact = &imported.board.net_classes["Exact"];
+        assert_eq!(exact.minimum_length_nm, exact.maximum_length_nm);
     }
 
     #[test]
