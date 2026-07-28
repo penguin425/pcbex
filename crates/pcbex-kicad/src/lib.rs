@@ -2111,6 +2111,11 @@ fn validate_copper_zone_net_name(xs: &[Sexp], nets: &HashMap<u32, Net>) -> Resul
             "KiCad copper zone net {id} net_name fields must not be repeated"
         ));
     }
+    if values.len() > 2 {
+        return Err(format!(
+            "KiCad copper zone net {id} net_name field must contain exactly one name"
+        ));
+    }
     let Some(name) = atom(values.get(1)) else {
         return Err(format!(
             "KiCad copper zone net {id} is missing a scalar name"
@@ -3578,6 +3583,28 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "KiCad copper zone net 1 net_name fields must not be repeated"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_extra_values_in_copper_zone_net_name_fields() {
+        for net_name in [
+            r#"(net_name "SIGNAL" extra)"#,
+            r#"(net_name "SIGNAL" (alias "OTHER"))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIGNAL")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (zone (net 1) {net_name} (layer "F.Cu")
+                    (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad copper zone net 1 net_name field must contain exactly one name"
             );
         }
     }
