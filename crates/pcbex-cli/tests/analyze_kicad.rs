@@ -26,12 +26,34 @@ fn analyze(input: &Path, output: &Path, fail_on_violations: bool) -> std::proces
     command.status().expect("analyze-kicad must start")
 }
 
+fn compare(
+    baseline: &Path,
+    current: &Path,
+    output: &Path,
+    fail_on_regressions: bool,
+) -> std::process::ExitStatus {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pcbex"));
+    command
+        .arg("compare-analysis")
+        .arg(baseline)
+        .arg(current)
+        .arg("--output-dir")
+        .arg(output);
+    if fail_on_regressions {
+        command.arg("--fail-on-regressions");
+    }
+    command.status().expect("compare-analysis must start")
+}
+
 #[test]
 fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = root.join("examples/simple.kicad_pcb");
     let output = temporary_directory("analysis");
     let gated_output = temporary_directory("analysis-gated");
+    let unchanged_comparison = temporary_directory("comparison-unchanged");
+    let current = temporary_directory("analysis-current");
+    let regressed_comparison = temporary_directory("comparison-regressed");
 
     assert!(analyze(&input, &output, false).success());
     for artifact in [
@@ -63,6 +85,50 @@ fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     assert!(gated_output.join("run.json").is_file());
     assert!(gated_output.join("report.sarif").is_file());
 
+    assert!(compare(&output, &output, &unchanged_comparison, true).success());
+    assert!(unchanged_comparison.join("delta.json").is_file());
+
+    assert!(analyze(&input, &current, false).success());
+    let mut quality: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(current.join("quality.json")).unwrap()).unwrap();
+    quality["total_vias"] = serde_json::json!(1);
+    fs::write(
+        current.join("quality.json"),
+        serde_json::to_string_pretty(&quality).unwrap(),
+    )
+    .unwrap();
+    let mut checks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(current.join("checks.json")).unwrap()).unwrap();
+    checks["violations"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "rule": "clearance",
+            "message": "new clearance finding",
+            "net_ids": [1]
+        }));
+    fs::write(
+        current.join("checks.json"),
+        serde_json::to_string_pretty(&checks).unwrap(),
+    )
+    .unwrap();
+
+    assert!(!compare(&output, &current, &regressed_comparison, true).success());
+    for artifact in ["delta.json", "report.sarif", "run.json", "summary.md"] {
+        assert!(
+            regressed_comparison.join(artifact).is_file(),
+            "missing comparison {artifact}"
+        );
+    }
+    let delta: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(regressed_comparison.join("delta.json")).unwrap())
+            .unwrap();
+    assert_eq!(delta["changes"]["total_vias"], 1);
+    assert_eq!(delta["new_violations"].as_array().unwrap().len(), 1);
+
     fs::remove_dir_all(output).unwrap();
     fs::remove_dir_all(gated_output).unwrap();
+    fs::remove_dir_all(unchanged_comparison).unwrap();
+    fs::remove_dir_all(current).unwrap();
+    fs::remove_dir_all(regressed_comparison).unwrap();
 }

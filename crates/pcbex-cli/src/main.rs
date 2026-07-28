@@ -4,12 +4,13 @@ use clap_complete::{Shell, generate};
 use pcbex_core::checking::{check_board, check_manufacturability, check_report_to_sarif};
 use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
 use pcbex_core::{
-    Board, RoutingQuality, Rules, board_json_schema, impedance_report, migrate_board_json,
-    parse_board_json, render_svg, repair_routes, repairable_net_ids, route_board, routing_quality,
-    solve_stackup_differential_width_nm, solve_stackup_width_nm,
+    AnalysisDelta, Board, RoutingQuality, Rules, analysis_delta_to_sarif, board_json_schema,
+    impedance_report, migrate_board_json, parse_board_json, render_svg, repair_routes,
+    repairable_net_ids, route_board, routing_quality, solve_stackup_differential_width_nm,
+    solve_stackup_width_nm,
 };
 use pcbex_kicad::{apply_custom_design_rules, apply_project_net_settings, import as import_kicad};
-use serde::Serialize;
+use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     fs, io,
@@ -71,6 +72,24 @@ struct RunManifest {
     rules_file: Option<InputDescriptor>,
     configuration: AnalysisConfiguration,
     result: AnalysisResult,
+    artifacts: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ComparisonInputs {
+    quality: InputDescriptor,
+    checks: InputDescriptor,
+}
+
+#[derive(Debug, Serialize)]
+struct ComparisonManifest {
+    schema_version: u32,
+    engine: String,
+    engine_version: String,
+    command: String,
+    baseline: ComparisonInputs,
+    current: ComparisonInputs,
+    regression: bool,
     artifacts: Vec<String>,
 }
 
@@ -157,6 +176,16 @@ enum Command {
         /// Write all reports before exiting unsuccessfully on violations.
         #[arg(long)]
         fail_on_violations: bool,
+    },
+    /// Compare two `analyze-kicad` bundles and emit CI-ready deltas.
+    CompareAnalysis {
+        baseline_dir: PathBuf,
+        current_dir: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        /// Write all comparison artifacts before exiting unsuccessfully.
+        #[arg(long)]
+        fail_on_regressions: bool,
     },
     /// Route a placed KiCad board across its declared copper layers.
     RouteKicad {
@@ -572,6 +601,82 @@ fn main() -> Result<()> {
                 );
             }
         }
+        Command::CompareAnalysis {
+            baseline_dir,
+            current_dir,
+            output_dir,
+            fail_on_regressions,
+        } => {
+            let (baseline_quality, baseline_quality_input) =
+                read_described_json::<RoutingQuality>(&baseline_dir.join("quality.json"))?;
+            let (baseline_checks, baseline_checks_input) =
+                read_described_json::<pcbex_core::checking::CheckReport>(
+                    &baseline_dir.join("checks.json"),
+                )?;
+            let (current_quality, current_quality_input) =
+                read_described_json::<RoutingQuality>(&current_dir.join("quality.json"))?;
+            let (current_checks, current_checks_input) =
+                read_described_json::<pcbex_core::checking::CheckReport>(
+                    &current_dir.join("checks.json"),
+                )?;
+            let delta = AnalysisDelta::between(
+                &baseline_quality,
+                &baseline_checks,
+                &current_quality,
+                &current_checks,
+            );
+            let regression = delta.is_regression();
+            let artifacts = vec![
+                "delta.json".to_string(),
+                "report.sarif".to_string(),
+                "run.json".to_string(),
+                "summary.md".to_string(),
+            ];
+            fs::create_dir_all(&output_dir)
+                .with_context(|| format!("creating {}", output_dir.display()))?;
+            fs::write(
+                output_dir.join("delta.json"),
+                serde_json::to_string_pretty(&delta)?,
+            )?;
+            fs::write(
+                output_dir.join("report.sarif"),
+                serde_json::to_string_pretty(&analysis_delta_to_sarif(&delta))?,
+            )?;
+            fs::write(
+                output_dir.join("summary.md"),
+                render_comparison_summary(&delta),
+            )?;
+            let manifest = ComparisonManifest {
+                schema_version: 1,
+                engine: "pcbex".to_string(),
+                engine_version: env!("CARGO_PKG_VERSION").to_string(),
+                command: "compare-analysis".to_string(),
+                baseline: ComparisonInputs {
+                    quality: baseline_quality_input,
+                    checks: baseline_checks_input,
+                },
+                current: ComparisonInputs {
+                    quality: current_quality_input,
+                    checks: current_checks_input,
+                },
+                regression,
+                artifacts,
+            };
+            fs::write(
+                output_dir.join("run.json"),
+                serde_json::to_string_pretty(&manifest)?,
+            )?;
+            eprintln!(
+                "comparison written to {}: {} quality regression(s), {} new violation(s), {} resolved violation(s)",
+                output_dir.display(),
+                delta.quality_regressions.len(),
+                delta.new_violations.len(),
+                delta.resolved_violations.len()
+            );
+            if fail_on_regressions && regression {
+                bail!("analysis comparison found regressions");
+            }
+        }
         Command::RouteKicad {
             input,
             project,
@@ -919,6 +1024,93 @@ fn input_descriptor(path: &Path, bytes: &[u8]) -> InputDescriptor {
     }
 }
 
+fn read_described_json<T: DeserializeOwned>(path: &Path) -> Result<(T, InputDescriptor)> {
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let value =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+    Ok((value, input_descriptor(path, &bytes)))
+}
+
+fn render_comparison_summary(delta: &AnalysisDelta) -> String {
+    let length_percent = delta
+        .changes
+        .total_length_percent
+        .map_or_else(|| "n/a".to_string(), |value| format!("{value:+.2}%"));
+    let mut summary = format!(
+        "# pcbex analysis comparison\n\n\
+         **Status:** {}\n\n\
+         | Metric | Baseline | Current | Change |\n\
+         |---|---:|---:|---:|\n\
+         | Total route length (nm) | {} | {} | {:+} ({}) |\n\
+         | Vias | {} | {} | {:+} |\n\
+         | Bends | {} | {} | {:+} |\n\
+         | Routed nets | {} | {} | {:+} |\n\
+         | Unrouted nets | {} | {} | {:+} |\n\
+         | Violations | {} | {} | {:+} |\n",
+        if delta.is_regression() {
+            "regressions found"
+        } else {
+            "no regressions"
+        },
+        delta.baseline.total_length_nm,
+        delta.current.total_length_nm,
+        delta.changes.total_length_nm,
+        length_percent,
+        delta.baseline.total_vias,
+        delta.current.total_vias,
+        delta.changes.total_vias,
+        delta.baseline.total_bends,
+        delta.current.total_bends,
+        delta.changes.total_bends,
+        delta.baseline.routed_nets,
+        delta.current.routed_nets,
+        delta.changes.routed_nets,
+        delta.baseline.unrouted_nets,
+        delta.current.unrouted_nets,
+        delta.changes.unrouted_nets,
+        delta.baseline.violations,
+        delta.current.violations,
+        delta.changes.violations,
+    );
+    if !delta.quality_regressions.is_empty() {
+        summary.push_str("\n## Quality regressions\n\n");
+        for regression in &delta.quality_regressions {
+            summary.push_str(&format!("- {}\n", regression.replace(['\r', '\n'], " ")));
+        }
+    }
+    append_violation_delta(&mut summary, "New violations", &delta.new_violations);
+    append_violation_delta(
+        &mut summary,
+        "Resolved violations",
+        &delta.resolved_violations,
+    );
+    summary
+}
+
+fn append_violation_delta(
+    summary: &mut String,
+    heading: &str,
+    violations: &[pcbex_core::analysis::ViolationFingerprint],
+) {
+    if violations.is_empty() {
+        return;
+    }
+    summary.push_str(&format!("\n## {heading}\n\n"));
+    for violation in violations {
+        summary.push_str(&format!(
+            "- `{}`: {} (nets: {})\n",
+            violation.rule,
+            violation.message.replace(['\r', '\n'], " "),
+            violation
+                .net_ids
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+}
+
 fn render_analysis_summary(
     quality: &RoutingQuality,
     report: &pcbex_core::checking::CheckReport,
@@ -1165,5 +1357,31 @@ mod tests {
         assert!(summary.contains("violations found"));
         assert!(summary.contains("| Unrouted nets | 4 |"));
         assert!(summary.contains("- `clearance`: too close"));
+    }
+
+    #[test]
+    fn parses_compare_analysis_regression_gate() {
+        let cli = Cli::try_parse_from([
+            "pcbex",
+            "compare-analysis",
+            "baseline",
+            "current",
+            "--output-dir",
+            "comparison",
+            "--fail-on-regressions",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::CompareAnalysis {
+                baseline_dir,
+                current_dir,
+                output_dir,
+                fail_on_regressions: true,
+            } if baseline_dir.as_os_str() == "baseline"
+                && current_dir.as_os_str() == "current"
+                && output_dir.as_os_str() == "comparison"
+        ));
     }
 }

@@ -48,6 +48,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Routing performance suite | Criterion scenarios for obstacle, 5/10-net, and board-cutout routing | Benchmark targets compile on every PR and retain local Criterion baselines |
 | Routing quality gates | Stable per-net, board-total, and differential-pair metrics with JSON/SARIF output, thresholds, and baseline regression comparison | Geometry-count regression plus CLI JSON/baseline smoke test |
 | KiCad analysis artifact bundle | Direct `.kicad_pcb` import emits normalized board, SVG, quality, DRC/DFM, SARIF, Markdown, and a SHA-256-addressed run manifest | CLI parsing, SHA-256, summary regressions, and practical-board command smoke test |
+| Analysis bundle comparison | Signed quality deltas plus identity-based new/resolved violations emit JSON, Markdown, SARIF, and input-addressed provenance before an optional regression gate | Core delta/SARIF regressions and end-to-end unchanged/regressed bundle CLI tests |
 | Performance regression gate | Deterministic search-state budgets for 10 parallel nets and a 100 mm board with 200 obstacles | Dedicated `performance_budget` target runs on every PR |
 | Deterministic parallel candidate search | Configurable 1–8 bounded workers explore first-pass A* candidates; ordered validation reuses one board snapshot per pass and sequential conflict fallback controls commits | Ten-net 1-vs-8-worker regression is byte-identical; Criterion measures actual 1/2/4/8-worker wall time |
 | Automatic local push-and-shove | Grid-aligned route-interior translation keeps terminal anchors fixed; failed nets try bounded blocker shoves before selective rip-up and atomically accept only checked combined routes | Successful manual shove preserves terminals, invalid edits roll back, and automatic blocker recovery produces a clean two-route board |
@@ -154,7 +155,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.297.0 exposes 368 Rust tests and 11 Python tests. The release workflow
+Version 1.298.0 exposes 371 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

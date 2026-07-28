@@ -596,6 +596,20 @@ be selected with `--project` and `--rules-file`. Add `--fail-on-violations` to
 write the complete bundle and then fail a CI job when internal checks are not
 clean.
 
+Compare a baseline bundle with the current bundle:
+
+```sh
+pcbex compare-analysis build/baseline build/current \
+  --output-dir build/comparison --fail-on-regressions
+```
+
+The comparison writes `delta.json`, `summary.md`, `report.sarif`, and a
+SHA-256-addressed `run.json` before applying the optional failure gate. Signed
+changes cover total length, vias, bends, routed and unrouted nets, and violation
+count. Violations are compared by rule, message, and normalized net IDs so a
+new finding cannot be hidden by resolving an unrelated finding. Resolved
+violations are retained separately for review.
+
 Length groups may also set `tuning_amplitude_nm`, `tuning_pitch_nm`, and
 `max_tuning_sections`. The tuner distributes the required delay across multiple
 legal straight sections, checking the whole board after every section, while
