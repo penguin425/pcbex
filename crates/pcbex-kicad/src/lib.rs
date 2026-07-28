@@ -37,6 +37,13 @@ pub use schematic::{
     SchematicMarker, SchematicNet, SchematicPin, SchematicPinRef, SchematicSymbol,
     SchematicUnsupportedFeature, SchematicWire, import_schematic, schematic_json_schema,
 };
+mod waiver;
+pub use waiver::{
+    ElectricalFindingDisposition, ElectricalWaiver, ElectricalWaiverCounts,
+    ElectricalWaiverDecision, ElectricalWaiverReport, ElectricalWaiverSet,
+    apply_electrical_waivers, electrical_waiver_report_json_schema,
+    electrical_waiver_set_json_schema,
+};
 
 const NM_PER_MM: f64 = 1_000_000.0;
 const ARC_CHORD_TOLERANCE_NM: f64 = 10_000.0;
