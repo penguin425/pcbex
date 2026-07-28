@@ -155,9 +155,10 @@ cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
 When a sibling `.kicad_pro` file exists, `route-kicad` imports its modern
 net-class dimensions and exact net assignments automatically. Use
 `--project path/to/board.kicad_pro` when the project has a different basename.
-Numeric net IDs in a `.kicad_pcb` must be present and valid; malformed IDs,
-duplicate IDs, and duplicate names are rejected instead of silently dropping or
-overwriting a declaration or retaining ambiguous nets.
+Numeric net IDs and scalar net names in a `.kicad_pcb` must be present and
+valid; malformed declarations, duplicate IDs, and duplicate names are rejected
+instead of silently dropping or overwriting a declaration or retaining
+ambiguous nets.
 Project net-class dimensions must be non-negative and fit the signed nanometer
 range; oversized values are rejected instead of saturating at the integer limit.
 Legacy net classes embedded in `.kicad_pcb` files follow the same finite,
