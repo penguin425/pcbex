@@ -144,6 +144,11 @@
     {
       "id": "multi-reviewer-ai-approval-quorum",
       "release": "v1.325.0",
+      "status": "released"
+    },
+    {
+      "id": "risk-based-ai-reviewer-routing",
+      "release": "v1.326.0",
       "status": "current"
     }
   ]

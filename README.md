@@ -729,13 +729,14 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.325.0
+    uses: penguin425/pcbex@v1.326.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
       schematic: hardware/controller.kicad_sch
       baseline-schematic: .pcbex-baseline/hardware/controller.kicad_sch
-      fail-on-schematic-review: "true"
+      schematic-reviewer-routing-policy: hardware/reviewer-routing-policy.json
+      fail-on-unrouted-schematic-review: "true"
       signed-policy-pack: hardware/organization-policy-pack.signed.json
       policy-public-key: ${{ runner.temp }}/pcbex-policy-root.pub
       policy-trust-state: .pcbex-baseline/hardware/organization-policy-pack.trust.json
@@ -789,6 +790,12 @@ Supplying both `schematic` and `baseline-schematic` adds semantic JSON,
 Markdown, and SARIF to the same evidence bundle and exposes
 `schematic-diff` plus `schematic-review-required`. The optional schematic gate
 therefore blocks electrical-intent changes while allowing drawing-only edits.
+Supplying `schematic-reviewer-routing-policy` additionally recomputes that
+semantic diff and assigns every change to one or more specialist AI reviewer
+profiles. Changes not claimed by a specialist are assigned to the mandatory
+fallback profile. The Action publishes `schematic-reviewer-routing` and
+`schematic-review-all-routed`; the opt-in unrouted-review gate runs only after
+the plan and Markdown summary have been retained.
 Supplying one digest-bound `ai-review-request`, paired newline-separated
 `ai-approval-files` and `ai-response-files`, and an organization policy pack
 adds a verified multi-reviewer quorum report. The Action exposes
@@ -1498,6 +1505,38 @@ IBIS/SI, PDN, or thermal tooling. Closed contracts are emitted by
 
 ## AI schematic review and signed approval
 
+### Risk-based reviewer routing
+
+Select reviewers from the actual electrical-intent delta before asking any
+model to approve it:
+
+```sh
+pcbex route-schematic-review \
+  accepted.kicad_sch proposed.kicad_sch \
+  --routing-policy examples/reviewer-routing-policy.json \
+  --output reviewer-routing.json \
+  --summary-output reviewer-routing.md \
+  --require-routed
+```
+
+The strict policy declares named reviewer profiles, exact provider/model
+candidates, minimum reviewer counts, review instructions, and selectors for
+change kinds, reference prefixes, library prefixes, net-name prefixes, and
+changed fields. Values within one selector field are alternatives; populated
+fields are combined, so all of them must match. Multiple profiles may claim
+the same high-risk change. Every otherwise unmatched change is assigned to the
+required selector-free fallback profile, including importer-coverage changes.
+
+pcbex imports both schematics and recomputes the semantic diff instead of
+trusting caller-supplied impact JSON. The deterministic plan binds the exact
+baseline/current schematic digests and normalized policy digest, lists every
+matched or fallback change, and reports the sum of minimum review assignments.
+Unknown fields, duplicate profile identities, impossible reviewer counts,
+missing fallbacks, selecting fallbacks, blank values, and future schema
+versions fail closed. Closed contracts are emitted by
+`schematic-reviewer-routing-policy-schema` and
+`schematic-reviewer-routing-plan-schema`.
+
 The AI reviews intent, while pcbex retains authority over deterministic gates
 and the cryptographic approval:
 
@@ -1596,7 +1635,8 @@ would not establish signer identity. The private key is created with mode
 AI integration is provider-neutral. `pcbex_agent.review_schematic_with_llm`
 accepts an injected transport, rejects non-JSON or invented evidence before
 Rust validation, and tells the model to use `unknown`/`needs_human` instead of
-guessing. The MCP server exposes `prepare_schematic_review`,
+guessing. The MCP server exposes `route_schematic_reviewers`,
+`prepare_schematic_review`,
 `sign_schematic_approval`, `verify_schematic_approval`, and
 `verify_schematic_approval_quorum`; signing and report writes are marked as
 destructive actions so MCP hosts can retain their user-approval boundary.

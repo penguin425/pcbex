@@ -45,6 +45,8 @@ write_output manufacturing-feedback ""
 write_output manufacturing-feedback-passed ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
+write_output schematic-reviewer-routing ""
+write_output schematic-review-all-routed ""
 write_output ai-approval-quorum ""
 write_output ai-approval-quorum-met ""
 
@@ -153,6 +155,12 @@ if [[ "$has_schematic" != "$has_baseline_schematic" ]]; then
 fi
 schematic_diff=""
 schematic_review_required=""
+schematic_reviewer_routing=""
+schematic_review_all_routed=""
+if [[ -n "${PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY:-}" && "$has_schematic" != "true" ]]; then
+  echo "PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY requires PCBEX_SCHEMATIC and PCBEX_BASELINE_SCHEMATIC" >&2
+  exit 2
+fi
 if [[ "$has_schematic" == "true" ]]; then
   schematic_diff="${artifact_dir}/schematic-diff.json"
   schematic_summary="${artifact_dir}/schematic-diff.md"
@@ -172,6 +180,26 @@ if [[ "$has_schematic" == "true" ]]; then
     printf '\n'
     cat "$schematic_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+  if [[ -n "${PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY:-}" ]]; then
+    schematic_reviewer_routing="${artifact_dir}/schematic-reviewer-routing.json"
+    schematic_reviewer_routing_summary="${artifact_dir}/schematic-reviewer-routing.md"
+    "$PCBEX_BINARY" route-schematic-review \
+      "$PCBEX_BASELINE_SCHEMATIC" \
+      "$PCBEX_SCHEMATIC" \
+      --routing-policy "$PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY" \
+      --output "$schematic_reviewer_routing" \
+      --summary-output "$schematic_reviewer_routing_summary" \
+      --require-routed
+    schematic_review_all_routed="$(
+      python3 -c \
+        'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["all_changes_routed"]).lower())' \
+        "$schematic_reviewer_routing"
+    )"
+    {
+      printf '\n'
+      cat "$schematic_reviewer_routing_summary"
+    } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+  fi
 fi
 
 ai_approval_quorum=""
@@ -264,6 +292,8 @@ write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
+write_output schematic-reviewer-routing "$schematic_reviewer_routing"
+write_output schematic-review-all-routed "$schematic_review_all_routed"
 write_output ai-approval-quorum "$ai_approval_quorum"
 write_output ai-approval-quorum-met "$ai_approval_quorum_met"
 write_output status ok

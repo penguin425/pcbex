@@ -22,6 +22,10 @@ inputs:
     description: Optional accepted .kicad_sch file; required together with schematic.
     required: false
     default: ""
+  schematic-reviewer-routing-policy:
+    description: Optional strict reviewer-routing policy applied to the schematic semantic diff.
+    required: false
+    default: ""
   fab:
     description: Optional built-in fabrication profile ID or stable alias.
     required: false
@@ -98,6 +102,10 @@ inputs:
     description: Fail after publishing evidence when the schematic semantic diff requires review.
     required: false
     default: "false"
+  fail-on-unrouted-schematic-review:
+    description: Fail after publishing evidence when a required schematic review has no complete reviewer-routing plan.
+    required: false
+    default: "false"
   fail-on-ai-quorum:
     description: Fail after publishing evidence unless the configured AI approval quorum passes.
     required: false
@@ -169,6 +177,12 @@ outputs:
   schematic-review-required:
     description: Whether supplied schematics contain electrical changes requiring review.
     value: ${{ steps.analyze.outputs.schematic-review-required }}
+  schematic-reviewer-routing:
+    description: Policy-derived AI reviewer-routing plan path, when configured.
+    value: ${{ steps.analyze.outputs.schematic-reviewer-routing }}
+  schematic-review-all-routed:
+    description: Whether every semantic change was assigned to a specialist or fallback reviewer profile.
+    value: ${{ steps.analyze.outputs.schematic-review-all-routed }}
   ai-approval-quorum:
     description: Verified AI approval-quorum JSON path, when supplied.
     value: ${{ steps.analyze.outputs.ai-approval-quorum }}
@@ -201,6 +215,7 @@ runs:
         PCBEX_BASELINE_BOARD: ${{ inputs.baseline-board }}
         PCBEX_SCHEMATIC: ${{ inputs.schematic }}
         PCBEX_BASELINE_SCHEMATIC: ${{ inputs.baseline-schematic }}
+        PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY: ${{ inputs.schematic-reviewer-routing-policy }}
         PCBEX_FAB: ${{ inputs.fab }}
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
         PCBEX_POLICY_PACK: ${{ inputs.policy-pack }}
@@ -256,11 +271,13 @@ runs:
         PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
         PCBEX_MANUFACTURING_FEEDBACK_PASSED: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
         PCBEX_SCHEMATIC_REVIEW_REQUIRED: ${{ steps.analyze.outputs.schematic-review-required }}
+        PCBEX_SCHEMATIC_REVIEW_ALL_ROUTED: ${{ steps.analyze.outputs.schematic-review-all-routed }}
         PCBEX_AI_APPROVAL_QUORUM_MET: ${{ steps.analyze.outputs.ai-approval-quorum-met }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
         PCBEX_FAIL_ON_SCHEMATIC_REVIEW: ${{ inputs.fail-on-schematic-review }}
+        PCBEX_FAIL_ON_UNROUTED_SCHEMATIC_REVIEW: ${{ inputs.fail-on-unrouted-schematic-review }}
         PCBEX_FAIL_ON_AI_QUORUM: ${{ inputs.fail-on-ai-quorum }}
       run: |
         set -euo pipefail
@@ -282,6 +299,10 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_SCHEMATIC_REVIEW" == "true" && "$PCBEX_SCHEMATIC_REVIEW_REQUIRED" != "false" ]]; then
           echo "::error::pcbex schematic semantic diff requires review or was not produced"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_UNROUTED_SCHEMATIC_REVIEW" == "true" && "$PCBEX_SCHEMATIC_REVIEW_REQUIRED" != "false" && "$PCBEX_SCHEMATIC_REVIEW_ALL_ROUTED" != "true" ]]; then
+          echo "::error::pcbex required schematic review has no complete reviewer-routing plan"
           exit 1
         fi
         if [[ "$PCBEX_FAIL_ON_AI_QUORUM" == "true" && "$PCBEX_AI_APPROVAL_QUORUM_MET" != "true" ]]; then

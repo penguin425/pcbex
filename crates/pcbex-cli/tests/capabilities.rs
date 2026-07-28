@@ -27,6 +27,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "record-manufacturing-feedback",
         "compare-manufacturing-feedback",
         "compare-schematics",
+        "route-schematic-review",
         "check-schematic",
         "prepare-ai-review",
         "verify-ai-quorum",

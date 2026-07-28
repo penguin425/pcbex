@@ -295,6 +295,7 @@ impl McpServer {
                     | "record_manufacturing_feedback"
                     | "compare_manufacturing_feedback"
                     | "compare_schematics"
+                    | "route_schematic_reviewers"
                     | "route_kicad"
             )
         ) {
@@ -737,6 +738,27 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "route_schematic_reviewers",
+            "Route AI schematic reviewers",
+            "Recompute semantic schematic changes and deterministically assign every change to policy-selected specialist or fallback AI reviewer profiles.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["baseline", "current", "routing_policy", "output"],
+                "properties": {
+                    "baseline": {"type": "string"},
+                    "current": {"type": "string"},
+                    "routing_policy": {"type": "string"},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_routed": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "route_kicad",
             "Route KiCad board",
             "Route a placed .kicad_pcb file and write a separate routed board.",
@@ -949,6 +971,7 @@ fn call_tool(
             compare_manufacturing_feedback(arguments, cancellation)?
         }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
+        "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
         "prepare_schematic_review" => prepare_schematic_review(arguments, cancellation)?,
         "sign_schematic_approval" => sign_schematic_approval(arguments, cancellation)?,
@@ -1239,6 +1262,54 @@ fn compare_schematics(
     Ok(execution_result(
         execution,
         json!({"output": output, "diff": diff}),
+    ))
+}
+
+fn route_schematic_reviewers(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "baseline",
+            "current",
+            "routing_policy",
+            "output",
+            "summary_output",
+            "require_routed",
+        ],
+    )?;
+    let baseline = required_string(&arguments, "baseline")?;
+    let current = required_string(&arguments, "current")?;
+    let routing_policy = required_string(&arguments, "routing_policy")?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "route-schematic-review".into(),
+        baseline,
+        current,
+        "--routing-policy".into(),
+        routing_policy,
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_routed",
+        "--require-routed",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let plan = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "plan": plan}),
     ))
 }
 
@@ -1733,7 +1804,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 13);
         let named = |name: &str| {
             tools
                 .iter()
@@ -1767,6 +1838,14 @@ mod tests {
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],
             "optional"
+        );
+        assert_eq!(
+            named("route_schematic_reviewers")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("route_schematic_reviewers")["annotations"]["destructiveHint"],
+            true
         );
         assert_eq!(
             named("sign_schematic_approval")["annotations"]["destructiveHint"],
