@@ -449,6 +449,7 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
         if atom(rule.first()) != Some("rule") {
             continue;
         }
+        atom(rule.get(1)).ok_or_else(|| "custom rule must contain one scalar name".to_string())?;
         let Some(condition) = custom_rule_condition(rule)? else {
             continue;
         };
@@ -6638,6 +6639,46 @@ mod tests {
         .unwrap();
         assert_eq!(applied, 2);
         assert_eq!(imported.board.net_classes["Signal"].clearance_nm, 400_000);
+    }
+
+    #[test]
+    fn rejects_missing_and_non_scalar_custom_rule_names_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for invalid_rule in [
+            r#"(rule
+                  (condition "A.NetClass == 'Signal'")
+                  (constraint track_width (min 0.4mm)))"#,
+            r#"(rule (name "Structured")
+                  (condition "A.NetClass == 'Signal'")
+                  (constraint track_width (min 0.4mm)))"#,
+        ] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  {invalid_rule}
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom rule must contain one scalar name"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
     }
 
     #[test]
