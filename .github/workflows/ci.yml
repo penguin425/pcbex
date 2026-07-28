@@ -13,6 +13,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  hardware-ci-action:
+    name: Hardware CI action
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Exercise the public composite action
+        id: pcbex
+        uses: ./
+        with:
+          board: examples/simple.kicad_pcb
+          baseline-board: examples/simple.kicad_pcb
+          output-dir: build/action-analysis
+          fail-on-violations: "false"
+          fail-on-regressions: "true"
+          artifact-name: pcbex-action-smoke
+      - name: Verify action outputs
+        env:
+          VIOLATION_COUNT: ${{ steps.pcbex.outputs.violation-count }}
+          REGRESSION: ${{ steps.pcbex.outputs.regression }}
+        run: |
+          test "$VIOLATION_COUNT" = "1"
+          test "$REGRESSION" = "false"
+
   rust:
     name: Rust
     runs-on: ubuntu-latest
