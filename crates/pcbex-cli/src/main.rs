@@ -55,6 +55,23 @@ enum QualityFormat {
 }
 
 #[derive(Debug, Serialize)]
+struct DoctorCheck {
+    id: &'static str,
+    required: bool,
+    available: bool,
+    detail: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorReport {
+    schema_version: u32,
+    engine: &'static str,
+    engine_version: &'static str,
+    ready: bool,
+    checks: Vec<DoctorCheck>,
+}
+
+#[derive(Debug, Serialize)]
 struct InputDescriptor {
     path: String,
     bytes: usize,
@@ -113,6 +130,14 @@ struct ComparisonManifest {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Diagnose the pcbex installation and optional external integrations.
+    Doctor {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Treat a missing or unusable kicad-cli installation as an error.
+        #[arg(long)]
+        require_kicad: bool,
+    },
     /// Generate shell completion definitions on standard output.
     Completion {
         #[arg(value_enum)]
@@ -563,9 +588,121 @@ fn resolve_dfm_profile(name: Option<&str>) -> Result<Option<DfmProfile>> {
     .transpose()
 }
 
+fn executable_check(
+    id: &'static str,
+    executable: &str,
+    version_arguments: &[&str],
+    required: bool,
+) -> DoctorCheck {
+    match ProcessCommand::new(executable)
+        .args(version_arguments)
+        .output()
+    {
+        Ok(output) => {
+            let rendered = if output.stdout.is_empty() {
+                &output.stderr
+            } else {
+                &output.stdout
+            };
+            let detail = String::from_utf8_lossy(rendered)
+                .lines()
+                .next()
+                .unwrap_or("version output was empty")
+                .trim()
+                .to_string();
+            DoctorCheck {
+                id,
+                required,
+                available: output.status.success(),
+                detail: if output.status.success() {
+                    detail
+                } else {
+                    format!("version command exited with {}: {detail}", output.status)
+                },
+            }
+        }
+        Err(error) => DoctorCheck {
+            id,
+            required,
+            available: false,
+            detail: error.to_string(),
+        },
+    }
+}
+
+fn doctor_report(require_kicad: bool) -> DoctorReport {
+    let current_directory = std::env::current_dir();
+    let mut checks = vec![DoctorCheck {
+        id: "pcbex",
+        required: true,
+        available: true,
+        detail: format!("pcbex {}", env!("CARGO_PKG_VERSION")),
+    }];
+    checks.push(match current_directory {
+        Ok(path) => DoctorCheck {
+            id: "working_directory",
+            required: true,
+            available: true,
+            detail: path.display().to_string(),
+        },
+        Err(error) => DoctorCheck {
+            id: "working_directory",
+            required: true,
+            available: false,
+            detail: error.to_string(),
+        },
+    });
+    checks.push(DoctorCheck {
+        id: "fabrication_profiles",
+        required: true,
+        available: !dfm_profiles().is_empty(),
+        detail: format!("{} built-in profile(s)", dfm_profiles().len()),
+    });
+    checks.push(executable_check(
+        "kicad_cli",
+        "kicad-cli",
+        &["version"],
+        require_kicad,
+    ));
+    checks.push(executable_check("git", "git", &["--version"], false));
+    checks.push(executable_check("python", "python3", &["--version"], false));
+    let ready = checks
+        .iter()
+        .all(|check| !check.required || check.available);
+    DoctorReport {
+        schema_version: 1,
+        engine: "pcbex",
+        engine_version: env!("CARGO_PKG_VERSION"),
+        ready,
+        checks,
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Doctor {
+            output,
+            require_kicad,
+        } => {
+            let report = doctor_report(require_kicad);
+            let rendered = serde_json::to_string_pretty(&report)?;
+            if let Some(path) = output {
+                fs::write(path, rendered)?;
+            } else {
+                println!("{rendered}");
+            }
+            if !report.ready {
+                let failed = report
+                    .checks
+                    .iter()
+                    .filter(|check| check.required && !check.available)
+                    .map(|check| check.id)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                bail!("pcbex installation is not ready: {failed}");
+            }
+        }
         Command::Completion { shell } => {
             let mut command = Cli::command();
             let name = command.get_name().to_string();

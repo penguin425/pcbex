@@ -64,6 +64,11 @@
     {
       "id": "roadmap-release-audit",
       "release": "v1.309.2",
+      "status": "released"
+    },
+    {
+      "id": "installation-doctor",
+      "release": "v1.310.0",
       "status": "current"
     }
   ]

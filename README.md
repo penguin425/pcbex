@@ -1246,6 +1246,18 @@ Closed request, response, and signature contracts are emitted by
 
 ## Releases
 
+Diagnose the local CLI and its optional KiCad, Git, and Python integrations
+before adding it to CI:
+
+```sh
+pcbex doctor
+pcbex doctor --require-kicad --output doctor.json
+```
+
+The command always emits a versioned JSON report. Optional integrations are
+reported without failing the command; `--require-kicad` promotes KiCad CLI
+availability to a required readiness check.
+
 Pushing a semantic-version tag from `main` creates a GitHub Release:
 
 ```sh
