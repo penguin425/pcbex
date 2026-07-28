@@ -160,6 +160,23 @@ jobs:
               --ticket HW-42 \
               --output "build/action-quorum/human-$engineer.json"
           done
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/transparency.key \
+            --public-key build/action-quorum/transparency.pub
+          target/release/pcbex init-approval-log \
+            --log-id action-approval-log \
+            --output build/action-quorum/approval-log.empty.json
+          target/release/pcbex append-approval-log \
+            build/action-quorum/approval-log.empty.json \
+            --artifact build/action-quorum/retained-quorum.json \
+            --kind ai-quorum-report \
+            --recorded-at-unix 1 \
+            --output build/action-quorum/approval-log.json
+          target/release/pcbex sign-approval-log \
+            build/action-quorum/approval-log.json \
+            --private-key build/action-quorum/transparency.key \
+            --signer-id action-security-log \
+            --output build/action-quorum/approval-log.checkpoint.json
       - name: Exercise the public composite action
         id: pcbex
         uses: ./
@@ -185,6 +202,10 @@ jobs:
             build/action-quorum/human-a.json
             build/action-quorum/human-b.json
           fail-on-schematic-approval: "true"
+          approval-transparency-log: build/action-quorum/approval-log.json
+          approval-log-checkpoint: build/action-quorum/approval-log.checkpoint.json
+          approval-log-public-key: build/action-quorum/transparency.pub
+          fail-on-approval-log: "true"
           manufacturing-feedback-declaration: build/action-feedback/declaration.json
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
           fail-on-manufacturing-feedback: "true"
@@ -212,6 +233,8 @@ jobs:
           HUMAN_ESCALATION: ${{ steps.pcbex.outputs.human-escalation }}
           HUMAN_ESCALATION_APPROVED: ${{ steps.pcbex.outputs.human-escalation-approved }}
           SCHEMATIC_APPROVAL_MET: ${{ steps.pcbex.outputs.schematic-approval-met }}
+          APPROVAL_LOG_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-verification }}
+          APPROVAL_LOG_VERIFIED: ${{ steps.pcbex.outputs.approval-log-verified }}
           SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           test -s "$ARTIFACT_DIR/pr-comment.md"
@@ -242,6 +265,9 @@ jobs:
           test "$HUMAN_ESCALATION_APPROVED" = "true"
           test "$SCHEMATIC_APPROVAL_MET" = "true"
           test "$(jq -r '.approvals' "$HUMAN_ESCALATION")" = "2"
+          test -s "$APPROVAL_LOG_VERIFICATION"
+          test "$APPROVAL_LOG_VERIFIED" = "true"
+          test "$(jq -r '.entry_count' "$APPROVAL_LOG_VERIFICATION")" = "1"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then
             [[ "$COMMENT_URL" == https://github.com/* ]]
           else

@@ -52,6 +52,8 @@ write_output ai-approval-quorum-met ""
 write_output human-escalation ""
 write_output human-escalation-approved ""
 write_output schematic-approval-met ""
+write_output approval-log-verification ""
+write_output approval-log-verified ""
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -323,6 +325,39 @@ if [[ "$ai_approval_quorum_met" == "true" || "$human_escalation_approved" == "tr
   schematic_approval_met=true
 fi
 
+approval_log_verification=""
+approval_log_verified=""
+approval_log_inputs=0
+if [[ -n "${PCBEX_APPROVAL_TRANSPARENCY_LOG:-}" ]]; then ((approval_log_inputs += 1)); fi
+if [[ -n "${PCBEX_APPROVAL_LOG_CHECKPOINT:-}" ]]; then ((approval_log_inputs += 1)); fi
+if [[ -n "${PCBEX_APPROVAL_LOG_PUBLIC_KEY:-}" ]]; then ((approval_log_inputs += 1)); fi
+if ((approval_log_inputs != 0 && approval_log_inputs != 3)); then
+  echo "PCBEX_APPROVAL_TRANSPARENCY_LOG, PCBEX_APPROVAL_LOG_CHECKPOINT, and PCBEX_APPROVAL_LOG_PUBLIC_KEY must be supplied together" >&2
+  exit 2
+fi
+if ((approval_log_inputs == 3)); then
+  approval_log_verification="${artifact_dir}/approval-log-verification.json"
+  "$PCBEX_BINARY" verify-approval-log \
+    "$PCBEX_APPROVAL_TRANSPARENCY_LOG" \
+    --checkpoint "$PCBEX_APPROVAL_LOG_CHECKPOINT" \
+    --public-key "$PCBEX_APPROVAL_LOG_PUBLIC_KEY" \
+    --output "$approval_log_verification"
+  approval_log_verified="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["verified"]).lower())' \
+      "$approval_log_verification"
+  )"
+  {
+    printf '\n# Approval transparency log\n\n'
+    printf -- '- Verified: `%s`\n' "$approval_log_verified"
+    printf -- '- Entries: `%s`\n' "$(
+      python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["entry_count"])' \
+        "$approval_log_verification"
+    )"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 comparison_sarif=""
 regression=false
 if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
@@ -373,4 +408,6 @@ write_output ai-approval-quorum-met "$ai_approval_quorum_met"
 write_output human-escalation "$human_escalation"
 write_output human-escalation-approved "$human_escalation_approved"
 write_output schematic-approval-met "$schematic_approval_met"
+write_output approval-log-verification "$approval_log_verification"
+write_output approval-log-verified "$approval_log_verified"
 write_output status ok

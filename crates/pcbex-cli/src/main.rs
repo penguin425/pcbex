@@ -15,34 +15,41 @@ use pcbex_core::{
     solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
-    AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiRequirement, AiReviewRequest,
-    AiReviewResponse, AiReviewSession, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet,
-    HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
-    SessionAiQuorumEvidence, SignedAiApproval, SignedHumanEscalation, SimulationArtifact,
-    SimulationEvidence, ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
-    ai_review_response_json_schema, apply_custom_design_rules, apply_electrical_waivers,
-    apply_project_net_settings, approval_public_key, build_ai_review_request,
-    build_ai_review_session, check_schematic, compare_electrical_reviews, compare_schematics,
+    AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiApprovalQuorumReport, AiRequirement,
+    AiReviewRequest, AiReviewResponse, AiReviewSession, ApprovalArtifactKind,
+    ApprovalEventDescriptor, ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview,
+    ElectricalWaiverSet, HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
+    HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
+    SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
+    SignedApprovalLogCheckpoint, SignedHumanEscalation, SimulationArtifact, SimulationEvidence,
+    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
+    ai_review_response_json_schema, append_approval_transparency_event, apply_custom_design_rules,
+    apply_electrical_waivers, apply_project_net_settings,
+    approval_log_verification_report_json_schema, approval_public_key,
+    approval_transparency_log_json_schema, build_ai_review_request, build_ai_review_session,
+    check_schematic, compare_electrical_reviews, compare_schematics,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review,
     human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    parse_ai_review_response, parse_electrical_policy, parse_schematic_reviewer_routing_policy,
-    parse_simulation_declaration, record_simulation_evidence, render_ai_approval_quorum_summary,
-    render_human_escalation_summary, render_routed_ai_approval_quorum_summary,
-    render_schematic_diff_summary, render_schematic_reviewer_routing_summary,
-    render_session_routed_ai_approval_quorum_summary, route_schematic_review,
-    routed_ai_approval_quorum_report_json_schema, schematic_diff_json_schema,
-    schematic_diff_to_sarif, schematic_json_schema, schematic_reviewer_routing_plan_json_schema,
-    schematic_reviewer_routing_policy_json_schema, sign_ai_review, sign_ai_review_for_session,
-    sign_human_escalation, signed_ai_approval_json_schema, signed_human_escalation_json_schema,
+    new_approval_transparency_log, parse_ai_review_response, parse_electrical_policy,
+    parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
+    record_simulation_evidence, render_ai_approval_quorum_summary, render_human_escalation_summary,
+    render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
+    render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
+    route_schematic_review, routed_ai_approval_quorum_report_json_schema,
+    schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
+    schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
+    sign_ai_review, sign_ai_review_for_session, sign_approval_log_checkpoint,
+    sign_human_escalation, signed_ai_approval_json_schema,
+    signed_approval_log_checkpoint_json_schema, signed_human_escalation_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
-    verify_human_escalation, verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
-    verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
-    verify_signed_ai_approval,
+    verify_approval_log_checkpoint, verify_human_escalation, verify_routed_ai_approval_quorum,
+    verify_session_ai_approval_quorum, verify_session_routed_ai_approval_quorum,
+    verify_session_signed_ai_approval, verify_signed_ai_approval,
 };
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     convert::Infallible,
@@ -119,6 +126,36 @@ impl From<HumanDecisionArg> for HumanEscalationDecision {
             HumanDecisionArg::Reject => Self::Reject,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ApprovalArtifactKindArg {
+    SignedAiApproval,
+    AiQuorumReport,
+    SignedHumanEscalation,
+    HumanEscalationReport,
+    SignedPolicyPack,
+}
+
+impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
+    fn from(value: ApprovalArtifactKindArg) -> Self {
+        match value {
+            ApprovalArtifactKindArg::SignedAiApproval => Self::SignedAiApproval,
+            ApprovalArtifactKindArg::AiQuorumReport => Self::AiQuorumReport,
+            ApprovalArtifactKindArg::SignedHumanEscalation => Self::SignedHumanEscalation,
+            ApprovalArtifactKindArg::HumanEscalationReport => Self::HumanEscalationReport,
+            ApprovalArtifactKindArg::SignedPolicyPack => Self::SignedPolicyPack,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum AiQuorumArtifact {
+    SessionRouted(SessionRoutedAiApprovalQuorumReport),
+    Session(SessionAiApprovalQuorumReport),
+    Routed(RoutedAiApprovalQuorumReport),
+    Global(AiApprovalQuorumReport),
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -496,6 +533,21 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed append-only approval-transparency-log JSON Schema.
+    ApprovalTransparencyLogSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed signed approval-log checkpoint JSON Schema.
+    SignedApprovalLogCheckpointSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed approval-log verification report JSON Schema.
+    ApprovalLogVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Prepare a complete, digest-bound request for an AI schematic reviewer.
     PrepareAiReview {
         input: PathBuf,
@@ -643,6 +695,46 @@ enum Command {
         /// Fail after writing evidence unless dual control approves.
         #[arg(long)]
         require_approved: bool,
+    },
+    /// Create an empty append-only approval transparency log.
+    InitApprovalLog {
+        #[arg(long)]
+        log_id: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Append one normalized approval artifact to a new immutable log snapshot.
+    AppendApprovalLog {
+        log: CompactPath,
+        #[arg(long)]
+        artifact: CompactPath,
+        #[arg(long, value_enum)]
+        kind: ApprovalArtifactKindArg,
+        /// Explicit event time for reproducible imports; defaults to the current clock.
+        #[arg(long)]
+        recorded_at_unix: Option<u64>,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Sign the exact head and complete digest of an approval log.
+    SignApprovalLog {
+        log: CompactPath,
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify every hash-chain entry and its trusted signed checkpoint.
+    VerifyApprovalLog {
+        log: CompactPath,
+        #[arg(long)]
+        checkpoint: CompactPath,
+        #[arg(long)]
+        public_key: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -1844,6 +1936,21 @@ fn main() -> Result<()> {
         Command::HumanEscalationReportSchema { output } => {
             write_or_print_json(&human_escalation_report_json_schema(), output.as_ref())?;
         }
+        Command::ApprovalTransparencyLogSchema { output } => {
+            write_or_print_json(&approval_transparency_log_json_schema(), output.as_ref())?;
+        }
+        Command::SignedApprovalLogCheckpointSchema { output } => {
+            write_or_print_json(
+                &signed_approval_log_checkpoint_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ApprovalLogVerificationReportSchema { output } => {
+            write_or_print_json(
+                &approval_log_verification_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::PrepareAiReview {
             input,
             electrical_review,
@@ -2398,6 +2505,81 @@ fn main() -> Result<()> {
             if require_approved && !report.escalation_approved {
                 bail!("human escalation did not receive dual-control approval");
             }
+        }
+        Command::InitApprovalLog { log_id, output } => {
+            let log = new_approval_transparency_log(&log_id).map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&log)?, false)?;
+            eprintln!("initialized approval transparency log {log_id}");
+        }
+        Command::AppendApprovalLog {
+            log,
+            artifact,
+            kind,
+            recorded_at_unix,
+            output,
+        } => {
+            if log.0.as_ref() == output.0.as_ref() {
+                bail!("approval log input and output paths must differ");
+            }
+            let (mut log, _) = read_described_json::<ApprovalTransparencyLog>(&log)?;
+            let event = approval_event_descriptor(kind, &artifact)?;
+            let digest = append_approval_transparency_event(
+                &mut log,
+                event,
+                recorded_at_unix.unwrap_or(current_unix_seconds()?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&log)?, false)?;
+            eprintln!(
+                "appended approval transparency entry {} at sequence {}",
+                digest,
+                log.entries.len() - 1
+            );
+        }
+        Command::SignApprovalLog {
+            log,
+            private_key,
+            signer_id,
+            output,
+        } => {
+            if log.0.as_ref() == output.0.as_ref() {
+                bail!("approval log and checkpoint output paths must differ");
+            }
+            let (log, _) = read_described_json::<ApprovalTransparencyLog>(&log)?;
+            let secret = read_hex_key(&private_key, "approval checkpoint private key")?;
+            let checkpoint = sign_approval_log_checkpoint(&log, &signer_id, &secret)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&checkpoint)?, false)?;
+            eprintln!(
+                "signed approval log {} at {} entr{}",
+                checkpoint.log_id,
+                checkpoint.entry_count,
+                if checkpoint.entry_count == 1 {
+                    "y"
+                } else {
+                    "ies"
+                }
+            );
+        }
+        Command::VerifyApprovalLog {
+            log,
+            checkpoint,
+            public_key,
+            output,
+        } => {
+            if output.0.as_ref() == log.0.as_ref() || output.0.as_ref() == checkpoint.0.as_ref() {
+                bail!("approval log verification output must use a separate path");
+            }
+            let (log, _) = read_described_json::<ApprovalTransparencyLog>(&log)?;
+            let (checkpoint, _) = read_described_json::<SignedApprovalLogCheckpoint>(&checkpoint)?;
+            let trusted = read_hex_key(&public_key, "trusted approval checkpoint public key")?;
+            let report = verify_approval_log_checkpoint(&log, &checkpoint, &trusted)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "verified approval transparency log {} with {} entries",
+                report.log_id, report.entry_count
+            );
         }
         Command::DfmProfiles { output } => {
             let profiles = serde_json::to_string_pretty(&dfm_profiles())?;
@@ -3762,6 +3944,124 @@ fn read_described_json<T: DeserializeOwned>(path: &Path) -> Result<(T, InputDesc
     let value =
         serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
     Ok((value, input_descriptor(path, &bytes)))
+}
+
+fn approval_event_descriptor(
+    kind: ApprovalArtifactKindArg,
+    path: &Path,
+) -> Result<ApprovalEventDescriptor> {
+    let source = fs::read_to_string(path)
+        .with_context(|| format!("reading approval artifact {}", path.display()))?;
+    let parse_error = |error: serde_json::Error| {
+        anyhow::anyhow!("invalid approval artifact {}: {error}", path.display())
+    };
+    match kind {
+        ApprovalArtifactKindArg::SignedAiApproval => {
+            let artifact: SignedAiApproval = serde_json::from_str(&source).map_err(parse_error)?;
+            Ok(ApprovalEventDescriptor {
+                artifact_kind: ApprovalArtifactKind::SignedAiApproval,
+                artifact_sha256: normalized_json_sha256(&artifact)?,
+                subject_id: artifact.request_sha256.clone(),
+                request_sha256: Some(artifact.request_sha256),
+                session_sha256: artifact.session_sha256,
+                signer_id: Some(artifact.signer_id),
+                outcome: if artifact.approved {
+                    "approved".into()
+                } else {
+                    "rejected".into()
+                },
+            })
+        }
+        ApprovalArtifactKindArg::AiQuorumReport => {
+            let artifact: AiQuorumArtifact = serde_json::from_str(&source).map_err(parse_error)?;
+            let (request_sha256, session_sha256, approved) = match &artifact {
+                AiQuorumArtifact::SessionRouted(report) => (
+                    report.session.request_sha256.clone(),
+                    Some(report.session.session_sha256.clone()),
+                    report.routed_quorum.routed_quorum_met,
+                ),
+                AiQuorumArtifact::Session(report) => (
+                    report.request_sha256.clone(),
+                    Some(report.session_sha256.clone()),
+                    report.quorum.quorum_met,
+                ),
+                AiQuorumArtifact::Routed(report) => (
+                    report.quorum.request_sha256.clone(),
+                    None,
+                    report.routed_quorum_met,
+                ),
+                AiQuorumArtifact::Global(report) => {
+                    (report.request_sha256.clone(), None, report.quorum_met)
+                }
+            };
+            Ok(ApprovalEventDescriptor {
+                artifact_kind: ApprovalArtifactKind::AiQuorumReport,
+                artifact_sha256: normalized_json_sha256(&artifact)?,
+                subject_id: request_sha256.clone(),
+                request_sha256: Some(request_sha256),
+                session_sha256,
+                signer_id: None,
+                outcome: if approved {
+                    "approved".into()
+                } else {
+                    "quorum_not_met".into()
+                },
+            })
+        }
+        ApprovalArtifactKindArg::SignedHumanEscalation => {
+            let artifact: SignedHumanEscalation =
+                serde_json::from_str(&source).map_err(parse_error)?;
+            let outcome = match artifact.decision {
+                HumanEscalationDecision::Approve => "approved",
+                HumanEscalationDecision::Reject => "rejected",
+            };
+            Ok(ApprovalEventDescriptor {
+                artifact_kind: ApprovalArtifactKind::SignedHumanEscalation,
+                artifact_sha256: normalized_json_sha256(&artifact)?,
+                subject_id: artifact.request_sha256.clone(),
+                request_sha256: Some(artifact.request_sha256),
+                session_sha256: Some(artifact.session_sha256),
+                signer_id: Some(artifact.signer_id),
+                outcome: outcome.into(),
+            })
+        }
+        ApprovalArtifactKindArg::HumanEscalationReport => {
+            let artifact: HumanEscalationReport =
+                serde_json::from_str(&source).map_err(parse_error)?;
+            Ok(ApprovalEventDescriptor {
+                artifact_kind: ApprovalArtifactKind::HumanEscalationReport,
+                artifact_sha256: normalized_json_sha256(&artifact)?,
+                subject_id: artifact.request_sha256.clone(),
+                request_sha256: Some(artifact.request_sha256),
+                session_sha256: Some(artifact.session_sha256),
+                signer_id: None,
+                outcome: if artifact.escalation_approved {
+                    "approved".into()
+                } else {
+                    "not_approved".into()
+                },
+            })
+        }
+        ApprovalArtifactKindArg::SignedPolicyPack => {
+            let artifact = parse_signed_policy_pack(&source).map_err(anyhow::Error::msg)?;
+            Ok(ApprovalEventDescriptor {
+                artifact_kind: ApprovalArtifactKind::SignedPolicyPack,
+                artifact_sha256: normalized_json_sha256(&artifact)?,
+                subject_id: format!(
+                    "{}@{}",
+                    artifact.policy_pack.id, artifact.policy_pack.revision
+                ),
+                request_sha256: None,
+                session_sha256: None,
+                signer_id: Some(artifact.signer_id),
+                outcome: "published".into(),
+            })
+        }
+    }
+}
+
+fn normalized_json_sha256(value: &impl Serialize) -> Result<String> {
+    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
 }
 
 fn render_comparison_summary(delta: &AnalysisDelta) -> String {
