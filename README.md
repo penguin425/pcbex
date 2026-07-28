@@ -658,6 +658,50 @@ count. Violations are compared by rule, message, and normalized net IDs so a
 new finding cannot be hidden by resolving an unrelated finding. Resolved
 violations are retained separately for review.
 
+Bind fabrication and inspection results back to the exact analyzed source
+board:
+
+```sh
+pcbex analyze-kicad examples/simple.kicad_pcb \
+  --output-dir build/manufacturing-analysis
+
+pcbex record-manufacturing-feedback \
+  examples/manufacturing-feedback-declaration.json \
+  --analysis-dir build/manufacturing-analysis \
+  --board examples/simple.kicad_pcb \
+  --artifact examples/manufacturing-inspection.csv \
+  --output build/manufacturing-feedback.json \
+  --summary-output build/manufacturing-feedback.md \
+  --sarif-output build/manufacturing-feedback.sarif
+```
+
+The closed declaration records manufacturer, process, optional lot,
+disposition, stable finding IDs, measurements, and the SHA-256 of the submitted
+board. The command independently hashes the board, `analyze-kicad` run
+manifest, and every raw inspection artifact. It rejects a manifest for another
+board, unknown fields, duplicate IDs, non-finite or reversed measurement
+bounds, duplicate artifact basenames, and missing evidence citations before
+writing the bound result. A rejected disposition or error finding makes
+`passed` false; `--require-passed` writes all requested evidence and then fails.
+
+Compare newly manufactured feedback with an accepted result:
+
+```sh
+pcbex compare-manufacturing-feedback \
+  accepted-feedback.json current-feedback.json \
+  --output manufacturing-comparison.json \
+  --summary-output manufacturing-comparison.md \
+  --sarif-output manufacturing-comparison.sarif \
+  --fail-on-regressions
+```
+
+Comparison requires the same manufacturer and reports new, escalated, and
+resolved findings. New warning/error findings, severity escalation,
+disposition degradation, or pass-to-fail transition are regressions. Closed
+contracts are emitted by `manufacturing-feedback-declaration-schema`,
+`manufacturing-feedback-schema`, and
+`manufacturing-feedback-comparison-schema`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -685,13 +729,18 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.322.0
+    uses: penguin425/pcbex@v1.323.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
       signed-policy-pack: hardware/organization-policy-pack.signed.json
       policy-public-key: ${{ runner.temp }}/pcbex-policy-root.pub
       policy-trust-state: .pcbex-baseline/hardware/organization-policy-pack.trust.json
+      manufacturing-feedback-declaration: manufacturing/fab-feedback.json
+      manufacturing-feedback-artifacts: |
+        manufacturing/inspection.csv
+        manufacturing/fab-report.pdf
+      fail-on-manufacturing-feedback: "true"
       fail-on-regressions: "true"
       upload-sarif: "true"
       pr-comment: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
@@ -720,6 +769,11 @@ from the protected base revision. The same authenticated physical policy is
 applied to current and baseline analysis, and the exact verified source digest
 is retained in each run manifest. The Action also outputs and uploads
 `verified-policy-trust-state.json` for review and later adoption.
+When a manufacturing declaration is supplied, the Action publishes its bound
+JSON, Markdown, and SARIF, appends the result to the Job Summary and PR comment,
+and exposes `manufacturing-feedback` plus `manufacturing-feedback-passed`.
+Artifact paths are supplied one per line; the manufacturing gate is opt-in so
+design-only workflows remain backward compatible.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -750,7 +804,9 @@ Configure an MCP host to launch the binary directly:
 
 The server implements the 2025-11-25 MCP lifecycle and negotiates compatible
 2025-06-18, 2025-03-26, and 2024-11-05 clients. It exposes
-`list_dfm_profiles`, `analyze_kicad`, `compare_analysis`, and `route_kicad`.
+`list_dfm_profiles`, policy verification, board analysis and routing,
+manufacturing-feedback recording/comparison, and signed schematic-review
+tools.
 Every tool has a closed input schema, an output schema, safety annotations, a
 human-readable text result, and matching `structuredContent`. Tool processes
 capture stdout and stderr so the stdio transport emits only newline-delimited
@@ -759,8 +815,8 @@ JSON-RPC messages. Expected analysis or regression gate failures use
 malformed requests remain JSON-RPC errors so an agent can correct its call.
 
 For 2025-11-25 clients, the server also implements the experimental MCP Tasks
-API. `analyze_kicad`, `compare_analysis`, and `route_kicad` declare
-`execution.taskSupport: "optional"` and accept task-augmented calls:
+API. Board analysis/comparison/routing and both manufacturing-feedback tools
+declare `execution.taskSupport: "optional"` and accept task-augmented calls:
 
 ```json
 {

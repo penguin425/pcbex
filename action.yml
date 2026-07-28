@@ -38,6 +38,14 @@ inputs:
     description: Optional previously accepted trust state used to reject signed-pack rollback or equivocation.
     required: false
     default: ""
+  manufacturing-feedback-declaration:
+    description: Optional strict fabrication feedback declaration bound to the analyzed board.
+    required: false
+    default: ""
+  manufacturing-feedback-artifacts:
+    description: Newline-separated fabrication or inspection artifact paths required by a feedback declaration.
+    required: false
+    default: ""
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -50,6 +58,10 @@ inputs:
     description: Fail after publishing artifacts when the baseline comparison regresses.
     required: false
     default: "true"
+  fail-on-manufacturing-feedback:
+    description: Fail after publishing evidence unless supplied manufacturing feedback passes.
+    required: false
+    default: "false"
   upload-artifact:
     description: Upload the complete analysis directory as a workflow artifact.
     required: false
@@ -105,6 +117,12 @@ outputs:
   verified-policy-trust-state:
     description: Newly accepted policy trust-state path when signed-policy-pack is used.
     value: ${{ steps.analyze.outputs.verified-policy-trust-state }}
+  manufacturing-feedback:
+    description: Digest-bound normalized manufacturing feedback path, when supplied.
+    value: ${{ steps.analyze.outputs.manufacturing-feedback }}
+  manufacturing-feedback-passed:
+    description: Whether supplied manufacturing feedback passed.
+    value: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
 
 runs:
   using: composite
@@ -135,6 +153,8 @@ runs:
         PCBEX_SIGNED_POLICY_PACK: ${{ inputs.signed-policy-pack }}
         PCBEX_POLICY_PUBLIC_KEY: ${{ inputs.policy-public-key }}
         PCBEX_POLICY_TRUST_STATE: ${{ inputs.policy-trust-state }}
+        PCBEX_MANUFACTURING_FEEDBACK_DECLARATION: ${{ inputs.manufacturing-feedback-declaration }}
+        PCBEX_MANUFACTURING_FEEDBACK_ARTIFACTS: ${{ inputs.manufacturing-feedback-artifacts }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 
@@ -174,8 +194,10 @@ runs:
         PCBEX_ANALYSIS_STATUS: ${{ steps.analyze.outputs.status }}
         PCBEX_VIOLATION_COUNT: ${{ steps.analyze.outputs.violation-count }}
         PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
+        PCBEX_MANUFACTURING_FEEDBACK_PASSED: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
+        PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -188,5 +210,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_REGRESSIONS" == "true" && "$PCBEX_REGRESSION" == "true" ]]; then
           echo "::error::pcbex found a hardware-analysis regression"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK" == "true" && "$PCBEX_MANUFACTURING_FEEDBACK_PASSED" != "true" ]]; then
+          echo "::error::pcbex manufacturing feedback is absent or did not pass"
           exit 1
         fi

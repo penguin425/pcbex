@@ -41,6 +41,8 @@ write_output comment-body ""
 write_output violation-count ""
 write_output regression false
 write_output verified-policy-trust-state ""
+write_output manufacturing-feedback ""
+write_output manufacturing-feedback-passed ""
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -103,6 +105,40 @@ violation_count="$(
 } > "$comment_body"
 cat "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 
+manufacturing_feedback=""
+manufacturing_feedback_passed=""
+if [[ -z "${PCBEX_MANUFACTURING_FEEDBACK_DECLARATION:-}" && -n "${PCBEX_MANUFACTURING_FEEDBACK_ARTIFACTS:-}" ]]; then
+  echo "PCBEX_MANUFACTURING_FEEDBACK_ARTIFACTS requires PCBEX_MANUFACTURING_FEEDBACK_DECLARATION" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_MANUFACTURING_FEEDBACK_DECLARATION:-}" ]]; then
+  manufacturing_feedback="${artifact_dir}/manufacturing-feedback.json"
+  manufacturing_summary="${artifact_dir}/manufacturing-feedback.md"
+  manufacturing_sarif="${sarif_dir}/manufacturing-feedback.sarif"
+  feedback_arguments=(record-manufacturing-feedback \
+    "$PCBEX_MANUFACTURING_FEEDBACK_DECLARATION" \
+    --analysis-dir "$current_dir" \
+    --board "$PCBEX_BOARD" \
+    --output "$manufacturing_feedback" \
+    --summary-output "$manufacturing_summary" \
+    --sarif-output "$manufacturing_sarif")
+  while IFS= read -r artifact; do
+    if [[ -n "$artifact" ]]; then
+      feedback_arguments+=(--artifact "$artifact")
+    fi
+  done <<< "${PCBEX_MANUFACTURING_FEEDBACK_ARTIFACTS:-}"
+  "$PCBEX_BINARY" "${feedback_arguments[@]}"
+  manufacturing_feedback_passed="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["passed"]).lower())' \
+      "$manufacturing_feedback"
+  )"
+  {
+    printf '\n'
+    cat "$manufacturing_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 comparison_sarif=""
 regression=false
 if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
@@ -142,4 +178,6 @@ write_output comment-body "$comment_body"
 write_output violation-count "$violation_count"
 write_output regression "$regression"
 write_output verified-policy-trust-state "$verified_policy_trust_state"
+write_output manufacturing-feedback "$manufacturing_feedback"
+write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
 write_output status ok

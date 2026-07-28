@@ -289,7 +289,13 @@ impl McpServer {
         let name = params.get("name").and_then(Value::as_str);
         if !matches!(
             name,
-            Some("analyze_kicad" | "compare_analysis" | "route_kicad")
+            Some(
+                "analyze_kicad"
+                    | "compare_analysis"
+                    | "record_manufacturing_feedback"
+                    | "compare_manufacturing_feedback"
+                    | "route_kicad"
+            )
         ) {
             return error_response(
                 id,
@@ -662,6 +668,53 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "record_manufacturing_feedback",
+            "Record manufacturing feedback",
+            "Bind fabrication findings and raw inspection artifacts to the exact board and analyze-kicad manifest.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["declaration", "analysis_dir", "board", "artifacts", "output"],
+                "properties": {
+                    "declaration": {"type": "string"},
+                    "analysis_dir": {"type": "string"},
+                    "board": {"type": "string"},
+                    "artifacts": {
+                        "type": "array", "minItems": 1,
+                        "items": {"type": "string"}
+                    },
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "sarif_output": {"type": "string"},
+                    "require_passed": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "compare_manufacturing_feedback",
+            "Compare manufacturing feedback",
+            "Compare accepted and current bound fabrication feedback and gate new or escalated findings.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["baseline", "current", "output"],
+                "properties": {
+                    "baseline": {"type": "string"},
+                    "current": {"type": "string"},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "sarif_output": {"type": "string"},
+                    "fail_on_regressions": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "route_kicad",
             "Route KiCad board",
             "Route a placed .kicad_pcb file and write a separate routed board.",
@@ -830,6 +883,10 @@ fn call_tool(
         "verify_policy_pack" => verify_policy_pack(arguments, cancellation)?,
         "analyze_kicad" => analyze_kicad(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
+        "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
+        "compare_manufacturing_feedback" => {
+            compare_manufacturing_feedback(arguments, cancellation)?
+        }
         "route_kicad" => route_kicad(arguments, cancellation)?,
         "prepare_schematic_review" => prepare_schematic_review(arguments, cancellation)?,
         "sign_schematic_approval" => sign_schematic_approval(arguments, cancellation)?,
@@ -970,6 +1027,107 @@ fn compare_analysis(
     Ok(execution_result(
         execution,
         json!({"artifact_dir": output_dir, "manifest": manifest}),
+    ))
+}
+
+fn record_manufacturing_feedback(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "declaration",
+            "analysis_dir",
+            "board",
+            "artifacts",
+            "output",
+            "summary_output",
+            "sarif_output",
+            "require_passed",
+        ],
+    )?;
+    let declaration = required_string(&arguments, "declaration")?;
+    let analysis_dir = required_string(&arguments, "analysis_dir")?;
+    let board = required_string(&arguments, "board")?;
+    let artifacts = required_string_array(&arguments, "artifacts", false)?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "record-manufacturing-feedback".into(),
+        declaration,
+        "--analysis-dir".into(),
+        analysis_dir,
+        "--board".into(),
+        board,
+    ];
+    for artifact in artifacts {
+        command.extend(["--artifact".into(), artifact]);
+    }
+    command.extend(["--output".into(), output.clone()]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_option(&arguments, "sarif_output", "--sarif-output", &mut command)?;
+    optional_flag(
+        &arguments,
+        "require_passed",
+        "--require-passed",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let feedback = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "feedback": feedback}),
+    ))
+}
+
+fn compare_manufacturing_feedback(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "baseline",
+            "current",
+            "output",
+            "summary_output",
+            "sarif_output",
+            "fail_on_regressions",
+        ],
+    )?;
+    let baseline = required_string(&arguments, "baseline")?;
+    let current = required_string(&arguments, "current")?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "compare-manufacturing-feedback".into(),
+        baseline,
+        current,
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_option(&arguments, "sarif_output", "--sarif-output", &mut command)?;
+    optional_flag(
+        &arguments,
+        "fail_on_regressions",
+        "--fail-on-regressions",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let comparison = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "comparison": comparison}),
     ))
 }
 
@@ -1370,38 +1528,47 @@ mod tests {
         let response = server
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
-        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 8);
+        let tools = response["result"]["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 10);
+        let named = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool["name"] == name)
+                .unwrap_or_else(|| panic!("missing MCP tool {name}"))
+        };
         assert_eq!(
-            response["result"]["tools"][0]["annotations"]["readOnlyHint"],
+            named("list_dfm_profiles")["annotations"]["readOnlyHint"],
             true
         );
         assert_eq!(
-            response["result"]["tools"][0]["execution"]["taskSupport"],
+            named("verify_policy_pack")["execution"]["taskSupport"],
             "forbidden"
         );
         assert_eq!(
-            response["result"]["tools"][1]["execution"]["taskSupport"],
-            "forbidden"
-        );
-        assert_eq!(
-            response["result"]["tools"][1]["annotations"]["destructiveHint"],
-            true
-        );
-        assert_eq!(
-            response["result"]["tools"][2]["execution"]["taskSupport"],
+            named("analyze_kicad")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(
-            response["result"]["tools"][6]["annotations"]["destructiveHint"],
+            named("record_manufacturing_feedback")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("record_manufacturing_feedback")["annotations"]["destructiveHint"],
             true
         );
         assert_eq!(
-            response["result"]["tools"][7]["annotations"]["readOnlyHint"],
+            named("record_manufacturing_feedback")["inputSchema"]["properties"]["artifacts"]["type"],
+            "array"
+        );
+        assert_eq!(
+            named("sign_schematic_approval")["annotations"]["destructiveHint"],
             true
         );
-        let verify_policy = response["result"]["tools"]
-            .as_array()
-            .unwrap()
+        assert_eq!(
+            named("verify_schematic_approval")["annotations"]["readOnlyHint"],
+            true
+        );
+        let verify_policy = tools
             .iter()
             .find(|tool| tool["name"] == "verify_policy_pack")
             .unwrap();

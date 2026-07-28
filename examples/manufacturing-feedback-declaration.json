@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "id": "example-fab-lot-42",
+  "manufacturer": {
+    "id": "example-fab",
+    "process": "2-layer production",
+    "lot": "lot-42"
+  },
+  "received_on": "2026-07-29",
+  "board_sha256": "6c740dcb4e44c7dc546d3dac46d6b588ae571e58f7e65411cd17faf61d86bd2f",
+  "disposition": "accepted_with_notes",
+  "findings": [
+    {
+      "id": "mask-sliver",
+      "category": "solder_mask",
+      "severity": "warning",
+      "message": "The minimum solder-mask sliver was below the preferred process target.",
+      "measurement": {
+        "name": "minimum solder-mask sliver",
+        "value": 0.08,
+        "unit": "mm",
+        "minimum": 0.1
+      },
+      "evidence": [
+        "manufacturing-inspection.csv"
+      ]
+    }
+  ]
+}
