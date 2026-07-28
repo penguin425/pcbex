@@ -2069,9 +2069,16 @@ fn validate_declared_copper_net(
     kind: &str,
     nets: &HashMap<u32, Net>,
 ) -> Result<(), String> {
-    let Some(values) = child_values(xs, "net") else {
+    let mut net_fields = xs.iter().filter_map(|value| {
+        let values = value.as_list()?;
+        (atom(values.first()) == Some("net")).then_some(values)
+    });
+    let Some(values) = net_fields.next() else {
         return Ok(());
     };
+    if net_fields.next().is_some() {
+        return Err(format!("KiCad {kind} net fields must not be repeated"));
+    }
     let id = number_u32(values.get(1))
         .ok_or_else(|| format!("KiCad {kind} is missing a valid numeric net ID"))?;
     if id != 0 && !nets.contains_key(&id) {
@@ -3362,6 +3369,51 @@ mod tests {
                 assert_eq!(
                     import(&pcb, rules()).unwrap_err(),
                     format!("KiCad {kind} is missing a valid numeric net ID")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_repeated_routed_copper_net_fields() {
+        let primitives = [
+            (
+                "segment",
+                r#"(segment (start 1 1) (end 5 1) (width 0.25)
+                  (layer "F.Cu") {nets})"#,
+            ),
+            (
+                "route arc",
+                r#"(arc (start 1 1) (mid 3 3) (end 5 1) (width 0.25)
+                  (layer "F.Cu") {nets})"#,
+            ),
+            (
+                "via",
+                r#"(via (at 3 3) (size 0.6) (drill 0.3)
+                  (layers "F.Cu" "B.Cu") {nets})"#,
+            ),
+            (
+                "copper zone",
+                r#"(zone {nets} (net_name "SIGNAL") (layer "F.Cu")
+                  (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))"#,
+            ),
+        ];
+
+        for (kind, primitive) in primitives {
+            for nets in ["(net 1) (net 1)", "(net 1) (net 2)"] {
+                let pcb = format!(
+                    r#"(kicad_pcb
+                      (net 1 "SIGNAL")
+                      (net 2 "OTHER")
+                      (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                      {}
+                    )"#,
+                    primitive.replace("{nets}", nets)
+                );
+
+                assert_eq!(
+                    import(&pcb, rules()).unwrap_err(),
+                    format!("KiCad {kind} net fields must not be repeated")
                 );
             }
         }
