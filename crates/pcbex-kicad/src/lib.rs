@@ -501,6 +501,9 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
                 "length" => {
                     let minimum = constraint_optional_value(constraint, "min")?;
                     let maximum = constraint_optional_value(constraint, "max")?;
+                    if minimum.is_none() && maximum.is_none() {
+                        return Err("custom constraint length has no supported value".to_string());
+                    }
                     for (name, value) in [("min", minimum), ("max", maximum)] {
                         if value.is_some_and(|length| length <= 0) {
                             return Err(format!("custom rule length {name} must be positive"));
@@ -6328,6 +6331,43 @@ mod tests {
         assert_eq!(class.clearance_nm, 200_000);
         assert_eq!(class.minimum_length_nm, None);
         assert_eq!(class.maximum_length_nm, None);
+    }
+
+    #[test]
+    fn rejects_custom_rule_lengths_without_supported_bounds_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for length_constraint in ["(constraint length)", "(constraint length (opt 1mm))"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let class = imported.board.net_classes.get_mut("Signal").unwrap();
+            class.minimum_length_nm = Some(1_000_000);
+            class.maximum_length_nm = Some(2_000_000);
+            let custom_rules = format!(
+                r#"
+                  (rule "Missing bounds"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm))
+                    {length_constraint})
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom constraint length has no supported value"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.minimum_length_nm, Some(1_000_000));
+            assert_eq!(class.maximum_length_nm, Some(2_000_000));
+        }
     }
 
     #[test]
