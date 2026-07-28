@@ -298,6 +298,7 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
         let patterns = patterns
             .as_array()
             .ok_or_else(|| "KiCad project netclass_patterns is not an array".to_string())?;
+        let mut project_patterns = HashSet::with_capacity(patterns.len());
         for assignment in patterns.iter().rev() {
             let assignment = assignment.as_object().ok_or_else(|| {
                 "KiCad project contains a non-object net-class pattern".to_string()
@@ -308,6 +309,11 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 .ok_or_else(|| "net-class pattern is missing pattern".to_string())?;
             if pattern.trim().is_empty() {
                 return Err("net-class pattern is blank".to_string());
+            }
+            if !project_patterns.insert(pattern) {
+                return Err(format!(
+                    "KiCad project contains duplicate net-class pattern {pattern}"
+                ));
             }
             let class = assignment
                 .get("netclass")
@@ -6089,6 +6095,46 @@ mod tests {
                 "net-class pattern is blank"
             );
             assert!(!imported.board.net_classes.contains_key("New"));
+            assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_project_net_class_patterns_atomically() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (add_net "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+              (net 1 "SIG")))
+        )"#;
+
+        for second_class in ["First", "Second"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = serde_json::json!({
+                "net_settings": {
+                    "classes": [
+                        {"name": "First", "track_width": 0.2},
+                        {"name": "Second", "track_width": 0.3}
+                    ],
+                    "netclass_patterns": [
+                        {"pattern": "SIG", "netclass": "First"},
+                        {"pattern": "SIG", "netclass": second_class}
+                    ]
+                }
+            });
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
+                "KiCad project contains duplicate net-class pattern SIG"
+            );
+            assert!(!imported.board.net_classes.contains_key("First"));
+            assert!(!imported.board.net_classes.contains_key("Second"));
             assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
         }
     }
