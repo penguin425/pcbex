@@ -54,6 +54,30 @@ inputs:
     description: Newline-separated fabrication or inspection artifact paths required by a feedback declaration.
     required: false
     default: ""
+  ai-review-request:
+    description: Optional digest-bound AI schematic-review request used for quorum verification.
+    required: false
+    default: ""
+  ai-approval-files:
+    description: Newline-separated signed AI approval files, paired with ai-response-files.
+    required: false
+    default: ""
+  ai-response-files:
+    description: Newline-separated exact AI response files, paired with ai-approval-files.
+    required: false
+    default: ""
+  ai-quorum-minimum-approvals:
+    description: Minimum independently signed approvals required.
+    required: false
+    default: "2"
+  ai-quorum-minimum-distinct-providers:
+    description: Minimum distinct approved provider identities required.
+    required: false
+    default: "2"
+  ai-quorum-minimum-distinct-models:
+    description: Minimum distinct approved model identities required.
+    required: false
+    default: "2"
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -72,6 +96,10 @@ inputs:
     default: "false"
   fail-on-schematic-review:
     description: Fail after publishing evidence when the schematic semantic diff requires review.
+    required: false
+    default: "false"
+  fail-on-ai-quorum:
+    description: Fail after publishing evidence unless the configured AI approval quorum passes.
     required: false
     default: "false"
   upload-artifact:
@@ -141,6 +169,12 @@ outputs:
   schematic-review-required:
     description: Whether supplied schematics contain electrical changes requiring review.
     value: ${{ steps.analyze.outputs.schematic-review-required }}
+  ai-approval-quorum:
+    description: Verified AI approval-quorum JSON path, when supplied.
+    value: ${{ steps.analyze.outputs.ai-approval-quorum }}
+  ai-approval-quorum-met:
+    description: Whether every configured AI approval-quorum threshold passed.
+    value: ${{ steps.analyze.outputs.ai-approval-quorum-met }}
 
 runs:
   using: composite
@@ -175,6 +209,12 @@ runs:
         PCBEX_POLICY_TRUST_STATE: ${{ inputs.policy-trust-state }}
         PCBEX_MANUFACTURING_FEEDBACK_DECLARATION: ${{ inputs.manufacturing-feedback-declaration }}
         PCBEX_MANUFACTURING_FEEDBACK_ARTIFACTS: ${{ inputs.manufacturing-feedback-artifacts }}
+        PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
+        PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
+        PCBEX_AI_RESPONSE_FILES: ${{ inputs.ai-response-files }}
+        PCBEX_AI_QUORUM_MINIMUM_APPROVALS: ${{ inputs.ai-quorum-minimum-approvals }}
+        PCBEX_AI_QUORUM_MINIMUM_DISTINCT_PROVIDERS: ${{ inputs.ai-quorum-minimum-distinct-providers }}
+        PCBEX_AI_QUORUM_MINIMUM_DISTINCT_MODELS: ${{ inputs.ai-quorum-minimum-distinct-models }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 
@@ -216,10 +256,12 @@ runs:
         PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
         PCBEX_MANUFACTURING_FEEDBACK_PASSED: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
         PCBEX_SCHEMATIC_REVIEW_REQUIRED: ${{ steps.analyze.outputs.schematic-review-required }}
+        PCBEX_AI_APPROVAL_QUORUM_MET: ${{ steps.analyze.outputs.ai-approval-quorum-met }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
         PCBEX_FAIL_ON_SCHEMATIC_REVIEW: ${{ inputs.fail-on-schematic-review }}
+        PCBEX_FAIL_ON_AI_QUORUM: ${{ inputs.fail-on-ai-quorum }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -240,5 +282,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_SCHEMATIC_REVIEW" == "true" && "$PCBEX_SCHEMATIC_REVIEW_REQUIRED" != "false" ]]; then
           echo "::error::pcbex schematic semantic diff requires review or was not produced"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_AI_QUORUM" == "true" && "$PCBEX_AI_APPROVAL_QUORUM_MET" != "true" ]]; then
+          echo "::error::pcbex AI schematic approval quorum is absent or did not pass"
           exit 1
         fi

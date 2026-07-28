@@ -139,6 +139,11 @@
     {
       "id": "schematic-semantic-diff",
       "release": "v1.324.0",
+      "status": "released"
+    },
+    {
+      "id": "multi-reviewer-ai-approval-quorum",
+      "release": "v1.325.0",
       "status": "current"
     }
   ]

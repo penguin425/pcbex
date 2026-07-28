@@ -34,6 +34,7 @@ auditable release.
 | v1.322.0 | Monotonic policy trust state | Reject signed-pack rollback, equivocation, and identity substitution |
 | v1.323.0 | Manufacturing feedback ingestion | Bind fabrication findings and measurements to exact analyzed boards |
 | v1.324.0 | Schematic semantic diff | Gate electrical-intent changes independently of drawing edits |
+| v1.325.0 | Multi-reviewer AI approval quorum | Require independently signed provider/model-diverse schematic reviews |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing

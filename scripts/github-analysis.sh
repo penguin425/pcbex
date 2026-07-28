@@ -45,6 +45,8 @@ write_output manufacturing-feedback ""
 write_output manufacturing-feedback-passed ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
+write_output ai-approval-quorum ""
+write_output ai-approval-quorum-met ""
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -172,6 +174,53 @@ if [[ "$has_schematic" == "true" ]]; then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+ai_approval_quorum=""
+ai_approval_quorum_met=""
+ai_quorum_inputs=0
+if [[ -n "${PCBEX_AI_REVIEW_REQUEST:-}" ]]; then ((ai_quorum_inputs += 1)); fi
+if [[ -n "${PCBEX_AI_APPROVAL_FILES:-}" ]]; then ((ai_quorum_inputs += 1)); fi
+if [[ -n "${PCBEX_AI_RESPONSE_FILES:-}" ]]; then ((ai_quorum_inputs += 1)); fi
+if ((ai_quorum_inputs != 0 && ai_quorum_inputs != 3)); then
+  echo "PCBEX_AI_REVIEW_REQUEST, PCBEX_AI_APPROVAL_FILES, and PCBEX_AI_RESPONSE_FILES must be supplied together" >&2
+  exit 2
+fi
+if ((ai_quorum_inputs == 3)); then
+  if [[ -z "$effective_policy_pack" ]]; then
+    echo "AI approval quorum verification requires a policy pack or signed policy pack" >&2
+    exit 2
+  fi
+  ai_approval_quorum="${artifact_dir}/ai-approval-quorum.json"
+  ai_approval_quorum_summary="${artifact_dir}/ai-approval-quorum.md"
+  quorum_arguments=(verify-ai-quorum \
+    "$PCBEX_AI_REVIEW_REQUEST" \
+    --policy-pack "$effective_policy_pack" \
+    --minimum-approvals "${PCBEX_AI_QUORUM_MINIMUM_APPROVALS:-2}" \
+    --minimum-distinct-providers "${PCBEX_AI_QUORUM_MINIMUM_DISTINCT_PROVIDERS:-2}" \
+    --minimum-distinct-models "${PCBEX_AI_QUORUM_MINIMUM_DISTINCT_MODELS:-2}" \
+    --output "$ai_approval_quorum" \
+    --summary-output "$ai_approval_quorum_summary")
+  while IFS= read -r approval; do
+    if [[ -n "$approval" ]]; then
+      quorum_arguments+=(--approval "$approval")
+    fi
+  done <<< "${PCBEX_AI_APPROVAL_FILES:-}"
+  while IFS= read -r response; do
+    if [[ -n "$response" ]]; then
+      quorum_arguments+=(--response "$response")
+    fi
+  done <<< "${PCBEX_AI_RESPONSE_FILES:-}"
+  "$PCBEX_BINARY" "${quorum_arguments[@]}"
+  ai_approval_quorum_met="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["quorum_met"]).lower())' \
+      "$ai_approval_quorum"
+  )"
+  {
+    printf '\n'
+    cat "$ai_approval_quorum_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 comparison_sarif=""
 regression=false
 if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
@@ -215,4 +264,6 @@ write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
+write_output ai-approval-quorum "$ai_approval_quorum"
+write_output ai-approval-quorum-met "$ai_approval_quorum_met"
 write_output status ok

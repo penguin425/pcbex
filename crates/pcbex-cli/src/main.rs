@@ -15,8 +15,9 @@ use pcbex_core::{
     solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
-    AiRequirement, AiReviewRequest, AiReviewResponse, ElectricalPolicy, ElectricalReview,
-    ElectricalWaiverSet, SignedAiApproval, SimulationArtifact, SimulationEvidence,
+    AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiRequirement, AiReviewRequest,
+    AiReviewResponse, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet, SignedAiApproval,
+    SimulationArtifact, SimulationEvidence, ai_approval_quorum_report_json_schema,
     ai_review_request_json_schema, ai_review_response_json_schema, apply_custom_design_rules,
     apply_electrical_waivers, apply_project_net_settings, approval_public_key,
     build_ai_review_request, check_schematic, compare_electrical_reviews, compare_schematics,
@@ -25,10 +26,11 @@ use pcbex_kicad::{
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review, import as import_kicad,
     import_schematic, parse_ai_review_response, parse_electrical_policy,
-    parse_simulation_declaration, record_simulation_evidence, render_schematic_diff_summary,
-    schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema, sign_ai_review,
-    signed_ai_approval_json_schema, simulation_declaration_json_schema,
-    simulation_evidence_json_schema, verify_signed_ai_approval,
+    parse_simulation_declaration, record_simulation_evidence, render_ai_approval_quorum_summary,
+    render_schematic_diff_summary, schematic_diff_json_schema, schematic_diff_to_sarif,
+    schematic_json_schema, sign_ai_review, signed_ai_approval_json_schema,
+    simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
+    verify_signed_ai_approval,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -403,6 +405,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed AI approval-quorum report JSON Schema.
+    AiApprovalQuorumSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Prepare a complete, digest-bound request for an AI schematic reviewer.
     PrepareAiReview {
         input: PathBuf,
@@ -462,6 +469,32 @@ enum Command {
         /// Also require the verified envelope to represent an approval.
         #[arg(long)]
         require_approved: bool,
+    },
+    /// Verify independent signed AI reviews and enforce a multi-reviewer quorum.
+    VerifyAiQuorum {
+        request: PathBuf,
+        /// Signed approval envelope; repeat once per reviewer.
+        #[arg(long = "approval", required = true)]
+        approvals: Vec<PathBuf>,
+        /// Exact AI response paired by position with each --approval.
+        #[arg(long = "response", required = true)]
+        responses: Vec<PathBuf>,
+        /// Organization policy pack containing every trusted approval signer.
+        #[arg(long)]
+        policy_pack: PathBuf,
+        #[arg(long, default_value_t = 2)]
+        minimum_approvals: u32,
+        #[arg(long, default_value_t = 2)]
+        minimum_distinct_providers: u32,
+        #[arg(long, default_value_t = 2)]
+        minimum_distinct_models: u32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        /// Fail after writing reports unless every quorum threshold passes.
+        #[arg(long)]
+        require_quorum: bool,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -1590,6 +1623,9 @@ fn main() -> Result<()> {
         Command::SignedAiApprovalSchema { output } => {
             write_or_print_json(&signed_ai_approval_json_schema(), output.as_ref())?;
         }
+        Command::AiApprovalQuorumSchema { output } => {
+            write_or_print_json(&ai_approval_quorum_report_json_schema(), output.as_ref())?;
+        }
         Command::PrepareAiReview {
             input,
             electrical_review,
@@ -1763,6 +1799,104 @@ fn main() -> Result<()> {
                 },
                 approval.signer_id
             );
+        }
+        Command::VerifyAiQuorum {
+            request,
+            approvals,
+            responses,
+            policy_pack,
+            minimum_approvals,
+            minimum_distinct_providers,
+            minimum_distinct_models,
+            output,
+            summary_output,
+            require_quorum,
+        } => {
+            if approvals.len() != responses.len() {
+                bail!(
+                    "--approval and --response counts must match; received {} and {}",
+                    approvals.len(),
+                    responses.len()
+                );
+            }
+            if summary_output.as_ref().is_some_and(|path| path == &output) {
+                bail!("quorum JSON and Markdown output paths must differ");
+            }
+            let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            let pack = load_policy_pack(&policy_pack)?.0;
+            validate_ai_request_against_policy_pack(&request, &pack)?;
+
+            let mut loaded_approvals = Vec::with_capacity(approvals.len());
+            let mut loaded_responses = Vec::with_capacity(responses.len());
+            let mut trusted_keys = Vec::with_capacity(approvals.len());
+            for (approval_path, response_path) in approvals.iter().zip(&responses) {
+                let (approval, _) = read_described_json::<SignedAiApproval>(approval_path)?;
+                let response_source = fs::read_to_string(response_path)
+                    .with_context(|| format!("reading {}", response_path.display()))?;
+                let response = parse_ai_review_response(&response_source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("parsing {}", response_path.display()))?;
+                let trusted = pack
+                    .trusted_approval_keys
+                    .iter()
+                    .find(|trusted| trusted.signer_id == approval.signer_id)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "approval signer {:?} is not trusted by policy pack {}",
+                            approval.signer_id,
+                            pack.id
+                        )
+                    })?;
+                trusted_keys.push(decode_hex_key(
+                    &trusted.public_key,
+                    "trusted approval public key",
+                )?);
+                loaded_approvals.push(approval);
+                loaded_responses.push(response);
+            }
+            let candidates = loaded_approvals
+                .iter()
+                .zip(&loaded_responses)
+                .zip(&trusted_keys)
+                .map(
+                    |((approval, response), trusted_public_key)| AiApprovalQuorumCandidate {
+                        approval,
+                        response,
+                        trusted_public_key,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let report = verify_ai_approval_quorum(
+                &request,
+                &candidates,
+                AiApprovalQuorumPolicy {
+                    minimum_approvals,
+                    minimum_distinct_providers,
+                    minimum_distinct_models,
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&report)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            if let Some(path) = summary_output {
+                fs::write(&path, render_ai_approval_quorum_summary(&report))
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
+            eprintln!(
+                "AI approval quorum: {}/{} approval(s), {} provider(s), {} model(s): {}",
+                report.counts.approvals,
+                report.policy.minimum_approvals,
+                report.counts.distinct_providers,
+                report.counts.distinct_models,
+                if report.quorum_met {
+                    "approved"
+                } else {
+                    "not met"
+                }
+            );
+            if require_quorum && !report.quorum_met {
+                bail!("AI approval quorum did not meet every threshold");
+            }
         }
         Command::DfmProfiles { output } => {
             let profiles = serde_json::to_string_pretty(&dfm_profiles())?;

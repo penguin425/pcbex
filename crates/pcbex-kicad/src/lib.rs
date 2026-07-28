@@ -16,6 +16,12 @@ pub use approval::{
     approval_public_key, build_ai_review_request, parse_ai_review_response, sign_ai_review,
     signed_ai_approval_json_schema, verify_signed_ai_approval,
 };
+mod approval_quorum;
+pub use approval_quorum::{
+    AiApprovalQuorumCandidate, AiApprovalQuorumCounts, AiApprovalQuorumMember,
+    AiApprovalQuorumPolicy, AiApprovalQuorumReport, ai_approval_quorum_report_json_schema,
+    render_ai_approval_quorum_summary, verify_ai_approval_quorum,
+};
 mod electrical;
 pub use electrical::{
     ElectricalExplanationReport, ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy,

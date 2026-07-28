@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.324.0
+    uses: penguin425/pcbex@v1.325.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -739,6 +739,14 @@ steps:
       signed-policy-pack: hardware/organization-policy-pack.signed.json
       policy-public-key: ${{ runner.temp }}/pcbex-policy-root.pub
       policy-trust-state: .pcbex-baseline/hardware/organization-policy-pack.trust.json
+      ai-review-request: hardware/review-request.json
+      ai-approval-files: |
+        hardware/reviewer-a.approval.json
+        hardware/reviewer-b.approval.json
+      ai-response-files: |
+        hardware/reviewer-a.response.json
+        hardware/reviewer-b.response.json
+      fail-on-ai-quorum: "true"
       manufacturing-feedback-declaration: manufacturing/fab-feedback.json
       manufacturing-feedback-artifacts: |
         manufacturing/inspection.csv
@@ -781,6 +789,13 @@ Supplying both `schematic` and `baseline-schematic` adds semantic JSON,
 Markdown, and SARIF to the same evidence bundle and exposes
 `schematic-diff` plus `schematic-review-required`. The optional schematic gate
 therefore blocks electrical-intent changes while allowing drawing-only edits.
+Supplying one digest-bound `ai-review-request`, paired newline-separated
+`ai-approval-files` and `ai-response-files`, and an organization policy pack
+adds a verified multi-reviewer quorum report. The Action exposes
+`ai-approval-quorum` and `ai-approval-quorum-met`; its opt-in gate runs only
+after the JSON, Markdown, Job Summary, PR comment, and workflow artifact are
+retained. Approval, provider, and model thresholds default to two and remain
+independently configurable.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -1533,6 +1548,35 @@ pcbex verify-ai-approval \
   --policy-pack examples/acme-policy-pack.json --require-approved
 ```
 
+For production review, verify multiple independently signed responses against
+the same request and organization trust root:
+
+```sh
+pcbex verify-ai-quorum ai-review-request.json \
+  --approval reviewer-a.approval.json \
+  --approval reviewer-b.approval.json \
+  --response reviewer-a.response.json \
+  --response reviewer-b.response.json \
+  --policy-pack organization-policy-pack.json \
+  --minimum-approvals 2 \
+  --minimum-distinct-providers 2 \
+  --minimum-distinct-models 2 \
+  --output approval-quorum.json \
+  --summary-output approval-quorum.md \
+  --require-quorum
+```
+
+Every envelope is freshly verified against the exact request, response, and
+trusted signer key. Signer IDs, public keys, and response digests must be
+unique, preventing one model response or signing identity from being counted
+twice. Provider and full provider/model/version identities are normalized
+case-insensitively before diversity counting. Valid signed rejections remain
+visible in the report but never count as approvals. A threshold failure writes
+deterministic JSON and Markdown before the optional gate exits unsuccessfully;
+signature tampering or an untrusted signer fails closed without producing a
+misleading report. The closed report schema is emitted by
+`ai-approval-quorum-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -1553,8 +1597,9 @@ AI integration is provider-neutral. `pcbex_agent.review_schematic_with_llm`
 accepts an injected transport, rejects non-JSON or invented evidence before
 Rust validation, and tells the model to use `unknown`/`needs_human` instead of
 guessing. The MCP server exposes `prepare_schematic_review`,
-`sign_schematic_approval`, and `verify_schematic_approval`; signing is marked
-as a destructive action so MCP hosts can retain their user-approval boundary.
+`sign_schematic_approval`, `verify_schematic_approval`, and
+`verify_schematic_approval_quorum`; signing and report writes are marked as
+destructive actions so MCP hosts can retain their user-approval boundary.
 Closed request, response, and signature contracts are emitted by
 `ai-review-request-schema`, `ai-review-response-schema`, and
 `signed-ai-approval-schema`.
