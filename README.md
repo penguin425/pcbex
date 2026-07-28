@@ -677,7 +677,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.307.0
+    uses: penguin425/pcbex@v1.308.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1183,6 +1183,66 @@ signal integrity, power integrity, thermal, and custom. The engine does not
 trust a specific simulator; CI supplies raw results from ngspice, SPICE,
 IBIS/SI, PDN, or thermal tooling. Closed contracts are emitted by
 `simulation-declaration-schema` and `simulation-evidence-schema`.
+
+## AI schematic review and signed approval
+
+The AI reviews intent, while pcbex retains authority over deterministic gates
+and the cryptographic approval:
+
+```sh
+# Run once; existing key files are never overwritten.
+pcbex approval-keygen \
+  --private-key .secrets/schematic-approval.key \
+  --public-key schematic-approval.pub
+
+# Recomputes the embedded electrical review and validates every simulation
+# binding. Simulation evidence is required unless explicitly waived.
+pcbex prepare-ai-review design.kicad_sch \
+  --electrical-review electrical-review.json \
+  --policy electrical-policy.json \
+  --simulation-evidence power-rail.evidence.json \
+  --requirement 'power=All IC supply pins have a valid source and decoupling' \
+  --requirement 'reset=Reset defaults to a defined safe state' \
+  --output ai-review-request.json
+
+# Give ai-review-request.json to the model and require the closed response
+# contract emitted by `ai-review-response-schema`.
+
+pcbex sign-ai-review ai-review-request.json ai-review-response.json \
+  --private-key .secrets/schematic-approval.key \
+  --signer-id production-ci \
+  --output signed-approval.json --require-approved
+
+pcbex verify-ai-approval \
+  signed-approval.json ai-review-request.json ai-review-response.json \
+  --public-key schematic-approval.pub --require-approved
+```
+
+The request embeds the normalized schematic, effective electrical policy,
+freshly recomputed electrical review, bound simulation evidence, explicit
+requirements, and the complete set of evidence IDs the model may cite. Its
+self-identity excludes only the identity field itself, so any mutation is
+detected. Every requirement must be assessed exactly once and cite at least
+one known evidence ID. Unknown requirements, missing evidence, failed
+simulations, ERC rejection, an AI reject/needs-human decision, or error/critical
+AI risks prevent approval.
+
+The model response is never allowed to change those gates. pcbex reevaluates
+the full request immediately before signing and produces a deterministic
+Ed25519 approval or rejection envelope. Verification requires the separately
+trusted public-key file; trusting only the public key embedded in the envelope
+would not establish signer identity. The private key is created with mode
+`0600` on Unix and must never be supplied to the model.
+
+AI integration is provider-neutral. `pcbex_agent.review_schematic_with_llm`
+accepts an injected transport, rejects non-JSON or invented evidence before
+Rust validation, and tells the model to use `unknown`/`needs_human` instead of
+guessing. The MCP server exposes `prepare_schematic_review`,
+`sign_schematic_approval`, and `verify_schematic_approval`; signing is marked
+as a destructive action so MCP hosts can retain their user-approval boundary.
+Closed request, response, and signature contracts are emitted by
+`ai-review-request-schema`, `ai-review-response-schema`, and
+`signed-ai-approval-schema`.
 
 ## Releases
 

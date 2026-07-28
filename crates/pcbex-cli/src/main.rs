@@ -14,17 +14,21 @@ use pcbex_core::{
     routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
-    ElectricalPolicy, ElectricalReview, SimulationArtifact, apply_custom_design_rules,
-    apply_project_net_settings, check_schematic, electrical_policy_json_schema,
+    AiRequirement, AiReviewRequest, AiReviewResponse, ElectricalPolicy, ElectricalReview,
+    SignedAiApproval, SimulationArtifact, SimulationEvidence, ai_review_request_json_schema,
+    ai_review_response_json_schema, apply_custom_design_rules, apply_project_net_settings,
+    approval_public_key, build_ai_review_request, check_schematic, electrical_policy_json_schema,
     electrical_review_json_schema, import as import_kicad, import_schematic,
-    parse_electrical_policy, parse_simulation_declaration, record_simulation_evidence,
-    schematic_json_schema, simulation_declaration_json_schema, simulation_evidence_json_schema,
+    parse_ai_review_response, parse_electrical_policy, parse_simulation_declaration,
+    record_simulation_evidence, schematic_json_schema, sign_ai_review,
+    signed_ai_approval_json_schema, simulation_declaration_json_schema,
+    simulation_evidence_json_schema, verify_signed_ai_approval,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
-    fs,
-    io::{self, Read},
+    fs::{self, OpenOptions},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
 };
@@ -185,6 +189,71 @@ enum Command {
         /// Fail after writing evidence unless the review and every assertion pass.
         #[arg(long)]
         require_passed: bool,
+    },
+    /// Print the closed AI schematic-review request JSON Schema.
+    AiReviewRequestSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed AI schematic-review response JSON Schema.
+    AiReviewResponseSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed signed AI-approval JSON Schema.
+    SignedAiApprovalSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Prepare a complete, digest-bound request for an AI schematic reviewer.
+    PrepareAiReview {
+        input: PathBuf,
+        #[arg(long)]
+        electrical_review: PathBuf,
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        #[arg(long = "simulation-evidence")]
+        simulation_evidence: Vec<PathBuf>,
+        /// Required design intent as `id=text`; repeat for each requirement.
+        #[arg(long = "requirement", required = true)]
+        requirements: Vec<String>,
+        /// Permit final approval without any simulation evidence.
+        #[arg(long)]
+        allow_no_simulation: bool,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Create a new Ed25519 keypair without overwriting existing files.
+    ApprovalKeygen {
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        public_key: PathBuf,
+    },
+    /// Evaluate an AI response and sign the resulting approval or rejection.
+    SignAiReview {
+        request: PathBuf,
+        response: PathBuf,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fail after writing the signed result unless every gate approves.
+        #[arg(long)]
+        require_approved: bool,
+    },
+    /// Strictly verify a signed AI approval against its exact request and response.
+    VerifyAiApproval {
+        approval: PathBuf,
+        request: PathBuf,
+        response: PathBuf,
+        #[arg(long)]
+        public_key: PathBuf,
+        /// Also require the verified envelope to represent an approval.
+        #[arg(long)]
+        require_approved: bool,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -699,6 +768,152 @@ fn main() -> Result<()> {
                     evidence.id
                 );
             }
+        }
+        Command::AiReviewRequestSchema { output } => {
+            write_or_print_json(&ai_review_request_json_schema(), output.as_ref())?;
+        }
+        Command::AiReviewResponseSchema { output } => {
+            write_or_print_json(&ai_review_response_json_schema(), output.as_ref())?;
+        }
+        Command::SignedAiApprovalSchema { output } => {
+            write_or_print_json(&signed_ai_approval_json_schema(), output.as_ref())?;
+        }
+        Command::PrepareAiReview {
+            input,
+            electrical_review,
+            policy,
+            simulation_evidence,
+            requirements,
+            allow_no_simulation,
+            output,
+        } => {
+            let schematic_source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let schematic = import_schematic(&schematic_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", input.display()))?;
+            let policy = if let Some(path) = policy {
+                parse_electrical_policy(
+                    &fs::read_to_string(&path)
+                        .with_context(|| format!("reading {}", path.display()))?,
+                )
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("parsing {}", path.display()))?
+            } else {
+                ElectricalPolicy::default()
+            };
+            let review_bytes = fs::read(&electrical_review)
+                .with_context(|| format!("reading {}", electrical_review.display()))?;
+            let review: ElectricalReview = serde_json::from_slice(&review_bytes)
+                .with_context(|| format!("parsing {}", electrical_review.display()))?;
+            let evidence = simulation_evidence
+                .iter()
+                .map(|path| read_described_json::<SimulationEvidence>(path).map(|(value, _)| value))
+                .collect::<Result<Vec<_>>>()?;
+            let requirements = requirements
+                .iter()
+                .map(|value| parse_ai_requirement(value))
+                .collect::<Result<Vec<_>>>()?;
+            let request = build_ai_review_request(
+                schematic,
+                &policy,
+                review,
+                format!("{:x}", Sha256::digest(&review_bytes)),
+                evidence,
+                requirements,
+                !allow_no_simulation,
+            )
+            .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&request)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "AI review request: {} requirement(s), {} simulation evidence item(s)",
+                request.requirements.len(),
+                request.simulation_evidence.len()
+            );
+        }
+        Command::ApprovalKeygen {
+            private_key,
+            public_key,
+        } => {
+            if private_key == public_key {
+                bail!("private and public approval key paths must differ");
+            }
+            if private_key.exists() || public_key.exists() {
+                bail!("approval key generation refuses to overwrite an existing file");
+            }
+            let mut secret = [0_u8; 32];
+            getrandom::fill(&mut secret)
+                .map_err(|error| anyhow::anyhow!("generating approval key: {error}"))?;
+            write_new_file(
+                &public_key,
+                &format!("{}\n", approval_public_key(&secret)),
+                false,
+            )?;
+            write_new_file(&private_key, &format!("{}\n", hex_encode(&secret)), true)?;
+            eprintln!(
+                "Ed25519 approval keypair written to {} and {}",
+                private_key.display(),
+                public_key.display()
+            );
+        }
+        Command::SignAiReview {
+            request,
+            response,
+            private_key,
+            signer_id,
+            output,
+            require_approved,
+        } => {
+            let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            let response_source = fs::read_to_string(&response)
+                .with_context(|| format!("reading {}", response.display()))?;
+            let response = parse_ai_review_response(&response_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("parsing {}", response.display()))?;
+            let secret = read_secret_key(&private_key)?;
+            let approval = sign_ai_review(&request, &response, &signer_id, &secret)
+                .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&approval)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "signed AI review: {}; {} gate failure(s)",
+                if approval.approved {
+                    "approved"
+                } else {
+                    "rejected"
+                },
+                approval.gate_failures.len()
+            );
+            if require_approved && !approval.approved {
+                bail!("signed AI review did not pass every approval gate");
+            }
+        }
+        Command::VerifyAiApproval {
+            approval,
+            request,
+            response,
+            public_key,
+            require_approved,
+        } => {
+            let (approval, _) = read_described_json::<SignedAiApproval>(&approval)?;
+            let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            let (response, _) = read_described_json::<AiReviewResponse>(&response)?;
+            let public_key = read_hex_key(&public_key, "approval public key")?;
+            verify_signed_ai_approval(&approval, &request, &response, &public_key)
+                .map_err(anyhow::Error::msg)?;
+            if require_approved && !approval.approved {
+                bail!("signature is valid, but the AI review was rejected");
+            }
+            println!(
+                "valid Ed25519 {} from {}",
+                if approval.approved {
+                    "approval"
+                } else {
+                    "rejection"
+                },
+                approval.signer_id
+            );
         }
         Command::DfmProfiles { output } => {
             let profiles = serde_json::to_string_pretty(&dfm_profiles())?;
@@ -1731,6 +1946,70 @@ fn input_descriptor(path: &Path, bytes: &[u8]) -> InputDescriptor {
         bytes: bytes.len(),
         sha256: format!("{:x}", Sha256::digest(bytes)),
     }
+}
+
+fn write_or_print_json(value: &serde_json::Value, output: Option<&PathBuf>) -> Result<()> {
+    let document = serde_json::to_string_pretty(value)?;
+    if let Some(path) = output {
+        fs::write(path, document).with_context(|| format!("writing {}", path.display()))?;
+    } else {
+        println!("{document}");
+    }
+    Ok(())
+}
+
+fn parse_ai_requirement(value: &str) -> Result<AiRequirement> {
+    let (id, text) = value
+        .split_once('=')
+        .ok_or_else(|| anyhow::anyhow!("AI requirement must use id=text syntax"))?;
+    if id.trim().is_empty() || text.trim().is_empty() {
+        bail!("AI requirement id and text must not be blank");
+    }
+    Ok(AiRequirement {
+        id: id.trim().into(),
+        text: text.trim().into(),
+    })
+}
+
+fn write_new_file(path: &Path, contents: &str, private: bool) -> Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(if private { 0o600 } else { 0o644 });
+    }
+    let mut file = options
+        .open(path)
+        .with_context(|| format!("creating {}", path.display()))?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+fn read_secret_key(path: &Path) -> Result<[u8; 32]> {
+    read_hex_key(path, "approval private key")
+}
+
+fn read_hex_key(path: &Path, description: &str) -> Result<[u8; 32]> {
+    let value = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let value = value.trim();
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|value| value.is_ascii_digit() || (b'a'..=b'f').contains(&value))
+    {
+        bail!("{description} must contain 64 lowercase hexadecimal digits");
+    }
+    let mut secret = [0_u8; 32];
+    for (index, byte) in secret.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .with_context(|| format!("decoding {description}"))?;
+    }
+    Ok(secret)
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|value| format!("{value:02x}")).collect()
 }
 
 fn simulation_artifact(path: &Path) -> Result<SimulationArtifact> {
