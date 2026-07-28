@@ -159,7 +159,7 @@ Numeric net IDs and scalar net names in a `.kicad_pcb` must be present and
 valid; malformed declarations, duplicate IDs, and duplicate names are rejected
 instead of silently dropping or overwriting a declaration or retaining
 ambiguous nets. Except for KiCad's reserved `net 0 ""` entry, net names must
-also be non-blank.
+also be non-blank; reserved net 0 must retain its exact empty name.
 Project net-class dimensions must be non-negative and fit the signed nanometer
 range; oversized values are rejected instead of saturating at the integer limit.
 Legacy net classes embedded in `.kicad_pcb` files follow the same finite,
