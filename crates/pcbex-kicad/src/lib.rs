@@ -449,7 +449,7 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
         if atom(rule.first()) != Some("rule") {
             continue;
         }
-        let Some(condition) = child_atom(rule, "condition") else {
+        let Some(condition) = custom_rule_condition(rule)? else {
             continue;
         };
         let Some(class_name) = condition_net_class(condition) else {
@@ -547,6 +547,20 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
     board.differential_pairs = infer_differential_pairs(&board.nets, &net_classes);
     board.net_classes = net_classes;
     Ok(applied)
+}
+
+fn custom_rule_condition(rule: &[Sexp]) -> Result<Option<&str>, String> {
+    let mut matches = rule.iter().filter_map(|value| {
+        let values = value.as_list()?;
+        (atom(values.first()) == Some("condition")).then_some(values)
+    });
+    let Some(values) = matches.next() else {
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Err("custom rule condition must not be repeated".to_string());
+    }
+    Ok(atom(values.get(1)))
 }
 
 fn condition_net_class(condition: &str) -> Option<String> {
@@ -6584,6 +6598,42 @@ mod tests {
         .unwrap();
         assert_eq!(applied, 2);
         assert_eq!(imported.board.net_classes["Signal"].clearance_nm, 400_000);
+    }
+
+    #[test]
+    fn rejects_repeated_custom_rule_conditions_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for second_condition in ["A.NetClass == 'Signal'", "A.NetClass == 'Missing'"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "Ambiguous"
+                    (condition "A.NetClass == 'Signal'")
+                    (condition "{second_condition}")
+                    (constraint track_width (min 0.4mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom rule condition must not be repeated"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
     }
 
     #[test]
