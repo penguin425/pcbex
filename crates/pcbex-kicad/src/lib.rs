@@ -529,6 +529,23 @@ fn import_net_classes(
             if classes.contains_key(name) {
                 return Err(format!("KiCad board contains duplicate net class {name}"));
             }
+            for key in [
+                "trace_width",
+                "clearance",
+                "via_dia",
+                "via_drill",
+                "diff_pair_width",
+                "diff_pair_gap",
+            ] {
+                let count = values
+                    .iter()
+                    .filter_map(Sexp::as_list)
+                    .filter(|value| atom(value.first()) == Some(key))
+                    .count();
+                if count > 1 {
+                    return Err(format!("net class {name} contains duplicate {key}"));
+                }
+            }
             let dimension = |key: &str, fallback: i64| -> Result<i64, String> {
                 let Some(value) = child_values(values, key) else {
                     return Ok(fallback);
@@ -5553,6 +5570,33 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 format!("net class Invalid has invalid {key}")
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_legacy_net_class_dimensions() {
+        for key in [
+            "trace_width",
+            "clearance",
+            "via_dia",
+            "via_drill",
+            "diff_pair_width",
+            "diff_pair_gap",
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup
+                    (net_class "Invalid" ""
+                      ({key} 0.20)
+                      ({key} 0.25)))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                format!("net class Invalid contains duplicate {key}")
             );
         }
     }

@@ -177,9 +177,10 @@ non-negative, signed-nanometer range contract. Their names must be present as
 scalar values, non-blank, and unique, and their descriptions must be scalar
 values (an empty description remains valid). All following values must be
 setting lists, and each supported dimension setting must contain exactly one
-finite scalar value. Missing, malformed, blank, duplicate, trailing, or stray
-scalar values are rejected instead of being ignored, retaining an unusable
-class, or silently selecting the first or last value.
+finite scalar value and appear at most once. Missing, malformed, blank,
+duplicate, trailing, or stray scalar values are rejected instead of being
+ignored, retaining an unusable class, or silently selecting the first or last
+value.
 Legacy `add_net` assignments must contain exactly one scalar name for a net
 present in the board; malformed, trailing, stale, or misspelled references are
 rejected instead of being silently ignored. A net may belong to only one
