@@ -176,7 +176,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.327.0 exposes 467 Rust tests and 18 Python tests. The release workflow
+Version 1.328.0 exposes 471 Rust tests and 18 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

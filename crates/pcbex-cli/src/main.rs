@@ -16,11 +16,12 @@ use pcbex_core::{
 };
 use pcbex_kicad::{
     AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiRequirement, AiReviewRequest,
-    AiReviewResponse, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet, SignedAiApproval,
-    SimulationArtifact, SimulationEvidence, ai_approval_quorum_report_json_schema,
-    ai_review_request_json_schema, ai_review_response_json_schema, apply_custom_design_rules,
-    apply_electrical_waivers, apply_project_net_settings, approval_public_key,
-    build_ai_review_request, check_schematic, compare_electrical_reviews, compare_schematics,
+    AiReviewResponse, AiReviewSession, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet,
+    SignedAiApproval, SimulationArtifact, SimulationEvidence,
+    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
+    ai_review_response_json_schema, apply_custom_design_rules, apply_electrical_waivers,
+    apply_project_net_settings, approval_public_key, build_ai_review_request,
+    build_ai_review_session, check_schematic, compare_electrical_reviews, compare_schematics,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
@@ -29,20 +30,26 @@ use pcbex_kicad::{
     parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
     record_simulation_evidence, render_ai_approval_quorum_summary,
     render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
-    render_schematic_reviewer_routing_summary, route_schematic_review,
-    routed_ai_approval_quorum_report_json_schema, schematic_diff_json_schema,
-    schematic_diff_to_sarif, schematic_json_schema, schematic_reviewer_routing_plan_json_schema,
-    schematic_reviewer_routing_policy_json_schema, sign_ai_review, signed_ai_approval_json_schema,
+    render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
+    route_schematic_review, routed_ai_approval_quorum_report_json_schema,
+    schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
+    schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
+    sign_ai_review, sign_ai_review_for_session, signed_ai_approval_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
-    verify_routed_ai_approval_quorum, verify_signed_ai_approval,
+    verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
+    verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
+    verify_signed_ai_approval,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
+    convert::Infallible,
     fs::{self, OpenOptions},
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 mod manufacturing_feedback;
@@ -69,7 +76,26 @@ use policy_pack::{
 #[command(version, about = "Deterministic PCB physical-design engine")]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Box<Command>,
+}
+
+#[derive(Clone, Debug)]
+struct CompactPath(Box<Path>);
+
+impl FromStr for CompactPath {
+    type Err = Infallible;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        Ok(Self(PathBuf::from(value).into_boxed_path()))
+    }
+}
+
+impl std::ops::Deref for CompactPath {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -463,6 +489,9 @@ enum Command {
         allow_no_simulation: bool,
         #[arg(short, long)]
         output: PathBuf,
+        /// Also create a random time-bound challenge bound to the new request.
+        #[arg(long)]
+        session_output: Option<CompactPath>,
     },
     /// Create a new Ed25519 keypair without overwriting existing files.
     ApprovalKeygen {
@@ -479,6 +508,9 @@ enum Command {
         private_key: PathBuf,
         #[arg(long)]
         signer_id: String,
+        /// Bind the signature to a time-bound, single-session challenge.
+        #[arg(long)]
+        session: Option<CompactPath>,
         #[arg(short, long)]
         output: PathBuf,
         /// Fail after writing the signed result unless every gate approves.
@@ -499,6 +531,9 @@ enum Command {
         /// Trust the signer key declared by an organization policy pack.
         #[arg(long, value_name = "PATH", conflicts_with = "public_key")]
         policy_pack: Option<PathBuf>,
+        /// Require a v2 approval bound to this active review session.
+        #[arg(long)]
+        session: Option<CompactPath>,
         /// Also require the verified envelope to represent an approval.
         #[arg(long)]
         require_approved: bool,
@@ -530,6 +565,9 @@ enum Command {
         /// Strict routing policy enabling profile-aware quorum enforcement.
         #[arg(long, requires_all = ["baseline_schematic", "current_schematic"])]
         reviewer_routing_policy: Option<PathBuf>,
+        /// Require every approval to bind this active review session.
+        #[arg(long)]
+        session: Option<CompactPath>,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long)]
@@ -1128,7 +1166,7 @@ fn capabilities_report() -> CapabilitiesReport {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    match cli.command {
+    match *cli.command {
         Command::Capabilities { output } => {
             let rendered = serde_json::to_string_pretty(&capabilities_report())?;
             if let Some(path) = output {
@@ -1741,6 +1779,7 @@ fn main() -> Result<()> {
             policy_pack,
             allow_no_simulation,
             output,
+            session_output,
         } => {
             let schematic_source = fs::read_to_string(&input)
                 .with_context(|| format!("reading {}", input.display()))?;
@@ -1794,8 +1833,35 @@ fn main() -> Result<()> {
                     .unwrap_or(!allow_no_simulation),
             )
             .map_err(anyhow::Error::msg)?;
+            let prepared_session = if let Some(session_output) = session_output.as_ref() {
+                if session_output.0.as_ref() == output.as_path() {
+                    bail!("AI review request and session output paths must differ");
+                }
+                let ttl_seconds = 3600;
+                let issued_at_unix = current_unix_seconds()?;
+                let expires_at_unix = issued_at_unix
+                    .checked_add(ttl_seconds)
+                    .ok_or_else(|| anyhow::anyhow!("AI review session expiration overflowed"))?;
+                let mut challenge = [0_u8; 32];
+                getrandom::fill(&mut challenge)
+                    .context("generating AI review session challenge")?;
+                let session = build_ai_review_session(
+                    &request,
+                    &hex_encode(&challenge),
+                    issued_at_unix,
+                    expires_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+                Some(session)
+            } else {
+                None
+            };
             fs::write(&output, serde_json::to_string_pretty(&request)?)
                 .with_context(|| format!("writing {}", output.display()))?;
+            if let (Some(session_output), Some(session)) = (session_output, prepared_session) {
+                fs::write(&*session_output, serde_json::to_string_pretty(&session)?)
+                    .with_context(|| format!("writing {}", session_output.display()))?;
+            }
             eprintln!(
                 "AI review request: {} requirement(s), {} simulation evidence item(s)",
                 request.requirements.len(),
@@ -1830,6 +1896,7 @@ fn main() -> Result<()> {
             response,
             private_key,
             signer_id,
+            session,
             output,
             require_approved,
         } => {
@@ -1840,8 +1907,16 @@ fn main() -> Result<()> {
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("parsing {}", response.display()))?;
             let secret = read_secret_key(&private_key)?;
-            let approval = sign_ai_review(&request, &response, &signer_id, &secret)
-                .map_err(anyhow::Error::msg)?;
+            let approval = if let Some(path) = session {
+                let (session, _) = read_described_json::<AiReviewSession>(&path)?;
+                let digest = pcbex_kicad::ai_review_session_sha256(&session, &request)
+                    .map_err(anyhow::Error::msg)?;
+                sign_ai_review_for_session(&request, &response, &digest, &signer_id, &secret)
+                    .map_err(anyhow::Error::msg)?
+            } else {
+                sign_ai_review(&request, &response, &signer_id, &secret)
+                    .map_err(anyhow::Error::msg)?
+            };
             fs::write(&output, serde_json::to_string_pretty(&approval)?)
                 .with_context(|| format!("writing {}", output.display()))?;
             eprintln!(
@@ -1863,6 +1938,7 @@ fn main() -> Result<()> {
             response,
             public_key,
             policy_pack,
+            session,
             require_approved,
         } => {
             let (approval, _) = read_described_json::<SignedAiApproval>(&approval)?;
@@ -1891,8 +1967,24 @@ fn main() -> Result<()> {
                     "approval public key",
                 )?
             };
-            verify_signed_ai_approval(&approval, &request, &response, &public_key)
+            if let Some(path) = session {
+                let (session, _) = read_described_json::<AiReviewSession>(&path)?;
+                let evaluated_at_unix = current_unix_seconds()?;
+                let digest =
+                    pcbex_kicad::validate_ai_review_session(&session, &request, evaluated_at_unix)
+                        .map_err(anyhow::Error::msg)?;
+                verify_session_signed_ai_approval(
+                    &approval,
+                    &request,
+                    &response,
+                    &public_key,
+                    &digest,
+                )
                 .map_err(anyhow::Error::msg)?;
+            } else {
+                verify_signed_ai_approval(&approval, &request, &response, &public_key)
+                    .map_err(anyhow::Error::msg)?;
+            }
             if require_approved && !approval.approved {
                 bail!("signature is valid, but the AI review was rejected");
             }
@@ -1917,6 +2009,7 @@ fn main() -> Result<()> {
             baseline_schematic,
             current_schematic,
             reviewer_routing_policy,
+            session,
             output,
             summary_output,
             require_quorum,
@@ -1980,6 +2073,15 @@ fn main() -> Result<()> {
                 minimum_distinct_providers,
                 minimum_distinct_models,
             };
+            let loaded_session = session
+                .as_ref()
+                .map(|path| read_described_json::<AiReviewSession>(path).map(|value| value.0))
+                .transpose()?;
+            let evaluated_at_unix = if loaded_session.is_some() {
+                Some(current_unix_seconds()?)
+            } else {
+                None
+            };
             if let (Some(baseline), Some(current), Some(routing_policy)) = (
                 baseline_schematic,
                 current_schematic,
@@ -1995,51 +2097,118 @@ fn main() -> Result<()> {
                 let plan =
                     route_schematic_review(&baseline_document, &current_document, &routing_policy)
                         .map_err(anyhow::Error::msg)?;
-                let report =
-                    verify_routed_ai_approval_quorum(&request, &candidates, quorum_policy, &plan)
-                        .map_err(anyhow::Error::msg)?;
-                fs::write(&output, serde_json::to_string_pretty(&report)?)?;
-                if let Some(path) = summary_output {
-                    fs::write(&path, render_routed_ai_approval_quorum_summary(&report))?;
-                }
-                eprintln!(
-                    "routed AI approval quorum: {}/{} profile(s), {} global approval(s): {}",
-                    report
-                        .profiles
-                        .iter()
-                        .filter(|profile| profile.profile_met)
-                        .count(),
-                    report.profiles.len(),
-                    report.quorum.counts.approvals,
-                    if report.routed_quorum_met {
-                        "approved"
-                    } else {
-                        "not met"
+                if let (Some(session), Some(evaluated_at_unix)) =
+                    (loaded_session.as_ref(), evaluated_at_unix)
+                {
+                    let report = verify_session_routed_ai_approval_quorum(
+                        &request,
+                        session,
+                        evaluated_at_unix,
+                        &candidates,
+                        quorum_policy,
+                        &plan,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    fs::write(&output, serde_json::to_string_pretty(&report)?)?;
+                    if let Some(path) = summary_output {
+                        fs::write(
+                            &path,
+                            render_session_routed_ai_approval_quorum_summary(&report),
+                        )?;
                     }
-                );
-                if require_quorum && !report.routed_quorum_met {
-                    bail!("routed AI approval quorum did not meet every threshold");
+                    eprintln!(
+                        "time-bound routed AI approval quorum: {}",
+                        if report.routed_quorum.routed_quorum_met {
+                            "approved"
+                        } else {
+                            "not met"
+                        }
+                    );
+                    if require_quorum && !report.routed_quorum.routed_quorum_met {
+                        bail!("routed AI approval quorum did not meet every threshold");
+                    }
+                } else {
+                    let report = verify_routed_ai_approval_quorum(
+                        &request,
+                        &candidates,
+                        quorum_policy,
+                        &plan,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    fs::write(&output, serde_json::to_string_pretty(&report)?)?;
+                    if let Some(path) = summary_output {
+                        fs::write(&path, render_routed_ai_approval_quorum_summary(&report))?;
+                    }
+                    eprintln!(
+                        "routed AI approval quorum: {}/{} profile(s), {} global approval(s): {}",
+                        report
+                            .profiles
+                            .iter()
+                            .filter(|profile| profile.profile_met)
+                            .count(),
+                        report.profiles.len(),
+                        report.quorum.counts.approvals,
+                        if report.routed_quorum_met {
+                            "approved"
+                        } else {
+                            "not met"
+                        }
+                    );
+                    if require_quorum && !report.routed_quorum_met {
+                        bail!("routed AI approval quorum did not meet every threshold");
+                    }
                 }
             } else {
-                let report = verify_ai_approval_quorum(&request, &candidates, quorum_policy)
+                if let (Some(session), Some(evaluated_at_unix)) =
+                    (loaded_session.as_ref(), evaluated_at_unix)
+                {
+                    let report = verify_session_ai_approval_quorum(
+                        &request,
+                        session,
+                        evaluated_at_unix,
+                        &candidates,
+                        quorum_policy,
+                    )
                     .map_err(anyhow::Error::msg)?;
-                fs::write(&output, serde_json::to_string_pretty(&report)?)?;
-                if let Some(path) = summary_output {
-                    fs::write(&path, render_ai_approval_quorum_summary(&report))?;
-                }
-                eprintln!(
-                    "AI approval quorum: {} approval(s), {} provider(s), {} model(s): {}",
-                    report.counts.approvals,
-                    report.counts.distinct_providers,
-                    report.counts.distinct_models,
-                    if report.quorum_met {
-                        "approved"
-                    } else {
-                        "not met"
+                    fs::write(&output, serde_json::to_string_pretty(&report)?)?;
+                    if let Some(path) = summary_output {
+                        fs::write(
+                            &path,
+                            pcbex_kicad::render_session_ai_approval_quorum_summary(&report),
+                        )?;
                     }
-                );
-                if require_quorum && !report.quorum_met {
-                    bail!("AI approval quorum did not meet every threshold");
+                    eprintln!(
+                        "time-bound AI approval quorum: {}",
+                        if report.quorum.quorum_met {
+                            "approved"
+                        } else {
+                            "not met"
+                        }
+                    );
+                    if require_quorum && !report.quorum.quorum_met {
+                        bail!("AI approval quorum did not meet every threshold");
+                    }
+                } else {
+                    let report = verify_ai_approval_quorum(&request, &candidates, quorum_policy)
+                        .map_err(anyhow::Error::msg)?;
+                    fs::write(&output, serde_json::to_string_pretty(&report)?)?;
+                    if let Some(path) = summary_output {
+                        fs::write(&path, render_ai_approval_quorum_summary(&report))?;
+                    }
+                    eprintln!(
+                        "AI approval quorum: {} approval(s), {} provider(s), {} model(s): {}",
+                        report.counts.approvals,
+                        report.counts.distinct_providers,
+                        report.counts.distinct_models,
+                        if report.quorum_met {
+                            "approved"
+                        } else {
+                            "not met"
+                        }
+                    );
+                    if require_quorum && !report.quorum_met {
+                        bail!("AI approval quorum did not meet every threshold");
+                    }
                 }
             }
         }
@@ -3286,6 +3455,13 @@ fn random_secret_key() -> Result<[u8; 32]> {
     Ok(secret)
 }
 
+fn current_unix_seconds() -> Result<u64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?
+        .as_secs())
+}
+
 fn read_hex_key(path: &Path, description: &str) -> Result<[u8; 32]> {
     let value = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     decode_hex_key(value.trim(), description)
@@ -3590,28 +3766,49 @@ fn ensure_clean(board: &Board) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn parse_cli(arguments: &[&str]) -> std::result::Result<Cli, clap::Error> {
+        let arguments = arguments
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(move || Cli::try_parse_from(arguments))
+            .expect("CLI parser test thread starts")
+            .join()
+            .expect("CLI parser test thread succeeds")
+    }
+
     #[test]
     fn generates_completions_for_every_supported_shell() {
-        for shell in [
-            Shell::Bash,
-            Shell::Elvish,
-            Shell::Fish,
-            Shell::PowerShell,
-            Shell::Zsh,
-        ] {
-            let mut command = Cli::command();
-            let name = command.get_name().to_string();
-            let mut output = Vec::new();
-            generate(shell, &mut command, name, &mut output);
-            let output = String::from_utf8(output).expect("completion output must be UTF-8");
-            assert!(output.contains("pcbex"));
-            assert!(output.contains("completion"));
-        }
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                for shell in [
+                    Shell::Bash,
+                    Shell::Elvish,
+                    Shell::Fish,
+                    Shell::PowerShell,
+                    Shell::Zsh,
+                ] {
+                    let mut command = Cli::command();
+                    let name = command.get_name().to_string();
+                    let mut output = Vec::new();
+                    generate(shell, &mut command, name, &mut output);
+                    let output =
+                        String::from_utf8(output).expect("completion output must be UTF-8");
+                    assert!(output.contains("pcbex"));
+                    assert!(output.contains("completion"));
+                }
+            })
+            .expect("completion test thread starts")
+            .join()
+            .expect("completion generation succeeds");
     }
 
     #[test]
     fn parses_impedance_width_solver_arguments() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "pcbex",
             "impedance-width",
             "board.json",
@@ -3625,7 +3822,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            cli.command,
+            *cli.command,
             Command::ImpedanceWidth {
                 layer,
                 target_ohms: 90.0,
@@ -3637,7 +3834,7 @@ mod tests {
 
     #[test]
     fn parses_impedance_report_output() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "pcbex",
             "impedance-report",
             "board.json",
@@ -3650,7 +3847,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            cli.command,
+            *cli.command,
             Command::ImpedanceReport {
                 input,
                 output: Some(output),
@@ -3664,7 +3861,7 @@ mod tests {
 
     #[test]
     fn parses_placement_candidate_controls() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "pcbex",
             "place-kicad-candidates",
             "board.kicad_pcb",
@@ -3682,7 +3879,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            cli.command,
+            *cli.command,
             Command::PlaceKicadCandidates {
                 candidates: 9,
                 workers: 3,
@@ -3695,7 +3892,7 @@ mod tests {
 
     #[test]
     fn parses_routing_candidate_controls() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "pcbex",
             "route-kicad-candidates",
             "board.kicad_pcb",
@@ -3713,7 +3910,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            cli.command,
+            *cli.command,
             Command::RouteKicadCandidates {
                 candidates: 10,
                 workers: 4,
@@ -3726,7 +3923,7 @@ mod tests {
 
     #[test]
     fn parses_schematic_import_coverage_gate() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "pcbex",
             "import-schematic",
             "design.kicad_sch",
@@ -3737,7 +3934,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            cli.command,
+            *cli.command,
             Command::ImportSchematic {
                 input,
                 output,
@@ -3749,7 +3946,7 @@ mod tests {
 
     #[test]
     fn parses_analyze_kicad_artifact_options() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "pcbex",
             "analyze-kicad",
             "board.kicad_pcb",
@@ -3766,7 +3963,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            cli.command,
+            *cli.command,
             Command::AnalyzeKicad {
                 input,
                 project: Some(project),
@@ -3795,7 +3992,7 @@ mod tests {
 
     #[test]
     fn parses_external_fabrication_profile_and_rejects_ambiguous_selection() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "pcbex",
             "analyze-kicad",
             "board.kicad_pcb",
@@ -3806,7 +4003,7 @@ mod tests {
         ])
         .unwrap();
         assert!(matches!(
-            cli.command,
+            *cli.command,
             Command::AnalyzeKicad {
                 fab: None,
                 fab_profile: Some(path),
@@ -3814,7 +4011,7 @@ mod tests {
             } if path.as_os_str() == "acme-profile.json"
         ));
         assert!(
-            Cli::try_parse_from([
+            parse_cli(&[
                 "pcbex",
                 "dfm",
                 "board.json",
@@ -3864,7 +4061,7 @@ mod tests {
 
     #[test]
     fn parses_compare_analysis_regression_gate() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "pcbex",
             "compare-analysis",
             "baseline",
@@ -3876,7 +4073,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            cli.command,
+            *cli.command,
             Command::CompareAnalysis {
                 baseline_dir,
                 current_dir,

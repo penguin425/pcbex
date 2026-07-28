@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.327.0
+    uses: penguin425/pcbex@v1.328.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -741,6 +741,7 @@ steps:
       policy-public-key: ${{ runner.temp }}/pcbex-policy-root.pub
       policy-trust-state: .pcbex-baseline/hardware/organization-policy-pack.trust.json
       ai-review-request: hardware/review-request.json
+      ai-review-session: hardware/review-session.json
       ai-approval-files: |
         hardware/reviewer-a.approval.json
         hardware/reviewer-b.approval.json
@@ -802,7 +803,9 @@ adds a verified multi-reviewer quorum report. The Action exposes
 `ai-approval-quorum` and `ai-approval-quorum-met`; its opt-in gate runs only
 after the JSON, Markdown, Job Summary, PR comment, and workflow artifact are
 retained. Approval, provider, and model thresholds default to two and remain
-independently configurable.
+independently configurable. Supplying `ai-review-session` additionally requires
+every approval to carry the active session challenge and rejects expired or
+legacy envelopes.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -1554,7 +1557,8 @@ pcbex prepare-ai-review design.kicad_sch \
   --simulation-evidence power-rail.evidence.json \
   --requirement 'power=All IC supply pins have a valid source and decoupling' \
   --requirement 'reset=Reset defaults to a defined safe state' \
-  --output ai-review-request.json
+  --output ai-review-request.json \
+  --session-output ai-review-session.json
 
 # Give ai-review-request.json to the model and require the closed response
 # contract emitted by `ai-review-response-schema`.
@@ -1562,11 +1566,14 @@ pcbex prepare-ai-review design.kicad_sch \
 pcbex sign-ai-review ai-review-request.json ai-review-response.json \
   --private-key .secrets/schematic-approval.key \
   --signer-id production-ci \
+  --session ai-review-session.json \
   --output signed-approval.json --require-approved
 
 pcbex verify-ai-approval \
   signed-approval.json ai-review-request.json ai-review-response.json \
-  --public-key schematic-approval.pub --require-approved
+  --public-key schematic-approval.pub \
+  --session ai-review-session.json \
+  --require-approved
 ```
 
 With an organization policy pack, review requirements and the simulation gate
@@ -1600,10 +1607,24 @@ pcbex verify-ai-quorum ai-review-request.json \
   --minimum-approvals 2 \
   --minimum-distinct-providers 2 \
   --minimum-distinct-models 2 \
+  --session ai-review-session.json \
   --output approval-quorum.json \
   --summary-output approval-quorum.md \
   --require-quorum
 ```
+
+`prepare-ai-review --session-output` creates a cryptographically random
+256-bit challenge bound to the exact request digest. Sessions expire after one hour by
+default and cannot exceed seven days. A session-bound signature uses envelope
+schema v2 and covers the session digest as well as the request, response, gate
+result, and signer. Verification checks the session self-digest and evaluates
+its issuance/expiration window before accepting any signature, so an approval
+cannot be replayed in a later CI run even when the schematic has not changed.
+The Rust verification API accepts an explicit evaluation timestamp for
+reproducible tests; CLI, MCP, and Action verification use the current system
+clock. Legacy v1 envelopes remain verifiable only when no session is
+requested, preventing a downgrade from the time-bound path. The Rust API
+exposes closed schemas for the session and both time-bound quorum report forms.
 
 When reviewer routing is configured, the same command freshly recomputes the
 semantic diff and additionally enforces every active reviewer profile:
@@ -1668,10 +1689,12 @@ guessing. The MCP server exposes `route_schematic_reviewers`,
 `prepare_schematic_review`,
 `sign_schematic_approval`, `verify_schematic_approval`, and
 `verify_schematic_approval_quorum`; signing and report writes are marked as
-destructive actions so MCP hosts can retain their user-approval boundary.
-Closed request, response, and signature contracts are emitted by
-`ai-review-request-schema`, `ai-review-response-schema`, and
-`signed-ai-approval-schema`.
+destructive actions so MCP hosts can retain their user-approval boundary. The
+GitHub Action accepts `ai-review-session` alongside its quorum inputs and
+publishes the time-bound result using the existing quorum outputs. Closed
+request, response, and signature contracts are emitted by
+`ai-review-request-schema`, `ai-review-response-schema`,
+and `signed-ai-approval-schema`; the Rust API exposes the session contract.
 
 For a real provider, wrap its SDK or HTTP API in an executable that reads the
 review prompt from stdin and writes only the response JSON to stdout. The agent

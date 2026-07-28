@@ -807,7 +807,8 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "type": "array", "minItems": 1, "items": {"type": "string"}
                     },
                     "allow_no_simulation": {"type": "boolean", "default": false},
-                    "output": {"type": "string"}
+                    "output": {"type": "string"},
+                    "session_output": {"type": "string"}
                 }
             }),
             false,
@@ -829,6 +830,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "response": {"type": "string"},
                     "private_key": {"type": "string"},
                     "signer_id": {"type": "string"},
+                    "session": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 }
@@ -855,6 +857,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "response": {"type": "string"},
                     "public_key": {"type": "string"},
                     "policy_pack": {"type": "string"},
+                    "session": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 }
             }),
@@ -895,6 +898,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "baseline_schematic": {"type": "string"},
                     "current_schematic": {"type": "string"},
                     "reviewer_routing_policy": {"type": "string"},
+                    "session": {"type": "string"},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
                     "require_quorum": {"type": "boolean", "default": false}
@@ -1375,6 +1379,7 @@ fn prepare_schematic_review(
             "requirements",
             "allow_no_simulation",
             "output",
+            "session_output",
         ],
     )?;
     let input = required_string(&arguments, "input")?;
@@ -1409,11 +1414,27 @@ fn prepare_schematic_review(
         &mut command,
     )?;
     command.extend(["--output".into(), output.clone()]);
+    optional_option(
+        &arguments,
+        "session_output",
+        "--session-output",
+        &mut command,
+    )?;
     let execution = execute(&command, cancellation)?;
     let request = read_json_if_present(Path::new(&output));
+    let session_output = arguments
+        .get("session_output")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let session = session_output
+        .as_deref()
+        .map(|path| read_json_if_present(Path::new(path)));
     Ok(execution_result(
         execution,
-        json!({"output": output, "request": request}),
+        json!({
+            "output": output, "request": request,
+            "session_output": session_output, "session": session
+        }),
     ))
 }
 
@@ -1428,6 +1449,7 @@ fn sign_schematic_approval(
             "response",
             "private_key",
             "signer_id",
+            "session",
             "output",
             "require_approved",
         ],
@@ -1448,6 +1470,7 @@ fn sign_schematic_approval(
         "--output".into(),
         output.clone(),
     ];
+    optional_option(&arguments, "session", "--session", &mut command)?;
     optional_flag(
         &arguments,
         "require_approved",
@@ -1474,6 +1497,7 @@ fn verify_schematic_approval(
             "response",
             "public_key",
             "policy_pack",
+            "session",
             "require_approved",
         ],
     )?;
@@ -1490,6 +1514,7 @@ fn verify_schematic_approval(
     let mut command = vec!["verify-ai-approval".into(), approval, request, response];
     optional_option(&arguments, "public_key", "--public-key", &mut command)?;
     optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
+    optional_option(&arguments, "session", "--session", &mut command)?;
     optional_flag(
         &arguments,
         "require_approved",
@@ -1518,6 +1543,7 @@ fn verify_schematic_approval_quorum(
             "baseline_schematic",
             "current_schematic",
             "reviewer_routing_policy",
+            "session",
             "output",
             "summary_output",
             "require_quorum",
@@ -1578,6 +1604,7 @@ fn verify_schematic_approval_quorum(
         "--baseline-schematic",
         &mut command,
     )?;
+    optional_option(&arguments, "session", "--session", &mut command)?;
     optional_option(
         &arguments,
         "current_schematic",
@@ -1889,6 +1916,14 @@ mod tests {
             true
         );
         assert_eq!(
+            named("prepare_schematic_review")["inputSchema"]["properties"]["session_output"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("sign_schematic_approval")["inputSchema"]["properties"]["session"]["type"],
+            "string"
+        );
+        assert_eq!(
             named("verify_schematic_approval")["annotations"]["readOnlyHint"],
             true
         );
@@ -1899,6 +1934,10 @@ mod tests {
         assert_eq!(
             named("verify_schematic_approval_quorum")["inputSchema"]["properties"]["reviewer_routing_policy"]
                 ["type"],
+            "string"
+        );
+        assert_eq!(
+            named("verify_schematic_approval_quorum")["inputSchema"]["properties"]["session"]["type"],
             "string"
         );
         assert_eq!(

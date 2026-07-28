@@ -90,7 +90,8 @@ jobs:
           target/release/pcbex prepare-ai-review examples/simple.kicad_sch \
             --electrical-review build/action-quorum/electrical-review.json \
             --policy-pack build/action-quorum/policy-pack.json \
-            --output build/action-quorum/request.json
+            --output build/action-quorum/request.json \
+            --session-output build/action-quorum/session.json
           request_sha256="$(jq -r '.request_sha256' build/action-quorum/request.json)"
           for reviewer in a b; do
             jq -n \
@@ -116,6 +117,7 @@ jobs:
               "build/action-quorum/response-$reviewer.json" \
               --private-key "build/action-quorum/reviewer-$reviewer.key" \
               --signer-id "reviewer-$reviewer" \
+              --session build/action-quorum/session.json \
               --output "build/action-quorum/approval-$reviewer.json" \
               --require-approved
           done
@@ -132,6 +134,7 @@ jobs:
           fail-on-unrouted-schematic-review: "true"
           policy-pack: build/action-quorum/policy-pack.json
           ai-review-request: build/action-quorum/request.json
+          ai-review-session: build/action-quorum/session.json
           ai-approval-files: |
             build/action-quorum/approval-a.json
             build/action-quorum/approval-b.json
@@ -185,9 +188,10 @@ jobs:
           test "$(jq -r '.route_count' "$SCHEMATIC_REVIEWER_ROUTING")" = "0"
           test -s "$AI_APPROVAL_QUORUM"
           test "$AI_APPROVAL_QUORUM_MET" = "true"
-          test "$(jq -r '.quorum.counts.approvals' "$AI_APPROVAL_QUORUM")" = "2"
-          test "$(jq -r '.quorum.counts.distinct_providers' "$AI_APPROVAL_QUORUM")" = "2"
-          test "$(jq -r '.routed_quorum_met' "$AI_APPROVAL_QUORUM")" = "true"
+          test "$(jq -r '.routed_quorum.quorum.counts.approvals' "$AI_APPROVAL_QUORUM")" = "2"
+          test "$(jq -r '.routed_quorum.quorum.counts.distinct_providers' "$AI_APPROVAL_QUORUM")" = "2"
+          test "$(jq -r '.routed_quorum.routed_quorum_met' "$AI_APPROVAL_QUORUM")" = "true"
+          test "$(jq -r '.session.session_sha256 | length' "$AI_APPROVAL_QUORUM")" = "64"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then
             [[ "$COMMENT_URL" == https://github.com/* ]]
           else

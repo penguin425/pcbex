@@ -1,6 +1,6 @@
 use super::{
-    AiReviewRequest, AiReviewResponse, SignedAiApproval, ai_review_request_sha256,
-    verify_signed_ai_approval,
+    AiReviewRequest, AiReviewResponse, AiReviewSession, SignedAiApproval, ai_review_request_sha256,
+    validate_ai_review_session, verify_session_signed_ai_approval, verify_signed_ai_approval,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -52,6 +52,18 @@ pub struct AiApprovalQuorumReport {
     pub quorum_failures: Vec<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionAiApprovalQuorumReport {
+    pub schema_version: u32,
+    pub session_sha256: String,
+    pub request_sha256: String,
+    pub issued_at_unix: u64,
+    pub expires_at_unix: u64,
+    pub evaluated_at_unix: u64,
+    pub quorum: AiApprovalQuorumReport,
+}
+
 pub struct AiApprovalQuorumCandidate<'a> {
     pub approval: &'a SignedAiApproval,
     pub response: &'a AiReviewResponse,
@@ -62,6 +74,50 @@ pub fn verify_ai_approval_quorum(
     request: &AiReviewRequest,
     candidates: &[AiApprovalQuorumCandidate<'_>],
     policy: AiApprovalQuorumPolicy,
+) -> Result<AiApprovalQuorumReport, String> {
+    verify_ai_approval_quorum_with(request, candidates, policy, |candidate| {
+        verify_signed_ai_approval(
+            candidate.approval,
+            request,
+            candidate.response,
+            candidate.trusted_public_key,
+        )
+    })
+}
+
+pub fn verify_session_ai_approval_quorum(
+    request: &AiReviewRequest,
+    session: &AiReviewSession,
+    evaluated_at_unix: u64,
+    candidates: &[AiApprovalQuorumCandidate<'_>],
+    policy: AiApprovalQuorumPolicy,
+) -> Result<SessionAiApprovalQuorumReport, String> {
+    let session_sha256 = validate_ai_review_session(session, request, evaluated_at_unix)?;
+    let quorum = verify_ai_approval_quorum_with(request, candidates, policy, |candidate| {
+        verify_session_signed_ai_approval(
+            candidate.approval,
+            request,
+            candidate.response,
+            candidate.trusted_public_key,
+            &session_sha256,
+        )
+    })?;
+    Ok(SessionAiApprovalQuorumReport {
+        schema_version: 1,
+        session_sha256,
+        request_sha256: quorum.request_sha256.clone(),
+        issued_at_unix: session.issued_at_unix,
+        expires_at_unix: session.expires_at_unix,
+        evaluated_at_unix,
+        quorum,
+    })
+}
+
+fn verify_ai_approval_quorum_with(
+    request: &AiReviewRequest,
+    candidates: &[AiApprovalQuorumCandidate<'_>],
+    policy: AiApprovalQuorumPolicy,
+    mut verify: impl FnMut(&AiApprovalQuorumCandidate<'_>) -> Result<(), String>,
 ) -> Result<AiApprovalQuorumReport, String> {
     validate_policy(&policy)?;
     if candidates.is_empty() || candidates.len() > MAX_QUORUM_MEMBERS {
@@ -77,12 +133,7 @@ pub fn verify_ai_approval_quorum(
     let mut members = Vec::with_capacity(candidates.len());
 
     for candidate in candidates {
-        verify_signed_ai_approval(
-            candidate.approval,
-            request,
-            candidate.response,
-            candidate.trusted_public_key,
-        )?;
+        verify(candidate)?;
         if !signer_ids.insert(candidate.approval.signer_id.clone()) {
             return Err(format!(
                 "duplicate AI approval quorum signer {:?}",
@@ -174,6 +225,16 @@ pub fn verify_ai_approval_quorum(
         quorum_met: quorum_failures.is_empty(),
         quorum_failures,
     })
+}
+
+pub fn render_session_ai_approval_quorum_summary(report: &SessionAiApprovalQuorumReport) -> String {
+    let mut output = String::from("# Time-bound AI schematic approval quorum\n\n");
+    let _ = writeln!(output, "- Session: `{}`", report.session_sha256);
+    let _ = writeln!(output, "- Issued: `{}`", report.issued_at_unix);
+    let _ = writeln!(output, "- Expires: `{}`", report.expires_at_unix);
+    let _ = writeln!(output, "- Evaluated: `{}`\n", report.evaluated_at_unix);
+    output.push_str(&render_ai_approval_quorum_summary(&report.quorum));
+    output
 }
 
 fn validate_policy(policy: &AiApprovalQuorumPolicy) -> Result<(), String> {
@@ -342,6 +403,30 @@ pub fn ai_approval_quorum_report_json_schema() -> Value {
                     "gate_failures": {"type": "array", "items": nonblank}
                 }
             }
+        }
+    })
+}
+
+pub fn session_ai_approval_quorum_report_json_schema() -> Value {
+    let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/session-ai-approval-quorum-report-v1.json",
+        "title": "pcbex time-bound AI schematic approval quorum report",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schema_version", "session_sha256", "request_sha256", "issued_at_unix",
+            "expires_at_unix", "evaluated_at_unix", "quorum"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "session_sha256": digest,
+            "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "issued_at_unix": {"type": "integer", "minimum": 0},
+            "expires_at_unix": {"type": "integer", "minimum": 1},
+            "evaluated_at_unix": {"type": "integer", "minimum": 0},
+            "quorum": ai_approval_quorum_report_json_schema()
         }
     })
 }
@@ -515,5 +600,9 @@ mod tests {
         for definition in schema["$defs"].as_object().unwrap().values() {
             assert_eq!(definition["additionalProperties"], false);
         }
+        assert_eq!(
+            session_ai_approval_quorum_report_json_schema()["additionalProperties"],
+            false
+        );
     }
 }

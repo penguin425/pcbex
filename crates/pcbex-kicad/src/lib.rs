@@ -14,13 +14,16 @@ pub use approval::{
     AiReviewDecision, AiReviewRequest, AiReviewResponse, AiRisk, AiRiskSeverity, SignedAiApproval,
     ai_review_request_json_schema, ai_review_request_sha256, ai_review_response_json_schema,
     approval_public_key, build_ai_review_request, parse_ai_review_response, sign_ai_review,
-    signed_ai_approval_json_schema, verify_signed_ai_approval,
+    sign_ai_review_for_session, signed_ai_approval_json_schema, verify_session_signed_ai_approval,
+    verify_signed_ai_approval,
 };
 mod approval_quorum;
 pub use approval_quorum::{
     AiApprovalQuorumCandidate, AiApprovalQuorumCounts, AiApprovalQuorumMember,
-    AiApprovalQuorumPolicy, AiApprovalQuorumReport, ai_approval_quorum_report_json_schema,
-    render_ai_approval_quorum_summary, verify_ai_approval_quorum,
+    AiApprovalQuorumPolicy, AiApprovalQuorumReport, SessionAiApprovalQuorumReport,
+    ai_approval_quorum_report_json_schema, render_ai_approval_quorum_summary,
+    render_session_ai_approval_quorum_summary, session_ai_approval_quorum_report_json_schema,
+    verify_ai_approval_quorum, verify_session_ai_approval_quorum,
 };
 mod electrical;
 pub use electrical::{
@@ -66,9 +69,16 @@ pub use reviewer_routing::{
 };
 mod routed_quorum;
 pub use routed_quorum::{
-    RoutedAiApprovalProfile, RoutedAiApprovalQuorumReport,
-    render_routed_ai_approval_quorum_summary, routed_ai_approval_quorum_report_json_schema,
-    verify_routed_ai_approval_quorum,
+    RoutedAiApprovalProfile, RoutedAiApprovalQuorumReport, SessionRoutedAiApprovalQuorumReport,
+    render_routed_ai_approval_quorum_summary, render_session_routed_ai_approval_quorum_summary,
+    routed_ai_approval_quorum_report_json_schema,
+    session_routed_ai_approval_quorum_report_json_schema, verify_routed_ai_approval_quorum,
+    verify_session_routed_ai_approval_quorum,
+};
+mod review_session;
+pub use review_session::{
+    AiReviewSession, MAX_AI_REVIEW_SESSION_SECONDS, ai_review_session_json_schema,
+    ai_review_session_sha256, build_ai_review_session, validate_ai_review_session,
 };
 mod waiver;
 pub use waiver::{
