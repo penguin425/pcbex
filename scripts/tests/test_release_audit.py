@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "release-audit.py"
@@ -71,6 +72,35 @@ class ReleaseAuditTests(unittest.TestCase):
                 "a" * 40,
                 allow_draft=False,
             )
+
+    def test_finds_draft_release_through_paginated_collection(self):
+        pages = [
+            [{"tag_name": "v1.0.0", "draft": False}],
+            [{"tag_name": "v1.1.0", "draft": True}],
+        ]
+        with mock.patch.object(
+            release_audit, "run", return_value=json.dumps(pages)
+        ) as command:
+            release = release_audit.github_release_by_tag("owner/repo", "v1.1.0")
+        self.assertTrue(release["draft"])
+        command.assert_called_once_with(
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            "repos/owner/repo/releases?per_page=100",
+        )
+
+    def test_rejects_missing_or_duplicate_release_lookup(self):
+        with mock.patch.object(release_audit, "run", return_value="[[]]"):
+            with self.assertRaises(release_audit.AuditError):
+                release_audit.github_release_by_tag("owner/repo", "v1.1.0")
+        duplicate = json.dumps(
+            [[{"tag_name": "v1.1.0"}], [{"tag_name": "v1.1.0"}]]
+        )
+        with mock.patch.object(release_audit, "run", return_value=duplicate):
+            with self.assertRaises(release_audit.AuditError):
+                release_audit.github_release_by_tag("owner/repo", "v1.1.0")
 
     def test_validates_checksums_and_spdx_documents(self):
         tag = "v1.1.0"

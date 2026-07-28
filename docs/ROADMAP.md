@@ -18,7 +18,7 @@ auditable release.
 | v1.306.0 | Electrical approval | Policy-controlled deterministic schematic gate |
 | v1.307.0 | Simulation evidence | Artifact-bound, simulator-neutral measurements |
 | v1.308.0 | AI schematic approval | Evidence-constrained review with Ed25519 signatures |
-| v1.309.1 | Release audit | Machine-checked roadmap, assets, checksums, and protection |
+| v1.309.2 | Release audit | Machine-checked roadmap, assets, checksums, and protection |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
