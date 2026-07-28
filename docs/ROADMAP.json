@@ -119,6 +119,11 @@
     {
       "id": "organization-policy-packs",
       "release": "v1.320.0",
+      "status": "released"
+    },
+    {
+      "id": "signed-policy-pack-distribution",
+      "release": "v1.321.0",
       "status": "current"
     }
   ]

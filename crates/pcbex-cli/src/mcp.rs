@@ -600,6 +600,24 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "verify_policy_pack",
+            "Verify organization policy pack",
+            "Verify a signed organization policy pack against a separately trusted Ed25519 public key and extract the authenticated pack.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "public_key", "output"],
+                "properties": {
+                    "input": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "analyze_kicad",
             "Analyze KiCad board",
             "Analyze a .kicad_pcb file and write a complete JSON, SVG, SARIF, Markdown, and provenance bundle.",
@@ -807,6 +825,7 @@ fn call_tool(
             reject_unknown(&arguments, &[])?;
             json!({"ok": true, "profiles": dfm_profiles()})
         }
+        "verify_policy_pack" => verify_policy_pack(arguments, cancellation)?,
         "analyze_kicad" => analyze_kicad(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -823,6 +842,30 @@ fn call_tool(
         "structuredContent": structured,
         "isError": is_error
     }))
+}
+
+fn verify_policy_pack(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["input", "public_key", "output"])?;
+    let input = required_string(&arguments, "input")?;
+    let public_key = required_string(&arguments, "public_key")?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "verify-policy-pack".into(),
+        input,
+        "--public-key".into(),
+        public_key,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let policy_pack = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "policy_pack": policy_pack}),
+    ))
 }
 
 fn analyze_kicad(
@@ -1303,7 +1346,7 @@ mod tests {
         let response = server
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
-        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 7);
+        assert_eq!(response["result"]["tools"].as_array().unwrap().len(), 8);
         assert_eq!(
             response["result"]["tools"][0]["annotations"]["readOnlyHint"],
             true
@@ -1314,14 +1357,22 @@ mod tests {
         );
         assert_eq!(
             response["result"]["tools"][1]["execution"]["taskSupport"],
-            "optional"
+            "forbidden"
         );
         assert_eq!(
-            response["result"]["tools"][5]["annotations"]["destructiveHint"],
+            response["result"]["tools"][1]["annotations"]["destructiveHint"],
             true
         );
         assert_eq!(
-            response["result"]["tools"][6]["annotations"]["readOnlyHint"],
+            response["result"]["tools"][2]["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            response["result"]["tools"][6]["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            response["result"]["tools"][7]["annotations"]["readOnlyHint"],
             true
         );
     }

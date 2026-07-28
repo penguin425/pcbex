@@ -23,7 +23,15 @@ inputs:
     required: false
     default: ""
   policy-pack:
-    description: Optional organization policy pack; mutually exclusive with fab and fab-profile.
+    description: Optional unsigned organization policy pack; mutually exclusive with physical-policy alternatives.
+    required: false
+    default: ""
+  signed-policy-pack:
+    description: Optional signed organization policy pack; requires policy-public-key.
+    required: false
+    default: ""
+  policy-public-key:
+    description: Trusted Ed25519 public-key file used only with signed-policy-pack.
     required: false
     default: ""
   output-dir:
@@ -117,6 +125,8 @@ runs:
         PCBEX_FAB: ${{ inputs.fab }}
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
         PCBEX_POLICY_PACK: ${{ inputs.policy-pack }}
+        PCBEX_SIGNED_POLICY_PACK: ${{ inputs.signed-policy-pack }}
+        PCBEX_POLICY_PUBLIC_KEY: ${{ inputs.policy-public-key }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 

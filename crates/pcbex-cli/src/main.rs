@@ -41,7 +41,11 @@ use std::{
 mod mcp;
 mod policy_pack;
 
-use policy_pack::{OrganizationPolicyPack, parse_policy_pack, policy_pack_json_schema};
+use policy_pack::{
+    OrganizationPolicyPack, SignedPolicyPack, parse_policy_pack, parse_signed_policy_pack,
+    policy_pack_json_schema, sign_policy_pack, signed_policy_pack_json_schema,
+    verify_signed_policy_pack,
+};
 
 #[derive(Parser)]
 #[command(version, about = "Deterministic PCB physical-design engine")]
@@ -406,6 +410,36 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Write the closed signed organization policy-pack JSON Schema.
+    SignedPolicyPackSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Create an Ed25519 keypair for signing organization policy packs.
+    PolicyKeygen {
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        public_key: PathBuf,
+    },
+    /// Sign a validated organization policy pack without overwriting output.
+    SignPolicyPack {
+        input: PathBuf,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify and extract an authenticated organization policy pack.
+    VerifyPolicyPack {
+        input: PathBuf,
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Upgrade an older board JSON document to the current schema.
     Migrate {
         input: PathBuf,
@@ -757,6 +791,13 @@ fn load_policy_pack(path: &Path) -> Result<(OrganizationPolicyPack, InputDescrip
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("validating organization policy pack {}", path.display()))?;
     Ok((pack, input_descriptor(path, &bytes)))
+}
+
+fn load_signed_policy_pack(path: &Path) -> Result<SignedPolicyPack> {
+    let source = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    parse_signed_policy_pack(&source)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("validating signed policy pack {}", path.display()))
 }
 
 fn validate_ai_request_against_policy_pack(
@@ -1339,9 +1380,7 @@ fn main() -> Result<()> {
             if private_key.exists() || public_key.exists() {
                 bail!("approval key generation refuses to overwrite an existing file");
             }
-            let mut secret = [0_u8; 32];
-            getrandom::fill(&mut secret)
-                .map_err(|error| anyhow::anyhow!("generating approval key: {error}"))?;
+            let secret = random_secret_key()?;
             write_new_file(
                 &public_key,
                 &format!("{}\n", approval_public_key(&secret)),
@@ -1468,6 +1507,74 @@ fn main() -> Result<()> {
         Command::ValidatePolicyPack { input, output } => {
             let pack = load_policy_pack(&input)?.0;
             write_or_print_json(&serde_json::to_value(pack)?, output.as_ref())?;
+        }
+        Command::SignedPolicyPackSchema { output } => {
+            write_or_print_json(&signed_policy_pack_json_schema(), output.as_ref())?;
+        }
+        Command::PolicyKeygen {
+            private_key,
+            public_key,
+        } => {
+            if private_key == public_key {
+                bail!("private and public policy key paths must differ");
+            }
+            if private_key.exists() || public_key.exists() {
+                bail!("policy key generation refuses to overwrite an existing file");
+            }
+            let secret = random_secret_key()?;
+            let public = approval_public_key(&secret);
+            write_new_file(&private_key, &format!("{}\n", hex_encode(&secret)), true)?;
+            if let Err(error) = write_new_file(&public_key, &format!("{public}\n"), false) {
+                let _ = fs::remove_file(&private_key);
+                return Err(error);
+            }
+            eprintln!(
+                "created policy signing key {} and public key {}",
+                private_key.display(),
+                public_key.display()
+            );
+        }
+        Command::SignPolicyPack {
+            input,
+            private_key,
+            signer_id,
+            output,
+        } => {
+            let pack = load_policy_pack(&input)?.0;
+            let secret = read_hex_key(&private_key, "policy signing private key")?;
+            let signed = sign_policy_pack(pack, &signer_id, &secret)
+                .map_err(anyhow::Error::msg)
+                .context("signing organization policy pack")?;
+            write_new_file(
+                &output,
+                &format!("{}\n", serde_json::to_string_pretty(&signed)?),
+                false,
+            )?;
+            eprintln!(
+                "signed policy pack {} revision {} as {}",
+                signed.policy_pack.id, signed.policy_pack.revision, signed.signer_id
+            );
+        }
+        Command::VerifyPolicyPack {
+            input,
+            public_key,
+            output,
+        } => {
+            let signed = load_signed_policy_pack(&input)?;
+            let public_key = read_hex_key(&public_key, "trusted policy public key")?;
+            verify_signed_policy_pack(&signed, &public_key)
+                .map_err(anyhow::Error::msg)
+                .context("verifying signed organization policy pack")?;
+            let normalized = format!("{}\n", serde_json::to_string_pretty(&signed.policy_pack)?);
+            if let Some(path) = output {
+                write_new_file(&path, &normalized, false)?;
+            } else {
+                print!("{normalized}");
+            }
+            eprintln!(
+                "verified policy pack {} revision {} signed by {}",
+                signed.policy_pack.id, signed.policy_pack.revision, signed.signer_id
+            );
         }
         Command::Migrate { input, output } => {
             let source = fs::read_to_string(&input)
@@ -2574,6 +2681,13 @@ fn write_new_file(path: &Path, contents: &str, private: bool) -> Result<()> {
 
 fn read_secret_key(path: &Path) -> Result<[u8; 32]> {
     read_hex_key(path, "approval private key")
+}
+
+fn random_secret_key() -> Result<[u8; 32]> {
+    let mut secret = [0_u8; 32];
+    getrandom::fill(&mut secret)
+        .map_err(|error| anyhow::anyhow!("generating Ed25519 key: {error}"))?;
+    Ok(secret)
 }
 
 fn read_hex_key(path: &Path, description: &str) -> Result<[u8; 32]> {

@@ -46,9 +46,26 @@ profile_selections=0
 if [[ -n "${PCBEX_FAB:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_POLICY_PACK:-}" ]]; then ((profile_selections += 1)); fi
+if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then ((profile_selections += 1)); fi
 if ((profile_selections > 1)); then
-  echo "PCBEX_FAB, PCBEX_FAB_PROFILE, and PCBEX_POLICY_PACK are mutually exclusive" >&2
+  echo "physical policy inputs are mutually exclusive" >&2
   exit 2
+fi
+has_signed_policy_pack=false
+has_policy_public_key=false
+if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then has_signed_policy_pack=true; fi
+if [[ -n "${PCBEX_POLICY_PUBLIC_KEY:-}" ]]; then has_policy_public_key=true; fi
+if [[ "$has_signed_policy_pack" != "$has_policy_public_key" ]]; then
+  echo "PCBEX_SIGNED_POLICY_PACK and PCBEX_POLICY_PUBLIC_KEY must be supplied together" >&2
+  exit 2
+fi
+effective_policy_pack="${PCBEX_POLICY_PACK:-}"
+if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then
+  effective_policy_pack="${artifact_dir}/verified-policy-pack.json"
+  "$PCBEX_BINARY" verify-policy-pack \
+    "$PCBEX_SIGNED_POLICY_PACK" \
+    --public-key "$PCBEX_POLICY_PUBLIC_KEY" \
+    --output "$effective_policy_pack"
 fi
 if [[ -n "${PCBEX_FAB:-}" ]]; then
   analysis_arguments+=(--fab "$PCBEX_FAB")
@@ -56,8 +73,8 @@ fi
 if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then
   analysis_arguments+=(--fab-profile "$PCBEX_FAB_PROFILE")
 fi
-if [[ -n "${PCBEX_POLICY_PACK:-}" ]]; then
-  analysis_arguments+=(--policy-pack "$PCBEX_POLICY_PACK")
+if [[ -n "$effective_policy_pack" ]]; then
+  analysis_arguments+=(--policy-pack "$effective_policy_pack")
 fi
 "$PCBEX_BINARY" "${analysis_arguments[@]}"
 cp "$current_dir/report.sarif" "$sarif_dir/current.sarif"
@@ -85,8 +102,8 @@ if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
   if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then
     baseline_arguments+=(--fab-profile "$PCBEX_FAB_PROFILE")
   fi
-  if [[ -n "${PCBEX_POLICY_PACK:-}" ]]; then
-    baseline_arguments+=(--policy-pack "$PCBEX_POLICY_PACK")
+  if [[ -n "$effective_policy_pack" ]]; then
+    baseline_arguments+=(--policy-pack "$effective_policy_pack")
   fi
   "$PCBEX_BINARY" "${baseline_arguments[@]}"
   "$PCBEX_BINARY" compare-analysis \
