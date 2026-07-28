@@ -224,8 +224,9 @@ name one non-blank scalar type; missing, blank, or structured type fields and
 extra scalar values are rejected. Each rule may contain at most one `condition`;
 repeated conditions are rejected instead of silently selecting the first. A
 custom rule must contain one scalar name; missing or structured names are
-rejected. A condition field must contain one scalar expression and no extra
-expressions. A recognized NetClass condition must close its quoted class name
+rejected, and blank names are invalid. A condition field must contain one
+scalar expression and no extra expressions. A recognized NetClass condition
+must close its quoted class name
 and end immediately afterward; the class name must be present, quoted, and non-blank,
 and trailing condition fragments are rejected rather than partially applied.
 Only direct `A.NetClass` or `B.NetClass` selectors using the `==` operator are
