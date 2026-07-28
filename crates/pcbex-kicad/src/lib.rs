@@ -516,6 +516,11 @@ fn import_net_classes(
             if name.trim().is_empty() {
                 return Err("KiCad board net class name must not be blank".into());
             }
+            if atom(values.get(2)).is_none() {
+                return Err(format!(
+                    "KiCad board net class {name} is missing a scalar description"
+                ));
+            }
             if classes.contains_key(name) {
                 return Err(format!("KiCad board contains duplicate net class {name}"));
             }
@@ -5572,6 +5577,35 @@ mod tests {
                 "KiCad board net class is missing its name"
             );
         }
+    }
+
+    #[test]
+    fn rejects_legacy_net_classes_without_a_scalar_description() {
+        for definition in [
+            r#"(net_class "Signal")"#,
+            r#"(net_class "Signal" (description "signals") (trace_width 0.25))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup {definition})
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad board net class Signal is missing a scalar description"
+            );
+        }
+
+        let empty_description = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        assert!(import(empty_description, rules()).is_ok());
     }
 
     #[test]
