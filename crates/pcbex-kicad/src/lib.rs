@@ -1890,7 +1890,17 @@ fn import_footprint(
         let custom_polygon =
             custom_pad_polygon(pad, position, angle + pad_angle).unwrap_or_default();
         let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
-        let net_values = child_values(pad, "net");
+        let mut net_fields = pad.iter().filter_map(|value| {
+            let values = value.as_list()?;
+            (atom(values.first()) == Some("net")).then_some(values)
+        });
+        let net_values = net_fields.next();
+        if net_fields.next().is_some() {
+            let number = atom(pad.get(1)).unwrap_or("");
+            return Err(format!(
+                "KiCad pad {number} net fields must not be repeated"
+            ));
+        }
         let net_id = net_values
             .map(|values| {
                 number_u32(values.get(1)).ok_or_else(|| {
@@ -3198,6 +3208,30 @@ mod tests {
             );
 
             assert_eq!(import(&pcb, rules()).unwrap_err(), error);
+        }
+    }
+
+    #[test]
+    fn rejects_repeated_kicad_pad_net_fields() {
+        for net_fields in [
+            r#"(net 1 "SIGNAL") (net 1 "SIGNAL")"#,
+            r#"(net 1 "SIGNAL") (net 2 "OTHER")"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIGNAL")
+                  (net 2 "OTHER")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (footprint "P" (layer "F.Cu") (at 2 2)
+                    (pad "A1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+                      {net_fields}))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad pad A1 net fields must not be repeated"
+            );
         }
     }
 

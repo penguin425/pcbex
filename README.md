@@ -164,8 +164,9 @@ Connected pads must reference a declared nonzero net ID; stale references are
 rejected instead of silently discarding the terminal and connection request.
 When a pad contains a net record, its ID must also be a valid non-negative
 integer, its name must be scalar, and the ID/name pair must match the board
-declaration; malformed or contradictory records are rejected instead of treating
-the pad as unconnected or attaching it to a differently named net.
+declaration. The record must not be repeated; malformed, duplicate, or
+contradictory records are rejected instead of treating the pad as unconnected or
+attaching it to a differently named net.
 Project net-class dimensions must be non-negative and fit the signed nanometer
 range; oversized values are rejected instead of saturating at the integer limit.
 Legacy net classes embedded in `.kicad_pcb` files follow the same finite,
