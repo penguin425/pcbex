@@ -308,6 +308,14 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
         {
             return Err(format!("net class {name} has invalid diff_pair_width"));
         }
+        for (key, value) in [
+            ("min_track_length", class_rules.minimum_length_nm),
+            ("max_track_length", class_rules.maximum_length_nm),
+        ] {
+            if value.is_some_and(|length| length <= 0) {
+                return Err(format!("net class {name} has invalid {key}"));
+            }
+        }
         net_classes.insert(name.to_string(), class_rules);
     }
 
@@ -6479,6 +6487,36 @@ mod tests {
             imported.board.net_classes["Touching"].differential_gap_nm,
             Some(0)
         );
+    }
+
+    #[test]
+    fn rejects_zero_project_net_class_length_limits_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for key in ["min_track_length", "max_track_length"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = serde_json::json!({
+                "net_settings": {
+                    "classes": [
+                        {"name": "Valid", "min_track_length": 1.0},
+                        {"name": "Zero", key: 0.0}
+                    ]
+                }
+            });
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
+                format!("net class Zero has invalid {key}")
+            );
+            assert_eq!(imported.board.net_classes.len(), 1);
+            assert!(imported.board.net_classes.contains_key("Existing"));
+        }
     }
 
     #[test]
