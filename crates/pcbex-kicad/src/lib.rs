@@ -8,6 +8,13 @@ use pcbex_core::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
+mod schematic;
+pub use schematic::{
+    ElectricalPinType, SchematicCoverage, SchematicDocument, SchematicLabel, SchematicLabelKind,
+    SchematicMarker, SchematicNet, SchematicPin, SchematicPinRef, SchematicSymbol,
+    SchematicUnsupportedFeature, SchematicWire, import_schematic, schematic_json_schema,
+};
+
 const NM_PER_MM: f64 = 1_000_000.0;
 const ARC_CHORD_TOLERANCE_NM: f64 = 10_000.0;
 const MAX_EDGE_ARC_SEGMENTS: usize = 16_384;

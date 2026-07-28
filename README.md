@@ -677,7 +677,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.304.0
+    uses: penguin425/pcbex@v1.305.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1077,6 +1077,34 @@ pcbex-agent repair-kicad input.kicad_pcb \
 The JSON report records every iteration, remaining errors and warnings, repair
 actions, the stop reason, and the best observed error count.
 
+## Schematic electrical IR
+
+Normalize a KiCad 6–10 `.kicad_sch` file before deterministic electrical
+checking or AI review:
+
+```sh
+pcbex import-schematic design.kicad_sch \
+  --output design.schematic.json --require-complete
+pcbex schematic-schema --output schematic-ir-v1.schema.json
+```
+
+The schema-versioned IR retains source-format identity, symbols, all
+properties, unit/convert selection, pin UUIDs and electrical types, transformed
+pin coordinates, wires, junctions, local/global/power labels, explicit
+no-connect markers, KiCad 10 local/global power scope, and deterministic
+electrical nets. Connectivity joins wire endpoints and T-junctions, splits
+unmarked crossings, and unifies repeated labels. Net members retain both
+reference designators and symbol UUIDs so unannotated or multi-unit parts
+remain unambiguous.
+
+The importer rejects unknown future formats, malformed coordinates, duplicate
+UUIDs/properties/pins, missing embedded symbols, unsupported pin types, and
+bounded-resource overflows. Buses, bus entries, net-class directives, extended
+library symbols, and hierarchical sheets/labels are retained as explicit
+coverage gaps rather than silently approved. `--require-complete` writes the
+inspectable IR first and then fails if any such gap exists. The included
+example is also parsed by KiCad 10 in CI-facing verification.
+
 ## Releases
 
 Pushing a semantic-version tag from `main` creates a GitHub Release:
@@ -1105,9 +1133,10 @@ safely.
 
 ## Scope
 
-pcbex is a deterministic physical-design engine for placed signal boards. It
-supports polygonal multilayer boards, differential pairs, length tuning, copper
-zones, partial-span vias, exact KiCad pad geometry, placement optimization, DFM
-reporting, and headless or IPC-assisted KiCad workflows. It does not synthesize
-schematics, select electrical components, perform analog or signal-integrity
-simulation, or replace final KiCad DRC and fabrication review.
+pcbex is a deterministic physical-design engine for placed signal boards with
+a versioned KiCad schematic electrical IR. It supports polygonal multilayer
+boards, differential pairs, length tuning, copper zones, partial-span vias,
+exact KiCad pad geometry, placement optimization, DFM reporting, and headless
+or IPC-assisted KiCad workflows. It does not yet synthesize schematics, select
+electrical components, perform analog or signal-integrity simulation, or
+replace final KiCad ERC/DRC and fabrication review.
