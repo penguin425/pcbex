@@ -52,6 +52,8 @@ jobs:
         env:
           PYTHONPATH: agent/src
         run: python -m unittest discover -s agent/tests -v
+      - name: Test release audit
+        run: python -m unittest discover -s scripts/tests -v
 
   prepare:
     name: Prepare draft release
@@ -175,9 +177,29 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --clobber
 
+  audit:
+    name: Audit release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Verify roadmap, release metadata, assets, checksums, and SBOMs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/release-audit.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --expected-sha "$GITHUB_SHA" \
+            --allow-draft
+
   publish:
     name: Publish release
-    needs: build
+    needs: audit
     runs-on: ubuntu-latest
     permissions:
       contents: write

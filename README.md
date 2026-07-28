@@ -677,7 +677,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.308.0
+    uses: penguin425/pcbex@v1.309.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1269,6 +1269,22 @@ gh attestation verify pcbex-v0.1.2-x86_64-unknown-linux-gnu.tar.gz \
 
 If a build fails, the release remains a draft and the workflow can be rerun
 safely.
+
+Before publication, the workflow runs `scripts/release-audit.py` against the
+machine-readable [product roadmap](docs/ROADMAP.md). It requires the exact 12
+release assets, downloads them, verifies every archive checksum and SPDX
+document, and confirms the tag commit. Repository administrators can also
+audit the live `main` protection:
+
+```sh
+python3 scripts/release-audit.py \
+  --repository penguin425/pcbex \
+  --check-protection
+```
+
+The protection audit requires pull-request flow, strict Rust/Python/KiCad
+checks, administrator enforcement, linear history, conversation resolution,
+and disabled force-pushes and deletions.
 
 ## Scope
 
