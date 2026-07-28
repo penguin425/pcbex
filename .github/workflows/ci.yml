@@ -27,7 +27,7 @@ jobs:
         with:
           board: examples/simple.kicad_pcb
           baseline-board: examples/simple.kicad_pcb
-          fab-profile: examples/acme-dfm-profile.json
+          policy-pack: examples/acme-policy-pack.json
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -47,7 +47,9 @@ jobs:
           grep -F '# pcbex hardware analysis' "$ARTIFACT_DIR/pr-comment.md"
           grep -F '# pcbex baseline comparison' "$ARTIFACT_DIR/pr-comment.md"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
-          test "$(jq -r '.dfm_profile_file.sha256 | length' "$ARTIFACT_DIR/current/run.json")" = "64"
+          test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
+          test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"
+          test "$(jq -r '.policy_pack_file.sha256 | length' "$ARTIFACT_DIR/current/run.json")" = "64"
           test "$VIOLATION_COUNT" = "1"
           test "$REGRESSION" = "false"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then

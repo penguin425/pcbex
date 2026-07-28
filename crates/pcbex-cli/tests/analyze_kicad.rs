@@ -56,9 +56,11 @@ fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     let regressed_comparison = temporary_directory("comparison-regressed");
     let profiled = temporary_directory("analysis-profiled");
     let externally_profiled = temporary_directory("analysis-external-profiled");
+    let policy_packed = temporary_directory("analysis-policy-packed");
     let profiles = temporary_directory("profiles").with_extension("json");
     let profile_schema = temporary_directory("profile-schema").with_extension("json");
     let external_profile = root.join("examples/acme-dfm-profile.json");
+    let policy_pack = root.join("examples/acme-policy-pack.json");
     let normalized_profile = temporary_directory("normalized-profile").with_extension("json");
 
     assert!(analyze(&input, &output, false).success());
@@ -182,6 +184,35 @@ fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     );
     assert_eq!(
         external_manifest["dfm_profile_file"]["sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("analyze-kicad")
+            .arg(&input)
+            .arg("--output-dir")
+            .arg(&policy_packed)
+            .arg("--policy-pack")
+            .arg(&policy_pack)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let packed_manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(policy_packed.join("run.json")).unwrap()).unwrap();
+    assert_eq!(
+        packed_manifest["configuration"]["organization_policy_pack"],
+        "acme-production-v1"
+    );
+    assert_eq!(
+        packed_manifest["configuration"]["dfm_profile"]["id"],
+        "acme-standard-4layer-v1"
+    );
+    assert_eq!(
+        packed_manifest["policy_pack_file"]["sha256"]
             .as_str()
             .unwrap()
             .len(),

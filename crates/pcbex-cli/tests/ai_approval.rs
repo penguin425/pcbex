@@ -177,6 +177,100 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
         .success()
     );
 
+    let sample_pack =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/acme-policy-pack.json");
+    let mut pack_value: Value = serde_json::from_slice(&fs::read(sample_pack).unwrap()).unwrap();
+    pack_value["electrical_policy"] = policy_value;
+    pack_value["ai_requirements"] = json!([{
+        "id": "power",
+        "text": "Power input treatment is intentional"
+    }]);
+    pack_value["require_simulation_evidence"] = false.into();
+    pack_value["trusted_approval_keys"] = json!([{
+        "signer_id": "ci-production",
+        "public_key": fs::read_to_string(&public_key).unwrap().trim()
+    }]);
+    let policy_pack = directory.join("organization-policy-pack.json");
+    fs::write(
+        &policy_pack,
+        serde_json::to_vec_pretty(&pack_value).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        run(&["validate-policy-pack", path(&policy_pack)])
+            .status
+            .success()
+    );
+    assert!(
+        run(&[
+            "verify-ai-approval",
+            path(&approval),
+            path(&request),
+            path(&response),
+            "--policy-pack",
+            path(&policy_pack),
+            "--require-approved",
+        ])
+        .status
+        .success()
+    );
+    let mismatched_policy_pack = directory.join("mismatched-organization-policy-pack.json");
+    let mut mismatched_pack_value = pack_value.clone();
+    mismatched_pack_value["require_simulation_evidence"] = true.into();
+    fs::write(
+        &mismatched_policy_pack,
+        serde_json::to_vec_pretty(&mismatched_pack_value).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !run(&[
+            "verify-ai-approval",
+            path(&approval),
+            path(&request),
+            path(&response),
+            "--policy-pack",
+            path(&mismatched_policy_pack),
+        ])
+        .status
+        .success()
+    );
+    let packed_review = directory.join("packed-electrical-review.json");
+    assert!(
+        run(&[
+            "check-schematic",
+            path(&schematic),
+            "--policy-pack",
+            path(&policy_pack),
+            "--output",
+            path(&packed_review),
+            "--require-approved",
+        ])
+        .status
+        .success()
+    );
+    let packed_request = directory.join("packed-request.json");
+    assert!(
+        run(&[
+            "prepare-ai-review",
+            path(&schematic),
+            "--electrical-review",
+            path(&packed_review),
+            "--policy-pack",
+            path(&policy_pack),
+            "--output",
+            path(&packed_request),
+        ])
+        .status
+        .success()
+    );
+    let packed_request_value: Value =
+        serde_json::from_slice(&fs::read(packed_request).unwrap()).unwrap();
+    assert_eq!(packed_request_value["requirements"][0]["id"], "power");
+    assert_eq!(
+        packed_request_value["approval_policy"]["require_simulation_evidence"],
+        false
+    );
+
     let mut tampered = response_value;
     tampered["summary"] = json!("tampered");
     fs::write(&response, serde_json::to_vec_pretty(&tampered).unwrap()).unwrap();

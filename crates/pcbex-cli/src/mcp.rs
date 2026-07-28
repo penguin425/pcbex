@@ -614,6 +614,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "rules_file": {"type": "string"},
                     "fab": {"type": "string"},
                     "fab_profile": {"type": "string"},
+                    "policy_pack": {"type": "string"},
                     "fail_on_violations": {"type": "boolean", "default": false}
                 }
             }),
@@ -655,6 +656,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "rules_file": {"type": "string"},
                     "fab": {"type": "string"},
                     "fab_profile": {"type": "string"},
+                    "policy_pack": {"type": "string"},
                     "svg": {"type": "string"},
                     "json_output": {"type": "string"},
                     "allow_unrouted": {"type": "boolean", "default": false}
@@ -671,11 +673,16 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["input", "electrical_review", "requirements", "output"],
+                "required": ["input", "electrical_review", "output"],
+                "oneOf": [
+                    {"required": ["requirements"]},
+                    {"required": ["policy_pack"]}
+                ],
                 "properties": {
                     "input": {"type": "string"},
                     "electrical_review": {"type": "string"},
                     "policy": {"type": "string"},
+                    "policy_pack": {"type": "string"},
                     "simulation_evidence": {
                         "type": "array", "items": {"type": "string"}
                     },
@@ -720,12 +727,17 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["approval", "request", "response", "public_key"],
+                "required": ["approval", "request", "response"],
+                "oneOf": [
+                    {"required": ["public_key"]},
+                    {"required": ["policy_pack"]}
+                ],
                 "properties": {
                     "approval": {"type": "string"},
                     "request": {"type": "string"},
                     "response": {"type": "string"},
                     "public_key": {"type": "string"},
+                    "policy_pack": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 }
             }),
@@ -826,6 +838,7 @@ fn analyze_kicad(
             "rules_file",
             "fab",
             "fab_profile",
+            "policy_pack",
             "fail_on_violations",
         ],
     )?;
@@ -841,6 +854,7 @@ fn analyze_kicad(
     optional_option(&arguments, "rules_file", "--rules-file", &mut command)?;
     optional_option(&arguments, "fab", "--fab", &mut command)?;
     optional_option(&arguments, "fab_profile", "--fab-profile", &mut command)?;
+    optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
     optional_flag(
         &arguments,
         "fail_on_violations",
@@ -905,6 +919,7 @@ fn route_kicad(
             "rules_file",
             "fab",
             "fab_profile",
+            "policy_pack",
             "svg",
             "json_output",
             "allow_unrouted",
@@ -922,6 +937,7 @@ fn route_kicad(
     optional_option(&arguments, "rules_file", "--rules-file", &mut command)?;
     optional_option(&arguments, "fab", "--fab", &mut command)?;
     optional_option(&arguments, "fab_profile", "--fab-profile", &mut command)?;
+    optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
     optional_option(&arguments, "svg", "--svg", &mut command)?;
     optional_option(&arguments, "json_output", "--json-output", &mut command)?;
     optional_flag(
@@ -944,6 +960,7 @@ fn prepare_schematic_review(
             "input",
             "electrical_review",
             "policy",
+            "policy_pack",
             "simulation_evidence",
             "requirements",
             "allow_no_simulation",
@@ -953,7 +970,11 @@ fn prepare_schematic_review(
     let input = required_string(&arguments, "input")?;
     let review = required_string(&arguments, "electrical_review")?;
     let output = required_string(&arguments, "output")?;
-    let requirements = required_string_array(&arguments, "requirements", false)?;
+    let requirements = required_string_array(
+        &arguments,
+        "requirements",
+        arguments.contains_key("policy_pack"),
+    )?;
     let simulations = required_string_array(&arguments, "simulation_evidence", true)?;
     let mut command = vec![
         "prepare-ai-review".into(),
@@ -962,6 +983,7 @@ fn prepare_schematic_review(
         review,
     ];
     optional_option(&arguments, "policy", "--policy", &mut command)?;
+    optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
     for value in simulations {
         command.push("--simulation-evidence".into());
         command.push(value);
@@ -1041,21 +1063,23 @@ fn verify_schematic_approval(
             "request",
             "response",
             "public_key",
+            "policy_pack",
             "require_approved",
         ],
     )?;
     let approval = required_string(&arguments, "approval")?;
     let request = required_string(&arguments, "request")?;
     let response = required_string(&arguments, "response")?;
-    let public_key = required_string(&arguments, "public_key")?;
-    let mut command = vec![
-        "verify-ai-approval".into(),
-        approval,
-        request,
-        response,
-        "--public-key".into(),
-        public_key,
-    ];
+    let has_public_key = arguments.contains_key("public_key");
+    let has_policy_pack = arguments.contains_key("policy_pack");
+    if has_public_key == has_policy_pack {
+        return Err(json!({
+            "detail": "exactly one of public_key or policy_pack is required"
+        }));
+    }
+    let mut command = vec!["verify-ai-approval".into(), approval, request, response];
+    optional_option(&arguments, "public_key", "--public-key", &mut command)?;
+    optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
     optional_flag(
         &arguments,
         "require_approved",

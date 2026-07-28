@@ -114,6 +114,11 @@
     {
       "id": "review-provider-command-adapter",
       "release": "v1.319.0",
+      "status": "released"
+    },
+    {
+      "id": "organization-policy-packs",
+      "release": "v1.320.0",
       "status": "current"
     }
   ]

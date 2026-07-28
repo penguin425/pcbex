@@ -678,11 +678,11 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.318.0
+    uses: penguin425/pcbex@v1.320.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
-      fab: jlcpcb-2layer
+      policy-pack: hardware/organization-policy-pack.json
       fail-on-regressions: "true"
       upload-sarif: "true"
       pr-comment: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
@@ -704,10 +704,10 @@ unexpected API shapes, and missing event context fail closed. The example
 disables comments for fork PRs, whose default `GITHUB_TOKEN` is read-only,
 while still producing their Job Summary and evidence artifact.
 
-Callers may replace `fab` with `fab-profile: hardware/acme-dfm.json` to apply a
-repository-owned external profile. The two inputs are mutually exclusive. The
-same profile is applied to current and baseline analysis, and its exact digest
-is retained in each run manifest.
+Callers select exactly one of `fab`, `fab-profile`, or
+`policy-pack`. The same physical policy is applied to current and baseline
+analysis, and the exact external source digest is retained in each run
+manifest.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -934,6 +934,38 @@ routing, route-candidate generation, board DFM checks, the composite Action,
 and the corresponding MCP analysis and routing tools. Analysis manifests bind
 both the normalized resolved profile and the source file's path, byte length,
 and SHA-256 digest.
+
+### Organization policy packs
+
+An organization can bind its complete approval contract in one distributable
+JSON file:
+
+```sh
+pcbex policy-pack-schema --output organization-policy-pack.schema.json
+pcbex validate-policy-pack examples/acme-policy-pack.json \
+  --output build/acme-policy-pack.normalized.json
+
+pcbex analyze-kicad board.kicad_pcb --output-dir build/analysis \
+  --policy-pack examples/acme-policy-pack.json
+pcbex check-schematic design.kicad_sch \
+  --policy-pack examples/acme-policy-pack.json \
+  --output electrical-review.json --require-approved
+```
+
+The closed `schema_version: 1` contract combines one DFM profile, one
+electrical policy, explicit AI-review requirements, whether simulation
+evidence is mandatory, and an allowlist of signer IDs with Ed25519 public
+keys. IDs, dates, dimensions, rule settings, requirements, and keys are
+strictly validated; unknown fields, duplicates, and altered profiles that
+impersonate built-in DFM identities fail closed. Private keys are never part
+of a policy pack.
+
+`--policy-pack` applies to KiCad analysis, routing, route-candidate generation,
+board DFM checking, schematic checking, AI-review preparation, approval
+verification, the composite Action, and the corresponding MCP analysis,
+routing, preparation, and verification tools. It is mutually exclusive with
+ad-hoc policy/profile overrides. Analysis manifests bind the pack ID, resolved
+DFM rules, source path, byte length, and SHA-256 digest.
 
 Invalid physical limits are reported individually as `dfm_rule_dimensions`;
 track width, drill size, and board thickness must be positive, while clearance
@@ -1334,6 +1366,24 @@ pcbex sign-ai-review ai-review-request.json ai-review-response.json \
 pcbex verify-ai-approval \
   signed-approval.json ai-review-request.json ai-review-response.json \
   --public-key schematic-approval.pub --require-approved
+```
+
+With an organization policy pack, review requirements and the simulation gate
+are supplied by policy, and approval verification selects the trusted key by
+the signed envelope's `signer_id`. Verification also requires the request's
+electrical policy, complete requirement set, and simulation gate to match the
+pack exactly:
+
+```sh
+pcbex prepare-ai-review design.kicad_sch \
+  --electrical-review electrical-review.json \
+  --policy-pack examples/acme-policy-pack.json \
+  --simulation-evidence power-rail.evidence.json \
+  --output ai-review-request.json
+
+pcbex verify-ai-approval \
+  signed-approval.json ai-review-request.json ai-review-response.json \
+  --policy-pack examples/acme-policy-pack.json --require-approved
 ```
 
 The request embeds the normalized schematic, effective electrical policy,
