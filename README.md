@@ -173,8 +173,9 @@ an ownerless route candidate.
 Project net-class dimensions must be non-negative and fit the signed nanometer
 range; oversized values are rejected instead of saturating at the integer limit.
 Legacy net classes embedded in `.kicad_pcb` files follow the same finite,
-non-negative, signed-nanometer range contract. Their names must also be
-present as scalar values, non-blank, and unique; missing, malformed, blank, or
+non-negative, signed-nanometer range contract. Their names must be present as
+scalar values, non-blank, and unique, and their descriptions must be scalar
+values (an empty description remains valid). Missing, malformed, blank, or
 duplicate embedded definitions are rejected instead of being ignored, retaining
 an unusable class, or silently selecting the last one.
 Legacy `add_net` assignments must contain exactly one scalar name for a net
