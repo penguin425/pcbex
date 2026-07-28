@@ -595,7 +595,11 @@ fn condition_net_class(condition: &str) -> Result<Option<String>, String> {
             "custom rule NetClass condition must end after its quoted class name".to_string(),
         );
     }
-    Ok(Some(quoted[..closing_quote].to_string()))
+    let class_name = &quoted[..closing_quote];
+    if class_name.trim().is_empty() {
+        return Err("custom rule NetClass condition class name must not be blank".to_string());
+    }
+    Ok(Some(class_name.to_string()))
 }
 
 fn constraint_value(constraint: &[Sexp], preferences: &[&str]) -> Result<i64, String> {
@@ -6773,6 +6777,41 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 expected
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
+    }
+
+    #[test]
+    fn rejects_blank_net_class_conditions_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for class_name in ["", "   "] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "Blank class"
+                    (condition "A.NetClass == '{class_name}'")
+                    (constraint track_width (min 0.4mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom rule NetClass condition class name must not be blank"
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);

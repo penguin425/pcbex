@@ -223,10 +223,10 @@ rules may deliberately override earlier rules. Each rule may contain at most
 one `condition`; repeated conditions are rejected instead of silently selecting
 the first. A condition field must contain one scalar expression and no extra
 expressions. A recognized NetClass condition must close its quoted class name
-and end immediately afterward; trailing condition fragments are rejected rather
-than partially applied. Custom-rule application is atomic, so an invalid later
-constraint or unknown net class cannot leave earlier rule updates partially
-applied.
+and end immediately afterward; the class name must not be blank, and trailing
+condition fragments are rejected rather than partially applied. Custom-rule
+application is atomic, so an invalid later constraint or unknown net class
+cannot leave earlier rule updates partially applied.
 
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.
