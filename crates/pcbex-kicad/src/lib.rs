@@ -533,6 +533,9 @@ fn import_net_classes(
                 let Some(value) = child_values(values, key) else {
                     return Ok(fallback);
                 };
+                if value.len() != 2 {
+                    return Err(format!("net class {name} has invalid {key}"));
+                }
                 number(value.get(1))
                     .and_then(checked_nonnegative_nm)
                     .ok_or_else(|| format!("net class {name} has invalid {key}"))
@@ -541,6 +544,9 @@ fn import_net_classes(
                 let Some(value) = child_values(values, key) else {
                     return Ok(None);
                 };
+                if value.len() != 2 {
+                    return Err(format!("net class {name} has invalid {key}"));
+                }
                 number(value.get(1))
                     .and_then(checked_nonnegative_nm)
                     .map(Some)
@@ -5514,6 +5520,32 @@ mod tests {
                   (setup
                     (net_class "Invalid" ""
                       ({key} {value})))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                format!("net class Invalid has invalid {key}")
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_extra_legacy_net_class_dimension_values() {
+        for key in [
+            "trace_width",
+            "clearance",
+            "via_dia",
+            "via_drill",
+            "diff_pair_width",
+            "diff_pair_gap",
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup
+                    (net_class "Invalid" ""
+                      ({key} 0.25 extra)))
                   (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
                 )"#
             );
