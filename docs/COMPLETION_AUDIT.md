@@ -52,6 +52,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | GitHub Actions hardware CI | Versioned composite action emits Job Summary, artifact bundles, SARIF, and post-upload violation/regression gates without privileged PR execution | CI exercises the public action contract, unchanged baseline comparison, outputs, and artifact upload |
 | Versioned fabrication profiles | Immutable JLCPCB/PCBWay standard 2-layer profiles retain aliases, revisions, verification dates, official sources, exact DFM rules, and non-lowering routing corrections in the run manifest | Profile resolution/application unit tests plus KiCad bundle/listing integration and public Action smoke test |
 | MCP stdio server | MCP 2025-11-25 lifecycle with older-version negotiation exposes typed DFM discovery, KiCad analysis, bundle comparison, and routing tools with structured results and safety annotations | Protocol lifecycle/error unit tests plus subprocess E2E proving clean JSON-RPC output and retained artifacts after a failed analysis gate |
+| MCP asynchronous tasks | MCP 2025-11-25 Tasks provide bounded deferred execution, status polling, listing, blocking result retrieval, TTL expiry, and process cancellation for analysis, comparison, and routing while older clients remain synchronous | Unit tests cover capability negotiation, task support metadata, state transitions, original error propagation, cancellation, listing, and compatibility; subprocess E2E retrieves a failed-gate artifact bundle through a task |
 | Performance regression gate | Deterministic search-state budgets for 10 parallel nets and a 100 mm board with 200 obstacles | Dedicated `performance_budget` target runs on every PR |
 | Deterministic parallel candidate search | Configurable 1–8 bounded workers explore first-pass A* candidates; ordered validation reuses one board snapshot per pass and sequential conflict fallback controls commits | Ten-net 1-vs-8-worker regression is byte-identical; Criterion measures actual 1/2/4/8-worker wall time |
 | Automatic local push-and-shove | Grid-aligned route-interior translation keeps terminal anchors fixed; failed nets try bounded blocker shoves before selective rip-up and atomically accept only checked combined routes | Successful manual shove preserves terminals, invalid edits roll back, and automatic blocker recovery produces a clean two-route board |
@@ -158,7 +159,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.301.0 exposes 378 Rust tests and 11 Python tests. The release workflow
+Version 1.302.0 exposes 381 Rust tests and 11 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

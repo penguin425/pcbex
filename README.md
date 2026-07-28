@@ -629,7 +629,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.301.0
+    uses: penguin425/pcbex@v1.302.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -676,6 +676,34 @@ capture stdout and stderr so the stdio transport emits only newline-delimited
 JSON-RPC messages. Expected analysis or regression gate failures use
 `isError: true` while retaining structured manifests and artifact paths;
 malformed requests remain JSON-RPC errors so an agent can correct its call.
+
+For 2025-11-25 clients, the server also implements the experimental MCP Tasks
+API. `analyze_kicad`, `compare_analysis`, and `route_kicad` declare
+`execution.taskSupport: "optional"` and accept task-augmented calls:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "analyze_kicad",
+    "arguments": {
+      "input": "board.kicad_pcb",
+      "output_dir": "pcbex-analysis"
+    },
+    "task": {"ttl": 600000}
+  }
+}
+```
+
+Use `tasks/get` to poll, `tasks/result` to retrieve the original tool result,
+`tasks/list` to inspect retained jobs, and `tasks/cancel` to terminate work.
+Tasks are process-local, default to a 10-minute lifetime, and permit a requested
+TTL up to 24 hours. The server retains at most 32 tasks and executes at most
+four concurrently. Older negotiated protocol versions continue to execute
+calls synchronously and ignore task augmentation as required by their
+capability model.
 
 Analysis and routing tools require explicit output paths and may overwrite
 files there. MCP hosts should retain their normal user-approval prompt for
