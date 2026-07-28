@@ -213,9 +213,10 @@ dimensions in either mm or mil must also fit the signed nanometer range.
 Effective custom-rule track widths and hole sizes must be positive, while zero
 clearance and differential gap remain valid. After all applicable rules are
 combined, each modified via diameter must be greater than its hole size.
-Custom-rule minimum and maximum length bounds must be positive when present.
-Custom-rule application is atomic, so an invalid later constraint or unknown
-net class cannot leave earlier rule updates partially applied.
+Custom-rule minimum and maximum length bounds must be positive when present,
+and the minimum must not exceed the maximum. Custom-rule application is atomic,
+so an invalid later constraint or unknown net class cannot leave earlier rule
+updates partially applied.
 
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.

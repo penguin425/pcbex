@@ -506,6 +506,12 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
                             return Err(format!("custom rule length {name} must be positive"));
                         }
                     }
+                    if matches!(
+                        (minimum, maximum),
+                        (Some(minimum), Some(maximum)) if minimum > maximum
+                    ) {
+                        return Err("custom rule length min must not exceed max".to_string());
+                    }
                     class.minimum_length_nm = minimum;
                     class.maximum_length_nm = maximum;
                 }
@@ -6293,6 +6299,35 @@ mod tests {
         let class = &imported.board.net_classes["Signal"];
         assert_eq!(class.minimum_length_nm, Some(1_000_000));
         assert_eq!(class.maximum_length_nm, Some(1_000_000));
+    }
+
+    #[test]
+    fn rejects_reversed_custom_rule_length_limits_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let mut imported = import(pcb, rules()).unwrap();
+        let custom_rules = r#"
+          (rule "Reversed"
+            (condition "A.NetClass == 'Signal'")
+            (constraint clearance (min 0.4mm))
+            (constraint length (min 2mm) (max 1mm)))
+        "#;
+
+        assert_eq!(
+            apply_custom_design_rules(&mut imported.board, custom_rules).unwrap_err(),
+            "custom rule length min must not exceed max"
+        );
+        let class = &imported.board.net_classes["Signal"];
+        assert_eq!(class.clearance_nm, 200_000);
+        assert_eq!(class.minimum_length_nm, None);
+        assert_eq!(class.maximum_length_nm, None);
     }
 
     #[test]
