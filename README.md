@@ -761,6 +761,8 @@ Pads must also name at least one unique layer present in the board copper
 stackup; invalid or duplicate layer memberships are rejected by normal DRC.
 When a pad carries a net identifier, that identifier must exist in the board
 net table; normal DRC reports undeclared pad-net references explicitly.
+Imported KiCad track segments, route arcs, vias, and copper zones with non-zero
+net identifiers must likewise reference entries declared in that table.
 The net table itself requires unique non-zero identifiers and unique non-empty
 names, preventing ambiguous routing, rule lookup, and pad ownership.
 Every route must likewise reference a declared net; normal DRC reports unknown

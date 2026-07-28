@@ -134,6 +134,13 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                 )
             }
             Some("zone") => {
+                if child_values(xs, "keepout").is_none()
+                    && child_values(xs, "attr")
+                        .and_then(|attr| child_values(attr, "teardrop"))
+                        .is_none()
+                {
+                    validate_declared_copper_net(xs, "copper zone", &nets)?;
+                }
                 import_keepout(xs, min, &mut keepouts, &copper_layers);
                 import_copper_zone(
                     xs,
@@ -3297,6 +3304,21 @@ mod tests {
         assert_eq!(
             import(pcb, rules()).unwrap_err(),
             "KiCad via references undeclared net ID 2"
+        );
+    }
+
+    #[test]
+    fn rejects_copper_zones_referencing_undeclared_kicad_nets() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "KNOWN")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (zone (net 2) (net_name "UNKNOWN") (layer "F.Cu")
+            (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "KiCad copper zone references undeclared net ID 2"
         );
     }
 
