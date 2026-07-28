@@ -629,7 +629,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.300.0
+    uses: penguin425/pcbex@v1.301.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -645,6 +645,41 @@ on. Violation and regression gates run only after uploads, so a failed PR check
 still retains the JSON, SVG, SARIF, summaries, and provenance manifests.
 Baseline checkout is intentionally caller-controlled, allowing a PR workflow
 to compare against its exact base SHA without using `pull_request_target`.
+
+### MCP server
+
+Start the built-in Model Context Protocol server over stdio:
+
+```sh
+pcbex mcp-server
+```
+
+Configure an MCP host to launch the binary directly:
+
+```json
+{
+  "mcpServers": {
+    "pcbex": {
+      "command": "/absolute/path/to/pcbex",
+      "args": ["mcp-server"]
+    }
+  }
+}
+```
+
+The server implements the 2025-11-25 MCP lifecycle and negotiates compatible
+2025-06-18, 2025-03-26, and 2024-11-05 clients. It exposes
+`list_dfm_profiles`, `analyze_kicad`, `compare_analysis`, and `route_kicad`.
+Every tool has a closed input schema, an output schema, safety annotations, a
+human-readable text result, and matching `structuredContent`. Tool processes
+capture stdout and stderr so the stdio transport emits only newline-delimited
+JSON-RPC messages. Expected analysis or regression gate failures use
+`isError: true` while retaining structured manifests and artifact paths;
+malformed requests remain JSON-RPC errors so an agent can correct its call.
+
+Analysis and routing tools require explicit output paths and may overwrite
+files there. MCP hosts should retain their normal user-approval prompt for
+these non-read-only tools.
 
 Length groups may also set `tuning_amplitude_nm`, `tuning_pitch_nm`, and
 `max_tuning_sections`. The tuner distributes the required delay across multiple
