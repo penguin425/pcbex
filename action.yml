@@ -1,5 +1,5 @@
 name: pcbex hardware CI
-description: Analyze a KiCad PCB, publish CI artifacts, and optionally gate regressions.
+description: Analyze a KiCad PCB, publish CI evidence, update PR comments, and gate regressions.
 author: pcbex contributors
 
 branding:
@@ -46,6 +46,22 @@ inputs:
     description: Upload SARIF to GitHub code scanning; requires security-events write permission.
     required: false
     default: "false"
+  pr-comment:
+    description: Create or update one marker-addressed pull-request comment.
+    required: false
+    default: "false"
+  github-token:
+    description: Token used only for the opt-in PR comment; requires pull-requests write permission.
+    required: false
+    default: ""
+  pr-number:
+    description: Pull-request number; defaults to the current pull_request event number.
+    required: false
+    default: ""
+  comment-id:
+    description: Stable 1-64 character identity allowing multiple pcbex comments on one PR.
+    required: false
+    default: hardware-analysis
 
 outputs:
   artifact-dir:
@@ -63,6 +79,9 @@ outputs:
   regression:
     description: Whether the baseline comparison found a regression.
     value: ${{ steps.analyze.outputs.regression }}
+  comment-url:
+    description: URL of the created or updated pull-request comment, when enabled.
+    value: ${{ steps.comment.outputs.comment-url }}
 
 runs:
   using: composite
@@ -106,6 +125,19 @@ runs:
       with:
         sarif_file: ${{ steps.analyze.outputs.sarif-dir }}
         category: pcbex-hardware-ci
+
+    - name: Create or update pull request comment
+      id: comment
+      if: ${{ always() && inputs.pr-comment == 'true' && steps.analyze.outputs.comment-body != '' }}
+      shell: bash
+      env:
+        PCBEX_API_URL: ${{ github.api_url }}
+        PCBEX_GITHUB_TOKEN: ${{ inputs.github-token }}
+        PCBEX_REPOSITORY: ${{ github.repository }}
+        PCBEX_PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
+        PCBEX_COMMENT_ID: ${{ inputs.comment-id }}
+        PCBEX_COMMENT_BODY: ${{ steps.analyze.outputs.comment-body }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/upsert-pr-comment.py"
 
     - name: Enforce analysis gates
       if: ${{ always() }}

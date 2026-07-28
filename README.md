@@ -668,6 +668,7 @@ the structured regression comparison:
 ```yaml
 permissions:
   contents: read
+  pull-requests: write
   security-events: write
 
 steps:
@@ -677,22 +678,37 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.309.2
+    uses: penguin425/pcbex@v1.317.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
       fab: jlcpcb-2layer
       fail-on-regressions: "true"
       upload-sarif: "true"
+      pr-comment: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+      github-token: ${{ github.token }}
+      comment-id: controller-layout
 ```
 
 The action outputs the artifact directory, current and comparison SARIF paths,
-violation count, and regression result. `upload-sarif` is opt-in because the
-calling job must grant `security-events: write`; artifact upload defaults to
-on. Violation and regression gates run only after uploads, so a failed PR check
-still retains the JSON, SVG, SARIF, summaries, and provenance manifests.
-Baseline checkout is intentionally caller-controlled, allowing a PR workflow
-to compare against its exact base SHA without using `pull_request_target`.
+violation count, regression result, and optional PR comment URL.
+`upload-sarif` is opt-in because the calling job must grant
+`security-events: write`; artifact upload defaults to on.
+
+`pr-comment` is also opt-in and requires both `pull-requests: write` and an
+explicit `github-token`. A stable `comment-id` creates a hidden marker; later
+runs update the newest editable matching comment instead of appending another.
+The comment body is read from the generated `pr-comment.md` artifact and is
+never expanded as shell source. Invalid identities, blank or oversized bodies,
+unexpected API shapes, and missing event context fail closed. The example
+disables comments for fork PRs, whose default `GITHUB_TOKEN` is read-only,
+while still producing their Job Summary and evidence artifact.
+
+Violation and regression gates run only after uploads and comment updates, so
+a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
+manifests. Baseline checkout is intentionally caller-controlled, allowing a PR
+workflow to compare against its exact base SHA without using
+`pull_request_target`.
 
 ### MCP server
 

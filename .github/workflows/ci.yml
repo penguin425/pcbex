@@ -16,6 +16,9 @@ jobs:
   hardware-ci-action:
     name: Hardware CI action
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
       - name: Exercise the public composite action
@@ -29,13 +32,27 @@ jobs:
           fail-on-violations: "false"
           fail-on-regressions: "true"
           artifact-name: pcbex-action-smoke
+          pr-comment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+          github-token: ${{ github.token }}
+          comment-id: action-smoke
       - name: Verify action outputs
         env:
+          ARTIFACT_DIR: ${{ steps.pcbex.outputs.artifact-dir }}
+          COMMENT_URL: ${{ steps.pcbex.outputs.comment-url }}
           VIOLATION_COUNT: ${{ steps.pcbex.outputs.violation-count }}
           REGRESSION: ${{ steps.pcbex.outputs.regression }}
+          SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
+          test -s "$ARTIFACT_DIR/pr-comment.md"
+          grep -F '# pcbex hardware analysis' "$ARTIFACT_DIR/pr-comment.md"
+          grep -F '# pcbex baseline comparison' "$ARTIFACT_DIR/pr-comment.md"
           test "$VIOLATION_COUNT" = "1"
           test "$REGRESSION" = "false"
+          if [[ "$SHOULD_COMMENT" == "true" ]]; then
+            [[ "$COMMENT_URL" == https://github.com/* ]]
+          else
+            test -z "$COMMENT_URL"
+          fi
 
   rust:
     name: Rust
