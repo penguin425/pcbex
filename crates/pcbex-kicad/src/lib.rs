@@ -275,23 +275,29 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                     .ok_or_else(|| format!("net class {name} has invalid {key}")),
             }
         };
-        net_classes.insert(
-            name.to_string(),
-            NetClassRules {
-                track_width_nm: dimension("track_width", board.rules.track_width_nm)?,
-                clearance_nm: dimension("clearance", board.rules.clearance_nm)?,
-                via_diameter_nm: dimension("via_diameter", board.rules.via_diameter_nm)?,
-                via_drill_nm: dimension("via_drill", board.rules.via_drill_nm)?,
-                layers: None,
-                differential_width_nm: optional_dimension("diff_pair_width")?,
-                differential_gap_nm: optional_dimension("diff_pair_gap")?,
-                minimum_length_nm: optional_dimension("min_track_length")?,
-                maximum_length_nm: optional_dimension("max_track_length")?,
-                target_impedance_ohms: None,
-                impedance_tolerance_ohms: None,
-                maximum_impedance_step_ohms: None,
-            },
-        );
+        let class_rules = NetClassRules {
+            track_width_nm: dimension("track_width", board.rules.track_width_nm)?,
+            clearance_nm: dimension("clearance", board.rules.clearance_nm)?,
+            via_diameter_nm: dimension("via_diameter", board.rules.via_diameter_nm)?,
+            via_drill_nm: dimension("via_drill", board.rules.via_drill_nm)?,
+            layers: None,
+            differential_width_nm: optional_dimension("diff_pair_width")?,
+            differential_gap_nm: optional_dimension("diff_pair_gap")?,
+            minimum_length_nm: optional_dimension("min_track_length")?,
+            maximum_length_nm: optional_dimension("max_track_length")?,
+            target_impedance_ohms: None,
+            impedance_tolerance_ohms: None,
+            maximum_impedance_step_ohms: None,
+        };
+        for (key, value) in [
+            ("track_width", class_rules.track_width_nm),
+            ("via_drill", class_rules.via_drill_nm),
+        ] {
+            if value <= 0 {
+                return Err(format!("net class {name} has invalid {key}"));
+            }
+        }
+        net_classes.insert(name.to_string(), class_rules);
     }
 
     if let Some(patterns) = settings.get("netclass_patterns") {
@@ -6359,6 +6365,36 @@ mod tests {
                 apply_project_net_settings(&mut imported.board, &project).unwrap_err(),
                 format!("net class Huge has invalid {key}")
             );
+        }
+    }
+
+    #[test]
+    fn rejects_zero_project_net_class_positive_dimensions_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for key in ["track_width", "via_drill"] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = serde_json::json!({
+                "net_settings": {
+                    "classes": [
+                        {"name": "Valid", "track_width": 0.3},
+                        {"name": "Zero", key: 0.0}
+                    ]
+                }
+            });
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
+                format!("net class Zero has invalid {key}")
+            );
+            assert_eq!(imported.board.net_classes.len(), 1);
+            assert!(imported.board.net_classes.contains_key("Existing"));
         }
     }
 
