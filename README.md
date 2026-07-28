@@ -677,7 +677,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.306.0
+    uses: penguin425/pcbex@v1.307.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1134,6 +1134,55 @@ returning nonzero so CI and later AI-review stages retain evidence.
 
 Closed Draft 2020-12 contracts are available through
 `electrical-policy-schema` and `electrical-review-schema`.
+
+## Bound simulation evidence
+
+Simulator-independent declarations turn measured results into an auditable
+approval gate. Each assertion declares a measurement, unit, and inclusive
+minimum and/or maximum:
+
+```json
+{
+  "schema_version": 1,
+  "id": "power-rail-dc",
+  "analysis": "dc_operating_point",
+  "simulator": {"name": "ngspice", "version": "42"},
+  "schematic_sha256": "<electrical-review schematic_sha256>",
+  "assertions": [{
+    "id": "vout",
+    "description": "regulated output",
+    "measured": 3.3,
+    "unit": "V",
+    "minimum": 3.2,
+    "maximum": 3.4
+  }]
+}
+```
+
+Bind that declaration and the raw simulator output to an approved electrical
+review:
+
+```sh
+pcbex record-simulation-evidence simulation.json \
+  --electrical-review electrical-review.json \
+  --artifact ngspice.raw --artifact measurements.csv \
+  --output simulation-evidence.json --require-passed
+```
+
+Artifacts are streamed through SHA-256 rather than loaded into memory. The
+deterministic evidence report records their basename, media type, byte count,
+and digest together with the exact electrical-review and normalized schematic
+identities. It passes only when the electrical review is approved and every
+bounded assertion passes. Empty artifacts, duplicate basenames/assertions,
+non-finite values, reversed bounds, mismatched schematics, unknown fields, and
+future schema versions fail closed. The report is still written before a
+failed assertion gate.
+
+Supported analysis categories are DC operating point, AC sweep, transient,
+signal integrity, power integrity, thermal, and custom. The engine does not
+trust a specific simulator; CI supplies raw results from ngspice, SPICE,
+IBIS/SI, PDN, or thermal tooling. Closed contracts are emitted by
+`simulation-declaration-schema` and `simulation-evidence-schema`.
 
 ## Releases
 
