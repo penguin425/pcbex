@@ -189,8 +189,9 @@ conflicting assignments are rejected instead of silently overwriting or
 repeating the assignment.
 Project settings are applied atomically, so an invalid class, pattern, or exact
 assignment cannot leave new classes or partial net assignments behind.
-Exact project assignments must name a net present in the board; stale or
-misspelled targets are rejected instead of being silently ignored.
+Exact project assignments must use a non-blank name for a net present in the
+board; blank, stale, or misspelled targets are rejected instead of being
+silently ignored.
 Each project `classes` entry must have a non-blank, unique name; blank or
 duplicate definitions are rejected instead of retaining an unusable class or
 silently selecting the last one.
