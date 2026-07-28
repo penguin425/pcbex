@@ -182,7 +182,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      # GitHub requires contents:write to read draft releases and their assets.
+      # The audit script itself performs only read/download operations.
+      contents: write
     steps:
       - uses: actions/checkout@v7
         with:
