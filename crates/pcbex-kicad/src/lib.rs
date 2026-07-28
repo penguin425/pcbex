@@ -2092,7 +2092,21 @@ fn validate_copper_zone_net_name(xs: &[Sexp], nets: &HashMap<u32, Net>) -> Resul
     let Some(id) = child_values(xs, "net").and_then(|values| number_u32(values.get(1))) else {
         return Ok(());
     };
-    let Some(name) = child_values(xs, "net_name").and_then(|values| atom(values.get(1))) else {
+    let mut net_name_fields = xs.iter().filter_map(|value| {
+        let values = value.as_list()?;
+        (atom(values.first()) == Some("net_name")).then_some(values)
+    });
+    let Some(values) = net_name_fields.next() else {
+        return Err(format!(
+            "KiCad copper zone net {id} is missing a scalar name"
+        ));
+    };
+    if net_name_fields.next().is_some() {
+        return Err(format!(
+            "KiCad copper zone net {id} net_name fields must not be repeated"
+        ));
+    }
+    let Some(name) = atom(values.get(1)) else {
         return Err(format!(
             "KiCad copper zone net {id} is missing a scalar name"
         ));
@@ -3497,6 +3511,28 @@ mod tests {
             );
 
             assert_eq!(import(&pcb, rules()).unwrap_err(), error);
+        }
+    }
+
+    #[test]
+    fn rejects_repeated_copper_zone_net_name_fields() {
+        for net_names in [
+            r#"(net_name "SIGNAL") (net_name "SIGNAL")"#,
+            r#"(net_name "SIGNAL") (net_name "OTHER")"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 1 "SIGNAL")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (zone (net 1) {net_names} (layer "F.Cu")
+                    (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad copper zone net 1 net_name fields must not be repeated"
+            );
         }
     }
 
