@@ -197,7 +197,8 @@ duplicate definitions are rejected instead of retaining an unusable class or
 silently selecting the last one. Project track widths and via drills must be
 positive, and each via diameter must be greater than its drill; zero or
 physically inconsistent dimensions are rejected before any project settings
-are applied.
+are applied. Differential-pair widths must likewise be positive, while a zero
+gap remains valid.
 Ordered `netclass_patterns` support hierarchical names, `*`/`?` wildcards, and
 regular expressions; patterns and their class references must be non-blank,
 exactly repeated patterns are rejected, and exact assignments retain
