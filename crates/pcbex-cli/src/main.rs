@@ -2,7 +2,10 @@ use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
 use pcbex_core::checking::{check_board, check_manufacturability, check_report_to_sarif};
-use pcbex_core::placement::{PlacementOptions, PlacementProblem, place};
+use pcbex_core::placement::{
+    CandidateObjective, PlacementCandidateOptions, PlacementCandidateSet, PlacementOptions,
+    PlacementProblem, place, place_candidates,
+};
 use pcbex_core::{
     AnalysisDelta, Board, DfmProfile, RoutingQuality, Rules, analysis_delta_to_sarif,
     apply_dfm_profile, board_json_schema, dfm_profile, dfm_profiles, impedance_report,
@@ -296,6 +299,20 @@ enum Command {
         #[arg(long)]
         seed: Option<u64>,
     },
+    /// Generate deterministic placement candidates and select from their Pareto front.
+    PlaceCandidates {
+        input: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        candidates: usize,
+        #[arg(long, default_value_t = 4)]
+        workers: usize,
+        #[arg(long)]
+        iterations: Option<usize>,
+        #[arg(long)]
+        seed: Option<u64>,
+    },
     /// Optimize footprint placement directly in a KiCad board.
     PlaceKicad {
         input: PathBuf,
@@ -309,6 +326,22 @@ enum Command {
         seed: Option<u64>,
         #[arg(long)]
         json_output: Option<PathBuf>,
+    },
+    /// Generate Pareto-ranked footprint placements directly from a KiCad board.
+    PlaceKicadCandidates {
+        input: PathBuf,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 0.5)]
+        grid_mm: f64,
+        #[arg(long, default_value_t = 5)]
+        candidates: usize,
+        #[arg(long, default_value_t = 4)]
+        workers: usize,
+        #[arg(long)]
+        iterations: Option<usize>,
+        #[arg(long)]
+        seed: Option<u64>,
     },
     /// Run KiCad DRC and generate Gerber and Excellon manufacturing files.
     Fabricate {
@@ -1004,6 +1037,29 @@ fn main() -> Result<()> {
                 result.initial_score.total, result.final_score.total, result.accepted_moves
             );
         }
+        Command::PlaceCandidates {
+            input,
+            output_dir,
+            candidates,
+            workers,
+            iterations,
+            seed,
+        } => {
+            let problem: PlacementProblem = serde_json::from_str(
+                &fs::read_to_string(&input)
+                    .with_context(|| format!("reading {}", input.display()))?,
+            )
+            .with_context(|| format!("parsing {}", input.display()))?;
+            let options = placement_candidate_options(candidates, workers, iterations, seed);
+            let results = place_candidates(&problem, &options).map_err(anyhow::Error::msg)?;
+            write_candidate_reports(&output_dir, &results)?;
+            eprintln!(
+                "generated {} placement candidates; Pareto front: {}; selected: {}",
+                results.candidates.len(),
+                results.pareto_front.len(),
+                results.selected_candidate_id
+            );
+        }
         Command::PlaceKicad {
             input,
             output,
@@ -1051,6 +1107,60 @@ fn main() -> Result<()> {
                 result.initial_score.total, result.final_score.total, result.accepted_moves
             );
         }
+        Command::PlaceKicadCandidates {
+            input,
+            output_dir,
+            grid_mm,
+            candidates,
+            workers,
+            iterations,
+            seed,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let imported = import_kicad(
+                &source,
+                Rules {
+                    grid_nm: 250_000,
+                    track_width_nm: 250_000,
+                    clearance_nm: 200_000,
+                    via_diameter_nm: 600_000,
+                    via_drill_nm: 300_000,
+                    bend_cost: 5,
+                    via_cost: 20,
+                },
+            )
+            .map_err(anyhow::Error::msg)?;
+            let problem = imported
+                .placement_problem(to_nm(grid_mm, "placement grid")?)
+                .map_err(anyhow::Error::msg)?;
+            let options = placement_candidate_options(candidates, workers, iterations, seed);
+            let results = place_candidates(&problem, &options).map_err(anyhow::Error::msg)?;
+            fs::create_dir_all(&output_dir)
+                .with_context(|| format!("creating {}", output_dir.display()))?;
+            for candidate in &results.candidates {
+                let board = imported
+                    .write_placements(&candidate.result.components)
+                    .map_err(anyhow::Error::msg)?;
+                let path = output_dir.join(format!(
+                    "{}-{}.kicad_pcb",
+                    candidate.id,
+                    candidate_objective_name(candidate.objective)
+                ));
+                fs::write(&path, board).with_context(|| format!("writing {}", path.display()))?;
+            }
+            let selected_board = imported
+                .write_placements(&results.selected().result.components)
+                .map_err(anyhow::Error::msg)?;
+            fs::write(output_dir.join("selected.kicad_pcb"), selected_board)?;
+            write_candidate_reports(&output_dir, &results)?;
+            eprintln!(
+                "generated {} KiCad placement candidates; Pareto front: {}; selected: {}",
+                results.candidates.len(),
+                results.pareto_front.len(),
+                results.selected_candidate_id
+            );
+        }
         Command::Fabricate { input, output_dir } => {
             run_kicad_drc(&input)?;
             fs::create_dir_all(&output_dir)
@@ -1072,6 +1182,52 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn placement_candidate_options(
+    candidates: usize,
+    workers: usize,
+    iterations: Option<usize>,
+    seed: Option<u64>,
+) -> PlacementCandidateOptions {
+    let mut placement = PlacementOptions::default();
+    if let Some(iterations) = iterations {
+        placement.iterations = iterations;
+    }
+    if let Some(seed) = seed {
+        placement.seed = seed;
+    }
+    PlacementCandidateOptions {
+        candidates,
+        workers,
+        placement,
+    }
+}
+
+fn write_candidate_reports(output_dir: &Path, results: &PlacementCandidateSet) -> Result<()> {
+    fs::create_dir_all(output_dir).with_context(|| format!("creating {}", output_dir.display()))?;
+    let manifest = output_dir.join("candidates.json");
+    fs::write(&manifest, serde_json::to_string_pretty(results)?)
+        .with_context(|| format!("writing {}", manifest.display()))?;
+    for candidate in &results.candidates {
+        let path = output_dir.join(format!("{}.json", candidate.id));
+        fs::write(&path, serde_json::to_string_pretty(candidate)?)
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
+    let selected = output_dir.join("selected.json");
+    fs::write(&selected, serde_json::to_string_pretty(results.selected())?)
+        .with_context(|| format!("writing {}", selected.display()))?;
+    Ok(())
+}
+
+fn candidate_objective_name(objective: CandidateObjective) -> &'static str {
+    match objective {
+        CandidateObjective::Balanced => "balanced",
+        CandidateObjective::Wirelength => "wirelength",
+        CandidateObjective::Routability => "routability",
+        CandidateObjective::Constraints => "constraints",
+        CandidateObjective::Legalization => "legalization",
+    }
 }
 
 fn input_descriptor(path: &Path, bytes: &[u8]) -> InputDescriptor {
@@ -1347,6 +1503,37 @@ mod tests {
             } if input.as_os_str() == "board.json"
                 && output.as_os_str() == "report.json"
                 && baseline.as_os_str() == "baseline.json"
+        ));
+    }
+
+    #[test]
+    fn parses_placement_candidate_controls() {
+        let cli = Cli::try_parse_from([
+            "pcbex",
+            "place-kicad-candidates",
+            "board.kicad_pcb",
+            "--output-dir",
+            "placements",
+            "--candidates",
+            "9",
+            "--workers",
+            "3",
+            "--iterations",
+            "1200",
+            "--seed",
+            "42",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            cli.command,
+            Command::PlaceKicadCandidates {
+                candidates: 9,
+                workers: 3,
+                iterations: Some(1200),
+                seed: Some(42),
+                ..
+            }
         ));
     }
 
