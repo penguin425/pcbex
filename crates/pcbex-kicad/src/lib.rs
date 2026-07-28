@@ -14,6 +14,13 @@ pub use electrical::{
     ElectricalRulePolicy, ElectricalSeverity, ElectricalSymbolRef, check_schematic,
     electrical_policy_json_schema, electrical_review_json_schema, parse_electrical_policy,
 };
+mod evidence;
+pub use evidence::{
+    SimulationAnalysisKind, SimulationArtifact, SimulationAssertion, SimulationAssertionResult,
+    SimulationDeclaration, SimulationEngine, SimulationEvidence, SimulationEvidenceCounts,
+    parse_simulation_declaration, record_simulation_evidence, simulation_declaration_json_schema,
+    simulation_evidence_json_schema,
+};
 mod schematic;
 pub use schematic::{
     ElectricalPinType, SchematicCoverage, SchematicDocument, SchematicLabel, SchematicLabelKind,

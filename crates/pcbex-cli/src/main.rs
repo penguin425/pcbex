@@ -14,14 +14,17 @@ use pcbex_core::{
     routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
-    ElectricalPolicy, apply_custom_design_rules, apply_project_net_settings, check_schematic,
-    electrical_policy_json_schema, electrical_review_json_schema, import as import_kicad,
-    import_schematic, parse_electrical_policy, schematic_json_schema,
+    ElectricalPolicy, ElectricalReview, SimulationArtifact, apply_custom_design_rules,
+    apply_project_net_settings, check_schematic, electrical_policy_json_schema,
+    electrical_review_json_schema, import as import_kicad, import_schematic,
+    parse_electrical_policy, parse_simulation_declaration, record_simulation_evidence,
+    schematic_json_schema, simulation_declaration_json_schema, simulation_evidence_json_schema,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
-    fs, io,
+    fs,
+    io::{self, Read},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
 };
@@ -158,6 +161,30 @@ enum Command {
         /// Fail after writing the report when error-severity findings remain.
         #[arg(long)]
         require_approved: bool,
+    },
+    /// Print the closed simulation-declaration JSON Schema.
+    SimulationDeclarationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed bound-simulation-evidence JSON Schema.
+    SimulationEvidenceSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Bind simulation assertions and raw artifacts to an electrical review.
+    RecordSimulationEvidence {
+        declaration: PathBuf,
+        #[arg(long)]
+        electrical_review: PathBuf,
+        /// Raw simulator output to hash and reference by basename.
+        #[arg(long = "artifact", required = true)]
+        artifacts: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fail after writing evidence unless the review and every assertion pass.
+        #[arg(long)]
+        require_passed: bool,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -596,6 +623,80 @@ fn main() -> Result<()> {
                     "electrical approval rejected by policy {} with {} error(s)",
                     review.policy_id,
                     review.counts.errors
+                );
+            }
+        }
+        Command::SimulationDeclarationSchema { output } => {
+            let schema = serde_json::to_string_pretty(&simulation_declaration_json_schema())?;
+            if let Some(path) = output {
+                fs::write(path, schema)?;
+            } else {
+                println!("{schema}");
+            }
+        }
+        Command::SimulationEvidenceSchema { output } => {
+            let schema = serde_json::to_string_pretty(&simulation_evidence_json_schema())?;
+            if let Some(path) = output {
+                fs::write(path, schema)?;
+            } else {
+                println!("{schema}");
+            }
+        }
+        Command::RecordSimulationEvidence {
+            declaration,
+            electrical_review,
+            artifacts,
+            output,
+            require_passed,
+        } => {
+            let declaration_source = fs::read_to_string(&declaration)
+                .with_context(|| format!("reading {}", declaration.display()))?;
+            let declaration_value = parse_simulation_declaration(&declaration_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("parsing {}", declaration.display()))?;
+            let review_bytes = fs::read(&electrical_review)
+                .with_context(|| format!("reading {}", electrical_review.display()))?;
+            let review: ElectricalReview = serde_json::from_slice(&review_bytes)
+                .with_context(|| format!("parsing {}", electrical_review.display()))?;
+            if review.schema_version != 1 {
+                bail!(
+                    "unsupported electrical review schema version {}",
+                    review.schema_version
+                );
+            }
+            if declaration_value.schematic_sha256 != review.schematic_sha256 {
+                bail!(
+                    "simulation declaration schematic SHA-256 does not match the electrical review"
+                );
+            }
+            let artifact_values = artifacts
+                .iter()
+                .map(|path| simulation_artifact(path))
+                .collect::<Result<Vec<_>>>()?;
+            let evidence = record_simulation_evidence(
+                &declaration_value,
+                &format!("{:x}", Sha256::digest(&review_bytes)),
+                review.approved,
+                artifact_values,
+            )
+            .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&evidence)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "simulation evidence: {}; {} passed, {} failed assertion(s); electrical review: {}",
+                if evidence.passed { "passed" } else { "failed" },
+                evidence.counts.passed,
+                evidence.counts.failed,
+                if evidence.electrical_review_approved {
+                    "approved"
+                } else {
+                    "rejected"
+                }
+            );
+            if require_passed && !evidence.passed {
+                bail!(
+                    "simulation evidence {} failed its approval gate",
+                    evidence.id
                 );
             }
         }
@@ -1630,6 +1731,43 @@ fn input_descriptor(path: &Path, bytes: &[u8]) -> InputDescriptor {
         bytes: bytes.len(),
         sha256: format!("{:x}", Sha256::digest(bytes)),
     }
+}
+
+fn simulation_artifact(path: &Path) -> Result<SimulationArtifact> {
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("simulation artifact requires a UTF-8 basename"))?
+        .to_string();
+    let mut file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file
+            .read(&mut buffer)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if count == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(count as u64)
+            .ok_or_else(|| anyhow::anyhow!("simulation artifact size overflow"))?;
+        digest.update(&buffer[..count]);
+    }
+    let media_type = match path.extension().and_then(|extension| extension.to_str()) {
+        Some("csv") => "text/csv",
+        Some("json") => "application/json",
+        Some("txt" | "log") => "text/plain",
+        _ => "application/octet-stream",
+    };
+    Ok(SimulationArtifact {
+        name,
+        media_type: media_type.into(),
+        bytes,
+        sha256: format!("{:x}", digest.finalize()),
+    })
 }
 
 fn read_described_json<T: DeserializeOwned>(path: &Path) -> Result<(T, InputDescriptor)> {
