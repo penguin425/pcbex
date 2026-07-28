@@ -2069,10 +2069,12 @@ fn validate_declared_copper_net(
     kind: &str,
     nets: &HashMap<u32, Net>,
 ) -> Result<(), String> {
-    let net_id = child_values(xs, "net").and_then(|values| number_u32(values.get(1)));
-    if let Some(id) = net_id.filter(|id| *id != 0)
-        && !nets.contains_key(&id)
-    {
+    let Some(values) = child_values(xs, "net") else {
+        return Ok(());
+    };
+    let id = number_u32(values.get(1))
+        .ok_or_else(|| format!("KiCad {kind} is missing a valid numeric net ID"))?;
+    if id != 0 && !nets.contains_key(&id) {
         return Err(format!("KiCad {kind} references undeclared net ID {id}"));
     }
     Ok(())
@@ -3320,6 +3322,49 @@ mod tests {
             import(pcb, rules()).unwrap_err(),
             "KiCad copper zone references undeclared net ID 2"
         );
+    }
+
+    #[test]
+    fn rejects_invalid_routed_copper_net_ids() {
+        let primitives = [
+            (
+                "segment",
+                r#"(segment (start 1 1) (end 5 1) (width 0.25)
+                  (layer "F.Cu") {net})"#,
+            ),
+            (
+                "route arc",
+                r#"(arc (start 1 1) (mid 3 3) (end 5 1) (width 0.25)
+                  (layer "F.Cu") {net})"#,
+            ),
+            (
+                "via",
+                r#"(via (at 3 3) (size 0.6) (drill 0.3)
+                  (layers "F.Cu" "B.Cu") {net})"#,
+            ),
+            (
+                "copper zone",
+                r#"(zone {net} (net_name "") (layer "F.Cu")
+                  (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5) (xy 1 5))))"#,
+            ),
+        ];
+
+        for (kind, primitive) in primitives {
+            for net in ["(net)", "(net -1)", "(net invalid)", "(net (id 1))"] {
+                let pcb = format!(
+                    r#"(kicad_pcb
+                      (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                      {}
+                    )"#,
+                    primitive.replace("{net}", net)
+                );
+
+                assert_eq!(
+                    import(&pcb, rules()).unwrap_err(),
+                    format!("KiCad {kind} is missing a valid numeric net ID")
+                );
+            }
+        }
     }
 
     #[test]
