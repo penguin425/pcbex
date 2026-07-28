@@ -31,6 +31,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "check-schematic",
         "prepare-ai-review",
         "verify-ai-quorum",
+        "sign-human-escalation",
+        "verify-human-escalation",
         "mcp-server",
         "fabricate",
     ] {

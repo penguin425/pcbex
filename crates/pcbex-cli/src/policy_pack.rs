@@ -32,6 +32,8 @@ pub struct OrganizationPolicyPack {
     pub ai_requirements: Vec<AiRequirement>,
     pub require_simulation_evidence: bool,
     pub trusted_approval_keys: Vec<TrustedApprovalKey>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_human_escalation_keys: Vec<TrustedApprovalKey>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -134,6 +136,29 @@ pub fn validate_policy_pack(pack: &OrganizationPolicyPack) -> Result<(), String>
         }
         if !keys.insert(&trusted.public_key) {
             return Err("duplicate trusted approval public key".into());
+        }
+    }
+    if pack.trusted_human_escalation_keys.len() > 100 {
+        return Err("trusted_human_escalation_keys cannot exceed 100 entries".into());
+    }
+    let mut human_signers = HashSet::new();
+    for trusted in &pack.trusted_human_escalation_keys {
+        validate_slug("trusted human escalation signer id", &trusted.signer_id)?;
+        validate_public_key(&trusted.public_key)?;
+        if !human_signers.insert(&trusted.signer_id) {
+            return Err(format!(
+                "duplicate trusted human escalation signer id {:?}",
+                trusted.signer_id
+            ));
+        }
+        if signers.contains(&trusted.signer_id) {
+            return Err(format!(
+                "signer {:?} cannot hold both AI and human escalation roles",
+                trusted.signer_id
+            ));
+        }
+        if !keys.insert(&trusted.public_key) {
+            return Err("a public key cannot hold both AI and human escalation trust roles".into());
         }
     }
     Ok(())
@@ -365,6 +390,17 @@ pub fn policy_pack_json_schema() -> Value {
                         "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
                     }
                 }
+            },
+            "trusted_human_escalation_keys": {
+                "type": "array", "maxItems": 100,
+                "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": ["signer_id", "public_key"],
+                    "properties": {
+                        "signer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                        "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }
+                }
             }
         }
     })
@@ -521,6 +557,15 @@ mod tests {
                 .unwrap_err()
                 .contains("collides")
         );
+
+        let mut value = serde_json::to_value(sample()).unwrap();
+        value["trusted_human_escalation_keys"] =
+            serde_json::json!([value["trusted_approval_keys"][0].clone()]);
+        assert!(
+            parse_policy_pack(&value.to_string())
+                .unwrap_err()
+                .contains("both AI and human escalation")
+        );
     }
 
     #[test]
@@ -530,6 +575,10 @@ mod tests {
         assert_eq!(schema["additionalProperties"], false);
         assert_eq!(
             schema["properties"]["trusted_approval_keys"]["items"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schema["properties"]["trusted_human_escalation_keys"]["items"]["additionalProperties"],
             false
         );
     }

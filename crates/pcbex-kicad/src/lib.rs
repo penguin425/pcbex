@@ -25,6 +25,14 @@ pub use approval_quorum::{
     render_session_ai_approval_quorum_summary, session_ai_approval_quorum_report_json_schema,
     verify_ai_approval_quorum, verify_session_ai_approval_quorum,
 };
+mod human_escalation;
+pub use human_escalation::{
+    HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationMember,
+    HumanEscalationPolicy, HumanEscalationReport, SessionAiQuorumEvidence, SignedHumanEscalation,
+    ai_quorum_evidence_sha256, human_escalation_report_json_schema,
+    render_human_escalation_summary, sign_human_escalation, signed_human_escalation_json_schema,
+    verify_human_escalation,
+};
 mod electrical;
 pub use electrical::{
     ElectricalExplanationReport, ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy,

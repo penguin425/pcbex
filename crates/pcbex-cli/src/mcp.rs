@@ -908,6 +908,65 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("forbidden"),
         ),
+        tool(
+            "sign_human_schematic_escalation",
+            "Sign human schematic escalation",
+            "Sign an explicit human approve/reject decision bound to eligible time-bound AI needs-human evidence.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "request", "session", "ai_quorum", "private_key", "signer_id",
+                    "decision", "reason", "ticket", "output"
+                ],
+                "properties": {
+                    "request": {"type": "string"},
+                    "session": {"type": "string"},
+                    "ai_quorum": {"type": "string"},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "decision": {"enum": ["approve", "reject"]},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "ticket": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_human_schematic_escalation",
+            "Verify human schematic escalation",
+            "Verify trusted, distinct human decisions and require dual control for eligible AI needs-human evidence.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "request", "session", "ai_quorum", "escalations", "policy_pack",
+                    "output"
+                ],
+                "properties": {
+                    "request": {"type": "string"},
+                    "session": {"type": "string"},
+                    "ai_quorum": {"type": "string"},
+                    "escalations": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "policy_pack": {"type": "string"},
+                    "minimum_approvals": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
     ]
 }
 
@@ -985,6 +1044,12 @@ fn call_tool(
         "verify_schematic_approval" => verify_schematic_approval(arguments, cancellation)?,
         "verify_schematic_approval_quorum" => {
             verify_schematic_approval_quorum(arguments, cancellation)?
+        }
+        "sign_human_schematic_escalation" => {
+            sign_human_schematic_escalation(arguments, cancellation)?
+        }
+        "verify_human_schematic_escalation" => {
+            verify_human_schematic_escalation(arguments, cancellation)?
         }
         _ => return Err(json!({"detail": format!("unknown tool {name:?}")})),
     };
@@ -1638,6 +1703,114 @@ fn verify_schematic_approval_quorum(
     ))
 }
 
+fn sign_human_schematic_escalation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "request",
+            "session",
+            "ai_quorum",
+            "private_key",
+            "signer_id",
+            "decision",
+            "reason",
+            "ticket",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-human-escalation".into(),
+        required_string(&arguments, "request")?,
+        "--session".into(),
+        required_string(&arguments, "session")?,
+        "--ai-quorum".into(),
+        required_string(&arguments, "ai_quorum")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--decision".into(),
+        required_string(&arguments, "decision")?,
+        "--reason".into(),
+        required_string(&arguments, "reason")?,
+        "--ticket".into(),
+        required_string(&arguments, "ticket")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let escalation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "escalation": escalation}),
+    ))
+}
+
+fn verify_human_schematic_escalation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "request",
+            "session",
+            "ai_quorum",
+            "escalations",
+            "policy_pack",
+            "minimum_approvals",
+            "output",
+            "summary_output",
+            "require_approved",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-human-escalation".into(),
+        required_string(&arguments, "request")?,
+        "--session".into(),
+        required_string(&arguments, "session")?,
+        "--ai-quorum".into(),
+        required_string(&arguments, "ai_quorum")?,
+    ];
+    for escalation in required_string_array(&arguments, "escalations", false)? {
+        command.extend(["--escalation".into(), escalation]);
+    }
+    command.extend([
+        "--policy-pack".into(),
+        required_string(&arguments, "policy_pack")?,
+    ]);
+    optional_positive_integer(
+        &arguments,
+        "minimum_approvals",
+        "--minimum-approvals",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 struct Execution {
     success: bool,
     exit_code: Option<i32>,
@@ -1868,7 +2041,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 13);
+        assert_eq!(tools.len(), 15);
         let named = |name: &str| {
             tools
                 .iter()
@@ -1943,6 +2116,16 @@ mod tests {
         assert_eq!(
             named("verify_schematic_approval_quorum")["annotations"]["destructiveHint"],
             true
+        );
+        assert_eq!(
+            named("sign_human_schematic_escalation")["inputSchema"]["properties"]["decision"]["enum"]
+                [0],
+            "approve"
+        );
+        assert_eq!(
+            named("verify_human_schematic_escalation")["inputSchema"]["properties"]["escalations"]
+                ["type"],
+            "array"
         );
         let verify_policy = tools
             .iter()
