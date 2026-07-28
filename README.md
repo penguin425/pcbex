@@ -195,8 +195,9 @@ Each project `classes` entry must have a non-blank, unique name; blank or
 duplicate definitions are rejected instead of retaining an unusable class or
 silently selecting the last one.
 Ordered `netclass_patterns` support hierarchical names, `*`/`?` wildcards, and
-regular expressions; blank or exactly repeated patterns are rejected, and exact
-assignments retain precedence. A sibling
+regular expressions; patterns and their class references must be non-blank,
+exactly repeated patterns are rejected, and exact assignments retain
+precedence. A sibling
 `.kicad_dru` is also discovered automatically. NetClass-conditioned clearance,
 track/via/hole dimensions, differential gap, and length constraints are applied
 to routing; use `--rules-file` to select another rules file. Custom-rule
