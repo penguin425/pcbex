@@ -603,6 +603,9 @@ fn import_net_classes(
                         "net class {name} add_net must contain exactly one net name"
                     ));
                 }
+                if net_name.trim().is_empty() {
+                    return Err(format!("net class {name} add_net name must not be blank"));
+                }
                 let Some(net_id) = net_ids_by_name.get(net_name) else {
                     return Err(format!(
                         "net class {name} references unknown net {net_name}"
@@ -5774,6 +5777,28 @@ mod tests {
             assert_eq!(
                 import(&pcb, rules()).unwrap_err(),
                 "net class Signal add_net must contain exactly one net name"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_blank_legacy_add_net_names() {
+        for net_name in ["", "   "] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (net 0 "")
+                  (setup
+                    (net_class "Signal" ""
+                      (clearance 0.2)
+                      (trace_width 0.25)
+                      (add_net "{net_name}")))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "net class Signal add_net name must not be blank"
             );
         }
     }
