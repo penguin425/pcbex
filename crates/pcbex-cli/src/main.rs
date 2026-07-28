@@ -22,7 +22,7 @@ use pcbex_kicad::{
     build_ai_review_request, check_schematic, compare_electrical_reviews,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
-    electrical_review_to_junit, electrical_waiver_report_json_schema,
+    electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review, import as import_kicad,
     import_schematic, parse_ai_review_response, parse_electrical_policy,
     parse_simulation_declaration, record_simulation_evidence, schematic_json_schema,
@@ -238,6 +238,9 @@ enum Command {
         /// Write a JUnit XML testsuite with one testcase per electrical rule.
         #[arg(long, value_name = "PATH")]
         junit_output: Option<PathBuf>,
+        /// Write SARIF 2.1.0 findings for code-scanning integrations.
+        #[arg(long, value_name = "PATH")]
+        sarif_output: Option<PathBuf>,
         /// Override built-in rule enablement and severities with a JSON policy.
         #[arg(long)]
         policy: Option<PathBuf>,
@@ -932,6 +935,7 @@ fn main() -> Result<()> {
             output,
             explain,
             junit_output,
+            sarif_output,
             policy,
             require_approved,
         } => {
@@ -963,6 +967,13 @@ fn main() -> Result<()> {
                 let junit =
                     electrical_review_to_junit(&review, &policy).map_err(anyhow::Error::msg)?;
                 fs::write(&path, junit).with_context(|| format!("writing {}", path.display()))?;
+            }
+            if let Some(path) = sarif_output {
+                let artifact_uri = input.to_string_lossy();
+                let sarif = electrical_review_to_sarif(&review, &policy, &artifact_uri)
+                    .map_err(anyhow::Error::msg)?;
+                fs::write(&path, serde_json::to_string_pretty(&sarif)?)
+                    .with_context(|| format!("writing {}", path.display()))?;
             }
             eprintln!(
                 "electrical review: {}; {} error(s), {} warning(s), {} info finding(s)",

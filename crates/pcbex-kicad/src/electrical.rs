@@ -450,6 +450,101 @@ pub fn electrical_review_to_junit(
     Ok(xml)
 }
 
+pub fn electrical_review_to_sarif(
+    review: &ElectricalReview,
+    policy: &ElectricalPolicy,
+    artifact_uri: &str,
+) -> Result<Value, String> {
+    if artifact_uri.trim().is_empty() {
+        return Err("electrical SARIF artifact URI must not be blank".into());
+    }
+    let explanations = explain_electrical_review(review, policy)?;
+    let rules = explanations
+        .rules
+        .iter()
+        .map(|rule| {
+            json!({
+                "id": rule.id,
+                "shortDescription": {"text": rule.title},
+                "fullDescription": {"text": rule.purpose},
+                "help": {
+                    "text": format!(
+                        "Trigger: {}\n\nRemediation: {}",
+                        rule.trigger, rule.remediation
+                    )
+                },
+                "defaultConfiguration": {
+                    "enabled": rule.enabled,
+                    "level": sarif_level(rule.severity)
+                },
+                "properties": {
+                    "tags": ["hardware", "schematic", "electrical"]
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut findings = review.findings.iter().collect::<Vec<_>>();
+    findings.sort_by(|left, right| left.id.cmp(&right.id));
+    let results = findings
+        .into_iter()
+        .map(|finding| {
+            json!({
+                "ruleId": finding.rule,
+                "level": sarif_level(finding.severity),
+                "message": {"text": finding.message},
+                "partialFingerprints": {
+                    "pcbexElectricalFinding/v1": finding.id
+                },
+                "locations": [{
+                    "physicalLocation": {
+                        "artifactLocation": {"uri": artifact_uri}
+                    }
+                }],
+                "properties": {
+                    "findingId": finding.id,
+                    "netId": finding.net_id,
+                    "symbols": finding.symbols,
+                    "pins": finding.pins
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "pcbex check-schematic",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "informationUri": "https://github.com/penguin425/pcbex",
+                    "rules": rules
+                }
+            },
+            "automationDetails": {
+                "id": format!("pcbex/electrical/{}/", review.policy_id)
+            },
+            "properties": {
+                "schemaVersion": review.schema_version,
+                "schematicSha256": review.schematic_sha256,
+                "policySha256": review.policy_sha256,
+                "policyId": review.policy_id,
+                "approved": review.approved
+            },
+            "results": results
+        }]
+    }))
+}
+
+fn sarif_level(severity: ElectricalSeverity) -> &'static str {
+    match severity {
+        ElectricalSeverity::Info => "note",
+        ElectricalSeverity::Warning => "warning",
+        ElectricalSeverity::Error => "error",
+    }
+}
+
 fn xml_escape(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len());
     for character in value.chars() {
@@ -1283,5 +1378,46 @@ mod tests {
         assert!(junit.contains("unsafe &lt;rail&gt; &amp; &quot;driver&quot;"));
         assert!(junit.contains(r#"value="team&lt;&amp;&quot;&gt;""#));
         assert!(!junit.contains("unsafe <rail>"));
+    }
+
+    #[test]
+    fn sarif_binds_rules_findings_and_schematic_identity() {
+        let schematic = import_schematic(SOURCE).unwrap();
+        let mut policy = ElectricalPolicy::default();
+        for rule in policy.rules.values_mut() {
+            rule.severity = ElectricalSeverity::Warning;
+        }
+        let review = check_schematic(&schematic, &policy).unwrap();
+        let sarif =
+            electrical_review_to_sarif(&review, &policy, "hardware/design.kicad_sch").unwrap();
+        assert_eq!(sarif["version"], "2.1.0");
+        assert_eq!(
+            sarif["runs"][0]["tool"]["driver"]["rules"]
+                .as_array()
+                .unwrap()
+                .len(),
+            RULES.len()
+        );
+        assert_eq!(
+            sarif["runs"][0]["properties"]["schematicSha256"],
+            review.schematic_sha256
+        );
+        let results = sarif["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results.len(), review.findings.len());
+        assert_eq!(
+            results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "hardware/design.kicad_sch"
+        );
+        assert!(results.iter().all(|result| {
+            result["partialFingerprints"]["pcbexElectricalFinding/v1"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("pcbex-er-"))
+        }));
+        assert!(results.iter().any(|result| result["level"] == "warning"));
+        assert!(electrical_review_to_sarif(&review, &policy, " ").is_err());
+        assert!(
+            electrical_review_to_sarif(&review, &ElectricalPolicy::default(), "design.kicad_sch")
+                .is_err()
+        );
     }
 }

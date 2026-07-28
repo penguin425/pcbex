@@ -35,6 +35,7 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
     let first = directory.join("first.json");
     let explanations = directory.join("explanations.json");
     let junit = directory.join("electrical-review.xml");
+    let sarif = directory.join("electrical-review.sarif");
     let second = directory.join("second.json");
     let rejected = run(&[
         "check-schematic",
@@ -45,12 +46,15 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
         path(&explanations),
         "--junit-output",
         path(&junit),
+        "--sarif-output",
+        path(&sarif),
         "--require-approved",
     ]);
     assert!(!rejected.status.success());
     assert!(first.is_file());
     assert!(explanations.is_file());
     assert!(junit.is_file());
+    assert!(sarif.is_file());
     assert!(
         run(&["check-schematic", path(&source), "--output", path(&second),])
             .status
@@ -80,6 +84,22 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
     assert!(junit_source.contains(r#"<testsuite name="pcbex electrical rules" tests="12""#));
     assert!(junit_source.contains(r#"<failure type="electrical_error""#));
     assert!(junit_source.contains(review["schematic_sha256"].as_str().unwrap()));
+    let sarif_report: Value = serde_json::from_slice(&fs::read(&sarif).unwrap()).unwrap();
+    assert_eq!(sarif_report["version"], "2.1.0");
+    assert_eq!(
+        sarif_report["runs"][0]["properties"]["schematicSha256"],
+        review["schematic_sha256"]
+    );
+    assert_eq!(
+        sarif_report["runs"][0]["results"].as_array().unwrap().len(),
+        review["findings"].as_array().unwrap().len()
+    );
+    assert!(
+        sarif_report["runs"][0]["results"][0]["partialFingerprints"]["pcbexElectricalFinding/v1"]
+            .as_str()
+            .unwrap()
+            .starts_with("pcbex-er-")
+    );
 
     let policy = directory.join("policy.json");
     assert!(
