@@ -449,7 +449,11 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
         if atom(rule.first()) != Some("rule") {
             continue;
         }
-        atom(rule.get(1)).ok_or_else(|| "custom rule must contain one scalar name".to_string())?;
+        let rule_name = atom(rule.get(1))
+            .ok_or_else(|| "custom rule must contain one scalar name".to_string())?;
+        if rule_name.trim().is_empty() {
+            return Err("custom rule name must not be blank".to_string());
+        }
         let Some(condition) = custom_rule_condition(rule)? else {
             continue;
         };
@@ -6674,6 +6678,41 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 "custom rule must contain one scalar name"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
+    }
+
+    #[test]
+    fn rejects_blank_custom_rule_names_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for rule_name in ["", "   "] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "{rule_name}"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint track_width (min 0.4mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                "custom rule name must not be blank"
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);
