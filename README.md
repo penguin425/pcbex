@@ -1114,6 +1114,7 @@ intent:
 pcbex check-schematic design.kicad_sch \
   --output electrical-review.json \
   --explain electrical-explanations.json \
+  --junit-output electrical-review.xml \
   --require-approved
 pcbex electrical-policy --output electrical-policy.json
 pcbex check-schematic design.kicad_sch \
@@ -1132,6 +1133,13 @@ including each rule's purpose, exact trigger, remediation guidance, effective
 severity and enablement, and the stable IDs of findings it produced. This keeps
 the signed electrical-review contract unchanged while making CI failures and
 AI hand-offs directly explainable.
+
+`--junit-output` emits one testcase for each built-in electrical rule. Enabled
+rules with error findings produce failures, warning and informational findings
+remain visible in `system-out`, and policy-disabled rules are explicitly
+skipped. Suite properties retain the schematic and policy SHA-256 identities,
+so Jenkins, GitLab, Buildkite, and other JUnit-aware CI systems can display the
+same approval evidence without changing the canonical JSON review.
 
 Temporary exceptions are represented separately from the immutable electrical
 review. Every waiver targets one stable finding ID and requires a non-empty

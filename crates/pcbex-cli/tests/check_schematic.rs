@@ -34,6 +34,7 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/simple.kicad_sch");
     let first = directory.join("first.json");
     let explanations = directory.join("explanations.json");
+    let junit = directory.join("electrical-review.xml");
     let second = directory.join("second.json");
     let rejected = run(&[
         "check-schematic",
@@ -42,11 +43,14 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
         path(&first),
         "--explain",
         path(&explanations),
+        "--junit-output",
+        path(&junit),
         "--require-approved",
     ]);
     assert!(!rejected.status.success());
     assert!(first.is_file());
     assert!(explanations.is_file());
+    assert!(junit.is_file());
     assert!(
         run(&["check-schematic", path(&source), "--output", path(&second),])
             .status
@@ -71,6 +75,11 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
             assert!(!rule[field].as_str().unwrap().is_empty());
         }
     }
+    let junit_source = fs::read_to_string(&junit).unwrap();
+    assert!(junit_source.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#));
+    assert!(junit_source.contains(r#"<testsuite name="pcbex electrical rules" tests="12""#));
+    assert!(junit_source.contains(r#"<failure type="electrical_error""#));
+    assert!(junit_source.contains(review["schematic_sha256"].as_str().unwrap()));
 
     let policy = directory.join("policy.json");
     assert!(

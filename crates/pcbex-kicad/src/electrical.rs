@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    fmt,
+    fmt::{self, Write as _},
 };
 
 pub const RULE_COVERAGE_INCOMPLETE: &str = "coverage_incomplete";
@@ -326,6 +326,143 @@ pub fn explain_electrical_review(
         policy_id: policy.id,
         rules,
     })
+}
+
+pub fn electrical_review_to_junit(
+    review: &ElectricalReview,
+    policy: &ElectricalPolicy,
+) -> Result<String, String> {
+    let explanations = explain_electrical_review(review, policy)?;
+    let failures = explanations
+        .rules
+        .iter()
+        .filter(|rule| {
+            rule.finding_ids.iter().any(|id| {
+                review.findings.iter().any(|finding| {
+                    finding.id == *id && finding.severity == ElectricalSeverity::Error
+                })
+            })
+        })
+        .count();
+    let skipped = explanations
+        .rules
+        .iter()
+        .filter(|rule| !rule.enabled)
+        .count();
+    let mut xml = String::new();
+    writeln!(xml, r#"<?xml version="1.0" encoding="UTF-8"?>"#).unwrap();
+    writeln!(
+        xml,
+        r#"<testsuites name="pcbex electrical review" tests="{}" failures="{failures}" errors="0" skipped="{skipped}">"#,
+        explanations.rules.len()
+    )
+    .unwrap();
+    writeln!(
+        xml,
+        r#"  <testsuite name="pcbex electrical rules" tests="{}" failures="{failures}" errors="0" skipped="{skipped}">"#,
+        explanations.rules.len()
+    )
+    .unwrap();
+    writeln!(xml, "    <properties>").unwrap();
+    for (name, value) in [
+        ("pcbex.schema_version", review.schema_version.to_string()),
+        ("pcbex.schematic_sha256", review.schematic_sha256.clone()),
+        ("pcbex.policy_sha256", review.policy_sha256.clone()),
+        ("pcbex.policy_id", review.policy_id.clone()),
+        ("pcbex.approved", review.approved.to_string()),
+    ] {
+        writeln!(
+            xml,
+            r#"      <property name="{}" value="{}"/>"#,
+            xml_escape(name),
+            xml_escape(&value)
+        )
+        .unwrap();
+    }
+    writeln!(xml, "    </properties>").unwrap();
+
+    for rule in &explanations.rules {
+        writeln!(
+            xml,
+            r#"    <testcase classname="pcbex.electrical" name="{}">"#,
+            xml_escape(&rule.id)
+        )
+        .unwrap();
+        if !rule.enabled {
+            writeln!(
+                xml,
+                r#"      <skipped message="disabled by electrical policy"/>"#
+            )
+            .unwrap();
+        } else {
+            let findings = review
+                .findings
+                .iter()
+                .filter(|finding| finding.rule == rule.id)
+                .collect::<Vec<_>>();
+            let errors = findings
+                .iter()
+                .filter(|finding| finding.severity == ElectricalSeverity::Error)
+                .copied()
+                .collect::<Vec<_>>();
+            if !errors.is_empty() {
+                writeln!(
+                    xml,
+                    r#"      <failure type="electrical_error" message="{} error finding(s)">"#,
+                    errors.len()
+                )
+                .unwrap();
+                for finding in errors {
+                    writeln!(
+                        xml,
+                        "        {}: {}",
+                        xml_escape(&finding.id),
+                        xml_escape(&finding.message)
+                    )
+                    .unwrap();
+                }
+                writeln!(xml, "      </failure>").unwrap();
+            }
+            let advisory = findings
+                .iter()
+                .filter(|finding| finding.severity != ElectricalSeverity::Error)
+                .copied()
+                .collect::<Vec<_>>();
+            if !advisory.is_empty() {
+                writeln!(xml, "      <system-out>").unwrap();
+                for finding in advisory {
+                    writeln!(
+                        xml,
+                        "        {:?} {}: {}",
+                        finding.severity,
+                        xml_escape(&finding.id),
+                        xml_escape(&finding.message)
+                    )
+                    .unwrap();
+                }
+                writeln!(xml, "      </system-out>").unwrap();
+            }
+        }
+        writeln!(xml, "    </testcase>").unwrap();
+    }
+    writeln!(xml, "  </testsuite>").unwrap();
+    writeln!(xml, "</testsuites>").unwrap();
+    Ok(xml)
+}
+
+fn xml_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            _ => escaped.push(character),
+        }
+    }
+    escaped
 }
 
 fn rule_explanation(rule: &str) -> (&'static str, &'static str, &'static str, &'static str) {
@@ -1121,5 +1258,30 @@ mod tests {
             ..ElectricalPolicy::default()
         };
         assert!(explain_electrical_review(&review, &mismatched).is_err());
+    }
+
+    #[test]
+    fn junit_maps_rule_outcomes_and_escapes_untrusted_text() {
+        let schematic = import_schematic(SOURCE).unwrap();
+        let mut policy = ElectricalPolicy::default();
+        policy
+            .rules
+            .get_mut(RULE_MISSING_FOOTPRINT)
+            .unwrap()
+            .enabled = false;
+        let mut review = check_schematic(&schematic, &policy).unwrap();
+        review.policy_id = r#"team<&">"#.into();
+        policy.id = review.policy_id.clone();
+        let policy_bytes = serde_json::to_vec(&policy).unwrap();
+        review.policy_sha256 = hex_digest(&policy_bytes);
+        review.findings[0].message = r#"unsafe <rail> & "driver""#.into();
+        let junit = electrical_review_to_junit(&review, &policy).unwrap();
+        assert!(junit.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#));
+        assert!(junit.contains(r#"tests="12""#));
+        assert!(junit.contains(r#"<failure type="electrical_error""#));
+        assert!(junit.contains(r#"<skipped message="disabled by electrical policy"/>"#));
+        assert!(junit.contains("unsafe &lt;rail&gt; &amp; &quot;driver&quot;"));
+        assert!(junit.contains(r#"value="team&lt;&amp;&quot;&gt;""#));
+        assert!(!junit.contains("unsafe <rail>"));
     }
 }

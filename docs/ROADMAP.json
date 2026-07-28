@@ -84,6 +84,11 @@
     {
       "id": "expiring-electrical-waivers",
       "release": "v1.313.0",
+      "status": "released"
+    },
+    {
+      "id": "electrical-junit-reporting",
+      "release": "v1.314.0",
       "status": "current"
     }
   ]
