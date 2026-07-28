@@ -167,6 +167,8 @@ integer, its name must be scalar, and the ID/name pair must match the board
 declaration. The record must not be repeated; malformed, duplicate, or
 contradictory records are rejected instead of treating the pad as unconnected or
 attaching it to a differently named net.
+Board segments with a nonzero net ID must likewise reference a declared net;
+stale routed copper is rejected instead of creating an ownerless route candidate.
 Project net-class dimensions must be non-negative and fit the signed nanometer
 range; oversized values are rejected instead of saturating at the integer limit.
 Legacy net classes embedded in `.kicad_pcb` files follow the same finite,
