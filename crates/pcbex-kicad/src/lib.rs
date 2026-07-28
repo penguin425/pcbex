@@ -644,6 +644,11 @@ fn import_net_classes(
                     return Err(format!("net class {name} has invalid {key}"));
                 }
             }
+            if class_rules.via_diameter_nm <= class_rules.via_drill_nm {
+                return Err(format!(
+                    "net class {name} via_dia must be greater than via_drill"
+                ));
+            }
             classes.insert(name.to_string(), class_rules);
             for child in values {
                 let Some(assignment) = child.as_list() else {
@@ -5639,6 +5644,38 @@ mod tests {
         )"#;
         let imported = import(pcb, rules()).unwrap();
         assert_eq!(imported.board.net_classes["Valid"].clearance_nm, 0);
+    }
+
+    #[test]
+    fn rejects_legacy_via_diameters_not_larger_than_drills() {
+        for (via_diameter, via_drill) in [(0.3, 0.3), (0.2, 0.3)] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (setup
+                    (net_class "Invalid" ""
+                      (via_dia {via_diameter})
+                      (via_drill {via_drill})))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "net class Invalid via_dia must be greater than via_drill"
+            );
+        }
+
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Valid" ""
+              (via_dia 0.301)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let imported = import(pcb, rules()).unwrap();
+        let class = &imported.board.net_classes["Valid"];
+        assert_eq!(class.via_diameter_nm, 301_000);
+        assert_eq!(class.via_drill_nm, 300_000);
     }
 
     #[test]
