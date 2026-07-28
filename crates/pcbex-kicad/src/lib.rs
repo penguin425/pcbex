@@ -460,6 +460,7 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
                 "custom rule references unknown net class {class_name}"
             ));
         };
+        let mut applied_kinds = HashSet::new();
         for item in rule {
             let Some(constraint) = item.as_list() else {
                 continue;
@@ -470,6 +471,18 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
             let Some(kind) = atom(constraint.get(1)) else {
                 continue;
             };
+            if matches!(
+                kind,
+                "clearance"
+                    | "track_width"
+                    | "via_diameter"
+                    | "hole_size"
+                    | "diff_pair_gap"
+                    | "length"
+            ) && !applied_kinds.insert(kind)
+            {
+                return Err(format!("custom rule repeats {kind} constraint"));
+            }
             match kind {
                 "clearance" => class.clearance_nm = constraint_value(constraint, &["min"])?,
                 "track_width" => {
@@ -6411,11 +6424,16 @@ mod tests {
 
         for (constraint, repeated_name) in cases {
             let mut imported = import(pcb, rules()).unwrap();
+            let preceding_constraint = if constraint.starts_with("(constraint clearance") {
+                "(constraint track_width (min 0.4mm))"
+            } else {
+                "(constraint clearance (min 0.4mm))"
+            };
             let custom_rules = format!(
                 r#"
                   (rule "Repeated value"
                     (condition "A.NetClass == 'Signal'")
-                    (constraint clearance (min 0.4mm))
+                    {preceding_constraint}
                     {constraint})
                 "#
             );
@@ -6455,11 +6473,16 @@ mod tests {
 
         for (constraint, malformed_name) in cases {
             let mut imported = import(pcb, rules()).unwrap();
+            let preceding_constraint = if constraint.starts_with("(constraint clearance") {
+                "(constraint track_width (min 0.4mm))"
+            } else {
+                "(constraint clearance (min 0.4mm))"
+            };
             let custom_rules = format!(
                 r#"
                   (rule "Extra dimension"
                     (condition "A.NetClass == 'Signal'")
-                    (constraint clearance (min 0.4mm))
+                    {preceding_constraint}
                     {constraint})
                 "#
             );
@@ -6476,6 +6499,91 @@ mod tests {
             assert_eq!(class.minimum_length_nm, None);
             assert_eq!(class.maximum_length_nm, None);
         }
+    }
+
+    #[test]
+    fn rejects_repeated_custom_constraints_within_one_rule_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let cases = [
+            (
+                "clearance",
+                "(constraint clearance (min 0.3mm))
+                 (constraint clearance (min 0.4mm))",
+            ),
+            (
+                "track_width",
+                "(constraint track_width (min 0.3mm))
+                 (constraint track_width (min 0.4mm))",
+            ),
+            (
+                "via_diameter",
+                "(constraint via_diameter (min 0.7mm))
+                 (constraint via_diameter (min 0.8mm))",
+            ),
+            (
+                "hole_size",
+                "(constraint hole_size (min 0.2mm))
+                 (constraint hole_size (min 0.25mm))",
+            ),
+            (
+                "diff_pair_gap",
+                "(constraint diff_pair_gap (min 0.3mm))
+                 (constraint diff_pair_gap (min 0.4mm))",
+            ),
+            (
+                "length",
+                "(constraint length (min 1mm) (max 2mm))
+                 (constraint length (min 3mm) (max 4mm))",
+            ),
+        ];
+
+        for (kind, constraints) in cases {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Repeated constraint"
+                    (condition "A.NetClass == 'Signal'")
+                    {constraints})
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                format!("custom rule repeats {kind} constraint")
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+            assert_eq!(class.via_diameter_nm, 600_000);
+            assert_eq!(class.via_drill_nm, 300_000);
+            assert_eq!(class.differential_gap_nm, None);
+            assert_eq!(class.minimum_length_nm, None);
+            assert_eq!(class.maximum_length_nm, None);
+        }
+
+        let mut imported = import(pcb, rules()).unwrap();
+        let applied = apply_custom_design_rules(
+            &mut imported.board,
+            r#"
+              (rule "First"
+                (condition "A.NetClass == 'Signal'")
+                (constraint clearance (min 0.3mm)))
+              (rule "Second"
+                (condition "A.NetClass == 'Signal'")
+                (constraint clearance (min 0.4mm)))
+            "#,
+        )
+        .unwrap();
+        assert_eq!(applied, 2);
+        assert_eq!(imported.board.net_classes["Signal"].clearance_nm, 400_000);
     }
 
     #[test]
