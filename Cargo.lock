@@ -584,11 +584,12 @@ checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "pcbex"
-version = "1.320.0"
+version = "1.321.0"
 dependencies = [
  "anyhow",
  "clap",
  "clap_complete",
+ "ed25519-dalek",
  "getrandom 0.4.3",
  "pcbex-core",
  "pcbex-kicad",
@@ -599,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-core"
-version = "1.320.0"
+version = "1.321.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -609,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-kicad"
-version = "1.320.0"
+version = "1.321.0"
 dependencies = [
  "ed25519-dalek",
  "pcbex-core",

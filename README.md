@@ -677,12 +677,20 @@ steps:
     with:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
+  - name: Install trusted pcbex policy root
+    env:
+      PCBEX_POLICY_PUBLIC_KEY: ${{ vars.PCBEX_POLICY_PUBLIC_KEY }}
+    run: |
+      umask 077
+      printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
+        > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.320.0
+    uses: penguin425/pcbex@v1.321.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
-      policy-pack: hardware/organization-policy-pack.json
+      signed-policy-pack: hardware/organization-policy-pack.signed.json
+      policy-public-key: ${{ runner.temp }}/pcbex-policy-root.pub
       fail-on-regressions: "true"
       upload-sarif: "true"
       pr-comment: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
@@ -704,10 +712,11 @@ unexpected API shapes, and missing event context fail closed. The example
 disables comments for fork PRs, whose default `GITHUB_TOKEN` is read-only,
 while still producing their Job Summary and evidence artifact.
 
-Callers select exactly one of `fab`, `fab-profile`, or
-`policy-pack`. The same physical policy is applied to current and baseline
-analysis, and the exact external source digest is retained in each run
-manifest.
+Callers select exactly one of `fab`, `fab-profile`, `policy-pack`, or
+`signed-policy-pack`. A signed pack additionally requires
+`policy-public-key`. The same authenticated physical policy is applied to
+current and baseline analysis, and the exact verified source digest is
+retained in each run manifest.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -966,6 +975,41 @@ verification, the composite Action, and the corresponding MCP analysis,
 routing, preparation, and verification tools. It is mutually exclusive with
 ad-hoc policy/profile overrides. Analysis manifests bind the pack ID, resolved
 DFM rules, source path, byte length, and SHA-256 digest.
+
+Authenticate packs before distributing them to CI:
+
+```sh
+# Run once and keep the private key outside the repository.
+pcbex policy-keygen \
+  --private-key .secrets/policy-signing.key \
+  --public-key policy-root.pub
+
+pcbex sign-policy-pack organization-policy-pack.json \
+  --private-key .secrets/policy-signing.key \
+  --signer-id hardware-security \
+  --output organization-policy-pack.signed.json
+
+pcbex signed-policy-pack-schema \
+  --output signed-policy-pack.schema.json
+pcbex verify-policy-pack organization-policy-pack.signed.json \
+  --public-key policy-root.pub \
+  --output build/verified-policy-pack.json
+```
+
+The signed envelope embeds the normalized pack and authenticates its SHA-256,
+ID, revision, and signer under a domain-separated Ed25519 signature. Unknown
+fields, digest mismatch, altered content, unsupported algorithms, invalid
+signatures, and a key other than the separately trusted public key fail
+closed. Key generation, signing, and verified extraction refuse to overwrite
+existing files.
+The MCP server exposes the same authenticated extraction boundary as
+`verify_policy_pack`; it never receives or exposes the signing private key.
+
+For the composite Action, write the trusted public key from a protected
+repository variable or secret into a runner-temporary file before invoking
+the Action; do not derive trust from the public key embedded in the signed
+envelope. The Action verifies and retains the extracted pack before current
+or baseline analysis starts.
 
 Invalid physical limits are reported individually as `dfm_rule_dimensions`;
 track width, drill size, and board thickness must be positive, while clearance
