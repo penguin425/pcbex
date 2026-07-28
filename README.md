@@ -1133,6 +1133,40 @@ severity and enablement, and the stable IDs of findings it produced. This keeps
 the signed electrical-review contract unchanged while making CI failures and
 AI hand-offs directly explainable.
 
+Temporary exceptions are represented separately from the immutable electrical
+review. Every waiver targets one stable finding ID and requires a non-empty
+reason, approver identity, and expiration date:
+
+```json
+{
+  "schema_version": 1,
+  "id": "prototype-v1",
+  "waivers": [{
+    "id": "temporary-power-source",
+    "finding_id": "pcbex-er-0123456789abcdef",
+    "reason": "External bench supply is used for prototype validation",
+    "approved_by": "hardware-lead",
+    "expires_on": "2026-08-31"
+  }]
+}
+```
+
+Apply waivers with an explicit date so the same invocation remains
+reproducible:
+
+```sh
+pcbex apply-electrical-waivers \
+  electrical-review.json electrical-waivers.json \
+  --as-of 2026-08-01 \
+  --output electrical-waiver-report.json \
+  --require-approved
+```
+
+Unknown findings, duplicate waiver IDs or targets, invalid dates, blank audit
+fields, and expired waivers fail closed. The result binds canonical SHA-256
+identities for the source review and waiver set. Closed contracts are emitted
+by `electrical-waiver-set-schema` and `electrical-waiver-report-schema`.
+
 Reports are deterministic and contain canonical SHA-256 identities for both
 the normalized schematic and effective policy. An approval is granted only
 when no enabled error-severity finding remains. A policy may explicitly

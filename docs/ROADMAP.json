@@ -79,6 +79,11 @@
     {
       "id": "electrical-rule-explanations",
       "release": "v1.312.0",
+      "status": "released"
+    },
+    {
+      "id": "expiring-electrical-waivers",
+      "release": "v1.313.0",
       "status": "current"
     }
   ]

@@ -16,15 +16,16 @@ use pcbex_core::{
 };
 use pcbex_kicad::{
     AiRequirement, AiReviewRequest, AiReviewResponse, ElectricalPolicy, ElectricalReview,
-    SignedAiApproval, SimulationArtifact, SimulationEvidence, ai_review_request_json_schema,
-    ai_review_response_json_schema, apply_custom_design_rules, apply_project_net_settings,
-    approval_public_key, build_ai_review_request, check_schematic,
-    electrical_explanation_json_schema, electrical_policy_json_schema,
-    electrical_review_json_schema, explain_electrical_review, import as import_kicad,
-    import_schematic, parse_ai_review_response, parse_electrical_policy,
-    parse_simulation_declaration, record_simulation_evidence, schematic_json_schema,
-    sign_ai_review, signed_ai_approval_json_schema, simulation_declaration_json_schema,
-    simulation_evidence_json_schema, verify_signed_ai_approval,
+    ElectricalWaiverSet, SignedAiApproval, SimulationArtifact, SimulationEvidence,
+    ai_review_request_json_schema, ai_review_response_json_schema, apply_custom_design_rules,
+    apply_electrical_waivers, apply_project_net_settings, approval_public_key,
+    build_ai_review_request, check_schematic, electrical_explanation_json_schema,
+    electrical_policy_json_schema, electrical_review_json_schema,
+    electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
+    explain_electrical_review, import as import_kicad, import_schematic, parse_ai_review_response,
+    parse_electrical_policy, parse_simulation_declaration, record_simulation_evidence,
+    schematic_json_schema, sign_ai_review, signed_ai_approval_json_schema,
+    simulation_declaration_json_schema, simulation_evidence_json_schema, verify_signed_ai_approval,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -204,6 +205,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed electrical waiver-set JSON Schema.
+    ElectricalWaiverSetSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed electrical waiver-report JSON Schema.
+    ElectricalWaiverReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the complete built-in electrical approval policy.
     ElectricalPolicy {
         #[arg(short, long)]
@@ -221,6 +232,19 @@ enum Command {
         #[arg(long)]
         policy: Option<PathBuf>,
         /// Fail after writing the report when error-severity findings remain.
+        #[arg(long)]
+        require_approved: bool,
+    },
+    /// Apply explicit, expiring waivers to a deterministic electrical review.
+    ApplyElectricalWaivers {
+        electrical_review: PathBuf,
+        waiver_set: PathBuf,
+        /// Explicit deterministic evaluation date in YYYY-MM-DD form.
+        #[arg(long)]
+        as_of: String,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fail after writing the report when unwaived errors remain.
         #[arg(long)]
         require_approved: bool,
     },
@@ -866,6 +890,12 @@ fn main() -> Result<()> {
                 println!("{schema}");
             }
         }
+        Command::ElectricalWaiverSetSchema { output } => {
+            write_or_print_json(&electrical_waiver_set_json_schema(), output.as_ref())?;
+        }
+        Command::ElectricalWaiverReportSchema { output } => {
+            write_or_print_json(&electrical_waiver_report_json_schema(), output.as_ref())?;
+        }
         Command::ElectricalPolicy { output } => {
             let policy = serde_json::to_string_pretty(&ElectricalPolicy::default())?;
             if let Some(path) = output {
@@ -921,6 +951,37 @@ fn main() -> Result<()> {
                     "electrical approval rejected by policy {} with {} error(s)",
                     review.policy_id,
                     review.counts.errors
+                );
+            }
+        }
+        Command::ApplyElectricalWaivers {
+            electrical_review,
+            waiver_set,
+            as_of,
+            output,
+            require_approved,
+        } => {
+            let (review, _) = read_described_json::<ElectricalReview>(&electrical_review)?;
+            let (waiver_set, _) = read_described_json::<ElectricalWaiverSet>(&waiver_set)?;
+            let report = apply_electrical_waivers(&review, &waiver_set, &as_of)
+                .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&report)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "electrical waiver review: {}; {} waived, {} expired, {} remaining error(s)",
+                if report.approved {
+                    "approved"
+                } else {
+                    "rejected"
+                },
+                report.counts.waived,
+                report.counts.expired,
+                report.counts.remaining_errors
+            );
+            if require_approved && !report.approved {
+                bail!(
+                    "electrical waiver review has {} unwaived error(s)",
+                    report.counts.remaining_errors
                 );
             }
         }
