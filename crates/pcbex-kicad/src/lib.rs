@@ -115,6 +115,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                 import_footprint(xs, min, &mut nets, &mut footprint_geometry, &copper_layers)?
             }
             Some("segment") => {
+                validate_declared_copper_net(xs, "segment", &nets)?;
                 import_segment(xs, min, &rules, &mut obstacles, &mut route_candidates)
             }
             Some("arc") => import_route_arc(xs, min, &rules, &mut obstacles, &mut route_candidates),
@@ -2050,6 +2051,20 @@ fn footprint_reference(xs: &[Sexp]) -> String {
     String::new()
 }
 
+fn validate_declared_copper_net(
+    xs: &[Sexp],
+    kind: &str,
+    nets: &HashMap<u32, Net>,
+) -> Result<(), String> {
+    let net_id = child_values(xs, "net").and_then(|values| number_u32(values.get(1)));
+    if let Some(id) = net_id.filter(|id| *id != 0)
+        && !nets.contains_key(&id)
+    {
+        return Err(format!("KiCad {kind} references undeclared net ID {id}"));
+    }
+    Ok(())
+}
+
 fn import_segment(
     xs: &[Sexp],
     origin: Point,
@@ -3233,6 +3248,20 @@ mod tests {
                 "KiCad pad A1 net fields must not be repeated"
             );
         }
+    }
+
+    #[test]
+    fn rejects_segments_referencing_undeclared_kicad_nets() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "KNOWN")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (segment (start 1 1) (end 5 1) (width 0.25) (layer "F.Cu") (net 2))
+        )"#;
+
+        assert_eq!(
+            import(pcb, rules()).unwrap_err(),
+            "KiCad segment references undeclared net ID 2"
+        );
     }
 
     #[test]
