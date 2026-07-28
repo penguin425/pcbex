@@ -27,12 +27,14 @@ use pcbex_kicad::{
     electrical_waiver_set_json_schema, explain_electrical_review, import as import_kicad,
     import_schematic, parse_ai_review_response, parse_electrical_policy,
     parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
-    record_simulation_evidence, render_ai_approval_quorum_summary, render_schematic_diff_summary,
-    render_schematic_reviewer_routing_summary, route_schematic_review, schematic_diff_json_schema,
+    record_simulation_evidence, render_ai_approval_quorum_summary,
+    render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
+    render_schematic_reviewer_routing_summary, route_schematic_review,
+    routed_ai_approval_quorum_report_json_schema, schematic_diff_json_schema,
     schematic_diff_to_sarif, schematic_json_schema, schematic_reviewer_routing_plan_json_schema,
     schematic_reviewer_routing_policy_json_schema, sign_ai_review, signed_ai_approval_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
-    verify_signed_ai_approval,
+    verify_routed_ai_approval_quorum, verify_signed_ai_approval,
 };
 use serde::{Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -436,6 +438,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed profile-aware AI approval-quorum report JSON Schema.
+    RoutedAiApprovalQuorumSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Prepare a complete, digest-bound request for an AI schematic reviewer.
     PrepareAiReview {
         input: PathBuf,
@@ -514,6 +521,15 @@ enum Command {
         minimum_distinct_providers: u32,
         #[arg(long, default_value_t = 2)]
         minimum_distinct_models: u32,
+        /// Accepted baseline schematic used to recompute reviewer routing.
+        #[arg(long, requires_all = ["current_schematic", "reviewer_routing_policy"])]
+        baseline_schematic: Option<PathBuf>,
+        /// Proposed schematic; its normalized digest must match the AI review request.
+        #[arg(long, requires_all = ["baseline_schematic", "reviewer_routing_policy"])]
+        current_schematic: Option<PathBuf>,
+        /// Strict routing policy enabling profile-aware quorum enforcement.
+        #[arg(long, requires_all = ["baseline_schematic", "current_schematic"])]
+        reviewer_routing_policy: Option<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long)]
@@ -1710,6 +1726,12 @@ fn main() -> Result<()> {
         Command::AiApprovalQuorumSchema { output } => {
             write_or_print_json(&ai_approval_quorum_report_json_schema(), output.as_ref())?;
         }
+        Command::RoutedAiApprovalQuorumSchema { output } => {
+            write_or_print_json(
+                &routed_ai_approval_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::PrepareAiReview {
             input,
             electrical_review,
@@ -1892,6 +1914,9 @@ fn main() -> Result<()> {
             minimum_approvals,
             minimum_distinct_providers,
             minimum_distinct_models,
+            baseline_schematic,
+            current_schematic,
+            reviewer_routing_policy,
             output,
             summary_output,
             require_quorum,
@@ -1950,36 +1975,72 @@ fn main() -> Result<()> {
                     },
                 )
                 .collect::<Vec<_>>();
-            let report = verify_ai_approval_quorum(
-                &request,
-                &candidates,
-                AiApprovalQuorumPolicy {
-                    minimum_approvals,
-                    minimum_distinct_providers,
-                    minimum_distinct_models,
-                },
-            )
-            .map_err(anyhow::Error::msg)?;
-            fs::write(&output, serde_json::to_string_pretty(&report)?)
-                .with_context(|| format!("writing {}", output.display()))?;
-            if let Some(path) = summary_output {
-                fs::write(&path, render_ai_approval_quorum_summary(&report))
-                    .with_context(|| format!("writing {}", path.display()))?;
-            }
-            eprintln!(
-                "AI approval quorum: {}/{} approval(s), {} provider(s), {} model(s): {}",
-                report.counts.approvals,
-                report.policy.minimum_approvals,
-                report.counts.distinct_providers,
-                report.counts.distinct_models,
-                if report.quorum_met {
-                    "approved"
-                } else {
-                    "not met"
+            let quorum_policy = AiApprovalQuorumPolicy {
+                minimum_approvals,
+                minimum_distinct_providers,
+                minimum_distinct_models,
+            };
+            if let (Some(baseline), Some(current), Some(routing_policy)) = (
+                baseline_schematic,
+                current_schematic,
+                reviewer_routing_policy,
+            ) {
+                let baseline_document = import_schematic(&fs::read_to_string(&baseline)?)
+                    .map_err(anyhow::Error::msg)?;
+                let current_document =
+                    import_schematic(&fs::read_to_string(&current)?).map_err(anyhow::Error::msg)?;
+                let routing_policy =
+                    parse_schematic_reviewer_routing_policy(&fs::read_to_string(&routing_policy)?)
+                        .map_err(anyhow::Error::msg)?;
+                let plan =
+                    route_schematic_review(&baseline_document, &current_document, &routing_policy)
+                        .map_err(anyhow::Error::msg)?;
+                let report =
+                    verify_routed_ai_approval_quorum(&request, &candidates, quorum_policy, &plan)
+                        .map_err(anyhow::Error::msg)?;
+                fs::write(&output, serde_json::to_string_pretty(&report)?)?;
+                if let Some(path) = summary_output {
+                    fs::write(&path, render_routed_ai_approval_quorum_summary(&report))?;
                 }
-            );
-            if require_quorum && !report.quorum_met {
-                bail!("AI approval quorum did not meet every threshold");
+                eprintln!(
+                    "routed AI approval quorum: {}/{} profile(s), {} global approval(s): {}",
+                    report
+                        .profiles
+                        .iter()
+                        .filter(|profile| profile.profile_met)
+                        .count(),
+                    report.profiles.len(),
+                    report.quorum.counts.approvals,
+                    if report.routed_quorum_met {
+                        "approved"
+                    } else {
+                        "not met"
+                    }
+                );
+                if require_quorum && !report.routed_quorum_met {
+                    bail!("routed AI approval quorum did not meet every threshold");
+                }
+            } else {
+                let report = verify_ai_approval_quorum(&request, &candidates, quorum_policy)
+                    .map_err(anyhow::Error::msg)?;
+                fs::write(&output, serde_json::to_string_pretty(&report)?)?;
+                if let Some(path) = summary_output {
+                    fs::write(&path, render_ai_approval_quorum_summary(&report))?;
+                }
+                eprintln!(
+                    "AI approval quorum: {} approval(s), {} provider(s), {} model(s): {}",
+                    report.counts.approvals,
+                    report.counts.distinct_providers,
+                    report.counts.distinct_models,
+                    if report.quorum_met {
+                        "approved"
+                    } else {
+                        "not met"
+                    }
+                );
+                if require_quorum && !report.quorum_met {
+                    bail!("AI approval quorum did not meet every threshold");
+                }
             }
         }
         Command::DfmProfiles { output } => {

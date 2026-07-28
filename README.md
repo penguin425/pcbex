@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.326.0
+    uses: penguin425/pcbex@v1.327.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1604,6 +1604,35 @@ pcbex verify-ai-quorum ai-review-request.json \
   --summary-output approval-quorum.md \
   --require-quorum
 ```
+
+When reviewer routing is configured, the same command freshly recomputes the
+semantic diff and additionally enforces every active reviewer profile:
+
+```sh
+pcbex verify-ai-quorum ai-review-request.json \
+  --approval reviewer-a.approval.json \
+  --response reviewer-a.response.json \
+  --policy-pack organization-policy-pack.json \
+  --minimum-approvals 1 \
+  --minimum-distinct-providers 1 \
+  --minimum-distinct-models 1 \
+  --baseline-schematic accepted.kicad_sch \
+  --current-schematic proposed.kicad_sch \
+  --reviewer-routing-policy reviewer-routing-policy.json \
+  --output routed-quorum.json \
+  --summary-output routed-quorum.md \
+  --require-quorum
+```
+
+The proposed schematic must have the exact normalized digest embedded in the
+AI review request. Only freshly verified signed approvals whose complete
+provider/model/version identity appears in a routed profile count toward that
+profile. A valid global quorum therefore cannot substitute unrelated models
+for a required power, safety, or specialist reviewer. Profile shortages write
+the nested global quorum and deterministic per-profile evidence before the
+optional gate fails. The Action enables this stronger gate automatically when
+schematics, reviewer routing, and AI quorum inputs are supplied together.
+The closed contract is emitted by `routed-ai-approval-quorum-schema`.
 
 Every envelope is freshly verified against the exact request, response, and
 trusted signer key. Signer IDs, public keys, and response digests must be

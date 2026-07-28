@@ -185,8 +185,9 @@ jobs:
           test "$(jq -r '.route_count' "$SCHEMATIC_REVIEWER_ROUTING")" = "0"
           test -s "$AI_APPROVAL_QUORUM"
           test "$AI_APPROVAL_QUORUM_MET" = "true"
-          test "$(jq -r '.counts.approvals' "$AI_APPROVAL_QUORUM")" = "2"
-          test "$(jq -r '.counts.distinct_providers' "$AI_APPROVAL_QUORUM")" = "2"
+          test "$(jq -r '.quorum.counts.approvals' "$AI_APPROVAL_QUORUM")" = "2"
+          test "$(jq -r '.quorum.counts.distinct_providers' "$AI_APPROVAL_QUORUM")" = "2"
+          test "$(jq -r '.routed_quorum_met' "$AI_APPROVAL_QUORUM")" = "true"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then
             [[ "$COMMENT_URL" == https://github.com/* ]]
           else
