@@ -27,6 +27,7 @@ auditable release.
 | v1.315.0 | Electrical baseline gate | Fail CI only for new or severity-escalated electrical errors |
 | v1.316.0 | Electrical SARIF reporting | Stable schematic findings for code-scanning review tools |
 | v1.317.0 | Idempotent PR comments | Update one stable hardware-analysis comment per PR |
+| v1.318.0 | Distributable DFM profiles | Strict organization-owned manufacturing constraints with provenance |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -35,7 +36,7 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should focus on production adoption: reusable fab profile
-distribution, organization policy packs, review-provider adapters, and
-manufacturing feedback ingestion. Those are intentionally not marked complete
-until each has an executable acceptance contract and its own release.
+The next roadmap should focus on production adoption: broader organization
+policy packs, review-provider adapters, and manufacturing feedback ingestion.
+Those are intentionally not marked complete until each has an executable
+acceptance contract and its own release.

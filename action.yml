@@ -18,6 +18,10 @@ inputs:
     description: Optional built-in fabrication profile ID or stable alias.
     required: false
     default: ""
+  fab-profile:
+    description: Optional strict external DFM profile JSON path; mutually exclusive with fab.
+    required: false
+    default: ""
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -107,6 +111,7 @@ runs:
         PCBEX_BOARD: ${{ inputs.board }}
         PCBEX_BASELINE_BOARD: ${{ inputs.baseline-board }}
         PCBEX_FAB: ${{ inputs.fab }}
+        PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 

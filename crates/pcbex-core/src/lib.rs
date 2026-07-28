@@ -13,7 +13,10 @@ pub mod routing_candidates;
 pub mod schema;
 
 pub use analysis::{AnalysisDelta, analysis_delta_to_sarif};
-pub use dfm_profiles::{DfmProfile, apply_dfm_profile, dfm_profile, dfm_profiles};
+pub use dfm_profiles::{
+    DFM_PROFILE_SCHEMA_VERSION, DfmProfile, apply_dfm_profile, dfm_profile,
+    dfm_profile_json_schema, dfm_profiles, parse_external_dfm_profile, validate_dfm_profile,
+};
 pub use impedance::{ImpedanceReport, impedance_report};
 pub use quality::{DifferentialQuality, NetQuality, RoutingQuality, routing_quality};
 pub use routing_candidates::{
@@ -362,6 +365,7 @@ fn default_escape_rings() -> u8 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManufacturingRules {
     pub minimum_track_width_nm: Nm,
     pub minimum_clearance_nm: Nm,

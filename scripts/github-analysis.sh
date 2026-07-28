@@ -42,8 +42,15 @@ write_output violation-count ""
 write_output regression false
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
+if [[ -n "${PCBEX_FAB:-}" && -n "${PCBEX_FAB_PROFILE:-}" ]]; then
+  echo "PCBEX_FAB and PCBEX_FAB_PROFILE are mutually exclusive" >&2
+  exit 2
+fi
 if [[ -n "${PCBEX_FAB:-}" ]]; then
   analysis_arguments+=(--fab "$PCBEX_FAB")
+fi
+if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then
+  analysis_arguments+=(--fab-profile "$PCBEX_FAB_PROFILE")
 fi
 "$PCBEX_BINARY" "${analysis_arguments[@]}"
 cp "$current_dir/report.sarif" "$sarif_dir/current.sarif"
@@ -67,6 +74,9 @@ if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
   baseline_arguments=(analyze-kicad "$PCBEX_BASELINE_BOARD" --output-dir "$baseline_dir")
   if [[ -n "${PCBEX_FAB:-}" ]]; then
     baseline_arguments+=(--fab "$PCBEX_FAB")
+  fi
+  if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then
+    baseline_arguments+=(--fab-profile "$PCBEX_FAB_PROFILE")
   fi
   "$PCBEX_BINARY" "${baseline_arguments[@]}"
   "$PCBEX_BINARY" compare-analysis \

@@ -104,6 +104,11 @@
     {
       "id": "idempotent-pr-comments",
       "release": "v1.317.0",
+      "status": "released"
+    },
+    {
+      "id": "distributable-dfm-profiles",
+      "release": "v1.318.0",
       "status": "current"
     }
   ]

@@ -9,10 +9,10 @@ use pcbex_core::placement::{
 use pcbex_core::{
     AnalysisDelta, Board, CURRENT_SCHEMA_VERSION, DfmProfile, RoutingCandidateObjective,
     RoutingCandidateOptions, RoutingCandidateSet, RoutingQuality, Rules, analysis_delta_to_sarif,
-    apply_dfm_profile, board_json_schema, dfm_profile, dfm_profiles, impedance_report,
-    migrate_board_json, parse_board_json, render_svg, repair_routes, repairable_net_ids,
-    route_board, route_candidates, routing_quality, solve_stackup_differential_width_nm,
-    solve_stackup_width_nm,
+    apply_dfm_profile, board_json_schema, dfm_profile, dfm_profile_json_schema, dfm_profiles,
+    impedance_report, migrate_board_json, parse_board_json, parse_external_dfm_profile, render_svg,
+    repair_routes, repairable_net_ids, route_board, route_candidates, routing_quality,
+    solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
     AiRequirement, AiReviewRequest, AiReviewResponse, ElectricalPolicy, ElectricalReview,
@@ -128,6 +128,7 @@ struct RunManifest {
     input: InputDescriptor,
     project: Option<InputDescriptor>,
     rules_file: Option<InputDescriptor>,
+    dfm_profile_file: Option<InputDescriptor>,
     configuration: AnalysisConfiguration,
     result: AnalysisResult,
     artifacts: Vec<String>,
@@ -365,6 +366,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Write the strict JSON Schema for distributable external DFM profiles.
+    DfmProfileSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize an external DFM profile.
+    ValidateDfmProfile {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Upgrade an older board JSON document to the current schema.
     Migrate {
         input: PathBuf,
@@ -448,8 +460,11 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
         /// Built-in fabrication profile ID or stable alias.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "fab_profile")]
         fab: Option<String>,
+        /// Strict external DFM profile JSON.
+        #[arg(long, value_name = "PATH", conflicts_with = "fab")]
+        fab_profile: Option<PathBuf>,
         /// Write all reports before exiting unsuccessfully on violations.
         #[arg(long)]
         fail_on_violations: bool,
@@ -490,8 +505,11 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
         /// Built-in fabrication profile ID or stable alias.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "fab_profile")]
         fab: Option<String>,
+        /// Strict external DFM profile JSON.
+        #[arg(long, value_name = "PATH", conflicts_with = "fab")]
+        fab_profile: Option<PathBuf>,
         #[arg(long)]
         svg: Option<PathBuf>,
         /// Also write routed items as JSON for the KiCad IPC adapter.
@@ -526,8 +544,11 @@ enum Command {
         bend_cost: u32,
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "fab_profile")]
         fab: Option<String>,
+        /// Strict external DFM profile JSON.
+        #[arg(long, value_name = "PATH", conflicts_with = "fab")]
+        fab_profile: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         candidates: usize,
         #[arg(long, default_value_t = 4)]
@@ -544,8 +565,11 @@ enum Command {
     Dfm {
         input: PathBuf,
         /// Override embedded manufacturing rules with a built-in profile.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "fab_profile")]
         fab: Option<String>,
+        /// Override embedded manufacturing rules with a strict external DFM profile JSON.
+        #[arg(long, value_name = "PATH", conflicts_with = "fab")]
+        fab_profile: Option<PathBuf>,
         #[arg(short, long)]
         output: Option<PathBuf>,
         #[arg(long, value_enum, default_value_t = ReportFormat::Json)]
@@ -654,18 +678,34 @@ fn read(path: &PathBuf) -> Result<Board> {
     .with_context(|| format!("parsing {}", path.display()))
 }
 
-fn resolve_dfm_profile(name: Option<&str>) -> Result<Option<DfmProfile>> {
-    name.map(|name| {
-        dfm_profile(name).ok_or_else(|| {
-            let available = dfm_profiles()
-                .iter()
-                .map(|profile| profile.id)
-                .collect::<Vec<_>>()
-                .join(", ");
-            anyhow::anyhow!("unknown fabrication profile {name:?}; available profiles: {available}")
+fn resolve_dfm_profile(
+    name: Option<&str>,
+    external: Option<&Path>,
+) -> Result<(Option<DfmProfile>, Option<InputDescriptor>)> {
+    if let Some(path) = external {
+        let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let source = std::str::from_utf8(&bytes)
+            .with_context(|| format!("decoding {} as UTF-8", path.display()))?;
+        let profile = parse_external_dfm_profile(source)
+            .map_err(anyhow::Error::msg)
+            .with_context(|| format!("validating external DFM profile {}", path.display()))?;
+        return Ok((Some(profile), Some(input_descriptor(path, &bytes))));
+    }
+    let profile = name
+        .map(|name| {
+            dfm_profile(name).ok_or_else(|| {
+                let available = dfm_profiles()
+                    .iter()
+                    .map(|profile| profile.id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::anyhow!(
+                    "unknown fabrication profile {name:?}; available profiles: {available}"
+                )
+            })
         })
-    })
-    .transpose()
+        .transpose()?;
+    Ok((profile, None))
 }
 
 fn executable_check(
@@ -1283,6 +1323,25 @@ fn main() -> Result<()> {
                 println!("{profiles}");
             }
         }
+        Command::DfmProfileSchema { output } => {
+            let schema = serde_json::to_string_pretty(&dfm_profile_json_schema())?;
+            if let Some(path) = output {
+                fs::write(path, schema)?;
+            } else {
+                println!("{schema}");
+            }
+        }
+        Command::ValidateDfmProfile { input, output } => {
+            let (profile, _) = resolve_dfm_profile(None, Some(&input))?;
+            let normalized = serde_json::to_string_pretty(
+                &profile.expect("external profile resolution always returns a profile"),
+            )?;
+            if let Some(path) = output {
+                fs::write(path, normalized)?;
+            } else {
+                println!("{normalized}");
+            }
+        }
         Command::Migrate { input, output } => {
             let source = fs::read_to_string(&input)
                 .with_context(|| format!("reading {}", input.display()))?;
@@ -1467,6 +1526,7 @@ fn main() -> Result<()> {
             bend_cost,
             via_cost,
             fab,
+            fab_profile,
             fail_on_violations,
         } => {
             let input_bytes =
@@ -1526,7 +1586,8 @@ fn main() -> Result<()> {
                     Ok(input_descriptor(path, &bytes))
                 })
                 .transpose()?;
-            let dfm_profile = resolve_dfm_profile(fab.as_deref())?;
+            let (dfm_profile, dfm_profile_file) =
+                resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?;
             if let Some(profile) = &dfm_profile {
                 apply_dfm_profile(&mut imported.board, profile);
             }
@@ -1571,6 +1632,7 @@ fn main() -> Result<()> {
                 input: input_descriptor(&input, &input_bytes),
                 project: project_descriptor,
                 rules_file: rules_descriptor,
+                dfm_profile_file,
                 configuration: AnalysisConfiguration {
                     rules: imported.board.rules.clone(),
                     project_settings_loaded: project.is_some(),
@@ -1694,6 +1756,7 @@ fn main() -> Result<()> {
             bend_cost,
             via_cost,
             fab,
+            fab_profile,
             svg,
             json_output,
             drc,
@@ -1740,7 +1803,7 @@ fn main() -> Result<()> {
                     path.display()
                 );
             }
-            if let Some(profile) = resolve_dfm_profile(fab.as_deref())? {
+            if let Some(profile) = resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0 {
                 apply_dfm_profile(&mut imported.board, &profile);
                 eprintln!("applied fabrication profile {}", profile.id);
             }
@@ -1807,6 +1870,7 @@ fn main() -> Result<()> {
             bend_cost,
             via_cost,
             fab,
+            fab_profile,
             candidates,
             workers,
             router_workers,
@@ -1849,7 +1913,7 @@ fn main() -> Result<()> {
                     .map_err(anyhow::Error::msg)
                     .with_context(|| format!("importing custom rules from {}", path.display()))?;
             }
-            if let Some(profile) = resolve_dfm_profile(fab.as_deref())? {
+            if let Some(profile) = resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0 {
                 apply_dfm_profile(&mut imported.board, &profile);
             }
             let results = route_candidates(
@@ -1924,15 +1988,18 @@ fn main() -> Result<()> {
         Command::Dfm {
             input,
             fab,
+            fab_profile,
             output,
             format,
         } => {
             let mut board = read(&input)?;
-            if let Some(profile) = resolve_dfm_profile(fab.as_deref())? {
+            if let Some(profile) = resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0 {
                 apply_dfm_profile(&mut board, &profile);
             }
             if board.manufacturing_rules.is_none() {
-                bail!("board does not define manufacturing_rules; select --fab PROFILE")
+                bail!(
+                    "board does not define manufacturing_rules; select --fab PROFILE or --fab-profile PATH"
+                )
             }
             let report = check_manufacturability(&board);
             let json = match format {
@@ -2800,9 +2867,46 @@ mod tests {
 
     #[test]
     fn resolves_fabrication_profile_aliases_with_versioned_identity() {
-        let profile = resolve_dfm_profile(Some("pcbway-2layer")).unwrap().unwrap();
+        let profile = resolve_dfm_profile(Some("pcbway-2layer"), None)
+            .unwrap()
+            .0
+            .unwrap();
         assert_eq!(profile.id, "pcbway-standard-2layer-1oz-v1");
-        assert!(resolve_dfm_profile(Some("missing-profile")).is_err());
+        assert!(resolve_dfm_profile(Some("missing-profile"), None).is_err());
+    }
+
+    #[test]
+    fn parses_external_fabrication_profile_and_rejects_ambiguous_selection() {
+        let cli = Cli::try_parse_from([
+            "pcbex",
+            "analyze-kicad",
+            "board.kicad_pcb",
+            "--output-dir",
+            "analysis",
+            "--fab-profile",
+            "acme-profile.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::AnalyzeKicad {
+                fab: None,
+                fab_profile: Some(path),
+                ..
+            } if path.as_os_str() == "acme-profile.json"
+        ));
+        assert!(
+            Cli::try_parse_from([
+                "pcbex",
+                "dfm",
+                "board.json",
+                "--fab",
+                "jlcpcb-2layer",
+                "--fab-profile",
+                "acme-profile.json",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
