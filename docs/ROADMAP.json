@@ -69,6 +69,11 @@
     {
       "id": "installation-doctor",
       "release": "v1.310.0",
+      "status": "released"
+    },
+    {
+      "id": "capability-inventory",
+      "release": "v1.311.0",
       "status": "current"
     }
   ]

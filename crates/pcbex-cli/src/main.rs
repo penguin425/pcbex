@@ -7,11 +7,12 @@ use pcbex_core::placement::{
     PlacementProblem, place, place_candidates,
 };
 use pcbex_core::{
-    AnalysisDelta, Board, DfmProfile, RoutingCandidateObjective, RoutingCandidateOptions,
-    RoutingCandidateSet, RoutingQuality, Rules, analysis_delta_to_sarif, apply_dfm_profile,
-    board_json_schema, dfm_profile, dfm_profiles, impedance_report, migrate_board_json,
-    parse_board_json, render_svg, repair_routes, repairable_net_ids, route_board, route_candidates,
-    routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
+    AnalysisDelta, Board, CURRENT_SCHEMA_VERSION, DfmProfile, RoutingCandidateObjective,
+    RoutingCandidateOptions, RoutingCandidateSet, RoutingQuality, Rules, analysis_delta_to_sarif,
+    apply_dfm_profile, board_json_schema, dfm_profile, dfm_profiles, impedance_report,
+    migrate_board_json, parse_board_json, render_svg, repair_routes, repairable_net_ids,
+    route_board, route_candidates, routing_quality, solve_stackup_differential_width_nm,
+    solve_stackup_width_nm,
 };
 use pcbex_kicad::{
     AiRequirement, AiReviewRequest, AiReviewResponse, ElectricalPolicy, ElectricalReview,
@@ -69,6 +70,24 @@ struct DoctorReport {
     engine_version: &'static str,
     ready: bool,
     checks: Vec<DoctorCheck>,
+}
+
+#[derive(Debug, Serialize)]
+struct CapabilityCommand {
+    name: String,
+    description: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CapabilitiesReport {
+    schema_version: u32,
+    engine: &'static str,
+    engine_version: &'static str,
+    board_schema_version: u32,
+    commands: Vec<CapabilityCommand>,
+    fabrication_profiles: Vec<String>,
+    external_integrations: Vec<&'static str>,
+    output_contracts: Vec<&'static str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -130,6 +149,11 @@ struct ComparisonManifest {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Print the versioned machine-readable capability inventory.
+    Capabilities {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Diagnose the pcbex installation and optional external integrations.
     Doctor {
         #[arg(short, long)]
@@ -678,9 +702,53 @@ fn doctor_report(require_kicad: bool) -> DoctorReport {
     }
 }
 
+fn capabilities_report() -> CapabilitiesReport {
+    let commands = Cli::command()
+        .get_subcommands()
+        .map(|command| CapabilityCommand {
+            name: command.get_name().to_string(),
+            description: command
+                .get_about()
+                .map(ToString::to_string)
+                .unwrap_or_default(),
+        })
+        .collect();
+    CapabilitiesReport {
+        schema_version: 1,
+        engine: "pcbex",
+        engine_version: env!("CARGO_PKG_VERSION"),
+        board_schema_version: CURRENT_SCHEMA_VERSION,
+        commands,
+        fabrication_profiles: dfm_profiles()
+            .iter()
+            .map(|profile| profile.id.to_string())
+            .collect(),
+        external_integrations: vec!["kicad-cli", "kicad-python", "git", "python3", "MCP stdio"],
+        output_contracts: vec![
+            "JSON Schema",
+            "JSON",
+            "SARIF 2.1.0",
+            "Markdown",
+            "SVG",
+            "KiCad PCB",
+            "Gerber",
+            "Excellon",
+            "SPDX JSON",
+        ],
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Capabilities { output } => {
+            let rendered = serde_json::to_string_pretty(&capabilities_report())?;
+            if let Some(path) = output {
+                fs::write(path, rendered)?;
+            } else {
+                println!("{rendered}");
+            }
+        }
         Command::Doctor {
             output,
             require_kicad,

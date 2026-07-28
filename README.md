@@ -1250,9 +1250,15 @@ Diagnose the local CLI and its optional KiCad, Git, and Python integrations
 before adding it to CI:
 
 ```sh
+pcbex capabilities
 pcbex doctor
 pcbex doctor --require-kicad --output doctor.json
 ```
+
+`capabilities` emits a versioned JSON inventory of every CLI command, supported
+board schema, fabrication profile, external integration, and output contract.
+Agents and CI wrappers can use it for feature discovery without parsing help
+text or assuming compatibility from the executable version alone.
 
 The command always emits a versioned JSON report. Optional integrations are
 reported without failing the command; `--require-kicad` promotes KiCad CLI
