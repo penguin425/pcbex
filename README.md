@@ -583,6 +583,35 @@ workers. Results are validated and committed in the original deterministic net
 order. A candidate that conflicts with an earlier commit is discarded and
 searched again against the updated board, retaining byte-identical output.
 
+Generate an N-best routing portfolio for board JSON or a placed KiCad board:
+
+```sh
+pcbex route-candidates placed.json \
+  --output-dir routing-candidates --candidates 10 \
+  --workers 4 --router-workers 2
+
+pcbex route-kicad-candidates placed.kicad_pcb \
+  --output-dir kicad-routing-candidates --candidates 10 \
+  --workers 4 --router-workers 2
+```
+
+Candidates cycle through balanced, shortest-route, via-minimized,
+bend-minimized, and alternate-net-order searches. The versioned
+`candidates.json` manifest records the effective search costs, route report,
+quality metrics, duplicate identity, Pareto membership, and deterministic
+selection. The Pareto front minimizes unrouted nets, total length, vias, and
+bends; selection then applies the caller's original routing costs. Every board
+and report is retained, together with `selected.board.json` and
+`selected.report.json`; KiCad mode also writes each candidate board and
+`selected.kicad_pcb`.
+
+Generation accepts 1–32 candidates, 1–8 portfolio workers, and 1–8 router
+workers per candidate, with a combined ceiling of 16 threads. Parallel worker
+counts do not change candidate geometry, metrics, duplicate detection, Pareto
+membership, or selection. Unless `--allow-unrouted` is given, artifacts are
+written first and the command then fails if the selected candidate is not
+fully routed.
+
 Generate a stable quality report for review or CI:
 
 ```sh
@@ -648,7 +677,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.303.0
+    uses: penguin425/pcbex@v1.304.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb

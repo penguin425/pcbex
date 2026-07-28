@@ -9,12 +9,17 @@ mod geometry;
 pub mod impedance;
 pub mod placement;
 pub mod quality;
+pub mod routing_candidates;
 pub mod schema;
 
 pub use analysis::{AnalysisDelta, analysis_delta_to_sarif};
 pub use dfm_profiles::{DfmProfile, apply_dfm_profile, dfm_profile, dfm_profiles};
 pub use impedance::{ImpedanceReport, impedance_report};
 pub use quality::{DifferentialQuality, NetQuality, RoutingQuality, routing_quality};
+pub use routing_candidates::{
+    RoutingCandidate, RoutingCandidateObjective, RoutingCandidateOptions, RoutingCandidateSet,
+    route_candidates,
+};
 pub use schema::{board_json_schema, migrate_board_json, parse_board_json};
 
 pub type Nm = i64;
@@ -1105,6 +1110,7 @@ pub struct Router<'a> {
     occupied_by: HashMap<(i32, i32, u8), u32>,
     congestion: HashMap<(i32, i32, u8), u16>,
     rasterized_candidate_cells: usize,
+    search_variant: u8,
 }
 
 struct RouteFailure {
@@ -1119,6 +1125,10 @@ struct SearchFailure {
 
 impl<'a> Router<'a> {
     pub fn new(board: &'a Board) -> Result<Self, String> {
+        Self::new_with_variant(board, 0)
+    }
+
+    fn new_with_variant(board: &'a Board, search_variant: u8) -> Result<Self, String> {
         if board.rules.grid_nm <= 0 {
             return Err("grid_nm must be positive".into());
         }
@@ -1463,6 +1473,7 @@ impl<'a> Router<'a> {
             occupied_by: HashMap::new(),
             congestion: HashMap::new(),
             rasterized_candidate_cells: 0,
+            search_variant,
         };
         router.rasterize_obstacles();
         Ok(router)
@@ -1726,13 +1737,7 @@ impl<'a> Router<'a> {
             .iter()
             .filter(|net| !fixed_net_ids.contains(&net.id))
             .collect();
-        nets.sort_by_key(|n| {
-            (
-                std::cmp::Reverse(n.priority),
-                std::cmp::Reverse(n.terminals.len()),
-                std::cmp::Reverse(net_span(n)),
-            )
-        });
+        nets.sort_by(|left, right| self.compare_nets(left, right));
         let mut pending: HashSet<u32> = nets.iter().map(|net| net.id).collect();
         let mut previously_failed = HashSet::new();
         let mut accepted = Vec::<Route>::new();
@@ -1764,13 +1769,10 @@ impl<'a> Router<'a> {
                 .copied()
                 .filter(|net| pending.contains(&net.id))
                 .collect();
-            attempt_nets.sort_by_key(|net| {
-                (
-                    !previously_failed.contains(&net.id),
-                    std::cmp::Reverse(net.priority),
-                    std::cmp::Reverse(net.terminals.len()),
-                    std::cmp::Reverse(net_span(net)),
-                )
+            attempt_nets.sort_by(|left, right| {
+                (!previously_failed.contains(&left.id))
+                    .cmp(&(!previously_failed.contains(&right.id)))
+                    .then_with(|| self.compare_nets(left, right))
             });
             let mut blockers = HashSet::new();
             let mut failed_ids = HashSet::new();
@@ -2044,6 +2046,31 @@ impl<'a> Router<'a> {
         Ok((route, expanded))
     }
 
+    fn compare_nets(&self, left: &Net, right: &Net) -> Ordering {
+        right
+            .priority
+            .cmp(&left.priority)
+            .then_with(|| match self.search_variant % 5 {
+                0 => right
+                    .terminals
+                    .len()
+                    .cmp(&left.terminals.len())
+                    .then_with(|| net_span(right).cmp(&net_span(left))),
+                1 => net_span(left)
+                    .cmp(&net_span(right))
+                    .then_with(|| right.terminals.len().cmp(&left.terminals.len()))
+                    .then_with(|| left.id.cmp(&right.id)),
+                2 => left
+                    .terminals
+                    .len()
+                    .cmp(&right.terminals.len())
+                    .then_with(|| net_span(right).cmp(&net_span(left)))
+                    .then_with(|| left.id.cmp(&right.id)),
+                3 => left.id.cmp(&right.id),
+                _ => right.id.cmp(&left.id),
+            })
+    }
+
     fn terminal_nodes(&self, net_id: u32, terminal: &Terminal, rules: &Rules) -> Vec<Node> {
         let allowed_layers = self.board.layers_for_net(net_id);
         let x = nearest_grid(terminal.position.x_nm, rules.grid_nm) as i32;
@@ -2171,7 +2198,9 @@ impl<'a> Router<'a> {
                 );
                 return Some((positive_route, negative_route, expanded));
             }
-            for (direction, (dx, dy)) in DIRS.iter().enumerate() {
+            for offset in 0..DIRS.len() {
+                let direction = (offset + usize::from(self.search_variant)) % DIRS.len();
+                let (dx, dy) = DIRS[direction];
                 let next = Node {
                     x: item.node.x + dx,
                     y: item.node.y + dy,
@@ -2204,7 +2233,7 @@ impl<'a> Router<'a> {
                 {
                     continue;
                 }
-                let step = if *dx != 0 && *dy != 0 { 14 } else { 10 };
+                let step = if dx != 0 && dy != 0 { 14 } else { 10 };
                 let bend = u64::from(item.node.dir < 8 && item.node.dir != direction as u8)
                     * rules.bend_cost as u64;
                 self.relax(
@@ -2274,7 +2303,9 @@ impl<'a> Router<'a> {
                 path.reverse();
                 return Ok((path, expanded, item.cost));
             }
-            for (dir, (dx, dy)) in DIRS.iter().enumerate() {
+            for offset in 0..DIRS.len() {
+                let dir = (offset + usize::from(self.search_variant)) % DIRS.len();
+                let (dx, dy) = DIRS[dir];
                 let nx = item.node.x + dx;
                 let ny = item.node.y + dy;
                 if nx < min_track_cell || ny < min_track_cell || nx > max_x || ny > max_y {
@@ -2293,8 +2324,8 @@ impl<'a> Router<'a> {
                     }
                     continue;
                 }
-                if *dx != 0
-                    && *dy != 0
+                if dx != 0
+                    && dy != 0
                     && [
                         (item.node.x + dx, item.node.y, item.node.layer),
                         (item.node.x, item.node.y + dy, item.node.layer),
@@ -2304,7 +2335,7 @@ impl<'a> Router<'a> {
                 {
                     continue;
                 }
-                let step = if *dx != 0 && *dy != 0 { 14 } else { 10 };
+                let step = if dx != 0 && dy != 0 { 14 } else { 10 };
                 let bend = if item.node.dir < 8 && item.node.dir != dir as u8 {
                     rules.bend_cost as u64
                 } else {
@@ -2813,6 +2844,14 @@ pub fn route_board_with_workers(
     board: &Board,
     worker_limit: usize,
 ) -> Result<(Board, RouteReport), String> {
+    route_board_with_variant(board, worker_limit, 0)
+}
+
+pub(crate) fn route_board_with_variant(
+    board: &Board,
+    worker_limit: usize,
+    search_variant: u8,
+) -> Result<(Board, RouteReport), String> {
     if worker_limit == 0 {
         return Err("worker limit must be at least 1".into());
     }
@@ -2832,7 +2871,8 @@ pub fn route_board_with_workers(
             continue;
         };
         let Some((positive_route, negative_route, expanded)) =
-            Router::new(&seeded)?.route_coupled_pair(positive, negative)
+            Router::new_with_variant(&seeded, search_variant)?
+                .route_coupled_pair(positive, negative)
         else {
             continue;
         };
@@ -2854,7 +2894,8 @@ pub fn route_board_with_workers(
             paired_expanded += expanded;
         }
     }
-    let (routes, mut report) = Router::new(&seeded)?.route_all_with_workers(worker_limit);
+    let (routes, mut report) =
+        Router::new_with_variant(&seeded, search_variant)?.route_all_with_workers(worker_limit);
     let mut out = seeded;
     out.routes = routes;
     couple_differential_pairs(&mut out, &mut report);
