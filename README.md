@@ -678,7 +678,7 @@ steps:
       ref: ${{ github.event.pull_request.base.sha }}
       path: .pcbex-baseline
   - id: hardware
-    uses: penguin425/pcbex@v1.317.0
+    uses: penguin425/pcbex@v1.318.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -703,6 +703,11 @@ never expanded as shell source. Invalid identities, blank or oversized bodies,
 unexpected API shapes, and missing event context fail closed. The example
 disables comments for fork PRs, whose default `GITHUB_TOKEN` is read-only,
 while still producing their Job Summary and evidence artifact.
+
+Callers may replace `fab` with `fab-profile: hardware/acme-dfm.json` to apply a
+repository-owned external profile. The two inputs are mutually exclusive. The
+same profile is applied to current and baseline analysis, and its exact digest
+is retained in each run manifest.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -909,6 +914,26 @@ clearance, drill, and annular-ring-derived via diameter where required; it
 never lowers a stricter project rule. Both initial profiles model routed-edge
 clearance and a 1.6 mm board. They use a conservative 10:1 via aspect-ratio
 limit where the standard capability pages do not publish a tighter limit.
+
+Organizations can distribute the same contract as a strict external JSON file:
+
+```sh
+pcbex dfm-profile-schema --output dfm-profile.schema.json
+pcbex validate-dfm-profile hardware/acme-dfm.json \
+  --output build/acme-dfm.normalized.json
+pcbex analyze-kicad board.kicad_pcb --output-dir build/analysis \
+  --fab-profile hardware/acme-dfm.json
+```
+
+External profiles use `schema_version: 1`, a stable lowercase ID, optional
+aliases, a positive revision, a real `YYYY-MM-DD` verification date, at least
+one HTTPS source, and a complete manufacturing-rules object. Unknown fields,
+invalid dimensions, duplicate names or sources, and collisions with built-in
+IDs or aliases fail closed. `--fab-profile` is supported by KiCad analysis,
+routing, route-candidate generation, board DFM checks, the composite Action,
+and the corresponding MCP analysis and routing tools. Analysis manifests bind
+both the normalized resolved profile and the source file's path, byte length,
+and SHA-256 digest.
 
 Invalid physical limits are reported individually as `dfm_rule_dimensions`;
 track width, drill size, and board thickness must be positive, while clearance

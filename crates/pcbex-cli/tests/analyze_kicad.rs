@@ -55,7 +55,11 @@ fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     let current = temporary_directory("analysis-current");
     let regressed_comparison = temporary_directory("comparison-regressed");
     let profiled = temporary_directory("analysis-profiled");
+    let externally_profiled = temporary_directory("analysis-external-profiled");
     let profiles = temporary_directory("profiles").with_extension("json");
+    let profile_schema = temporary_directory("profile-schema").with_extension("json");
+    let external_profile = root.join("examples/acme-dfm-profile.json");
+    let normalized_profile = temporary_directory("normalized-profile").with_extension("json");
 
     assert!(analyze(&input, &output, false).success());
     for artifact in [
@@ -126,7 +130,63 @@ fn analyze_kicad_writes_a_complete_bundle_before_gating() {
     let listed: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(&profiles).unwrap()).unwrap();
     assert_eq!(listed.as_array().unwrap().len(), 2);
+    assert_eq!(listed[0]["schema_version"], 1);
     assert_eq!(listed[0]["revision"], 1);
+
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("dfm-profile-schema")
+            .arg("--output")
+            .arg(&profile_schema)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let schema: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&profile_schema).unwrap()).unwrap();
+    assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+    assert_eq!(schema["additionalProperties"], false);
+
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-dfm-profile")
+            .arg(&external_profile)
+            .arg("--output")
+            .arg(&normalized_profile)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("analyze-kicad")
+            .arg(&input)
+            .arg("--output-dir")
+            .arg(&externally_profiled)
+            .arg("--fab-profile")
+            .arg(&external_profile)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let external_manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(externally_profiled.join("run.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        external_manifest["configuration"]["dfm_profile"]["id"],
+        "acme-standard-4layer-v1"
+    );
+    assert_eq!(
+        external_manifest["dfm_profile_file"]["bytes"],
+        fs::metadata(&external_profile).unwrap().len()
+    );
+    assert_eq!(
+        external_manifest["dfm_profile_file"]["sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
 
     assert!(compare(&output, &output, &unchanged_comparison, true).success());
     assert!(unchanged_comparison.join("delta.json").is_file());

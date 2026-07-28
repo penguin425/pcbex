@@ -613,6 +613,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "project": {"type": "string"},
                     "rules_file": {"type": "string"},
                     "fab": {"type": "string"},
+                    "fab_profile": {"type": "string"},
                     "fail_on_violations": {"type": "boolean", "default": false}
                 }
             }),
@@ -653,6 +654,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "project": {"type": "string"},
                     "rules_file": {"type": "string"},
                     "fab": {"type": "string"},
+                    "fab_profile": {"type": "string"},
                     "svg": {"type": "string"},
                     "json_output": {"type": "string"},
                     "allow_unrouted": {"type": "boolean", "default": false}
@@ -823,6 +825,7 @@ fn analyze_kicad(
             "project",
             "rules_file",
             "fab",
+            "fab_profile",
             "fail_on_violations",
         ],
     )?;
@@ -837,6 +840,7 @@ fn analyze_kicad(
     optional_option(&arguments, "project", "--project", &mut command)?;
     optional_option(&arguments, "rules_file", "--rules-file", &mut command)?;
     optional_option(&arguments, "fab", "--fab", &mut command)?;
+    optional_option(&arguments, "fab_profile", "--fab-profile", &mut command)?;
     optional_flag(
         &arguments,
         "fail_on_violations",
@@ -900,6 +904,7 @@ fn route_kicad(
             "project",
             "rules_file",
             "fab",
+            "fab_profile",
             "svg",
             "json_output",
             "allow_unrouted",
@@ -916,6 +921,7 @@ fn route_kicad(
     optional_option(&arguments, "project", "--project", &mut command)?;
     optional_option(&arguments, "rules_file", "--rules-file", &mut command)?;
     optional_option(&arguments, "fab", "--fab", &mut command)?;
+    optional_option(&arguments, "fab_profile", "--fab-profile", &mut command)?;
     optional_option(&arguments, "svg", "--svg", &mut command)?;
     optional_option(&arguments, "json_output", "--json-output", &mut command)?;
     optional_flag(
