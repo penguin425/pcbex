@@ -217,8 +217,9 @@ Custom-rule minimum and maximum length bounds must be positive when present,
 at least one supported bound is required, and the minimum must not exceed the
 maximum. A custom constraint may specify each supported `min`, `max`, or `opt`
 value at most once; repeated values are rejected instead of silently selecting
-the first. Custom-rule application is atomic, so an invalid later constraint
-or unknown net class cannot leave earlier rule updates partially applied.
+the first, and each value must contain exactly one dimension. Custom-rule
+application is atomic, so an invalid later constraint or unknown net class
+cannot leave earlier rule updates partially applied.
 
 [`examples/nonrect.kicad_pcb`](examples/nonrect.kicad_pcb) demonstrates a
 five-sided outline that routes and passes KiCad DRC.
