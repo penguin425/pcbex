@@ -452,7 +452,7 @@ pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usiz
         let Some(condition) = custom_rule_condition(rule)? else {
             continue;
         };
-        let Some(class_name) = condition_net_class(condition) else {
+        let Some(class_name) = condition_net_class(condition)? else {
             continue;
         };
         let Some(class) = net_classes.get_mut(&class_name) else {
@@ -568,16 +568,34 @@ fn custom_rule_condition(rule: &[Sexp]) -> Result<Option<&str>, String> {
     Ok(Some(condition))
 }
 
-fn condition_net_class(condition: &str) -> Option<String> {
+fn condition_net_class(condition: &str) -> Result<Option<String>, String> {
     let marker = "NetClass";
-    let rest = &condition[condition.find(marker)? + marker.len()..];
+    let Some(marker_position) = condition.find(marker) else {
+        return Ok(None);
+    };
+    let rest = &condition[marker_position + marker.len()..];
     let rest = rest.trim_start();
-    let rest = rest.strip_prefix("==")?.trim_start();
-    let quote = rest.chars().next()?;
+    let Some(rest) = rest.strip_prefix("==") else {
+        return Ok(None);
+    };
+    let rest = rest.trim_start();
+    let Some(quote) = rest.chars().next() else {
+        return Ok(None);
+    };
     if quote != '\'' && quote != '"' {
-        return None;
+        return Ok(None);
     }
-    Some(rest[1..].split(quote).next()?.to_string())
+    let quoted = &rest[quote.len_utf8()..];
+    let Some(closing_quote) = quoted.find(quote) else {
+        return Err("custom rule NetClass condition has an unterminated class name".to_string());
+    };
+    let trailing = &quoted[closing_quote + quote.len_utf8()..];
+    if !trailing.trim().is_empty() {
+        return Err(
+            "custom rule NetClass condition must end after its quoted class name".to_string(),
+        );
+    }
+    Ok(Some(quoted[..closing_quote].to_string()))
 }
 
 fn constraint_value(constraint: &[Sexp], preferences: &[&str]) -> Result<i64, String> {
@@ -6710,6 +6728,51 @@ mod tests {
             assert_eq!(
                 apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
                 "custom rule condition must contain one scalar expression"
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+        }
+    }
+
+    #[test]
+    fn rejects_unterminated_and_trailing_net_class_conditions_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let cases = [
+            (
+                "A.NetClass == 'Signal",
+                "custom rule NetClass condition has an unterminated class name",
+            ),
+            (
+                "A.NetClass == 'Signal' || A.NetClass == 'Missing'",
+                "custom rule NetClass condition must end after its quoted class name",
+            ),
+        ];
+
+        for (condition, expected) in cases {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Valid first"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm)))
+                  (rule "Malformed condition"
+                    (condition "{condition}")
+                    (constraint track_width (min 0.4mm)))
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                expected
             );
             let class = &imported.board.net_classes["Signal"];
             assert_eq!(class.clearance_nm, 200_000);
