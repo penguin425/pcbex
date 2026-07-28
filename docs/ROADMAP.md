@@ -33,6 +33,7 @@ auditable release.
 | v1.321.0 | Signed policy-pack distribution | Ed25519-authenticated organization policy before CI application |
 | v1.322.0 | Monotonic policy trust state | Reject signed-pack rollback, equivocation, and identity substitution |
 | v1.323.0 | Manufacturing feedback ingestion | Bind fabrication findings and measurements to exact analyzed boards |
+| v1.324.0 | Schematic semantic diff | Gate electrical-intent changes independently of drawing edits |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing

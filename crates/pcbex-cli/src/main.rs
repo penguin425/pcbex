@@ -19,14 +19,15 @@ use pcbex_kicad::{
     ElectricalWaiverSet, SignedAiApproval, SimulationArtifact, SimulationEvidence,
     ai_review_request_json_schema, ai_review_response_json_schema, apply_custom_design_rules,
     apply_electrical_waivers, apply_project_net_settings, approval_public_key,
-    build_ai_review_request, check_schematic, compare_electrical_reviews,
+    build_ai_review_request, check_schematic, compare_electrical_reviews, compare_schematics,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review, import as import_kicad,
     import_schematic, parse_ai_review_response, parse_electrical_policy,
-    parse_simulation_declaration, record_simulation_evidence, schematic_json_schema,
-    sign_ai_review, signed_ai_approval_json_schema, simulation_declaration_json_schema,
+    parse_simulation_declaration, record_simulation_evidence, render_schematic_diff_summary,
+    schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema, sign_ai_review,
+    signed_ai_approval_json_schema, simulation_declaration_json_schema,
     simulation_evidence_json_schema, verify_signed_ai_approval,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -204,6 +205,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed schematic semantic-diff JSON Schema.
+    SchematicDiffSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Normalize a KiCad schematic into the versioned electrical-design IR.
     ImportSchematic {
         input: PathBuf,
@@ -212,6 +218,20 @@ enum Command {
         /// Fail after writing the IR when buses or hierarchy prevent complete coverage.
         #[arg(long)]
         require_complete: bool,
+    },
+    /// Compare two KiCad schematics by electrical intent instead of text layout.
+    CompareSchematics {
+        baseline: PathBuf,
+        current: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        sarif_output: Option<PathBuf>,
+        /// Fail after writing reports when electrical review is required.
+        #[arg(long)]
+        require_no_review: bool,
     },
     /// Print the closed deterministic electrical-policy JSON Schema.
     ElectricalPolicySchema {
@@ -1086,6 +1106,9 @@ fn main() -> Result<()> {
                 println!("{schema}");
             }
         }
+        Command::SchematicDiffSchema { output } => {
+            write_or_print_json(&schematic_diff_json_schema(), output.as_ref())?;
+        }
         Command::ImportSchematic {
             input,
             output,
@@ -1124,6 +1147,55 @@ fn main() -> Result<()> {
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
+            }
+        }
+        Command::CompareSchematics {
+            baseline,
+            current,
+            output,
+            summary_output,
+            sarif_output,
+            require_no_review,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(output.as_path()),
+                    summary_output.as_deref(),
+                    sarif_output.as_deref(),
+                ],
+                "schematic semantic diff",
+            )?;
+            let baseline_source = fs::read_to_string(&baseline)
+                .with_context(|| format!("reading {}", baseline.display()))?;
+            let current_source = fs::read_to_string(&current)
+                .with_context(|| format!("reading {}", current.display()))?;
+            let baseline_document = import_schematic(&baseline_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", baseline.display()))?;
+            let current_document = import_schematic(&current_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", current.display()))?;
+            let diff = compare_schematics(&baseline_document, &current_document)
+                .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&diff)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            if let Some(path) = summary_output {
+                fs::write(&path, render_schematic_diff_summary(&diff))
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
+            if let Some(path) = sarif_output {
+                fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&schematic_diff_to_sarif(&diff))?,
+                )
+                .with_context(|| format!("writing {}", path.display()))?;
+            }
+            eprintln!(
+                "schematic semantic diff: {} affected symbol(s), {} affected net(s); review required {}",
+                diff.counts.affected_symbols, diff.counts.affected_nets, diff.review_required
+            );
+            if require_no_review && diff.review_required {
+                bail!("schematic semantic changes require review");
             }
         }
         Command::ElectricalPolicySchema { output } => {

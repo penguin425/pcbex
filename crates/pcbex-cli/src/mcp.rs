@@ -294,6 +294,7 @@ impl McpServer {
                     | "compare_analysis"
                     | "record_manufacturing_feedback"
                     | "compare_manufacturing_feedback"
+                    | "compare_schematics"
                     | "route_kicad"
             )
         ) {
@@ -715,6 +716,27 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "compare_schematics",
+            "Compare KiCad schematics",
+            "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["baseline", "current", "output"],
+                "properties": {
+                    "baseline": {"type": "string"},
+                    "current": {"type": "string"},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "sarif_output": {"type": "string"},
+                    "require_no_review": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "route_kicad",
             "Route KiCad board",
             "Route a placed .kicad_pcb file and write a separate routed board.",
@@ -887,6 +909,7 @@ fn call_tool(
         "compare_manufacturing_feedback" => {
             compare_manufacturing_feedback(arguments, cancellation)?
         }
+        "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
         "prepare_schematic_review" => prepare_schematic_review(arguments, cancellation)?,
         "sign_schematic_approval" => sign_schematic_approval(arguments, cancellation)?,
@@ -1128,6 +1151,52 @@ fn compare_manufacturing_feedback(
     Ok(execution_result(
         execution,
         json!({"output": output, "comparison": comparison}),
+    ))
+}
+
+fn compare_schematics(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "baseline",
+            "current",
+            "output",
+            "summary_output",
+            "sarif_output",
+            "require_no_review",
+        ],
+    )?;
+    let baseline = required_string(&arguments, "baseline")?;
+    let current = required_string(&arguments, "current")?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "compare-schematics".into(),
+        baseline,
+        current,
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_option(&arguments, "sarif_output", "--sarif-output", &mut command)?;
+    optional_flag(
+        &arguments,
+        "require_no_review",
+        "--require-no-review",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let diff = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "diff": diff}),
     ))
 }
 
@@ -1529,7 +1598,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 11);
         let named = |name: &str| {
             tools
                 .iter()
@@ -1559,6 +1628,10 @@ mod tests {
         assert_eq!(
             named("record_manufacturing_feedback")["inputSchema"]["properties"]["artifacts"]["type"],
             "array"
+        );
+        assert_eq!(
+            named("compare_schematics")["execution"]["taskSupport"],
+            "optional"
         );
         assert_eq!(
             named("sign_schematic_approval")["annotations"]["destructiveHint"],

@@ -52,6 +52,9 @@ jobs:
         with:
           board: examples/simple.kicad_pcb
           baseline-board: examples/simple.kicad_pcb
+          schematic: examples/simple.kicad_sch
+          baseline-schematic: examples/simple.kicad_sch
+          fail-on-schematic-review: "true"
           policy-pack: examples/acme-policy-pack.json
           manufacturing-feedback-declaration: build/action-feedback/declaration.json
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
@@ -71,6 +74,8 @@ jobs:
           REGRESSION: ${{ steps.pcbex.outputs.regression }}
           MANUFACTURING_FEEDBACK: ${{ steps.pcbex.outputs.manufacturing-feedback }}
           MANUFACTURING_FEEDBACK_PASSED: ${{ steps.pcbex.outputs.manufacturing-feedback-passed }}
+          SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
+          SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
           SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           test -s "$ARTIFACT_DIR/pr-comment.md"
@@ -85,6 +90,9 @@ jobs:
           test -s "$MANUFACTURING_FEEDBACK"
           test "$MANUFACTURING_FEEDBACK_PASSED" = "true"
           test "$(jq -r '.declaration.id' "$MANUFACTURING_FEEDBACK")" = "action-smoke-lot"
+          test -s "$SCHEMATIC_DIFF"
+          test "$SCHEMATIC_REVIEW_REQUIRED" = "false"
+          test "$(jq -r '.changed' "$SCHEMATIC_DIFF")" = "false"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then
             [[ "$COMMENT_URL" == https://github.com/* ]]
           else

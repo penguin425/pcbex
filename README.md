@@ -729,10 +729,13 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.323.0
+    uses: penguin425/pcbex@v1.324.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
+      schematic: hardware/controller.kicad_sch
+      baseline-schematic: .pcbex-baseline/hardware/controller.kicad_sch
+      fail-on-schematic-review: "true"
       signed-policy-pack: hardware/organization-policy-pack.signed.json
       policy-public-key: ${{ runner.temp }}/pcbex-policy-root.pub
       policy-trust-state: .pcbex-baseline/hardware/organization-policy-pack.trust.json
@@ -774,6 +777,10 @@ JSON, Markdown, and SARIF, appends the result to the Job Summary and PR comment,
 and exposes `manufacturing-feedback` plus `manufacturing-feedback-passed`.
 Artifact paths are supplied one per line; the manufacturing gate is opt-in so
 design-only workflows remain backward compatible.
+Supplying both `schematic` and `baseline-schematic` adds semantic JSON,
+Markdown, and SARIF to the same evidence bundle and exposes
+`schematic-diff` plus `schematic-review-required`. The optional schematic gate
+therefore blocks electrical-intent changes while allowing drawing-only edits.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -805,8 +812,8 @@ Configure an MCP host to launch the binary directly:
 The server implements the 2025-11-25 MCP lifecycle and negotiates compatible
 2025-06-18, 2025-03-26, and 2024-11-05 clients. It exposes
 `list_dfm_profiles`, policy verification, board analysis and routing,
-manufacturing-feedback recording/comparison, and signed schematic-review
-tools.
+manufacturing-feedback recording/comparison, schematic semantic comparison,
+and signed schematic-review tools.
 Every tool has a closed input schema, an output schema, safety annotations, a
 human-readable text result, and matching `structuredContent`. Tool processes
 capture stdout and stderr so the stdio transport emits only newline-delimited
@@ -815,8 +822,9 @@ JSON-RPC messages. Expected analysis or regression gate failures use
 malformed requests remain JSON-RPC errors so an agent can correct its call.
 
 For 2025-11-25 clients, the server also implements the experimental MCP Tasks
-API. Board analysis/comparison/routing and both manufacturing-feedback tools
-declare `execution.taskSupport: "optional"` and accept task-augmented calls:
+API. Board analysis/comparison/routing, manufacturing-feedback tools, and
+schematic semantic comparison declare `execution.taskSupport: "optional"` and
+accept task-augmented calls:
 
 ```json
 {
@@ -1293,6 +1301,29 @@ library symbols, and hierarchical sheets/labels are retained as explicit
 coverage gaps rather than silently approved. `--require-complete` writes the
 inspectable IR first and then fails if any such gap exists. The included
 example is also parsed by KiCad 10 in CI-facing verification.
+
+Compare two schematic revisions by electrical intent rather than KiCad
+s-expression or drawing coordinates:
+
+```sh
+pcbex compare-schematics accepted.kicad_sch current.kicad_sch \
+  --output schematic-diff.json \
+  --summary-output schematic-diff.md \
+  --sarif-output schematic-diff.sarif \
+  --require-no-review
+pcbex schematic-diff-schema --output schematic-diff-v1.schema.json
+```
+
+The closed diff binds canonical SHA-256 identities for both normalized
+schematics and compares symbols by UUID, pins by UUID or stable number, named
+nets by label, and unnamed nets by their sorted pin-set digest. It reports
+added, removed, and modified symbols, pins, labels, and connectivity together
+with the complete affected reference and net sets. Value, footprint,
+annotation, DNP/BOM, custom property, pin-type, no-connect, and connectivity
+changes require review. Pure drawing movement, rotation, wire ordering, and
+coordinate-preserving presentation edits do not. Incomplete importer coverage
+always requires review; `--require-no-review` writes every requested artifact
+before failing.
 
 ## Deterministic schematic approval gate
 

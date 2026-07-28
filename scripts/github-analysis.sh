@@ -43,6 +43,8 @@ write_output regression false
 write_output verified-policy-trust-state ""
 write_output manufacturing-feedback ""
 write_output manufacturing-feedback-passed ""
+write_output schematic-diff ""
+write_output schematic-review-required ""
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -139,6 +141,37 @@ if [[ -n "${PCBEX_MANUFACTURING_FEEDBACK_DECLARATION:-}" ]]; then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+has_schematic=false
+has_baseline_schematic=false
+if [[ -n "${PCBEX_SCHEMATIC:-}" ]]; then has_schematic=true; fi
+if [[ -n "${PCBEX_BASELINE_SCHEMATIC:-}" ]]; then has_baseline_schematic=true; fi
+if [[ "$has_schematic" != "$has_baseline_schematic" ]]; then
+  echo "PCBEX_SCHEMATIC and PCBEX_BASELINE_SCHEMATIC must be supplied together" >&2
+  exit 2
+fi
+schematic_diff=""
+schematic_review_required=""
+if [[ "$has_schematic" == "true" ]]; then
+  schematic_diff="${artifact_dir}/schematic-diff.json"
+  schematic_summary="${artifact_dir}/schematic-diff.md"
+  schematic_sarif="${sarif_dir}/schematic-diff.sarif"
+  "$PCBEX_BINARY" compare-schematics \
+    "$PCBEX_BASELINE_SCHEMATIC" \
+    "$PCBEX_SCHEMATIC" \
+    --output "$schematic_diff" \
+    --summary-output "$schematic_summary" \
+    --sarif-output "$schematic_sarif"
+  schematic_review_required="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["review_required"]).lower())' \
+      "$schematic_diff"
+  )"
+  {
+    printf '\n'
+    cat "$schematic_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 comparison_sarif=""
 regression=false
 if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
@@ -180,4 +213,6 @@ write_output regression "$regression"
 write_output verified-policy-trust-state "$verified_policy_trust_state"
 write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
+write_output schematic-diff "$schematic_diff"
+write_output schematic-review-required "$schematic_review_required"
 write_output status ok
