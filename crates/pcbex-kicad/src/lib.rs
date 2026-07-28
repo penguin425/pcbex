@@ -549,21 +549,34 @@ fn condition_net_class(condition: &str) -> Option<String> {
 }
 
 fn constraint_value(constraint: &[Sexp], preferences: &[&str]) -> Result<i64, String> {
+    let mut selected = None;
     for preference in preferences {
-        if let Some(value) = constraint_optional_value(constraint, preference)? {
-            return Ok(value);
+        let value = constraint_optional_value(constraint, preference)?;
+        if selected.is_none() {
+            selected = value;
         }
     }
-    Err(format!(
-        "custom constraint {} has no supported value",
-        atom(constraint.get(1)).unwrap_or("unknown")
-    ))
+    selected.ok_or_else(|| {
+        format!(
+            "custom constraint {} has no supported value",
+            atom(constraint.get(1)).unwrap_or("unknown")
+        )
+    })
 }
 
 fn constraint_optional_value(constraint: &[Sexp], name: &str) -> Result<Option<i64>, String> {
-    let Some(values) = child_values(constraint, name) else {
+    let mut matches = constraint.iter().filter_map(|value| {
+        let values = value.as_list()?;
+        (atom(values.first()) == Some(name)).then_some(values)
+    });
+    let Some(values) = matches.next() else {
         return Ok(None);
     };
+    if matches.next().is_some() {
+        return Err(format!(
+            "custom constraint {name} value must not be repeated"
+        ));
+    }
     let token =
         atom(values.get(1)).ok_or_else(|| format!("custom constraint {name} value is missing"))?;
     let millimetres = if let Some(value) = token.strip_suffix("mm") {
@@ -6367,6 +6380,50 @@ mod tests {
             assert_eq!(class.clearance_nm, 200_000);
             assert_eq!(class.minimum_length_nm, Some(1_000_000));
             assert_eq!(class.maximum_length_nm, Some(2_000_000));
+        }
+    }
+
+    #[test]
+    fn rejects_repeated_custom_constraint_values_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Signal" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (via_dia 0.6)
+              (via_drill 0.3)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+        let cases = [
+            ("(constraint clearance (min 0.3mm) (min 0.4mm))", "min"),
+            ("(constraint track_width (opt 0.3mm) (opt 0.4mm))", "opt"),
+            (
+                "(constraint track_width (opt 0.3mm) (min 0.2mm) (min 0.25mm))",
+                "min",
+            ),
+            ("(constraint length (max 2mm) (max 3mm))", "max"),
+        ];
+
+        for (constraint, repeated_name) in cases {
+            let mut imported = import(pcb, rules()).unwrap();
+            let custom_rules = format!(
+                r#"
+                  (rule "Repeated value"
+                    (condition "A.NetClass == 'Signal'")
+                    (constraint clearance (min 0.4mm))
+                    {constraint})
+                "#
+            );
+
+            assert_eq!(
+                apply_custom_design_rules(&mut imported.board, &custom_rules).unwrap_err(),
+                format!("custom constraint {repeated_name} value must not be repeated")
+            );
+            let class = &imported.board.net_classes["Signal"];
+            assert_eq!(class.clearance_nm, 200_000);
+            assert_eq!(class.track_width_nm, 250_000);
+            assert_eq!(class.minimum_length_nm, None);
+            assert_eq!(class.maximum_length_nm, None);
         }
     }
 
