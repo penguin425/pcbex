@@ -1890,7 +1890,14 @@ fn import_footprint(
         let custom_polygon =
             custom_pad_polygon(pad, position, angle + pad_angle).unwrap_or_default();
         let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
-        let net_id = child_values(pad, "net").and_then(|values| number_u32(values.get(1)));
+        let net_id = child_values(pad, "net")
+            .map(|values| {
+                number_u32(values.get(1)).ok_or_else(|| {
+                    let number = atom(pad.get(1)).unwrap_or("");
+                    format!("KiCad pad {number} is missing a valid numeric net ID")
+                })
+            })
+            .transpose()?;
         if let Some(id) = net_id.filter(|id| *id != 0)
             && !nets.contains_key(&id)
         {
@@ -3090,6 +3097,30 @@ mod tests {
             import(pcb, rules()).unwrap_err(),
             "KiCad pad A1 references undeclared net ID 2"
         );
+    }
+
+    #[test]
+    fn rejects_missing_and_invalid_kicad_pad_net_ids() {
+        for net in [
+            r#"(net)"#,
+            r#"(net -1 "INVALID")"#,
+            r#"(net invalid "INVALID")"#,
+            r#"(net (id 1) "INVALID")"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (footprint "P" (layer "F.Cu") (at 2 2)
+                    (pad "A1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+                      {net}))
+                )"#
+            );
+
+            assert_eq!(
+                import(&pcb, rules()).unwrap_err(),
+                "KiCad pad A1 is missing a valid numeric net ID"
+            );
+        }
     }
 
     #[test]
