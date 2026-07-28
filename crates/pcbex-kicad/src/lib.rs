@@ -349,6 +349,11 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                     "net-class assignment for {net_name} is not a string"
                 ));
             };
+            if class.trim().is_empty() {
+                return Err(format!(
+                    "net-class assignment for {net_name} has blank netclass"
+                ));
+            }
             if !net_classes.contains_key(class) {
                 return Err(format!(
                     "net-class assignment for {net_name} references unknown class {class}"
@@ -6095,6 +6100,39 @@ mod tests {
             assert_eq!(
                 apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
                 "net-class assignment net name must not be blank"
+            );
+            assert!(!imported.board.net_classes.contains_key("New"));
+            assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
+        }
+    }
+
+    #[test]
+    fn rejects_blank_project_assignment_net_classes_atomically() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIG")
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)
+              (add_net "SIG")))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "P" (layer "F.Cu") (at 2 2)
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")
+              (net 1 "SIG")))
+        )"#;
+
+        for class in ["", "   "] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = serde_json::json!({
+                "net_settings": {
+                    "classes": [{"name": "New", "track_width": 0.3}],
+                    "netclass_assignments": {"SIG": class}
+                }
+            });
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
+                "net-class assignment for SIG has blank netclass"
             );
             assert!(!imported.board.net_classes.contains_key("New"));
             assert_eq!(imported.board.nets[0].class.as_deref(), Some("Existing"));
