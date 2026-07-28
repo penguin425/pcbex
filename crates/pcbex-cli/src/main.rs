@@ -26,9 +26,11 @@ use pcbex_kicad::{
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review, import as import_kicad,
     import_schematic, parse_ai_review_response, parse_electrical_policy,
-    parse_simulation_declaration, record_simulation_evidence, render_ai_approval_quorum_summary,
-    render_schematic_diff_summary, schematic_diff_json_schema, schematic_diff_to_sarif,
-    schematic_json_schema, sign_ai_review, signed_ai_approval_json_schema,
+    parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
+    record_simulation_evidence, render_ai_approval_quorum_summary, render_schematic_diff_summary,
+    render_schematic_reviewer_routing_summary, route_schematic_review, schematic_diff_json_schema,
+    schematic_diff_to_sarif, schematic_json_schema, schematic_reviewer_routing_plan_json_schema,
+    schematic_reviewer_routing_policy_json_schema, sign_ai_review, signed_ai_approval_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
     verify_signed_ai_approval,
 };
@@ -212,6 +214,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed schematic reviewer-routing policy JSON Schema.
+    SchematicReviewerRoutingPolicySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed deterministic reviewer-routing plan JSON Schema.
+    SchematicReviewerRoutingPlanSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Normalize a KiCad schematic into the versioned electrical-design IR.
     ImportSchematic {
         input: PathBuf,
@@ -234,6 +246,20 @@ enum Command {
         /// Fail after writing reports when electrical review is required.
         #[arg(long)]
         require_no_review: bool,
+    },
+    /// Route semantic schematic changes to policy-selected AI reviewer profiles.
+    RouteSchematicReview {
+        baseline: PathBuf,
+        current: PathBuf,
+        #[arg(long)]
+        routing_policy: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        /// Fail after writing reports when review is required but no route was produced.
+        #[arg(long)]
+        require_routed: bool,
     },
     /// Print the closed deterministic electrical-policy JSON Schema.
     ElectricalPolicySchema {
@@ -1142,6 +1168,18 @@ fn main() -> Result<()> {
         Command::SchematicDiffSchema { output } => {
             write_or_print_json(&schematic_diff_json_schema(), output.as_ref())?;
         }
+        Command::SchematicReviewerRoutingPolicySchema { output } => {
+            write_or_print_json(
+                &schematic_reviewer_routing_policy_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::SchematicReviewerRoutingPlanSchema { output } => {
+            write_or_print_json(
+                &schematic_reviewer_routing_plan_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ImportSchematic {
             input,
             output,
@@ -1229,6 +1267,52 @@ fn main() -> Result<()> {
             );
             if require_no_review && diff.review_required {
                 bail!("schematic semantic changes require review");
+            }
+        }
+        Command::RouteSchematicReview {
+            baseline,
+            current,
+            routing_policy,
+            output,
+            summary_output,
+            require_routed,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "schematic reviewer routing",
+            )?;
+            let baseline_source = fs::read_to_string(&baseline)
+                .with_context(|| format!("reading {}", baseline.display()))?;
+            let current_source = fs::read_to_string(&current)
+                .with_context(|| format!("reading {}", current.display()))?;
+            let policy_source = fs::read_to_string(&routing_policy)
+                .with_context(|| format!("reading {}", routing_policy.display()))?;
+            let baseline_document = import_schematic(&baseline_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", baseline.display()))?;
+            let current_document = import_schematic(&current_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", current.display()))?;
+            let policy = parse_schematic_reviewer_routing_policy(&policy_source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("parsing {}", routing_policy.display()))?;
+            let plan = route_schematic_review(&baseline_document, &current_document, &policy)
+                .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&plan)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            if let Some(path) = summary_output {
+                fs::write(&path, render_schematic_reviewer_routing_summary(&plan))
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
+            eprintln!(
+                "schematic reviewer routing: {} change(s), {} profile(s), {} minimum assignment(s)",
+                plan.change_count, plan.route_count, plan.minimum_review_assignments
+            );
+            if require_routed
+                && plan.review_required
+                && (!plan.all_changes_routed || plan.routes.is_empty())
+            {
+                bail!("schematic review is required but every change was not routed");
             }
         }
         Command::ElectricalPolicySchema { output } => {

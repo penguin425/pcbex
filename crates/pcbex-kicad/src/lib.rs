@@ -56,6 +56,14 @@ pub use schematic_diff::{
     SchematicSymbolSummary, compare_schematics, render_schematic_diff_summary,
     schematic_diff_json_schema, schematic_diff_to_sarif,
 };
+mod reviewer_routing;
+pub use reviewer_routing::{
+    SchematicReviewChange, SchematicReviewChangeKind, SchematicReviewSelector,
+    SchematicReviewerProfile, SchematicReviewerRoute, SchematicReviewerRoutingPlan,
+    SchematicReviewerRoutingPolicy, parse_schematic_reviewer_routing_policy,
+    render_schematic_reviewer_routing_summary, route_schematic_review,
+    schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
+};
 mod waiver;
 pub use waiver::{
     ElectricalFindingDisposition, ElectricalWaiver, ElectricalWaiverCounts,

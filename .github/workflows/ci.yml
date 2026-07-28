@@ -127,7 +127,9 @@ jobs:
           baseline-board: examples/simple.kicad_pcb
           schematic: examples/simple.kicad_sch
           baseline-schematic: examples/simple.kicad_sch
+          schematic-reviewer-routing-policy: examples/reviewer-routing-policy.json
           fail-on-schematic-review: "true"
+          fail-on-unrouted-schematic-review: "true"
           policy-pack: build/action-quorum/policy-pack.json
           ai-review-request: build/action-quorum/request.json
           ai-approval-files: |
@@ -157,6 +159,8 @@ jobs:
           MANUFACTURING_FEEDBACK_PASSED: ${{ steps.pcbex.outputs.manufacturing-feedback-passed }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
+          SCHEMATIC_REVIEWER_ROUTING: ${{ steps.pcbex.outputs.schematic-reviewer-routing }}
+          SCHEMATIC_REVIEW_ALL_ROUTED: ${{ steps.pcbex.outputs.schematic-review-all-routed }}
           AI_APPROVAL_QUORUM: ${{ steps.pcbex.outputs.ai-approval-quorum }}
           AI_APPROVAL_QUORUM_MET: ${{ steps.pcbex.outputs.ai-approval-quorum-met }}
           SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
@@ -176,6 +180,9 @@ jobs:
           test -s "$SCHEMATIC_DIFF"
           test "$SCHEMATIC_REVIEW_REQUIRED" = "false"
           test "$(jq -r '.changed' "$SCHEMATIC_DIFF")" = "false"
+          test -s "$SCHEMATIC_REVIEWER_ROUTING"
+          test "$SCHEMATIC_REVIEW_ALL_ROUTED" = "true"
+          test "$(jq -r '.route_count' "$SCHEMATIC_REVIEWER_ROUTING")" = "0"
           test -s "$AI_APPROVAL_QUORUM"
           test "$AI_APPROVAL_QUORUM_MET" = "true"
           test "$(jq -r '.counts.approvals' "$AI_APPROVAL_QUORUM")" = "2"

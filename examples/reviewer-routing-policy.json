@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "id": "example-ai-review-routing-v1",
+  "fallback_profile_id": "general",
+  "profiles": [
+    {
+      "id": "general",
+      "title": "General electrical reviewer",
+      "minimum_reviewers": 1,
+      "reviewer_candidates": [
+        {
+          "provider": "example-provider-b",
+          "model": "general-hardware-reviewer",
+          "version": null
+        }
+      ],
+      "instructions": [
+        "Review every semantic change not claimed by a specialist profile."
+      ],
+      "selectors": []
+    },
+    {
+      "id": "power",
+      "title": "Power and protection reviewer",
+      "minimum_reviewers": 2,
+      "reviewer_candidates": [
+        {
+          "provider": "example-provider-a",
+          "model": "power-integrity-reviewer",
+          "version": "2026-07"
+        },
+        {
+          "provider": "example-provider-b",
+          "model": "electrical-safety-reviewer",
+          "version": null
+        }
+      ],
+      "instructions": [
+        "Check rail sequencing, current paths, decoupling, and protection.",
+        "Escalate unsafe or insufficiently evidenced power changes to a human."
+      ],
+      "selectors": [
+        {
+          "change_kinds": [],
+          "reference_prefixes": [],
+          "library_prefixes": [],
+          "net_name_prefixes": [
+            "+",
+            "GND",
+            "VCC",
+            "VDD"
+          ],
+          "changed_fields": []
+        },
+        {
+          "change_kinds": [],
+          "reference_prefixes": [],
+          "library_prefixes": [
+            "Diode:",
+            "Regulator_",
+            "power:"
+          ],
+          "net_name_prefixes": [],
+          "changed_fields": []
+        }
+      ]
+    }
+  ]
+}
