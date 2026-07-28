@@ -195,7 +195,9 @@ blank class references are rejected instead of being silently ignored.
 Each project `classes` entry must have a non-blank, unique name; blank or
 duplicate definitions are rejected instead of retaining an unusable class or
 silently selecting the last one. Project track widths and via drills must be
-positive; zero dimensions are rejected before any project settings are applied.
+positive, and each via diameter must be greater than its drill; zero or
+physically inconsistent dimensions are rejected before any project settings
+are applied.
 Ordered `netclass_patterns` support hierarchical names, `*`/`?` wildcards, and
 regular expressions; patterns and their class references must be non-blank,
 exactly repeated patterns are rejected, and exact assignments retain

@@ -297,6 +297,11 @@ pub fn apply_project_net_settings(board: &mut Board, source: &str) -> Result<(),
                 return Err(format!("net class {name} has invalid {key}"));
             }
         }
+        if class_rules.via_diameter_nm <= class_rules.via_drill_nm {
+            return Err(format!(
+                "net class {name} via_diameter must be greater than via_drill"
+            ));
+        }
         net_classes.insert(name.to_string(), class_rules);
     }
 
@@ -6392,6 +6397,40 @@ mod tests {
             assert_eq!(
                 apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
                 format!("net class Zero has invalid {key}")
+            );
+            assert_eq!(imported.board.net_classes.len(), 1);
+            assert!(imported.board.net_classes.contains_key("Existing"));
+        }
+    }
+
+    #[test]
+    fn rejects_project_via_diameters_not_larger_than_drills_atomically() {
+        let pcb = r#"(kicad_pcb
+          (setup
+            (net_class "Existing" ""
+              (clearance 0.2)
+              (trace_width 0.25)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+        )"#;
+
+        for (via_diameter, via_drill) in [(0.3, 0.3), (0.2, 0.3)] {
+            let mut imported = import(pcb, rules()).unwrap();
+            let project = serde_json::json!({
+                "net_settings": {
+                    "classes": [
+                        {"name": "Valid", "track_width": 0.3},
+                        {
+                            "name": "Invalid",
+                            "via_diameter": via_diameter,
+                            "via_drill": via_drill
+                        }
+                    ]
+                }
+            });
+
+            assert_eq!(
+                apply_project_net_settings(&mut imported.board, &project.to_string()).unwrap_err(),
+                "net class Invalid via_diameter must be greater than via_drill"
             );
             assert_eq!(imported.board.net_classes.len(), 1);
             assert!(imported.board.net_classes.contains_key("Existing"));
