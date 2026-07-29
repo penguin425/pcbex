@@ -294,6 +294,7 @@ impl McpServer {
                     | "compare_analysis"
                     | "record_manufacturing_feedback"
                     | "compare_manufacturing_feedback"
+                    | "recommend_policy"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -741,6 +742,40 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "summary_output": {"type": "string"},
                     "sarif_output": {"type": "string"},
                     "fail_on_regressions": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "recommend_policy",
+            "Recommend manufacturing policy tightening",
+            "Generate a proposal-only, human-gated DFM tightening report from independently bound fabrication feedback and exact analyze-kicad manifests.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "policy_pack", "feedback", "analysis_manifests",
+                    "generated_on", "output"
+                ],
+                "properties": {
+                    "policy_pack": {"type": "string"},
+                    "feedback": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "analysis_manifests": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "generated_on": {"type": "string", "format": "date"},
+                    "minimum_occurrences": {
+                        "type": "integer", "minimum": 2, "maximum": 100,
+                        "default": 2
+                    },
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"}
                 }
             }),
             false,
@@ -1340,6 +1375,7 @@ fn call_tool(
         "compare_manufacturing_feedback" => {
             compare_manufacturing_feedback(arguments, cancellation)?
         }
+        "recommend_policy" => recommend_policy(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -1703,6 +1739,71 @@ fn compare_manufacturing_feedback(
     Ok(execution_result(
         execution,
         json!({"output": output, "comparison": comparison}),
+    ))
+}
+
+fn recommend_policy(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "policy_pack",
+            "feedback",
+            "analysis_manifests",
+            "generated_on",
+            "minimum_occurrences",
+            "output",
+            "summary_output",
+        ],
+    )?;
+    let feedback = required_string_array(&arguments, "feedback", false)?;
+    let manifests = required_string_array(&arguments, "analysis_manifests", false)?;
+    if feedback.len() != manifests.len() {
+        return Err(json!({
+            "detail": "feedback and analysis_manifests must contain the same number of paths"
+        }));
+    }
+    if feedback.len() > 1_000 {
+        return Err(json!({"detail": "feedback cannot exceed 1000 entries"}));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "recommend-policy".into(),
+        required_string(&arguments, "policy_pack")?,
+    ];
+    for path in feedback {
+        command.extend(["--feedback".into(), path]);
+    }
+    for path in manifests {
+        command.extend(["--analysis-manifest".into(), path]);
+    }
+    command.extend([
+        "--generated-on".into(),
+        required_string(&arguments, "generated_on")?,
+    ]);
+    if let Some(value) = arguments.get("minimum_occurrences") {
+        let value = value
+            .as_u64()
+            .filter(|value| (2..=100).contains(value))
+            .ok_or_else(
+                || json!({"detail": "minimum_occurrences must be an integer from 2 to 100"}),
+            )?;
+        command.extend(["--minimum-occurrences".into(), value.to_string()]);
+    }
+    command.extend(["--output".into(), output.clone()]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let recommendation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "recommendation": recommendation}),
     ))
 }
 
@@ -2899,7 +3000,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 29);
+        assert_eq!(tools.len(), 30);
         let named = |name: &str| {
             tools
                 .iter()
@@ -2929,6 +3030,18 @@ mod tests {
         assert_eq!(
             named("record_manufacturing_feedback")["inputSchema"]["properties"]["artifacts"]["type"],
             "array"
+        );
+        assert_eq!(
+            named("recommend_policy")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("recommend_policy")["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named("recommend_policy")["inputSchema"]["properties"]["minimum_occurrences"]["minimum"],
+            2
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],

@@ -70,6 +70,22 @@ inputs:
     description: Newline-separated fabrication or inspection artifact paths required by a feedback declaration.
     required: false
     default: ""
+  policy-recommendation-feedback-files:
+    description: Optional newline-separated historical bound feedback files, paired with policy-recommendation-analysis-manifests.
+    required: false
+    default: ""
+  policy-recommendation-analysis-manifests:
+    description: Optional newline-separated exact run.json files bound by the historical feedback inputs.
+    required: false
+    default: ""
+  policy-recommendation-generated-on:
+    description: Opt-in deterministic YYYY-MM-DD date for a proposal-only DFM tightening report.
+    required: false
+    default: ""
+  policy-recommendation-minimum-occurrences:
+    description: Independent feedback IDs required before one tightening is proposed.
+    required: false
+    default: "2"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -273,6 +289,9 @@ outputs:
   manufacturing-feedback-passed:
     description: Whether supplied manufacturing feedback passed.
     value: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
+  policy-recommendation:
+    description: Proposal-only, human-gated manufacturing policy recommendation path.
+    value: ${{ steps.analyze.outputs.policy-recommendation }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -362,6 +381,10 @@ runs:
         PCBEX_POLICY_PACK_TIMEOUT_SECONDS: ${{ inputs.policy-pack-timeout-seconds }}
         PCBEX_MANUFACTURING_FEEDBACK_DECLARATION: ${{ inputs.manufacturing-feedback-declaration }}
         PCBEX_MANUFACTURING_FEEDBACK_ARTIFACTS: ${{ inputs.manufacturing-feedback-artifacts }}
+        PCBEX_POLICY_RECOMMENDATION_FEEDBACK_FILES: ${{ inputs.policy-recommendation-feedback-files }}
+        PCBEX_POLICY_RECOMMENDATION_ANALYSIS_MANIFESTS: ${{ inputs.policy-recommendation-analysis-manifests }}
+        PCBEX_POLICY_RECOMMENDATION_GENERATED_ON: ${{ inputs.policy-recommendation-generated-on }}
+        PCBEX_POLICY_RECOMMENDATION_MINIMUM_OCCURRENCES: ${{ inputs.policy-recommendation-minimum-occurrences }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}

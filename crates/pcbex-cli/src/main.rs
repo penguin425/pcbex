@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use anyhow::{Context, Result, bail};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{Shell, generate};
@@ -73,6 +75,7 @@ use std::{
 mod manufacturing_feedback;
 mod mcp;
 mod policy_pack;
+mod policy_recommendation;
 mod remote_policy;
 mod remote_witness;
 
@@ -90,6 +93,10 @@ use policy_pack::{
     parse_policy_pack, parse_policy_trust_state, parse_signed_policy_pack, policy_pack_json_schema,
     policy_trust_state_json_schema, sign_policy_pack, signed_policy_pack_json_schema,
     verify_signed_policy_pack,
+};
+use policy_recommendation::{
+    PolicyRecommendationInput, generate_policy_recommendations, parse_policy_recommendation_report,
+    policy_recommendation_json_schema, render_policy_recommendation_summary,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_witness::{remote_witness_receipt_json_schema, request_remote_witness};
@@ -463,6 +470,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed governed manufacturing-policy recommendation JSON Schema.
+    PolicyRecommendationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a governed manufacturing-policy recommendation.
+    ValidatePolicyRecommendation {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -496,6 +514,27 @@ enum Command {
         /// Fail after writing all reports when new or escalated findings regress.
         #[arg(long)]
         fail_on_regressions: bool,
+    },
+    /// Propose safety-direction DFM tightening from independently bound fabrication evidence.
+    RecommendPolicy {
+        /// Exact organization policy pack whose DFM profile was used for every analysis.
+        policy_pack: PathBuf,
+        /// Bound manufacturing feedback; repeat and pair by position with analysis-manifest.
+        #[arg(long = "feedback", required = true)]
+        feedback: Vec<PathBuf>,
+        /// Exact run.json bound by the paired feedback record.
+        #[arg(long = "analysis-manifest", required = true)]
+        analysis_manifests: Vec<PathBuf>,
+        /// Deterministic report date in YYYY-MM-DD form.
+        #[arg(long)]
+        generated_on: String,
+        /// Independent feedback IDs required before proposing one rule change.
+        #[arg(long, default_value_t = 2)]
+        minimum_occurrences: u32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -1923,6 +1962,15 @@ fn main() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::PolicyRecommendationSchema { output } => {
+            write_or_print_json(&policy_recommendation_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyRecommendation { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report = parse_policy_recommendation_report(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -2047,6 +2095,70 @@ fn main() -> Result<()> {
             if fail_on_regressions && comparison.regression {
                 bail!("manufacturing feedback comparison found regressions");
             }
+        }
+        Command::RecommendPolicy {
+            policy_pack,
+            feedback,
+            analysis_manifests,
+            generated_on,
+            minimum_occurrences,
+            output,
+            summary_output,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy recommendation",
+            )?;
+            if feedback.len() != analysis_manifests.len() {
+                bail!("policy recommendation requires one analysis manifest per feedback input");
+            }
+            if feedback.len() > 1_000 {
+                bail!("policy recommendation accepts at most 1000 feedback inputs");
+            }
+            let policy_source = fs::read_to_string(&policy_pack)
+                .with_context(|| format!("reading {}", policy_pack.display()))?;
+            let policy = parse_policy_pack(&policy_source).map_err(anyhow::Error::msg)?;
+            let feedback_documents = feedback
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_manufacturing_feedback(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let manifest_documents = analysis_manifests
+                .iter()
+                .map(|path| fs::read(path).with_context(|| format!("reading {}", path.display())))
+                .collect::<Result<Vec<_>>>()?;
+            let inputs = feedback_documents
+                .iter()
+                .zip(&manifest_documents)
+                .map(|(feedback, analysis_manifest)| PolicyRecommendationInput {
+                    feedback,
+                    analysis_manifest,
+                })
+                .collect::<Vec<_>>();
+            let report = generate_policy_recommendations(
+                &policy,
+                &inputs,
+                &generated_on,
+                minimum_occurrences,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&report)? + "\n";
+            let summary = render_policy_recommendation_summary(&report);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "policy recommendation: {} proposed tightening(s), {} skipped finding(s); human approval required",
+                report.recommendations.len(),
+                report.skipped_findings.len()
+            );
         }
         Command::RecordSimulationEvidence {
             declaration,
