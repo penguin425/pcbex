@@ -194,6 +194,11 @@
     {
       "id": "central-policy-pack-retrieval",
       "release": "v1.335.0",
+      "status": "released"
+    },
+    {
+      "id": "managed-ai-provider-adapters",
+      "release": "v1.336.0",
       "status": "current"
     }
   ]

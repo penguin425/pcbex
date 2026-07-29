@@ -8,6 +8,10 @@ from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
 from .models import PlanLimits
+from .managed_provider import (
+    managed_provider_receipt_json_schema,
+    review_schematic_with_managed_provider,
+)
 from .planner import build_plan
 from .provider import (
     ProviderError,
@@ -57,6 +61,30 @@ def main() -> None:
         help="write the closed provider-command receipt JSON Schema",
     )
     receipt_schema.add_argument("-o", "--output", type=Path)
+    managed_review = sub.add_parser(
+        "review-managed",
+        help="run a bounded managed AI provider review and retain an audit receipt",
+    )
+    managed_review.add_argument("request", type=Path)
+    managed_review.add_argument("-o", "--output", type=Path, required=True)
+    managed_review.add_argument("--receipt", type=Path, required=True)
+    managed_review.add_argument(
+        "--provider", choices=("openai", "anthropic", "gemini"), required=True
+    )
+    managed_review.add_argument("--model", required=True)
+    managed_review.add_argument("--model-version")
+    managed_review.add_argument("--api-key-environment")
+    managed_review.add_argument("--endpoint")
+    managed_review.add_argument("--timeout-seconds", type=int, default=120)
+    managed_review.add_argument(
+        "--maximum-response-bytes", type=int, default=1024 * 1024
+    )
+    managed_review.add_argument("--maximum-output-tokens", type=int, default=4096)
+    managed_schema = sub.add_parser(
+        "managed-provider-receipt-schema",
+        help="write the closed managed-provider receipt JSON Schema",
+    )
+    managed_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -127,6 +155,36 @@ def main() -> None:
     elif args.command == "provider-receipt-schema":
         rendered = json.dumps(
             provider_receipt_json_schema(), indent=2, ensure_ascii=False
+        ) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
+    elif args.command == "review-managed":
+        try:
+            receipt = review_schematic_with_managed_provider(
+                args.request,
+                args.output,
+                args.receipt,
+                provider=args.provider,
+                model=args.model,
+                model_version=args.model_version,
+                api_key_environment=args.api_key_environment,
+                endpoint=args.endpoint,
+                timeout_seconds=args.timeout_seconds,
+                max_response_bytes=args.maximum_response_bytes,
+                max_output_tokens=args.maximum_output_tokens,
+            )
+        except (OSError, ProviderError, ReviewError) as error:
+            raise SystemExit(f"managed schematic review failed: {error}") from error
+        print(
+            f"{receipt['provider']} AI review response written with request "
+            f"{receipt['request']['sha256']} and response "
+            f"{receipt['response']['sha256']}"
+        )
+    elif args.command == "managed-provider-receipt-schema":
+        rendered = json.dumps(
+            managed_provider_receipt_json_schema(), indent=2, ensure_ascii=False
         ) + "\n"
         if args.output:
             args.output.write_text(rendered, encoding="utf-8")

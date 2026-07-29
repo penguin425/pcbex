@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.335.0
+    uses: penguin425/pcbex@v1.336.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1934,9 +1934,54 @@ request, response, and signature contracts are emitted by
 `ai-review-request-schema`, `ai-review-response-schema`,
 and `signed-ai-approval-schema`; the Rust API exposes the session contract.
 
-For a real provider, wrap its SDK or HTTP API in an executable that reads the
-review prompt from stdin and writes only the response JSON to stdout. The agent
-runs that adapter without a shell:
+For OpenAI, Anthropic, or Gemini, the managed adapter calls the provider's
+official structured-output API directly and normalizes its response into the
+same closed pcbex contract:
+
+```sh
+export OPENAI_API_KEY='...'
+pcbex-agent review-managed ai-review-request.json \
+  --output ai-review-response.json \
+  --receipt ai-provider-receipt.json \
+  --provider openai \
+  --model YOUR_MODEL_ID \
+  --model-version YOUR_IMMUTABLE_DEPLOYMENT_REVISION
+
+pcbex-agent managed-provider-receipt-schema \
+  --output managed-provider-receipt.schema.json
+```
+
+The default credential environments are `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, and `GEMINI_API_KEY`; `--api-key-environment` selects a
+different environment variable by name. Credentials never enter argv,
+normalized responses, receipts, or error bodies. Default endpoints use HTTPS;
+custom endpoints must also use HTTPS and cannot contain credentials, a query,
+or a fragment. Redirects, incomplete/refused outputs, multiple structured
+outputs, non-JSON content, timeouts, and oversized responses fail before any
+artifact is written. The response model identity is fixed from the trusted CLI
+arguments instead of accepting the model's self-identification.
+
+A dedicated composite Action exposes only the normalized response and
+secret-free receipt. Pass the key from GitHub Secrets:
+
+```yaml
+- id: ai-review
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.336.0
+  with:
+    request: hardware/ai-review-request.json
+    provider: openai
+    model: YOUR_MODEL_ID
+    model-version: YOUR_IMMUTABLE_DEPLOYMENT_REVISION
+    api-key: ${{ secrets.OPENAI_API_KEY }}
+```
+
+Its `response` output can enter the existing `sign-ai-review` and quorum flow;
+the receipt is retained alongside the signed approval evidence. Provider API
+access alone never grants approval authority.
+
+For another provider or an organization-specific gateway, wrap its SDK or HTTP
+API in an executable that reads the review prompt from stdin and writes only
+the response JSON to stdout. The agent runs that adapter without a shell:
 
 ```sh
 pcbex-agent review-schematic ai-review-request.json \
