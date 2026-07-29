@@ -24,15 +24,16 @@ use pcbex_kicad::{
     ElectricalWaiverSet, HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
     HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
     SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
-    SignedApprovalLogCheckpoint, SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation,
-    SignedHumanEscalation, SimulationArtifact, SimulationEvidence,
-    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
+    SignedApprovalLogCheckpoint, SignedApprovalLogGossipReceipt, SignedApprovalLogWitness,
+    SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation, SimulationArtifact,
+    SimulationEvidence, ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
     ai_review_response_json_schema, append_approval_transparency_event,
     apply_approval_log_witness_key_rotation, apply_custom_design_rules, apply_electrical_waivers,
     apply_project_net_settings, approval_log_anchor_proof_json_schema,
     approval_log_anchor_verification_report_json_schema,
     approval_log_consistency_proof_json_schema,
     approval_log_consistency_verification_report_json_schema,
+    approval_log_gossip_verification_report_json_schema,
     approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
     approval_public_key, approval_transparency_log_json_schema, build_ai_review_request,
@@ -52,16 +53,17 @@ use pcbex_kicad::{
     schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
     schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
     sign_ai_review, sign_ai_review_for_session, sign_approval_log_checkpoint,
-    sign_approval_log_witness, sign_approval_log_witness_key_rotation, sign_human_escalation,
-    signed_ai_approval_json_schema, signed_approval_log_checkpoint_json_schema,
-    signed_approval_log_checkpoint_sha256, signed_approval_log_witness_json_schema,
+    sign_approval_log_gossip_receipt, sign_approval_log_witness,
+    sign_approval_log_witness_key_rotation, sign_human_escalation, signed_ai_approval_json_schema,
+    signed_approval_log_checkpoint_json_schema, signed_approval_log_checkpoint_sha256,
+    signed_approval_log_gossip_receipt_json_schema, signed_approval_log_witness_json_schema,
     signed_approval_log_witness_key_rotation_json_schema, signed_human_escalation_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
     verify_approval_log_anchor_proof, verify_approval_log_checkpoint,
-    verify_approval_log_consistency_proof, verify_approval_log_witness_quorum,
-    verify_human_escalation, verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
-    verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
-    verify_signed_ai_approval,
+    verify_approval_log_consistency_proof, verify_approval_log_gossip_receipt,
+    verify_approval_log_witness_quorum, verify_human_escalation, verify_routed_ai_approval_quorum,
+    verify_session_ai_approval_quorum, verify_session_routed_ai_approval_quorum,
+    verify_session_signed_ai_approval, verify_signed_ai_approval,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -2598,6 +2600,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed approval public-log gossip receipt JSON Schema.
+    SignedApprovalLogGossipReceiptSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed approval public-log gossip verification JSON Schema.
+    ApprovalLogGossipVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed approval-log witness quorum report JSON Schema.
     ApprovalLogWitnessQuorumReportSchema {
         #[arg(short, long)]
@@ -2902,6 +2914,42 @@ enum Command {
         proof: CompactPath,
         #[arg(long)]
         public_key: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Independently sign one trusted approval public-log tree-head observation.
+    SignApprovalLogGossipReceipt {
+        #[arg(long)]
+        anchor: CompactPath,
+        #[arg(long)]
+        log_public_key: CompactPath,
+        #[arg(long)]
+        observer_id: String,
+        #[arg(long)]
+        observer_private_key: CompactPath,
+        #[arg(long)]
+        received_at_unix: u64,
+        #[arg(long)]
+        expires_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Compare a signed independent observation with a retained local anchor.
+    VerifyApprovalLogGossipReceipt {
+        #[arg(long)]
+        local_anchor: CompactPath,
+        #[arg(long)]
+        receipt: CompactPath,
+        #[arg(long)]
+        consistency_proof: Option<CompactPath>,
+        #[arg(long)]
+        log_public_key: CompactPath,
+        #[arg(long)]
+        observer_id: String,
+        #[arg(long)]
+        observer_public_key: CompactPath,
+        #[arg(long)]
+        evaluated_at_unix: u64,
         #[arg(short, long)]
         output: CompactPath,
     },
@@ -8642,6 +8690,18 @@ fn run_cli() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::SignedApprovalLogGossipReceiptSchema { output } => {
+            write_or_print_json(
+                &signed_approval_log_gossip_receipt_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ApprovalLogGossipVerificationReportSchema { output } => {
+            write_or_print_json(
+                &approval_log_gossip_verification_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ApprovalLogWitnessQuorumReportSchema { output } => {
             write_or_print_json(
                 &approval_log_witness_quorum_report_json_schema(),
@@ -9545,6 +9605,91 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "verified approval public-log extension {} -> {} in {}",
                 report.old_tree_size, report.new_tree_size, report.log_id
+            );
+        }
+        Command::SignApprovalLogGossipReceipt {
+            anchor,
+            log_public_key,
+            observer_id,
+            observer_private_key,
+            received_at_unix,
+            expires_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(anchor.0.as_ref()),
+                    Some(log_public_key.0.as_ref()),
+                    Some(observer_private_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval-log gossip signing",
+            )?;
+            let (anchor, _) = read_described_json::<ApprovalLogAnchorProof>(&anchor)?;
+            let log_key = read_hex_key(&log_public_key, "trusted approval public-log key")?;
+            let observer_secret =
+                read_hex_key(&observer_private_key, "approval gossip observer private key")?;
+            let receipt = sign_approval_log_gossip_receipt(
+                &anchor,
+                &log_key,
+                &observer_id,
+                received_at_unix,
+                expires_at_unix,
+                &observer_secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&receipt)?, false)?;
+            eprintln!(
+                "signed approval public-log observation {} at tree size {}",
+                receipt.observer_id, receipt.tree_head.tree_size
+            );
+        }
+        Command::VerifyApprovalLogGossipReceipt {
+            local_anchor,
+            receipt,
+            consistency_proof,
+            log_public_key,
+            observer_id,
+            observer_public_key,
+            evaluated_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(local_anchor.0.as_ref()),
+                    Some(receipt.0.as_ref()),
+                    consistency_proof.as_ref().map(|path| path.0.as_ref()),
+                    Some(log_public_key.0.as_ref()),
+                    Some(observer_public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval-log gossip verification",
+            )?;
+            let (local_anchor, _) =
+                read_described_json::<ApprovalLogAnchorProof>(&local_anchor)?;
+            let (receipt, _) = read_described_json::<SignedApprovalLogGossipReceipt>(&receipt)?;
+            let consistency = consistency_proof
+                .as_ref()
+                .map(|path| read_described_json::<ApprovalLogConsistencyProof>(path))
+                .transpose()?
+                .map(|value| value.0);
+            let log_key = read_hex_key(&log_public_key, "trusted approval public-log key")?;
+            let observer_key =
+                read_hex_key(&observer_public_key, "trusted approval gossip observer key")?;
+            let report = verify_approval_log_gossip_receipt(
+                &local_anchor,
+                &receipt,
+                consistency.as_ref(),
+                &log_key,
+                &observer_id,
+                &observer_key,
+                evaluated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "verified approval public-log gossip {}: {}",
+                report.observer_id, report.relationship
             );
         }
         Command::VerifyApprovalLogWitnesses {

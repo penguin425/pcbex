@@ -2108,6 +2108,63 @@ if ((approval_log_consistency_inputs == 2)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+approval_log_gossip_verification=""
+approval_log_gossip_verified=""
+approval_log_gossip_inputs=0
+for value in \
+  "${PCBEX_APPROVAL_LOG_GOSSIP_RECEIPT:-}" \
+  "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_ID:-}" \
+  "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY:-}" \
+  "${PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((approval_log_gossip_inputs += 1)); fi
+done
+if ((approval_log_gossip_inputs != 0 && approval_log_gossip_inputs != 4)); then
+  echo "approval-log gossip receipt, observer id/key, and evaluation time must be supplied together" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_CONSISTENCY_PROOF:-}" ]] \
+  && ((approval_log_gossip_inputs != 4)); then
+  echo "approval-log gossip consistency proof requires complete gossip inputs" >&2
+  exit 2
+fi
+if ((approval_log_gossip_inputs == 4)); then
+  if ((approval_log_anchor_inputs != 2)); then
+    echo "approval-log gossip requires the local anchor proof and public key" >&2
+    exit 2
+  fi
+  approval_log_gossip_verification="${artifact_dir}/approval-log-gossip-verification.json"
+  approval_log_gossip_arguments=(
+    verify-approval-log-gossip-receipt
+    --local-anchor "$PCBEX_APPROVAL_LOG_ANCHOR_PROOF"
+    --receipt "$PCBEX_APPROVAL_LOG_GOSSIP_RECEIPT"
+    --log-public-key "$PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY"
+    --observer-id "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_ID"
+    --observer-public-key "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY"
+    --evaluated-at-unix "$PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX"
+    --output "$approval_log_gossip_verification"
+  )
+  if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_CONSISTENCY_PROOF:-}" ]]; then
+    approval_log_gossip_arguments+=(
+      --consistency-proof "$PCBEX_APPROVAL_LOG_GOSSIP_CONSISTENCY_PROOF"
+    )
+  fi
+  "$PCBEX_BINARY" "${approval_log_gossip_arguments[@]}"
+  approval_log_gossip_verified="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["verified"]).lower())' \
+      "$approval_log_gossip_verification"
+  )"
+  {
+    printf '\n# Approval public-log gossip\n\n'
+    printf -- '- Verified: `%s`\n' "$approval_log_gossip_verified"
+    printf -- '- Relationship: `%s`\n' "$(
+      python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["relationship"])' \
+        "$approval_log_gossip_verification"
+    )"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 remote_witness=""
 remote_witness_receipt=""
 remote_witness_public_key=""
@@ -2325,6 +2382,8 @@ write_output approval-log-anchor-verification "$approval_log_anchor_verification
 write_output approval-log-anchored "$approval_log_anchored"
 write_output approval-log-consistency-verification "$approval_log_consistency_verification"
 write_output approval-log-consistent "$approval_log_consistent"
+write_output approval-log-gossip-verification "$approval_log_gossip_verification"
+write_output approval-log-gossip-verified "$approval_log_gossip_verified"
 write_output approval-log-witness-quorum "$approval_log_witness_quorum"
 write_output approval-log-witness-quorum-met "$approval_log_witness_quorum_met"
 write_output remote-witness "$remote_witness"

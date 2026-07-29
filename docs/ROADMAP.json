@@ -374,6 +374,11 @@
     {
       "id": "approval-transparency-public-log-consistency",
       "release": "v1.371.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-public-log-gossip",
+      "release": "v1.372.0",
       "status": "current"
     }
   ]

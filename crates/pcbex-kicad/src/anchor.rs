@@ -205,8 +205,8 @@ pub fn create_approval_log_consistency_proof(
     new_anchor: &ApprovalLogAnchorProof,
     ordered_checkpoint_sha256: &[String],
 ) -> Result<ApprovalLogConsistencyProof, String> {
-    validate_anchor_proof(old_anchor)?;
-    validate_anchor_proof(new_anchor)?;
+    validate_approval_log_anchor_proof(old_anchor)?;
+    validate_approval_log_anchor_proof(new_anchor)?;
     let old_head = &old_anchor.tree_head;
     let new_head = &new_anchor.tree_head;
     validate_consistency_head_pair(old_head, new_head)?;
@@ -249,8 +249,8 @@ pub fn verify_approval_log_consistency_proof(
     proof: &ApprovalLogConsistencyProof,
     trusted_public_key: &[u8; 32],
 ) -> Result<ApprovalLogConsistencyVerificationReport, String> {
-    validate_anchor_proof(old_anchor)?;
-    validate_anchor_proof(new_anchor)?;
+    validate_approval_log_anchor_proof(old_anchor)?;
+    validate_approval_log_anchor_proof(new_anchor)?;
     validate_consistency_proof(proof)?;
     if proof.old_tree_head != old_anchor.tree_head {
         return Err(
@@ -260,10 +260,18 @@ pub fn verify_approval_log_consistency_proof(
     if proof.new_tree_head != new_anchor.tree_head {
         return Err("approval consistency proof does not match the current anchor".into());
     }
+    verify_approval_log_tree_head_consistency(proof, trusted_public_key)
+}
+
+pub fn verify_approval_log_tree_head_consistency(
+    proof: &ApprovalLogConsistencyProof,
+    trusted_public_key: &[u8; 32],
+) -> Result<ApprovalLogConsistencyVerificationReport, String> {
+    validate_consistency_proof(proof)?;
     let old_head = &proof.old_tree_head;
     let new_head = &proof.new_tree_head;
-    verify_tree_head(old_head, trusted_public_key)?;
-    verify_tree_head(new_head, trusted_public_key)?;
+    verify_approval_public_log_tree_head(old_head, trusted_public_key)?;
+    verify_approval_public_log_tree_head(new_head, trusted_public_key)?;
     let path = proof
         .consistency_path
         .iter()
@@ -300,6 +308,15 @@ pub fn verify_approval_log_consistency_proof(
         tree_head_public_key: new_head.public_key.clone(),
         consistent: true,
     })
+}
+
+pub fn approval_public_log_tree_head_sha256(
+    head: &SignedApprovalPublicLogTreeHead,
+) -> Result<String, String> {
+    validate_tree_head_shape(head)?;
+    let bytes = serde_json::to_vec(head)
+        .map_err(|error| format!("serializing approval public-log tree head: {error}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 fn leaf_hash(checkpoint_sha256: &str) -> Result<[u8; 32], String> {
@@ -481,7 +498,7 @@ fn tree_head_payload(
     .map_err(|error| format!("serializing approval public-log tree head: {error}"))
 }
 
-fn validate_anchor_proof(proof: &ApprovalLogAnchorProof) -> Result<(), String> {
+pub fn validate_approval_log_anchor_proof(proof: &ApprovalLogAnchorProof) -> Result<(), String> {
     if proof.schema_version != 1
         || proof.leaf_index >= proof.tree_head.tree_size
         || proof.audit_path.len() > MAX_AUDIT_PATH
@@ -549,7 +566,7 @@ fn validate_consistency_head_pair(
     Ok(())
 }
 
-fn verify_tree_head(
+pub fn verify_approval_public_log_tree_head(
     head: &SignedApprovalPublicLogTreeHead,
     trusted_public_key: &[u8; 32],
 ) -> Result<(), String> {

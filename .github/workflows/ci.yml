@@ -347,6 +347,17 @@ jobs:
             --log-checkpoint build/action-quorum/approval-log.checkpoint.json \
             --log-checkpoint build/action-quorum/approval-log.checkpoint.json \
             --output build/action-quorum/approval-log.consistency.json
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/gossip-observer.key \
+            --public-key build/action-quorum/gossip-observer.pub
+          target/release/pcbex sign-approval-log-gossip-receipt \
+            --anchor build/action-quorum/approval-log.anchor.json \
+            --log-public-key build/action-quorum/public-log.pub \
+            --observer-id action-gossip-observer \
+            --observer-private-key build/action-quorum/gossip-observer.key \
+            --received-at-unix 4 \
+            --expires-at-unix 100 \
+            --output build/action-quorum/approval-log.gossip.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -416,6 +427,11 @@ jobs:
           approval-log-previous-anchor-proof: build/action-quorum/approval-log.previous-anchor.json
           approval-log-consistency-proof: build/action-quorum/approval-log.consistency.json
           fail-on-approval-log-consistency: "true"
+          approval-log-gossip-receipt: build/action-quorum/approval-log.gossip.json
+          approval-log-gossip-observer-id: action-gossip-observer
+          approval-log-gossip-observer-public-key: build/action-quorum/gossip-observer.pub
+          approval-log-gossip-evaluated-at-unix: "50"
+          fail-on-approval-log-gossip: "true"
           approval-log-witness-files: |
             build/action-quorum/witness-a.json
             build/action-quorum/witness-b.json
@@ -504,6 +520,8 @@ jobs:
           APPROVAL_LOG_ANCHORED: ${{ steps.pcbex.outputs.approval-log-anchored }}
           APPROVAL_LOG_CONSISTENCY_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-consistency-verification }}
           APPROVAL_LOG_CONSISTENT: ${{ steps.pcbex.outputs.approval-log-consistent }}
+          APPROVAL_LOG_GOSSIP_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-gossip-verification }}
+          APPROVAL_LOG_GOSSIP_VERIFIED: ${{ steps.pcbex.outputs.approval-log-gossip-verified }}
           REMOTE_WITNESS: ${{ steps.pcbex.outputs.remote-witness }}
           REMOTE_WITNESS_RECEIPT: ${{ steps.pcbex.outputs.remote-witness-receipt }}
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
@@ -540,6 +558,8 @@ jobs:
           test "$APPROVAL_LOG_CONSISTENT" = "true"
           test "$(jq -r '.old_tree_size' "$APPROVAL_LOG_CONSISTENCY_VERIFICATION")" = "1"
           test "$(jq -r '.new_tree_size' "$APPROVAL_LOG_CONSISTENCY_VERIFICATION")" = "2"
+          test "$APPROVAL_LOG_GOSSIP_VERIFIED" = "true"
+          test "$(jq -r '.relationship' "$APPROVAL_LOG_GOSSIP_VERIFICATION")" = "same_tree"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"
