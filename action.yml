@@ -98,6 +98,18 @@ inputs:
     description: Minimum distinct human approvals required; cannot be less than two.
     required: false
     default: "2"
+  approval-transparency-log:
+    description: Optional append-only approval transparency log to verify.
+    required: false
+    default: ""
+  approval-log-checkpoint:
+    description: Signed checkpoint bound to approval-transparency-log.
+    required: false
+    default: ""
+  approval-log-public-key:
+    description: Trusted Ed25519 public-key file for the approval-log checkpoint.
+    required: false
+    default: ""
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -128,6 +140,10 @@ inputs:
     default: "false"
   fail-on-schematic-approval:
     description: Fail unless either AI quorum passes or an eligible dual-control human escalation passes.
+    required: false
+    default: "false"
+  fail-on-approval-log:
+    description: Fail unless the supplied approval transparency log and checkpoint verify.
     required: false
     default: "false"
   upload-artifact:
@@ -218,6 +234,12 @@ outputs:
   schematic-approval-met:
     description: Whether AI quorum or its governed human escalation approved the schematic.
     value: ${{ steps.analyze.outputs.schematic-approval-met }}
+  approval-log-verification:
+    description: Verified approval transparency-log report path, when supplied.
+    value: ${{ steps.analyze.outputs.approval-log-verification }}
+  approval-log-verified:
+    description: Whether the complete approval hash chain and checkpoint verified.
+    value: ${{ steps.analyze.outputs.approval-log-verified }}
 
 runs:
   using: composite
@@ -263,6 +285,9 @@ runs:
         PCBEX_HUMAN_ESCALATION_FILES: ${{ inputs.human-escalation-files }}
         PCBEX_HUMAN_ESCALATION_AI_QUORUM: ${{ inputs.human-escalation-ai-quorum }}
         PCBEX_HUMAN_ESCALATION_MINIMUM_APPROVALS: ${{ inputs.human-escalation-minimum-approvals }}
+        PCBEX_APPROVAL_TRANSPARENCY_LOG: ${{ inputs.approval-transparency-log }}
+        PCBEX_APPROVAL_LOG_CHECKPOINT: ${{ inputs.approval-log-checkpoint }}
+        PCBEX_APPROVAL_LOG_PUBLIC_KEY: ${{ inputs.approval-log-public-key }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 
@@ -307,6 +332,7 @@ runs:
         PCBEX_SCHEMATIC_REVIEW_ALL_ROUTED: ${{ steps.analyze.outputs.schematic-review-all-routed }}
         PCBEX_AI_APPROVAL_QUORUM_MET: ${{ steps.analyze.outputs.ai-approval-quorum-met }}
         PCBEX_SCHEMATIC_APPROVAL_MET: ${{ steps.analyze.outputs.schematic-approval-met }}
+        PCBEX_APPROVAL_LOG_VERIFIED: ${{ steps.analyze.outputs.approval-log-verified }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -314,6 +340,7 @@ runs:
         PCBEX_FAIL_ON_UNROUTED_SCHEMATIC_REVIEW: ${{ inputs.fail-on-unrouted-schematic-review }}
         PCBEX_FAIL_ON_AI_QUORUM: ${{ inputs.fail-on-ai-quorum }}
         PCBEX_FAIL_ON_SCHEMATIC_APPROVAL: ${{ inputs.fail-on-schematic-approval }}
+        PCBEX_FAIL_ON_APPROVAL_LOG: ${{ inputs.fail-on-approval-log }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -346,5 +373,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_SCHEMATIC_APPROVAL" == "true" && "$PCBEX_SCHEMATIC_APPROVAL_MET" != "true" ]]; then
           echo "::error::pcbex schematic has neither AI quorum nor governed human approval"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG" == "true" && "$PCBEX_APPROVAL_LOG_VERIFIED" != "true" ]]; then
+          echo "::error::pcbex approval transparency log is absent or invalid"
           exit 1
         fi

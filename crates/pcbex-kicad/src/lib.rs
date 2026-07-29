@@ -33,6 +33,15 @@ pub use human_escalation::{
     render_human_escalation_summary, sign_human_escalation, signed_human_escalation_json_schema,
     verify_human_escalation,
 };
+mod transparency;
+pub use transparency::{
+    ApprovalArtifactKind, ApprovalEventDescriptor, ApprovalLogVerificationReport,
+    ApprovalTransparencyEntry, ApprovalTransparencyLog, SignedApprovalLogCheckpoint,
+    append_approval_transparency_event, approval_log_verification_report_json_schema,
+    approval_transparency_log_json_schema, approval_transparency_log_sha256,
+    new_approval_transparency_log, sign_approval_log_checkpoint,
+    signed_approval_log_checkpoint_json_schema, verify_approval_log_checkpoint,
+};
 mod electrical;
 pub use electrical::{
     ElectricalExplanationReport, ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy,

@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.329.0
+    uses: penguin425/pcbex@v1.330.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1704,6 +1704,55 @@ requirements, and error/critical risks remain non-overridable. The closed
 contracts are emitted by `signed-human-escalation-schema` and
 `human-escalation-report-schema`.
 
+Approval evidence can be retained in an append-only, hash-chained transparency
+log and sealed with a trusted Ed25519 checkpoint:
+
+```sh
+pcbex init-approval-log \
+  --log-id production-schematic-approvals \
+  --output approvals.0.json
+
+pcbex append-approval-log approvals.0.json \
+  --artifact signed-approval.json \
+  --kind signed-ai-approval \
+  --output approvals.1.json
+
+pcbex append-approval-log approvals.1.json \
+  --artifact human-escalation.json \
+  --kind human-escalation-report \
+  --output approvals.2.json
+
+pcbex sign-approval-log approvals.2.json \
+  --private-key .secrets/transparency-log.key \
+  --signer-id release-control \
+  --output approvals.checkpoint.json
+
+pcbex verify-approval-log approvals.2.json \
+  --checkpoint approvals.checkpoint.json \
+  --public-key transparency-log.pub \
+  --output approvals.verification.json
+```
+
+Each append command requires different input and output paths, preserving the
+previous immutable snapshot. Artifacts are strictly parsed by their closed
+contract and hashed as normalized typed JSON. Entry sequence numbers,
+timestamps, previous-entry hashes, and self-hashes detect mutation,
+reordering, insertion, and deletion. The signed checkpoint binds the complete
+log digest, head, and entry count, so truncation, rollback to an older snapshot,
+and stale checkpoints also fail closed. Supported evidence includes signed AI
+approvals, global or routed AI quorum reports, signed human escalations, human
+escalation reports, and signed organization policy packs. The log proves
+retention integrity; each artifact should still pass its normal signature and
+policy verification before being appended.
+
+The composite Action accepts `approval-transparency-log`,
+`approval-log-checkpoint`, and `approval-log-public-key`, publishes
+`approval-log-verification` and `approval-log-verified`, and can enforce the
+result with `fail-on-approval-log`. Closed contracts are emitted by
+`approval-transparency-log-schema`,
+`signed-approval-log-checkpoint-schema`, and
+`approval-log-verification-report-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -1726,9 +1775,10 @@ Rust validation, and tells the model to use `unknown`/`needs_human` instead of
 guessing. The MCP server exposes `route_schematic_reviewers`,
 `prepare_schematic_review`,
 `sign_schematic_approval`, `verify_schematic_approval`, and
-`verify_schematic_approval_quorum`, plus signed human escalation tools; signing
-and report writes are marked as destructive actions so MCP hosts can retain
-their user-approval boundary. The GitHub Action accepts `ai-review-session`
+`verify_schematic_approval_quorum`, plus signed human escalation and approval
+transparency-log tools; signing, appending, and report writes are marked as
+destructive actions so MCP hosts can retain their user-approval boundary. The
+GitHub Action accepts `ai-review-session`
 alongside its quorum inputs, optionally verifies `human-escalation-files`, and
 publishes `schematic-approval-met` as the AI-or-governed-human result. The
 human path also requires `human-escalation-ai-quorum`, the exact retained

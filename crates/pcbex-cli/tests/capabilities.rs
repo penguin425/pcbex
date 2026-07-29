@@ -33,6 +33,10 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "verify-ai-quorum",
         "sign-human-escalation",
         "verify-human-escalation",
+        "init-approval-log",
+        "append-approval-log",
+        "sign-approval-log",
+        "verify-approval-log",
         "mcp-server",
         "fabricate",
     ] {

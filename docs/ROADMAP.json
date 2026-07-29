@@ -164,6 +164,11 @@
     {
       "id": "dual-control-human-ai-escalation",
       "release": "v1.329.0",
+      "status": "released"
+    },
+    {
+      "id": "signed-approval-transparency-log",
+      "release": "v1.330.0",
       "status": "current"
     }
   ]

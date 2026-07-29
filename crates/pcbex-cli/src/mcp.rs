@@ -967,6 +967,81 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("forbidden"),
         ),
+        tool(
+            "init_approval_transparency_log",
+            "Initialize approval transparency log",
+            "Create an empty append-only approval evidence log.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["log_id", "output"],
+                "properties": {
+                    "log_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "append_approval_transparency_log",
+            "Append approval transparency event",
+            "Normalize one supported approval artifact and append it to a new hash-chained log snapshot.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["log", "artifact", "kind", "output"],
+                "properties": {
+                    "log": {"type": "string"},
+                    "artifact": {"type": "string"},
+                    "kind": {"enum": [
+                        "signed-ai-approval", "ai-quorum-report",
+                        "signed-human-escalation", "human-escalation-report",
+                        "signed-policy-pack"
+                    ]},
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_approval_transparency_log",
+            "Sign approval-log checkpoint",
+            "Create an Ed25519 checkpoint for the exact approval log head and complete log digest.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["log", "private_key", "signer_id", "output"],
+                "properties": {
+                    "log": {"type": "string"},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_approval_transparency_log",
+            "Verify approval transparency log",
+            "Verify the complete hash chain and a trusted Ed25519 checkpoint.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["log", "checkpoint", "public_key", "output"],
+                "properties": {
+                    "log": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
     ]
 }
 
@@ -1050,6 +1125,18 @@ fn call_tool(
         }
         "verify_human_schematic_escalation" => {
             verify_human_schematic_escalation(arguments, cancellation)?
+        }
+        "init_approval_transparency_log" => {
+            init_approval_transparency_log(arguments, cancellation)?
+        }
+        "append_approval_transparency_log" => {
+            append_approval_transparency_log(arguments, cancellation)?
+        }
+        "sign_approval_transparency_log" => {
+            sign_approval_transparency_log(arguments, cancellation)?
+        }
+        "verify_approval_transparency_log" => {
+            verify_approval_transparency_log(arguments, cancellation)?
         }
         _ => return Err(json!({"detail": format!("unknown tool {name:?}")})),
     };
@@ -1811,6 +1898,107 @@ fn verify_human_schematic_escalation(
     ))
 }
 
+fn init_approval_transparency_log(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["log_id", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "init-approval-log".into(),
+        "--log-id".into(),
+        required_string(&arguments, "log_id")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let log = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "log": log}),
+    ))
+}
+
+fn append_approval_transparency_log(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["log", "artifact", "kind", "recorded_at_unix", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "append-approval-log".into(),
+        required_string(&arguments, "log")?,
+        "--artifact".into(),
+        required_string(&arguments, "artifact")?,
+        "--kind".into(),
+        required_string(&arguments, "kind")?,
+    ];
+    optional_nonnegative_integer(
+        &arguments,
+        "recorded_at_unix",
+        "--recorded-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let log = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "log": log}),
+    ))
+}
+
+fn sign_approval_transparency_log(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["log", "private_key", "signer_id", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-approval-log".into(),
+        required_string(&arguments, "log")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let checkpoint = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "checkpoint": checkpoint}),
+    ))
+}
+
+fn verify_approval_transparency_log(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["log", "checkpoint", "public_key", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "verify-approval-log".into(),
+        required_string(&arguments, "log")?,
+        "--checkpoint".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 struct Execution {
     success: bool,
     exit_code: Option<i32>,
@@ -1947,6 +2135,22 @@ fn optional_positive_integer(
     Ok(())
 }
 
+fn optional_nonnegative_integer(
+    arguments: &Map<String, Value>,
+    name: &str,
+    option: &str,
+    command: &mut Vec<String>,
+) -> std::result::Result<(), Value> {
+    if let Some(value) = arguments.get(name) {
+        let value = value
+            .as_u64()
+            .ok_or_else(|| json!({"detail": format!("{name} must be a non-negative integer")}))?;
+        command.push(option.into());
+        command.push(value.to_string());
+    }
+    Ok(())
+}
+
 fn required_string_array(
     arguments: &Map<String, Value>,
     name: &str,
@@ -2041,7 +2245,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 15);
+        assert_eq!(tools.len(), 19);
         let named = |name: &str| {
             tools
                 .iter()
@@ -2126,6 +2330,15 @@ mod tests {
             named("verify_human_schematic_escalation")["inputSchema"]["properties"]["escalations"]
                 ["type"],
             "array"
+        );
+        assert_eq!(
+            named("append_approval_transparency_log")["inputSchema"]["properties"]["kind"]["enum"]
+                [0],
+            "signed-ai-approval"
+        );
+        assert_eq!(
+            named("verify_approval_transparency_log")["annotations"]["destructiveHint"],
+            true
         );
         let verify_policy = tools
             .iter()

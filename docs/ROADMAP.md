@@ -39,6 +39,7 @@ auditable release.
 | v1.327.0 | Profile-aware AI approval quorum | Prove every routed specialist profile is satisfied by matching signed reviewers |
 | v1.328.0 | Time-bound AI review sessions | Prevent approval replay with expiring request-bound random challenges |
 | v1.329.0 | Dual-control human AI escalation | Govern AI uncertainty without permitting safety-gate overrides |
+| v1.330.0 | Signed approval transparency log | Detect deletion, reordering, mutation, truncation, and stale checkpoints across approval evidence |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -48,7 +49,7 @@ that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
 The next roadmap should focus on production adoption: managed
-provider-specific adapters, centralized policy-pack retrieval, approval
-transparency logs, and governed feedback-to-policy recommendations. Those are
-intentionally not marked complete until each has an executable acceptance
-contract and its own release.
+provider-specific adapters, centralized policy-pack retrieval, remote
+transparency-log witnesses, and governed feedback-to-policy recommendations.
+Those are intentionally not marked complete until each has an executable
+acceptance contract and its own release.
