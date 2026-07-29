@@ -2019,7 +2019,7 @@ if ((approval_log_inputs == 3)); then
       "$approval_log_verification"
   )"
   {
-    printf '\n# Approval transparency log\n\n'
+    printf '\n# Approval and registry-witness receipt transparency log\n\n'
     printf -- '- Verified: `%s`\n' "$approval_log_verified"
     printf -- '- Entries: `%s`\n' "$(
       python3 -c \

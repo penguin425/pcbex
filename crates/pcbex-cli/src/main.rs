@@ -303,6 +303,7 @@ use remote_policy_lifecycle_gossip::{
     request_remote_policy_lifecycle_log_gossip,
 };
 use remote_policy_lifecycle_gossip_registry_checkpoint_witness::{
+    parse_remote_registry_history_checkpoint_witness_receipt,
     remote_registry_history_checkpoint_witness_receipt_json_schema,
     request_remote_registry_history_checkpoint_witness,
 };
@@ -404,6 +405,7 @@ enum ApprovalArtifactKindArg {
     SignedHumanEscalation,
     HumanEscalationReport,
     SignedPolicyPack,
+    RemoteRegistryHistoryCheckpointWitnessReceipt,
 }
 
 impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
@@ -414,6 +416,9 @@ impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
             ApprovalArtifactKindArg::SignedHumanEscalation => Self::SignedHumanEscalation,
             ApprovalArtifactKindArg::HumanEscalationReport => Self::HumanEscalationReport,
             ApprovalArtifactKindArg::SignedPolicyPack => Self::SignedPolicyPack,
+            ApprovalArtifactKindArg::RemoteRegistryHistoryCheckpointWitnessReceipt => {
+                Self::RemoteRegistryHistoryCheckpointWitnessReceipt
+            }
         }
     }
 }
@@ -11059,6 +11064,19 @@ fn approval_event_descriptor(
                 session_sha256: None,
                 signer_id: Some(artifact.signer_id),
                 outcome: "published".into(),
+            })
+        }
+        ApprovalArtifactKindArg::RemoteRegistryHistoryCheckpointWitnessReceipt => {
+            let artifact = parse_remote_registry_history_checkpoint_witness_receipt(&source)
+                .map_err(anyhow::Error::msg)?;
+            Ok(ApprovalEventDescriptor {
+                artifact_kind: ApprovalArtifactKind::RemoteRegistryHistoryCheckpointWitnessReceipt,
+                artifact_sha256: normalized_json_sha256(&artifact)?,
+                subject_id: artifact.checkpoint_sha256,
+                request_sha256: Some(artifact.request_sha256),
+                session_sha256: Some(artifact.response_sha256),
+                signer_id: None,
+                outcome: format!("verified-witness:{}", artifact.witness_id),
             })
         }
     }

@@ -719,11 +719,11 @@ inputs:
     required: false
     default: "2"
   approval-transparency-log:
-    description: Optional append-only approval transparency log to verify.
+    description: Optional append-only approval and verified registry-witness-receipt transparency log to verify.
     required: false
     default: ""
   approval-log-checkpoint:
-    description: Signed checkpoint bound to approval-transparency-log.
+    description: Signed checkpoint bound to the supplied transparency log.
     required: false
     default: ""
   approval-log-public-key:

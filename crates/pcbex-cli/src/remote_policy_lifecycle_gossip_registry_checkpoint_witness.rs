@@ -4,6 +4,7 @@ use crate::policy_lifecycle_gossip_registry_checkpoint::{
     validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state,
     verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_for_trust_state,
 };
+use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -100,6 +101,55 @@ pub fn remote_registry_history_checkpoint_witness_receipt_json_schema() -> Value
             "verified": {"const": true}
         }
     })
+}
+
+pub fn parse_remote_registry_history_checkpoint_witness_receipt(
+    source: &str,
+) -> Result<RemoteRegistryHistoryCheckpointWitnessReceipt, String> {
+    let receipt: RemoteRegistryHistoryCheckpointWitnessReceipt = serde_json::from_str(source)
+        .map_err(|error| {
+            format!("invalid remote registry history checkpoint witness receipt JSON: {error}")
+        })?;
+    validate_remote_registry_history_checkpoint_witness_receipt(&receipt)?;
+    Ok(receipt)
+}
+
+pub fn validate_remote_registry_history_checkpoint_witness_receipt(
+    receipt: &RemoteRegistryHistoryCheckpointWitnessReceipt,
+) -> Result<(), String> {
+    if receipt.schema_version != 1
+        || receipt.adapter != ADAPTER
+        || !receipt.verified
+        || receipt.response_bytes == 0
+        || receipt.response_bytes > MAX_RESPONSE_BYTES
+        || receipt.witnessed_at_unix > receipt.evaluated_at_unix
+    {
+        return Err("invalid remote registry history checkpoint witness receipt invariants".into());
+    }
+    validate_endpoint(&receipt.endpoint, true)?;
+    validate_slug(&receipt.registry_id, "registry id")?;
+    validate_digest(&receipt.checkpoint_sha256, "checkpoint SHA-256")?;
+    validate_digest(
+        &receipt.checkpoint_trust_state_sha256,
+        "checkpoint trust-state SHA-256",
+    )?;
+    validate_digest(&receipt.request_sha256, "request SHA-256")?;
+    validate_digest(&receipt.response_sha256, "response SHA-256")?;
+    validate_slug(&receipt.witness_id, "registry history witness id")?;
+    let public_key = decode_hex::<32>(&receipt.witness_public_key, "witness public key")?;
+    VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| format!("invalid registry history witness public key: {error}"))?;
+    match (
+        &receipt.witness_key_trust_state_sha256,
+        receipt.witness_key_generation,
+    ) {
+        (None, None) => {}
+        (Some(digest), Some(_)) => {
+            validate_digest(digest, "witness key trust-state SHA-256")?;
+        }
+        _ => return Err("remote witness receipt trust-state binding is incomplete".into()),
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -273,6 +323,43 @@ fn validate_env_name(value: &str) -> Result<(), String> {
         return Err("bearer-token environment name is invalid".into());
     }
     Ok(())
+}
+
+fn validate_slug(value: &str, label: &str) -> Result<(), String> {
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
+        && (value.as_bytes()[0].is_ascii_lowercase() || value.as_bytes()[0].is_ascii_digit());
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("{label} is invalid"))
+    }
+}
+
+fn validate_digest(value: &str, label: &str) -> Result<(), String> {
+    decode_hex::<32>(value, label).map(|_| ())
+}
+
+fn decode_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], String> {
+    if value.len() != N * 2
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "{label} must contain {} lowercase hexadecimal digits",
+            N * 2
+        ));
+    }
+    let mut bytes = [0_u8; N];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&value[index * 2..index * 2 + 2], 16)
+            .map_err(|error| format!("decoding {label}: {error}"))?;
+    }
+    Ok(bytes)
 }
 
 fn sha256(bytes: &[u8]) -> String {
