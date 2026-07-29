@@ -259,6 +259,11 @@
     {
       "id": "independently-verified-policy-remediation",
       "release": "v1.348.0",
+      "status": "released"
+    },
+    {
+      "id": "append-only-policy-lifecycle-ledger",
+      "release": "v1.349.0",
       "status": "current"
     }
   ]

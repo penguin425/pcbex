@@ -838,7 +838,7 @@ fn slug_schema() -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::policy_incident_ledger::repeated_incident_test_ledger;
     use crate::policy_pack::{TrustedApprovalKey, parse_policy_pack};
@@ -958,8 +958,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn independent_clean_successor_lifts_only_its_exact_digest() {
+    pub(crate) fn lifecycle_test_states() -> (
+        OrganizationPolicyPack,
+        PolicySuspensionState,
+        PolicyRemediationState,
+    ) {
         let suspension_a = [7_u8; 32];
         let suspension_b = [8_u8; 32];
         let remediation_a = [9_u8; 32];
@@ -1123,7 +1126,12 @@ mod tests {
             std::slice::from_ref(&remediation),
         )
         .unwrap();
+        (candidate, suspension, remediation)
+    }
 
+    #[test]
+    fn independent_clean_successor_lifts_only_its_exact_digest() {
+        let (_, _, remediation) = lifecycle_test_states();
         let mut tampered = remediation;
         tampered.monitoring.promotion_eligible = false;
         assert!(validate_policy_remediation_state(&tampered).is_err());

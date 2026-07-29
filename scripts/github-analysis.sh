@@ -74,6 +74,9 @@ write_output policy-suspension-state ""
 write_output policy-suspension-status ""
 write_output policy-remediation-state ""
 write_output policy-remediation-status ""
+write_output policy-lifecycle-ledger ""
+write_output policy-lifecycle-generation ""
+write_output policy-lifecycle-awaiting-remediation ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -494,6 +497,11 @@ if [[ -n "${PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX:-}" ]]; then
       deployment_arguments+=(--remediation-state "$remediation_state")
     fi
   done <<< "${PCBEX_POLICY_REMEDIATION_STATE_FILES:-}"
+  while IFS= read -r lifecycle_ledger; do
+    if [[ -n "$lifecycle_ledger" ]]; then
+      deployment_arguments+=(--policy-lifecycle-ledger "$lifecycle_ledger")
+    fi
+  done <<< "${PCBEX_POLICY_LIFECYCLE_LEDGER_FILES:-}"
   while IFS= read -r decision; do
     if [[ -n "$decision" ]]; then
       deployment_arguments+=(--decision "$decision")
@@ -824,6 +832,57 @@ if [[ -n "${PCBEX_POLICY_REMEDIATION_RECORDED_AT_UNIX:-}" ]]; then
   {
     printf '\n'
     cat "$policy_remediation_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+policy_lifecycle_ledger=""
+policy_lifecycle_generation=""
+policy_lifecycle_awaiting_remediation=""
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_EVENT_TYPE:-}" ]]; then
+  policy_lifecycle_ledger="${artifact_dir}/policy-lifecycle-ledger.json"
+  policy_lifecycle_summary="${artifact_dir}/policy-lifecycle-ledger.md"
+  lifecycle_arguments=(append-policy-lifecycle-event \
+    --output "$policy_lifecycle_ledger" \
+    --summary-output "$policy_lifecycle_summary")
+  if [[ -n "${PCBEX_POLICY_LIFECYCLE_BASELINE_LEDGER:-}" ]]; then
+    lifecycle_arguments+=(--baseline-ledger "$PCBEX_POLICY_LIFECYCLE_BASELINE_LEDGER")
+  fi
+  case "$PCBEX_POLICY_LIFECYCLE_EVENT_TYPE" in
+    suspension)
+      lifecycle_suspension="${PCBEX_POLICY_LIFECYCLE_SUSPENSION_STATE:-$policy_suspension_state}"
+      if [[ -z "$lifecycle_suspension" ]]; then
+        echo "policy lifecycle suspension event requires a retained suspension state" >&2
+        exit 2
+      fi
+      lifecycle_arguments+=(--suspension "$lifecycle_suspension")
+      ;;
+    remediation)
+      lifecycle_remediation="${PCBEX_POLICY_LIFECYCLE_REMEDIATION_STATE:-$policy_remediation_state}"
+      if [[ -z "$lifecycle_remediation" ]]; then
+        echo "policy lifecycle remediation event requires a retained remediation state" >&2
+        exit 2
+      fi
+      lifecycle_arguments+=(--remediation "$lifecycle_remediation")
+      ;;
+    *)
+      echo "PCBEX_POLICY_LIFECYCLE_EVENT_TYPE must be suspension or remediation" >&2
+      exit 2
+      ;;
+  esac
+  "$PCBEX_BINARY" "${lifecycle_arguments[@]}"
+  readarray -t lifecycle_values < <(
+    python3 -c '
+import json,sys
+data=json.load(open(sys.argv[1], encoding="utf-8"))
+print(data["generation"])
+print(data["awaiting_remediation"])
+' "$policy_lifecycle_ledger"
+  )
+  policy_lifecycle_generation="${lifecycle_values[0]}"
+  policy_lifecycle_awaiting_remediation="${lifecycle_values[1]}"
+  {
+    printf '\n'
+    cat "$policy_lifecycle_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -1247,6 +1306,9 @@ write_output policy-suspension-state "$policy_suspension_state"
 write_output policy-suspension-status "$policy_suspension_status"
 write_output policy-remediation-state "$policy_remediation_state"
 write_output policy-remediation-status "$policy_remediation_status"
+write_output policy-lifecycle-ledger "$policy_lifecycle_ledger"
+write_output policy-lifecycle-generation "$policy_lifecycle_generation"
+write_output policy-lifecycle-awaiting-remediation "$policy_lifecycle_awaiting_remediation"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

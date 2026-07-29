@@ -79,6 +79,7 @@ mod policy_deployment;
 mod policy_deployment_rollback;
 mod policy_deployment_verification;
 mod policy_incident_ledger;
+mod policy_lifecycle;
 mod policy_pack;
 mod policy_recommendation;
 mod policy_remediation;
@@ -120,6 +121,12 @@ use policy_deployment_verification::{
 use policy_incident_ledger::{
     append_policy_incident, parse_policy_incident_ledger, policy_incident_ledger_json_schema,
     render_policy_incident_ledger_summary,
+};
+use policy_lifecycle::{
+    append_policy_lifecycle_event, lifecycle_evidence, parse_policy_lifecycle_ledger,
+    parse_policy_lifecycle_snapshot, policy_lifecycle_ledger_json_schema,
+    policy_lifecycle_snapshot_json_schema, render_policy_lifecycle_summary,
+    snapshot_policy_lifecycle,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -782,6 +789,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed append-only policy lifecycle ledger JSON Schema.
+    PolicyLifecycleLedgerSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize an append-only policy lifecycle ledger.
+    ValidatePolicyLifecycleLedger {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed historical policy lifecycle snapshot JSON Schema.
+    PolicyLifecycleSnapshotSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a historical policy lifecycle snapshot.
+    ValidatePolicyLifecycleSnapshot {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -994,6 +1023,9 @@ enum Command {
         /// Independently approved clean successor evidence for suspended policies.
         #[arg(long = "remediation-state")]
         remediation_states: Vec<PathBuf>,
+        /// Append-only lifecycle ledgers containing complete suspension/remediation evidence.
+        #[arg(long = "policy-lifecycle-ledger")]
+        policy_lifecycle_ledgers: Vec<PathBuf>,
         #[arg(long)]
         recorded_at_unix: u64,
         #[arg(short, long)]
@@ -1240,6 +1272,33 @@ enum Command {
         summary_output: Option<PathBuf>,
         #[arg(long)]
         require_verified: bool,
+    },
+    /// Append one complete suspension decision or remediation to its immutable lifecycle.
+    AppendPolicyLifecycleEvent {
+        /// Previously retained lifecycle ledger; required after the first event.
+        #[arg(long)]
+        baseline_ledger: Option<PathBuf>,
+        /// Complete signed suspension/continue state to append.
+        #[arg(long, conflicts_with = "remediation")]
+        suspension: Option<PathBuf>,
+        /// Complete independently verified remediation state to append.
+        #[arg(long, conflicts_with = "suspension")]
+        remediation: Option<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        /// Fail after writing while any suspension is awaiting remediation.
+        #[arg(long)]
+        require_no_pending_suspensions: bool,
+    },
+    /// Recompute policy suspension/remediation status at one historical generation.
+    SnapshotPolicyLifecycle {
+        ledger: PathBuf,
+        #[arg(long)]
+        generation: u64,
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2862,6 +2921,24 @@ fn main() -> Result<()> {
             let state = parse_policy_remediation_state(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
         }
+        Command::PolicyLifecycleLedgerSchema { output } => {
+            write_or_print_json(&policy_lifecycle_ledger_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyLifecycleLedger { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let ledger = parse_policy_lifecycle_ledger(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(ledger)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleSnapshotSchema { output } => {
+            write_or_print_json(&policy_lifecycle_snapshot_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyLifecycleSnapshot { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let snapshot = parse_policy_lifecycle_snapshot(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(snapshot)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -3513,6 +3590,7 @@ fn main() -> Result<()> {
             baseline_state,
             suspension_states,
             remediation_states,
+            policy_lifecycle_ledgers,
             recorded_at_unix,
             output,
             summary_output,
@@ -3539,7 +3617,7 @@ fn main() -> Result<()> {
                 parse_canary_authorization(&authorization_source).map_err(anyhow::Error::msg)?;
             let policy = load_policy_pack(&policy_pack)?.0;
             let candidate_policy = load_policy_pack(&candidate_policy_pack)?.0;
-            let suspension_states = suspension_states
+            let mut suspension_states = suspension_states
                 .iter()
                 .map(|path| {
                     let source = fs::read_to_string(path)
@@ -3549,7 +3627,7 @@ fn main() -> Result<()> {
                         .with_context(|| format!("parsing {}", path.display()))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let remediation_states = remediation_states
+            let mut remediation_states = remediation_states
                 .iter()
                 .map(|path| {
                     let source = fs::read_to_string(path)
@@ -3559,6 +3637,17 @@ fn main() -> Result<()> {
                         .with_context(|| format!("parsing {}", path.display()))
                 })
                 .collect::<Result<Vec<_>>>()?;
+            for path in &policy_lifecycle_ledgers {
+                let source = fs::read_to_string(path)
+                    .with_context(|| format!("reading {}", path.display()))?;
+                let ledger = parse_policy_lifecycle_ledger(&source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                let (mut retained_suspensions, mut retained_remediations) =
+                    lifecycle_evidence(&ledger).map_err(anyhow::Error::msg)?;
+                suspension_states.append(&mut retained_suspensions);
+                remediation_states.append(&mut retained_remediations);
+            }
             enforce_policy_suspensions(&candidate_policy, &suspension_states, &remediation_states)
                 .map_err(anyhow::Error::msg)?;
             let source_trust_state = load_policy_trust_state(&source_policy_trust_state)?;
@@ -4358,6 +4447,89 @@ fn main() -> Result<()> {
             if require_verified && !state.suspension_lifted_for_remediation {
                 bail!("policy remediation was not independently verified");
             }
+        }
+        Command::AppendPolicyLifecycleEvent {
+            baseline_ledger,
+            suspension,
+            remediation,
+            output,
+            summary_output,
+            require_no_pending_suspensions,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy lifecycle",
+            )?;
+            let baseline = baseline_ledger
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_lifecycle_ledger(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .transpose()?;
+            let suspension = suspension
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_suspension_state(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .transpose()?;
+            let remediation = remediation
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_remediation_state(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .transpose()?;
+            let ledger = append_policy_lifecycle_event(
+                baseline.as_ref(),
+                suspension.as_ref(),
+                remediation.as_ref(),
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&ledger)? + "\n";
+            let summary = render_policy_lifecycle_summary(&ledger);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "policy lifecycle generation {} retained: {} pending suspension(s)",
+                ledger.generation, ledger.awaiting_remediation
+            );
+            if require_no_pending_suspensions && ledger.awaiting_remediation != 0 {
+                bail!(
+                    "policy lifecycle has {} suspension(s) awaiting remediation",
+                    ledger.awaiting_remediation
+                );
+            }
+        }
+        Command::SnapshotPolicyLifecycle {
+            ledger,
+            generation,
+            output,
+        } => {
+            let source = fs::read_to_string(&ledger)
+                .with_context(|| format!("reading {}", ledger.display()))?;
+            let ledger = parse_policy_lifecycle_ledger(&source).map_err(anyhow::Error::msg)?;
+            let snapshot =
+                snapshot_policy_lifecycle(&ledger, generation).map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&snapshot)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "policy lifecycle snapshot generation {}: {} pending suspension(s)",
+                snapshot.generation, snapshot.awaiting_remediation
+            );
         }
         Command::RecordSimulationEvidence {
             declaration,

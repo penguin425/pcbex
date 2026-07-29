@@ -1139,6 +1139,39 @@ and time. A suspended policy identity blocks later promotion until
 release applies only to that exact successor digest and never lifts suspension
 automatically. CLI, MCP, and the composite Action enforce the same boundary.
 
+Retain every suspension and remediation as one append-only lifecycle:
+
+```sh
+pcbex append-policy-lifecycle-event \
+  --suspension policy-suspension.json \
+  --output policy-lifecycle.json \
+  --summary-output policy-lifecycle.md
+
+pcbex append-policy-lifecycle-event \
+  --baseline-ledger policy-lifecycle.json \
+  --remediation policy-remediation.json \
+  --output policy-lifecycle.next.json \
+  --summary-output policy-lifecycle.next.md \
+  --require-no-pending-suspensions
+
+pcbex snapshot-policy-lifecycle policy-lifecycle.next.json \
+  --generation 1 \
+  --output policy-lifecycle.generation-1.json
+```
+
+Every entry binds its sequence, previous entry, event type, complete embedded
+state digest, policy identity, and time. Parsing recomputes the complete chain,
+revalidates every embedded signed state, and derives which decisions are
+`awaiting_remediation`, `released`, `superseded`, or
+`continued_under_review`. A remediation must resolve one exact active
+suspension and cannot be replayed. Historical snapshots embed the complete
+source ledger and its digest, then recompute the requested generation rather
+than trusting copied counters. `advance-policy-deployment` accepts repeatable
+`--policy-lifecycle-ledger` inputs and reuses their fully verified evidence.
+MCP exposes append and snapshot tools; the Action can append one selected
+event, publish its generation and pending count, and consume retained lifecycle
+ledgers at the deployment gate.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1166,7 +1199,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.348.0
+    uses: penguin425/pcbex@v1.349.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2403,7 +2436,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.348.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.349.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

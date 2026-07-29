@@ -178,6 +178,10 @@ inputs:
     description: Newline-separated independently verified remediation states for suspended policies.
     required: false
     default: ""
+  policy-lifecycle-ledger-files:
+    description: Newline-separated append-only lifecycle ledgers containing complete suspension and remediation evidence.
+    required: false
+    default: ""
   policy-deployment-recorded-at-unix:
     description: Opt-in Unix timestamp for advancing the monotonic deployment state.
     required: false
@@ -372,6 +376,26 @@ inputs:
     default: ""
   fail-on-policy-remediation:
     description: Fail unless an exact successor remediation is independently verified.
+    required: false
+    default: "false"
+  policy-lifecycle-event-type:
+    description: Optional lifecycle event to append; must be suspension or remediation.
+    required: false
+    default: ""
+  policy-lifecycle-baseline-ledger:
+    description: Previously retained append-only suspension/remediation lifecycle ledger.
+    required: false
+    default: ""
+  policy-lifecycle-suspension-state:
+    description: Suspension state to append; defaults to the state produced in this run.
+    required: false
+    default: ""
+  policy-lifecycle-remediation-state:
+    description: Remediation state to append; defaults to the state produced in this run.
+    required: false
+    default: ""
+  fail-on-policy-lifecycle-pending:
+    description: Fail when the resulting lifecycle still contains a suspension awaiting remediation.
     required: false
     default: "false"
   ai-review-request:
@@ -664,6 +688,15 @@ outputs:
   policy-remediation-status:
     description: Whether remediation evidence lifted one suspension for one exact digest.
     value: ${{ steps.analyze.outputs.policy-remediation-status }}
+  policy-lifecycle-ledger:
+    description: Append-only suspension and remediation lifecycle ledger.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-ledger }}
+  policy-lifecycle-generation:
+    description: Latest retained lifecycle generation.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-generation }}
+  policy-lifecycle-awaiting-remediation:
+    description: Number of retained suspensions still awaiting remediation.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-awaiting-remediation }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -777,6 +810,7 @@ runs:
         PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE: ${{ inputs.policy-deployment-baseline-state }}
         PCBEX_POLICY_SUSPENSION_STATE_FILES: ${{ inputs.policy-suspension-state-files }}
         PCBEX_POLICY_REMEDIATION_STATE_FILES: ${{ inputs.policy-remediation-state-files }}
+        PCBEX_POLICY_LIFECYCLE_LEDGER_FILES: ${{ inputs.policy-lifecycle-ledger-files }}
         PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX: ${{ inputs.policy-deployment-recorded-at-unix }}
         PCBEX_POLICY_DEPLOYMENT_VERIFICATION_STATE: ${{ inputs.policy-deployment-verification-state }}
         PCBEX_POLICY_DEPLOYMENT_VERIFICATION_PROJECT_ID: ${{ inputs.policy-deployment-verification-project-id }}
@@ -818,6 +852,10 @@ runs:
         PCBEX_POLICY_REMEDIATION_APPROVAL_FILES: ${{ inputs.policy-remediation-approval-files }}
         PCBEX_POLICY_REMEDIATION_MINIMUM_APPROVALS: ${{ inputs.policy-remediation-minimum-approvals }}
         PCBEX_POLICY_REMEDIATION_RECORDED_AT_UNIX: ${{ inputs.policy-remediation-recorded-at-unix }}
+        PCBEX_POLICY_LIFECYCLE_EVENT_TYPE: ${{ inputs.policy-lifecycle-event-type }}
+        PCBEX_POLICY_LIFECYCLE_BASELINE_LEDGER: ${{ inputs.policy-lifecycle-baseline-ledger }}
+        PCBEX_POLICY_LIFECYCLE_SUSPENSION_STATE: ${{ inputs.policy-lifecycle-suspension-state }}
+        PCBEX_POLICY_LIFECYCLE_REMEDIATION_STATE: ${{ inputs.policy-lifecycle-remediation-state }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -899,6 +937,7 @@ runs:
         PCBEX_POLICY_INCIDENT_SUSPENSION_REVIEW_REQUIRED: ${{ steps.analyze.outputs.policy-incident-suspension-review-required }}
         PCBEX_POLICY_SUSPENSION_STATUS: ${{ steps.analyze.outputs.policy-suspension-status }}
         PCBEX_POLICY_REMEDIATION_STATUS: ${{ steps.analyze.outputs.policy-remediation-status }}
+        PCBEX_POLICY_LIFECYCLE_AWAITING_REMEDIATION: ${{ steps.analyze.outputs.policy-lifecycle-awaiting-remediation }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -920,6 +959,7 @@ runs:
         PCBEX_FAIL_ON_POLICY_INCIDENT_SUSPENSION_REVIEW: ${{ inputs.fail-on-policy-incident-suspension-review }}
         PCBEX_FAIL_ON_POLICY_SUSPENSION: ${{ inputs.fail-on-policy-suspension }}
         PCBEX_FAIL_ON_POLICY_REMEDIATION: ${{ inputs.fail-on-policy-remediation }}
+        PCBEX_FAIL_ON_POLICY_LIFECYCLE_PENDING: ${{ inputs.fail-on-policy-lifecycle-pending }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -1008,5 +1048,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_REMEDIATION" == "true" && "$PCBEX_POLICY_REMEDIATION_STATUS" != "remediation_verified" ]]; then
           echo "::error::pcbex policy remediation lacks clean evidence and an independent approval quorum"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_PENDING" == "true" && "$PCBEX_POLICY_LIFECYCLE_AWAITING_REMEDIATION" != "0" ]]; then
+          echo "::error::pcbex policy lifecycle contains a suspension awaiting remediation"
           exit 1
         fi

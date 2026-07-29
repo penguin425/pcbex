@@ -58,6 +58,7 @@ auditable release.
 | v1.346.0 | Hash-chained policy incident ledger | Retain closed rollbacks, recovery metrics, and repeated-revision suspension candidates without automatic suspension |
 | v1.347.0 | Signed policy suspension decision | Bind dual-control human suspension to repeated incidents and deny exact suspended digests at promotion |
 | v1.348.0 | Independently verified policy remediation | Require an accepted clean successor and a new independent quorum before lifting one suspension for one exact digest |
+| v1.349.0 | Append-only policy lifecycle ledger | Reconstruct blocked, released, superseded, and pending suspension decisions at every retained generation |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -66,6 +67,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should retain an append-only lifecycle for suspension and
-remediation decisions so auditors can prove which policy digests were blocked,
-released, superseded, or still awaiting action at any historical generation.
+The next roadmap should authenticate policy lifecycle heads with monotonic
+signed checkpoints so independent CI consumers can reject a valid but stale
+ledger without relying on mutable repository state.
