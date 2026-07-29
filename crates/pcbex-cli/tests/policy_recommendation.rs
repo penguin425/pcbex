@@ -1501,6 +1501,59 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
     assert_eq!(closure_document["status"], "incident_closed");
     assert_eq!(closure_document["operator_id"], "incident-operator");
     assert_eq!(closure_document["automatic_incident_closure"], false);
+    let incident_ledger = temporary.join("policy-incident-ledger.json");
+    let ledger_result = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("append-policy-incident-ledger")
+        .arg(&production_rollback_state)
+        .arg("--failed-verification")
+        .arg(&revision_three_verification)
+        .arg("--recovery")
+        .arg(&recovery)
+        .arg("--closure")
+        .arg(&incident_closure)
+        .arg("--output")
+        .arg(&incident_ledger)
+        .output()
+        .unwrap();
+    assert!(
+        ledger_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ledger_result.stderr)
+    );
+    let ledger_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&incident_ledger).unwrap()).unwrap();
+    assert_eq!(ledger_document["entry_count"], 1);
+    assert_eq!(ledger_document["generation"], 1);
+    assert_eq!(ledger_document["requires_human_suspension_review"], false);
+    assert_eq!(ledger_document["automatic_policy_suspension"], false);
+    assert_eq!(ledger_document["entries"][0]["time_to_rollback_seconds"], 2);
+    assert_eq!(ledger_document["entries"][0]["time_to_recovery_seconds"], 3);
+    assert_eq!(ledger_document["entries"][0]["time_to_close_seconds"], 5);
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-policy-incident-ledger")
+            .arg(&incident_ledger)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let duplicate_incident = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("append-policy-incident-ledger")
+        .arg(&production_rollback_state)
+        .arg("--failed-verification")
+        .arg(&revision_three_verification)
+        .arg("--recovery")
+        .arg(&recovery)
+        .arg("--closure")
+        .arg(&incident_closure)
+        .arg("--baseline-ledger")
+        .arg(&incident_ledger)
+        .arg("--output")
+        .arg(temporary.join("duplicate-policy-incident-ledger.json"))
+        .output()
+        .unwrap();
+    assert!(!duplicate_incident.status.success());
+    assert!(String::from_utf8_lossy(&duplicate_incident.stderr).contains("already retained"));
 
     let self_acknowledgment = temporary.join("rollback-self-acknowledgment.json");
     assert!(
@@ -1545,6 +1598,7 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
         "policy-rollback-recovery-schema",
         "signed-rollback-incident-acknowledgment-schema",
         "rollback-incident-closure-schema",
+        "policy-incident-ledger-schema",
     ] {
         let schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
             .arg(schema_command)

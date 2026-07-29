@@ -53,6 +53,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "validate-rollback-incident-acknowledgment",
         "close-rollback-incident",
         "validate-rollback-incident-closure",
+        "append-policy-incident-ledger",
+        "validate-policy-incident-ledger",
         "compare-schematics",
         "route-schematic-review",
         "check-schematic",

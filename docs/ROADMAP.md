@@ -55,6 +55,7 @@ auditable release.
 | v1.343.0 | Fleet-wide post-deployment verification | Bind complete production evidence to the approved candidate and require dual-control rollback on regression |
 | v1.344.0 | Verification-bound dual-control rollback | Restore only the retained predecessor after two trusted humans sign exact failed production evidence |
 | v1.345.0 | Verified rollback-incident closure | Verify the complete restored fleet and require an independent trusted operator signature before closure |
+| v1.346.0 | Hash-chained policy incident ledger | Retain closed rollbacks, recovery metrics, and repeated-revision suspension candidates without automatic suspension |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -63,6 +64,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should retain deployment incident history across later policy
-promotions and provide bounded operational metrics for recovery time, repeated
-failure patterns, and policy revisions that should be suspended.
+The next roadmap should bind a human suspension decision to repeated incident
+evidence and prevent a suspended policy digest from being promoted again until
+an independently approved remediation revision is verified.

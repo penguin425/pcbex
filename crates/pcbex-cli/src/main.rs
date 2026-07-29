@@ -78,6 +78,7 @@ mod mcp;
 mod policy_deployment;
 mod policy_deployment_rollback;
 mod policy_deployment_verification;
+mod policy_incident_ledger;
 mod policy_pack;
 mod policy_recommendation;
 mod policy_rollback_recovery;
@@ -113,6 +114,10 @@ use policy_deployment_rollback::{
 use policy_deployment_verification::{
     parse_policy_deployment_verification, policy_deployment_verification_json_schema,
     render_policy_deployment_verification_summary, verify_policy_deployment,
+};
+use policy_incident_ledger::{
+    append_policy_incident, parse_policy_incident_ledger, policy_incident_ledger_json_schema,
+    render_policy_incident_ledger_summary,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -693,6 +698,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed append-only policy-incident-ledger JSON Schema.
+    PolicyIncidentLedgerSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize an append-only policy-incident ledger.
+    ValidatePolicyIncidentLedger {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1034,6 +1050,27 @@ enum Command {
         summary_output: Option<PathBuf>,
         #[arg(long)]
         require_closed: bool,
+    },
+    /// Append one closed rollback incident and recompute bounded operational metrics.
+    AppendPolicyIncidentLedger {
+        rollback: PathBuf,
+        #[arg(long)]
+        failed_verification: PathBuf,
+        #[arg(long)]
+        recovery: PathBuf,
+        #[arg(long)]
+        closure: PathBuf,
+        #[arg(long)]
+        baseline_ledger: Option<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        suspension_threshold: u32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        /// Fail after writing when repeated incidents require human suspension review.
+        #[arg(long)]
+        require_no_suspension_review: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2603,6 +2640,15 @@ fn main() -> Result<()> {
             let state = parse_rollback_incident_closure(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
         }
+        Command::PolicyIncidentLedgerSchema { output } => {
+            write_or_print_json(&policy_incident_ledger_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyIncidentLedger { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let ledger = parse_policy_incident_ledger(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(ledger)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -3803,6 +3849,70 @@ fn main() -> Result<()> {
             );
             if require_closed && !state.incident_closed {
                 bail!("rollback incident was not closed");
+            }
+        }
+        Command::AppendPolicyIncidentLedger {
+            rollback,
+            failed_verification,
+            recovery,
+            closure,
+            baseline_ledger,
+            suspension_threshold,
+            output,
+            summary_output,
+            require_no_suspension_review,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy incident ledger",
+            )?;
+            let rollback_source = fs::read_to_string(&rollback)
+                .with_context(|| format!("reading {}", rollback.display()))?;
+            let rollback = parse_policy_deployment_rollback_state(&rollback_source)
+                .map_err(anyhow::Error::msg)?;
+            let failed_verification_source = fs::read_to_string(&failed_verification)
+                .with_context(|| format!("reading {}", failed_verification.display()))?;
+            let failed_verification =
+                parse_policy_deployment_verification(&failed_verification_source)
+                    .map_err(anyhow::Error::msg)?;
+            let recovery_source = fs::read_to_string(&recovery)
+                .with_context(|| format!("reading {}", recovery.display()))?;
+            let recovery =
+                parse_policy_rollback_recovery(&recovery_source).map_err(anyhow::Error::msg)?;
+            let closure_source = fs::read_to_string(&closure)
+                .with_context(|| format!("reading {}", closure.display()))?;
+            let closure =
+                parse_rollback_incident_closure(&closure_source).map_err(anyhow::Error::msg)?;
+            let baseline = baseline_ledger
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_incident_ledger(&source).map_err(anyhow::Error::msg)
+                })
+                .transpose()?;
+            let ledger = append_policy_incident(
+                baseline.as_ref(),
+                &rollback,
+                &failed_verification,
+                &recovery,
+                &closure,
+                suspension_threshold,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&ledger)? + "\n";
+            let summary = render_policy_incident_ledger_summary(&ledger);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "policy incident ledger: {} incident(s), suspension review {}",
+                ledger.entry_count, ledger.requires_human_suspension_review
+            );
+            if require_no_suspension_review && ledger.requires_human_suspension_review {
+                bail!("policy incident ledger requires human suspension review");
             }
         }
         Command::RecordSimulationEvidence {
