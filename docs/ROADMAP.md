@@ -53,6 +53,7 @@ auditable release.
 | v1.341.0 | Dual-control canary completion | Finalize promotion or rollback only with unanimous trusted human signatures over exact monitoring evidence |
 | v1.342.0 | Monotonic policy deployment state | Re-verify final signatures, reject revision replay, and retain hash-chained active and rollback revisions |
 | v1.343.0 | Fleet-wide post-deployment verification | Bind complete production evidence to the approved candidate and require dual-control rollback on regression |
+| v1.344.0 | Verification-bound dual-control rollback | Restore only the retained predecessor after two trusted humans sign exact failed production evidence |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -61,6 +62,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should execute a verification-bound rollback only after a
-fresh, unanimous dual-control authorization, then retain the restored active
-revision and failed production evidence in one hash-chained state transition.
+The next roadmap should verify the restored fleet against the retained
+pre-promotion production baseline and close the rollback incident only after
+complete clean evidence and an independently signed operator acknowledgment.

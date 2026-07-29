@@ -1092,6 +1092,270 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
             .unwrap()
             .success()
     );
+    let promoted_revision_three = temporary.join("promoted-revision-three.json");
+    let promoted_revision_three_result = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("advance-policy-deployment")
+        .arg(&rollout)
+        .arg(&monitoring)
+        .arg(&authorization)
+        .arg("--policy-pack")
+        .arg(&verified_policy)
+        .arg("--candidate-policy-pack")
+        .arg(&rollback_candidate_verified)
+        .arg("--source-policy-trust-state")
+        .arg(&policy_trust_state)
+        .arg("--candidate-policy-trust-state")
+        .arg(&rollback_candidate_trust)
+        .arg("--decision")
+        .arg(&completion_a)
+        .arg("--decision")
+        .arg(&completion_b)
+        .arg("--baseline-state")
+        .arg(&deployment)
+        .arg("--recorded-at-unix")
+        .arg("1801")
+        .arg("--output")
+        .arg(&promoted_revision_three)
+        .output()
+        .unwrap();
+    assert!(
+        promoted_revision_three_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&promoted_revision_three_result.stderr)
+    );
+    let promoted_revision_three_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&promoted_revision_three).unwrap()).unwrap();
+    assert_eq!(promoted_revision_three_document["active_revision"], 3);
+    assert_eq!(promoted_revision_three_document["rollback_revision"], 2);
+    let deployed_revision_three = temporary.join("deployed-revision-three");
+    assert!(
+        analyze(
+            &deployed_revision_three,
+            "--policy-pack",
+            &rollback_candidate_verified
+        )
+        .status
+        .success()
+    );
+    let regressed_revision_three = temporary.join("deployed-revision-three-regressed");
+    fs::create_dir(&regressed_revision_three).unwrap();
+    let mut revision_three_run: serde_json::Value =
+        serde_json::from_slice(&fs::read(deployed_revision_three.join("run.json")).unwrap())
+            .unwrap();
+    revision_three_run["result"]["violations"] = serde_json::json!(2);
+    fs::write(
+        regressed_revision_three.join("run.json"),
+        serde_json::to_string_pretty(&revision_three_run).unwrap(),
+    )
+    .unwrap();
+    let mut revision_three_checks: serde_json::Value =
+        serde_json::from_slice(&fs::read(deployed_revision_three.join("checks.json")).unwrap())
+            .unwrap();
+    revision_three_checks["violations"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "rule": "clearance",
+            "message": "revision three production regression",
+            "net_ids": [1]
+        }));
+    fs::write(
+        regressed_revision_three.join("checks.json"),
+        serde_json::to_string_pretty(&revision_three_checks).unwrap(),
+    )
+    .unwrap();
+    fs::copy(
+        deployed_revision_three.join("quality.json"),
+        regressed_revision_three.join("quality.json"),
+    )
+    .unwrap();
+    let revision_three_verification = temporary.join("revision-three-verification.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("verify-policy-deployment")
+            .arg(&promoted_revision_three)
+            .arg(&rollout)
+            .arg("--candidate-policy-pack")
+            .arg(&rollback_candidate_verified)
+            .arg("--project-id")
+            .arg("controller")
+            .arg("--board")
+            .arg(&board)
+            .arg("--expected-analysis")
+            .arg(&candidate)
+            .arg("--observed-analysis")
+            .arg(&regressed_revision_three)
+            .arg("--verified-at-unix")
+            .arg("1900")
+            .arg("--output")
+            .arg(&revision_three_verification)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let production_rollback_a = temporary.join("production-rollback-a.json");
+    let production_rollback_b = temporary.join("production-rollback-b.json");
+    for (private_key, signer_id, signed) in [
+        (&key_a, "reviewer-a", &production_rollback_a),
+        (&key_b, "reviewer-b", &production_rollback_b),
+    ] {
+        assert!(
+            Command::new(env!("CARGO_BIN_EXE_pcbex"))
+                .arg("sign-policy-deployment-rollback")
+                .arg(&promoted_revision_three)
+                .arg(&revision_three_verification)
+                .arg("--approved-at-unix")
+                .arg("1901")
+                .arg("--private-key")
+                .arg(private_key)
+                .arg("--signer-id")
+                .arg(signer_id)
+                .arg("--reason")
+                .arg("Production evidence regressed after policy promotion.")
+                .arg("--ticket")
+                .arg("HW-46")
+                .arg("--output")
+                .arg(signed)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let production_rollback_state = temporary.join("production-rollback-state.json");
+    let applied_production_rollback = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("apply-policy-deployment-rollback")
+        .arg(&promoted_revision_three)
+        .arg(&revision_three_verification)
+        .arg("--active-policy-pack")
+        .arg(&rollback_candidate_verified)
+        .arg("--approval")
+        .arg(&production_rollback_a)
+        .arg("--approval")
+        .arg(&production_rollback_b)
+        .arg("--recorded-at-unix")
+        .arg("1902")
+        .arg("--output")
+        .arg(&production_rollback_state)
+        .arg("--require-applied")
+        .output()
+        .unwrap();
+    assert!(
+        applied_production_rollback.status.success(),
+        "{}",
+        String::from_utf8_lossy(&applied_production_rollback.stderr)
+    );
+    let production_rollback_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&production_rollback_state).unwrap()).unwrap();
+    assert_eq!(production_rollback_document["status"], "rollback_applied");
+    assert_eq!(production_rollback_document["generation"], 3);
+    assert_eq!(production_rollback_document["active_revision"], 2);
+    assert_eq!(production_rollback_document["failed_revision"], 3);
+    assert_eq!(production_rollback_document["approvals"], 2);
+    assert_eq!(production_rollback_document["rollback_applied"], true);
+    assert_eq!(production_rollback_document["automatic_rollback"], false);
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-policy-deployment-rollback-state")
+            .arg(&production_rollback_state)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let insufficient_production_rollback = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("apply-policy-deployment-rollback")
+        .arg(&promoted_revision_three)
+        .arg(&revision_three_verification)
+        .arg("--active-policy-pack")
+        .arg(&rollback_candidate_verified)
+        .arg("--approval")
+        .arg(&production_rollback_a)
+        .arg("--recorded-at-unix")
+        .arg("1902")
+        .arg("--output")
+        .arg(temporary.join("insufficient-production-rollback.json"))
+        .output()
+        .unwrap();
+    assert!(!insufficient_production_rollback.status.success());
+    assert!(
+        String::from_utf8_lossy(&insufficient_production_rollback.stderr)
+            .contains("dual-control quorum"),
+        "{}",
+        String::from_utf8_lossy(&insufficient_production_rollback.stderr)
+    );
+    let replayed_production_rollback = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("apply-policy-deployment-rollback")
+        .arg(&promoted_revision_three)
+        .arg(&revision_three_verification)
+        .arg("--active-policy-pack")
+        .arg(&rollback_candidate_verified)
+        .arg("--approval")
+        .arg(&production_rollback_a)
+        .arg("--approval")
+        .arg(&production_rollback_a)
+        .arg("--recorded-at-unix")
+        .arg("1902")
+        .arg("--output")
+        .arg(temporary.join("replayed-production-rollback.json"))
+        .output()
+        .unwrap();
+    assert!(!replayed_production_rollback.status.success());
+    assert!(
+        String::from_utf8_lossy(&replayed_production_rollback.stderr).contains("distinct signer"),
+        "{}",
+        String::from_utf8_lossy(&replayed_production_rollback.stderr)
+    );
+    let mut tampered_approval: serde_json::Value =
+        serde_json::from_slice(&fs::read(&production_rollback_a).unwrap()).unwrap();
+    tampered_approval["ticket"] = serde_json::json!("HW-TAMPERED");
+    let tampered_approval_path = temporary.join("tampered-production-rollback.json");
+    fs::write(
+        &tampered_approval_path,
+        serde_json::to_string_pretty(&tampered_approval).unwrap(),
+    )
+    .unwrap();
+    let tampered_production_rollback = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("apply-policy-deployment-rollback")
+        .arg(&promoted_revision_three)
+        .arg(&revision_three_verification)
+        .arg("--active-policy-pack")
+        .arg(&rollback_candidate_verified)
+        .arg("--approval")
+        .arg(&tampered_approval_path)
+        .arg("--approval")
+        .arg(&production_rollback_b)
+        .arg("--recorded-at-unix")
+        .arg("1902")
+        .arg("--output")
+        .arg(temporary.join("tampered-production-rollback-state.json"))
+        .output()
+        .unwrap();
+    assert!(!tampered_production_rollback.status.success());
+    assert!(
+        String::from_utf8_lossy(&tampered_production_rollback.stderr)
+            .contains("invalid deployment rollback signature"),
+        "{}",
+        String::from_utf8_lossy(&tampered_production_rollback.stderr)
+    );
+    let signed_rollback_schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("signed-policy-deployment-rollback-schema")
+        .output()
+        .unwrap();
+    assert!(signed_rollback_schema.status.success());
+    let signed_rollback_schema: serde_json::Value =
+        serde_json::from_slice(&signed_rollback_schema.stdout).unwrap();
+    assert_eq!(signed_rollback_schema["additionalProperties"], false);
+    let rollback_state_schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("policy-deployment-rollback-state-schema")
+        .output()
+        .unwrap();
+    assert!(rollback_state_schema.status.success());
+    let rollback_state_schema: serde_json::Value =
+        serde_json::from_slice(&rollback_state_schema.stdout).unwrap();
+    assert_eq!(rollback_state_schema["additionalProperties"], false);
+    assert_eq!(
+        rollback_state_schema["properties"]["automatic_rollback"]["const"],
+        false
+    );
     let deployment_rollback_a = temporary.join("deployment-rollback-a.json");
     let deployment_rollback_b = temporary.join("deployment-rollback-b.json");
     for (private_key, signer_id, signed) in [

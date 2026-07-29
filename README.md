@@ -955,6 +955,41 @@ an automatic rollback. MCP exposes `verify_policy_deployment`; the Action
 accepts `policy-deployment-verification-*` inputs and can enforce the result
 with `fail-on-policy-deployment-verification`.
 
+When verification requires rollback, each trusted human signs the exact failed
+state, verification report, failed revision, and immutable restore target:
+
+```sh
+pcbex sign-policy-deployment-rollback policy-deployment.json \
+  policy-deployment-verification.json \
+  --approved-at-unix 1785291600 \
+  --private-key engineer-a.key \
+  --signer-id engineer-a \
+  --reason "Production clearance regressed after promotion." \
+  --ticket HW-ROLLBACK-42 \
+  --output rollback-a.json
+
+pcbex apply-policy-deployment-rollback policy-deployment.json \
+  policy-deployment-verification.json \
+  --active-policy-pack organization-policy-pack.failed.json \
+  --approval rollback-a.json \
+  --approval rollback-b.json \
+  --recorded-at-unix 1785291800 \
+  --output policy-deployment-rollback.json \
+  --summary-output policy-deployment-rollback.md \
+  --require-applied
+```
+
+The command accepts only failed, digest-bound production verification with a
+previously retained active revision. At least two distinct trusted human
+signers and keys must agree within the bounded 24-hour review window. The
+failed active pack supplies the unchanged human trust root; arbitrary restore
+targets, bootstrap rollback, stale approval, key reuse, and insufficient
+quorum fail closed. The resulting state binds the predecessor deployment,
+failed verification, failed and restored revisions, highest considered
+revision, and every approval digest. `automatic_rollback` remains false. MCP
+exposes signing and application tools, and the Action accepts
+`policy-deployment-rollback-*` inputs.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -982,7 +1017,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.343.0
+    uses: penguin425/pcbex@v1.344.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2219,7 +2254,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.343.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.344.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

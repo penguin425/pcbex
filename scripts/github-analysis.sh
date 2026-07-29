@@ -61,6 +61,9 @@ write_output policy-deployment-active-revision ""
 write_output policy-deployment-verification ""
 write_output policy-deployment-verified ""
 write_output policy-deployment-rollback-required ""
+write_output policy-deployment-rollback ""
+write_output policy-deployment-rollback-status ""
+write_output policy-deployment-rollback-active-revision ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -545,6 +548,59 @@ print(str(data["rollback_required"]).lower())
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+policy_deployment_rollback=""
+policy_deployment_rollback_status=""
+policy_deployment_rollback_active_revision=""
+rollback_inputs=0
+for value in \
+  "${PCBEX_POLICY_DEPLOYMENT_ROLLBACK_APPROVAL_FILES:-}" \
+  "${PCBEX_POLICY_DEPLOYMENT_ROLLBACK_RECORDED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((rollback_inputs += 1)); fi
+done
+if ((rollback_inputs != 0 && rollback_inputs != 2)); then
+  echo "production rollback approvals and recorded time must be supplied together" >&2
+  exit 2
+fi
+if ((rollback_inputs == 2)); then
+  rollback_deployment="${PCBEX_POLICY_DEPLOYMENT_VERIFICATION_STATE:-$policy_deployment}"
+  rollback_verification="${PCBEX_POLICY_DEPLOYMENT_ROLLBACK_VERIFICATION:-$policy_deployment_verification}"
+  rollback_active_policy="${PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK:-}"
+  if [[ -z "$rollback_deployment" || -z "$rollback_verification" || -z "$rollback_active_policy" ]]; then
+    echo "production rollback requires the promoted state, failed verification, and failed active policy pack" >&2
+    exit 2
+  fi
+  policy_deployment_rollback="${artifact_dir}/policy-deployment-rollback.json"
+  policy_deployment_rollback_summary="${artifact_dir}/policy-deployment-rollback.md"
+  rollback_arguments=(apply-policy-deployment-rollback \
+    "$rollback_deployment" \
+    "$rollback_verification" \
+    --active-policy-pack "$rollback_active_policy" \
+    --minimum-approvals "${PCBEX_POLICY_DEPLOYMENT_ROLLBACK_MINIMUM_APPROVALS:-2}" \
+    --recorded-at-unix "$PCBEX_POLICY_DEPLOYMENT_ROLLBACK_RECORDED_AT_UNIX" \
+    --output "$policy_deployment_rollback" \
+    --summary-output "$policy_deployment_rollback_summary")
+  while IFS= read -r approval; do
+    if [[ -n "$approval" ]]; then
+      rollback_arguments+=(--approval "$approval")
+    fi
+  done <<< "${PCBEX_POLICY_DEPLOYMENT_ROLLBACK_APPROVAL_FILES:-}"
+  "$PCBEX_BINARY" "${rollback_arguments[@]}"
+  readarray -t rollback_values < <(
+    python3 -c '
+import json,sys
+data=json.load(open(sys.argv[1], encoding="utf-8"))
+print(data["status"])
+print(data["active_revision"])
+' "$policy_deployment_rollback"
+  )
+  policy_deployment_rollback_status="${rollback_values[0]}"
+  policy_deployment_rollback_active_revision="${rollback_values[1]}"
+  {
+    printf '\n'
+    cat "$policy_deployment_rollback_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 has_schematic=false
 has_baseline_schematic=false
 if [[ -n "${PCBEX_SCHEMATIC:-}" ]]; then has_schematic=true; fi
@@ -952,6 +1008,9 @@ write_output policy-deployment-active-revision "$policy_deployment_active_revisi
 write_output policy-deployment-verification "$policy_deployment_verification"
 write_output policy-deployment-verified "$policy_deployment_verified"
 write_output policy-deployment-rollback-required "$policy_deployment_rollback_required"
+write_output policy-deployment-rollback "$policy_deployment_rollback"
+write_output policy-deployment-rollback-status "$policy_deployment_rollback_status"
+write_output policy-deployment-rollback-active-revision "$policy_deployment_rollback_active_revision"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"
