@@ -1804,8 +1804,48 @@ and computed final registry, and forbids pairing the history with a copied
 retained registry. MCP exposes the same atomic audit as a task-forbidden tool.
 The audit proves internal completeness and authenticity of the supplied chain;
 it does not by itself prove that a valid prefix is the globally latest head.
-The next witnessed-checkpoint milestone closes that freshness/equivocation
-boundary.
+
+Publish and independently witness the exact audited head:
+
+```sh
+pcbex sign-policy-lifecycle-log-gossip-organization-registry-history-checkpoint \
+  gossip-registry.history.json \
+  --authority-private-key gossip-registry-root.key \
+  --issued-at-unix 1785302500 \
+  --output gossip-registry.history.checkpoint.json
+
+pcbex accept-policy-lifecycle-log-gossip-organization-registry-history-checkpoint \
+  gossip-registry.history.json gossip-registry.history.checkpoint.json \
+  --baseline gossip-registry.history.checkpoint.previous.trust.json \
+  --accepted-at-unix 1785302600 \
+  --output gossip-registry.history.checkpoint.trust.json
+
+pcbex verify-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witnesses \
+  gossip-registry.history.json gossip-registry.history.checkpoint.json \
+  --witness witness-a.json --witness witness-b.json \
+  --trusted-witness-id independent-a \
+  --trusted-witness-id independent-b \
+  --trusted-witness-public-key independent-a.pub \
+  --trusted-witness-public-key independent-b.pub \
+  --minimum-witnesses 2 --evaluated-at-unix 1785302700 \
+  --require-quorum --output gossip-registry.history.checkpoint.quorum.json
+```
+
+The root signature binds the complete audit digest, computed registry digest,
+last transition, active governance, retained root, and exact generation.
+Acceptance pins that checkpoint and rejects rollback, history truncation, or a
+different valid checkpoint at the same generation. A higher generation must
+contain the pinned state at its exact prior position. Each witness independently
+replays the entire history before signing, and quorum verification requires
+fresh signatures from distinct trusted identities and keys over the same
+checkpoint. This detects split views once conflicting artifacts reach a common
+consumer; it does not claim network-wide latest-head discovery.
+
+Closed schemas cover checkpoints, trust states, witnesses, and quorum reports.
+MCP exposes all four operations as task-forbidden tools. GitHub Actions accepts
+the signed checkpoint and optional baseline trust state, then can require a
+fresh witness quorum using paired witness artifacts, trusted IDs, and trusted
+public-key files.
 
 ### GitHub Actions hardware CI
 
@@ -1834,7 +1874,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.366.0
+    uses: penguin425/pcbex@v1.367.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3071,7 +3111,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.366.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.367.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

@@ -93,6 +93,9 @@ write_output policy-lifecycle-log-gossip-quorum ""
 write_output policy-lifecycle-log-gossip-quorum-met ""
 write_output policy-lifecycle-log-gossip-organization-registry-history-audit ""
 write_output policy-lifecycle-log-gossip-organization-registry-history-final ""
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-trust-state ""
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum ""
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum-met ""
 write_output policy-lifecycle-log-remote-gossip-observations ""
 write_output policy-lifecycle-log-remote-gossip-receipts ""
 write_output schematic-diff ""
@@ -1156,6 +1159,9 @@ fi
 policy_lifecycle_log_gossip_organization_registry="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}"
 policy_lifecycle_log_gossip_organization_registry_history_audit=""
 policy_lifecycle_log_gossip_organization_registry_history_final=""
+policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state=""
+policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum=""
+policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_met=""
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
   if [[ -n "$policy_lifecycle_log_gossip_organization_registry" ]]; then
     echo "gossip registry history and copied retained registry are mutually exclusive" >&2
@@ -1169,6 +1175,97 @@ if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" 
     --output "$policy_lifecycle_log_gossip_organization_registry_history_audit" \
     --final-registry-output "$policy_lifecycle_log_gossip_organization_registry_history_final"
   policy_lifecycle_log_gossip_organization_registry="$policy_lifecycle_log_gossip_organization_registry_history_final"
+fi
+registry_checkpoint="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT:-}"
+registry_checkpoint_baseline="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BASELINE:-}"
+if [[ -n "$registry_checkpoint" ]]; then
+  if [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
+    echo "registry-history checkpoint requires a complete registry history" >&2
+    exit 2
+  fi
+  if [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_ACCEPTED_AT_UNIX:-}" ]]; then
+    echo "registry-history checkpoint requires an explicit acceptance time" >&2
+    exit 2
+  fi
+  policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-history-checkpoint-trust-state.json"
+  registry_checkpoint_arguments=(
+    accept-policy-lifecycle-log-gossip-organization-registry-history-checkpoint
+    "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY"
+    "$registry_checkpoint"
+    --accepted-at-unix
+    "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_ACCEPTED_AT_UNIX"
+    --output
+    "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state"
+  )
+  if [[ -n "$registry_checkpoint_baseline" ]]; then
+    registry_checkpoint_arguments+=(--baseline "$registry_checkpoint_baseline")
+  fi
+  "$PCBEX_BINARY" "${registry_checkpoint_arguments[@]}"
+elif [[ -n "$registry_checkpoint_baseline" ]] \
+  || [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_ACCEPTED_AT_UNIX:-}" ]]; then
+  echo "registry-history checkpoint baseline and acceptance time require a checkpoint" >&2
+  exit 2
+fi
+
+registry_checkpoint_witness_inputs=0
+for value in \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES:-}"; do
+  if [[ -n "$value" ]]; then
+    registry_checkpoint_witness_inputs=$((registry_checkpoint_witness_inputs + 1))
+  fi
+done
+if ((registry_checkpoint_witness_inputs != 0 && registry_checkpoint_witness_inputs != 3)); then
+  echo "registry-history checkpoint witnesses, trusted IDs, and trusted keys must be supplied together" >&2
+  exit 2
+fi
+if ((registry_checkpoint_witness_inputs == 3)); then
+  if [[ -z "$registry_checkpoint" ]]; then
+    echo "registry-history checkpoint witness verification requires a checkpoint" >&2
+    exit 2
+  fi
+  if [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX:-}" ]]; then
+    echo "registry-history checkpoint witnesses require an explicit evaluation time" >&2
+    exit 2
+  fi
+  policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum.json"
+  registry_checkpoint_witness_arguments=(
+    verify-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witnesses
+    "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY"
+    "$registry_checkpoint"
+    --minimum-witnesses
+    "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_MINIMUM_WITNESSES:-2}"
+    --evaluated-at-unix
+    "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX"
+    --require-quorum
+    --output
+    "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum"
+  )
+  while IFS= read -r witness; do
+    if [[ -n "$witness" ]]; then
+      registry_checkpoint_witness_arguments+=(--witness "$witness")
+    fi
+  done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES"
+  while IFS= read -r witness_id; do
+    if [[ -n "$witness_id" ]]; then
+      registry_checkpoint_witness_arguments+=(--trusted-witness-id "$witness_id")
+    fi
+  done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS"
+  while IFS= read -r witness_key; do
+    if [[ -n "$witness_key" ]]; then
+      registry_checkpoint_witness_arguments+=(--trusted-witness-public-key "$witness_key")
+    fi
+  done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES"
+  "$PCBEX_BINARY" "${registry_checkpoint_witness_arguments[@]}"
+  policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_met="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["quorum_met"]).lower())' \
+      "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum"
+  )"
+elif [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX:-}" ]]; then
+  echo "registry-history checkpoint witness evaluation time requires complete witness inputs" >&2
+  exit 2
 fi
 policy_lifecycle_log_gossip_organization_registry_governance="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}"
 governance_policy_inputs=0
@@ -2044,6 +2141,9 @@ write_output policy-lifecycle-log-gossip-quorum "$policy_lifecycle_log_gossip_qu
 write_output policy-lifecycle-log-gossip-quorum-met "$policy_lifecycle_log_gossip_quorum_met"
 write_output policy-lifecycle-log-gossip-organization-registry-history-audit "$policy_lifecycle_log_gossip_organization_registry_history_audit"
 write_output policy-lifecycle-log-gossip-organization-registry-history-final "$policy_lifecycle_log_gossip_organization_registry_history_final"
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-trust-state "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state"
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum"
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum-met "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_met"
 write_output policy-lifecycle-log-remote-gossip-observations "$policy_lifecycle_log_remote_gossip_observations"
 write_output policy-lifecycle-log-remote-gossip-receipts "$policy_lifecycle_log_remote_gossip_receipts"
 write_output schematic-diff "$schematic_diff"

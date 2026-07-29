@@ -638,6 +638,149 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     ] {
         assert!(run(&[command, path(input)]).status.success());
     }
+
+    let history_checkpoint = directory.join("registry.history.checkpoint.json");
+    assert!(
+        run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-history-checkpoint",
+            path(&history),
+            "--authority-private-key",
+            path(&authority_final_private),
+            "--issued-at-unix",
+            "3100",
+            "--output",
+            path(&history_checkpoint),
+        ])
+        .status
+        .success()
+    );
+    let checkpoint_trust = directory.join("registry.history.checkpoint.trust.json");
+    assert!(
+        run(&[
+            "accept-policy-lifecycle-log-gossip-organization-registry-history-checkpoint",
+            path(&history),
+            path(&history_checkpoint),
+            "--accepted-at-unix",
+            "3200",
+            "--output",
+            path(&checkpoint_trust),
+        ])
+        .status
+        .success()
+    );
+    let checkpoint_trust_value = read_json(&checkpoint_trust);
+    assert_eq!(checkpoint_trust_value["accepted_generation"], 6);
+
+    let witness_a = directory.join("registry.history.checkpoint.witness-a.json");
+    let witness_b = directory.join("registry.history.checkpoint.witness-b.json");
+    for (witness_id, private_key, output) in [
+        ("independent-a", &governance_a_private, &witness_a),
+        ("independent-b", &governance_b_private, &witness_b),
+    ] {
+        assert!(
+            run(&[
+                "sign-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness",
+                path(&history),
+                path(&history_checkpoint),
+                "--witness-id",
+                witness_id,
+                "--witness-private-key",
+                path(private_key),
+                "--witnessed-at-unix",
+                "3300",
+                "--output",
+                path(output),
+            ])
+            .status
+            .success()
+        );
+    }
+    let witness_quorum = directory.join("registry.history.checkpoint.quorum.json");
+    assert!(
+        run(&[
+            "verify-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witnesses",
+            path(&history),
+            path(&history_checkpoint),
+            "--witness",
+            path(&witness_b),
+            "--witness",
+            path(&witness_a),
+            "--trusted-witness-id",
+            "independent-a",
+            "--trusted-witness-id",
+            "independent-b",
+            "--trusted-witness-public-key",
+            path(&governance_a_public),
+            "--trusted-witness-public-key",
+            path(&governance_b_public),
+            "--minimum-witnesses",
+            "2",
+            "--evaluated-at-unix",
+            "3400",
+            "--require-quorum",
+            "--output",
+            path(&witness_quorum),
+        ])
+        .status
+        .success()
+    );
+    let quorum_value = read_json(&witness_quorum);
+    assert_eq!(quorum_value["valid_witnesses"], 2);
+    assert_eq!(quorum_value["quorum_met"], true);
+    assert_eq!(quorum_value["members"][0]["witness_id"], "independent-a");
+
+    for (command, input) in [
+        (
+            "validate-policy-lifecycle-log-gossip-organization-registry-history-checkpoint",
+            &history_checkpoint,
+        ),
+        (
+            "validate-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-trust-state",
+            &checkpoint_trust,
+        ),
+        (
+            "validate-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness",
+            &witness_a,
+        ),
+        (
+            "validate-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum",
+            &witness_quorum,
+        ),
+    ] {
+        assert!(run(&[command, path(input)]).status.success());
+    }
+
+    let rejected_quorum = directory.join("registry.history.checkpoint.rejected-quorum.json");
+    assert!(
+        !run(&[
+            "verify-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witnesses",
+            path(&history),
+            path(&history_checkpoint),
+            "--witness",
+            path(&witness_a),
+            "--witness",
+            path(&witness_b),
+            "--trusted-witness-id",
+            "independent-a",
+            "--trusted-witness-id",
+            "independent-b",
+            "--trusted-witness-public-key",
+            path(&governance_a_public),
+            "--trusted-witness-public-key",
+            path(&governance_b_public),
+            "--minimum-witnesses",
+            "3",
+            "--evaluated-at-unix",
+            "3400",
+            "--require-quorum",
+            "--output",
+            path(&rejected_quorum),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_quorum.exists());
+
     let mut reordered_history = history_value;
     reordered_history["events"]
         .as_array_mut()

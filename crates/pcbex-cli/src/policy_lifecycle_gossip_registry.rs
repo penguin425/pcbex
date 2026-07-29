@@ -1532,6 +1532,13 @@ pub fn policy_lifecycle_log_gossip_organization_registry_sha256(
     normalized_sha256(registry, "gossip organization registry")
 }
 
+pub fn policy_lifecycle_log_gossip_organization_registry_history_audit_report_sha256(
+    report: &PolicyLifecycleLogGossipOrganizationRegistryHistoryAuditReport,
+) -> Result<String, String> {
+    validate_policy_lifecycle_log_gossip_organization_registry_history_audit_report(report)?;
+    normalized_sha256(report, "gossip organization registry history audit")
+}
+
 pub fn signed_policy_lifecycle_log_gossip_organization_registry_transition_sha256(
     transition: &SignedPolicyLifecycleLogGossipOrganizationRegistryTransition,
 ) -> Result<String, String> {

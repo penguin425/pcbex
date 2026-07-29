@@ -85,6 +85,7 @@ mod policy_lifecycle_checkpoint;
 mod policy_lifecycle_gossip;
 mod policy_lifecycle_gossip_quorum;
 mod policy_lifecycle_gossip_registry;
+mod policy_lifecycle_gossip_registry_checkpoint;
 mod policy_lifecycle_gossip_trust;
 mod policy_pack;
 mod policy_recommendation;
@@ -216,6 +217,20 @@ use policy_lifecycle_gossip_registry::{
     signed_policy_lifecycle_log_gossip_organization_registry_threshold_transition_json_schema,
     signed_policy_lifecycle_log_gossip_organization_registry_transition_json_schema,
     verify_policy_lifecycle_log_gossip_quorum_with_organization_registry,
+};
+use policy_lifecycle_gossip_registry_checkpoint::{
+    accept_policy_lifecycle_log_gossip_organization_registry_history_checkpoint,
+    parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state,
+    parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report,
+    parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint,
+    parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness,
+    policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state_json_schema,
+    policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema,
+    sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint,
+    sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness,
+    signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_json_schema,
+    signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_json_schema,
+    verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses,
 };
 use policy_lifecycle_gossip_trust::{
     apply_policy_lifecycle_log_gossip_observer_key_rotation,
@@ -1199,6 +1214,50 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed root-signed registry-history checkpoint JSON Schema.
+    SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a root-signed registry-history checkpoint.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed registry-history checkpoint trust-state JSON Schema.
+    PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a registry-history checkpoint trust state.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointTrustState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed registry-history checkpoint witness JSON Schema.
+    SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a registry-history checkpoint witness.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed registry-history checkpoint witness-quorum JSON Schema.
+    PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a registry-history checkpoint witness quorum.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorum {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed threshold-approved registry-transition JSON Schema.
     SignedPolicyLifecycleLogGossipOrganizationRegistryThresholdTransitionSchema {
         #[arg(short, long)]
@@ -2176,6 +2235,59 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         final_registry_output: PathBuf,
+    },
+    /// Audit a registry history and sign its exact final state with the retained root.
+    SignPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint {
+        history: PathBuf,
+        #[arg(long)]
+        authority_private_key: PathBuf,
+        #[arg(long)]
+        issued_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify a checkpoint from genesis and pin or advance its local trust state.
+    AcceptPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint {
+        history: PathBuf,
+        checkpoint: PathBuf,
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+        #[arg(long)]
+        accepted_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Independently audit and witness one exact registry-history checkpoint.
+    SignPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness {
+        history: PathBuf,
+        checkpoint: PathBuf,
+        #[arg(long)]
+        witness_id: String,
+        #[arg(long)]
+        witness_private_key: PathBuf,
+        #[arg(long)]
+        witnessed_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify fresh, distinct witnesses for one exact registry-history checkpoint.
+    VerifyPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnesses {
+        history: PathBuf,
+        checkpoint: PathBuf,
+        #[arg(long = "witness", required = true)]
+        witnesses: Vec<PathBuf>,
+        #[arg(long = "trusted-witness-id", required = true)]
+        trusted_witness_ids: Vec<String>,
+        #[arg(long = "trusted-witness-public-key", required = true)]
+        trusted_witness_public_keys: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_witnesses: u32,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(long)]
+        require_quorum: bool,
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Verify fresh observations from distinct organizations as one gossip quorum.
     VerifyPolicyLifecycleLogGossipQuorum {
@@ -3287,6 +3399,16 @@ fn capabilities_report() -> CapabilitiesReport {
 }
 
 fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .name("pcbex-cli".into())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(run_cli)
+        .context("starting pcbex CLI thread")?
+        .join()
+        .map_err(|_| anyhow::anyhow!("pcbex CLI thread panicked"))?
+}
+
+fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     match *cli.command {
         Command::Capabilities { output } => {
@@ -4267,6 +4389,90 @@ fn main() -> Result<()> {
                 .with_context(|| format!("reading {}", input.display()))?;
             let report =
                 parse_policy_lifecycle_log_gossip_organization_registry_history_audit_report(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let checkpoint =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(checkpoint)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointTrustStateSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointTrustState {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let trust_state =
+                parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(trust_state)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let witness =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(witness)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorum {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report =
+                parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report(
                     &source,
                 )
                 .map_err(anyhow::Error::msg)?;
@@ -7440,6 +7646,206 @@ fn main() -> Result<()> {
             eprintln!(
                 "verified {} lifecycle gossip registry event(s) through generation {}",
                 report.event_count, report.final_registry.generation
+            );
+        }
+        Command::SignPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint {
+            history,
+            authority_private_key,
+            issued_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(history.as_path()), Some(output.as_path())],
+                "policy lifecycle gossip registry history checkpoint",
+            )?;
+            let source = fs::read_to_string(&history)
+                .with_context(|| format!("reading {}", history.display()))?;
+            let history =
+                parse_policy_lifecycle_log_gossip_organization_registry_history(&source)
+                    .map_err(anyhow::Error::msg)?;
+            let private_key =
+                read_hex_key(&authority_private_key, "registry root private key")?;
+            let checkpoint =
+                sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
+                    &history,
+                    &private_key,
+                    issued_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&checkpoint)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed lifecycle gossip registry history checkpoint at generation {}",
+                checkpoint.generation
+            );
+        }
+        Command::AcceptPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint {
+            history,
+            checkpoint,
+            baseline,
+            accepted_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(history.as_path()),
+                    Some(checkpoint.as_path()),
+                    baseline.as_deref(),
+                    Some(output.as_path()),
+                ],
+                "policy lifecycle gossip registry history checkpoint trust state",
+            )?;
+            let history_source = fs::read_to_string(&history)
+                .with_context(|| format!("reading {}", history.display()))?;
+            let history =
+                parse_policy_lifecycle_log_gossip_organization_registry_history(&history_source)
+                    .map_err(anyhow::Error::msg)?;
+            let checkpoint_source = fs::read_to_string(&checkpoint)
+                .with_context(|| format!("reading {}", checkpoint.display()))?;
+            let checkpoint =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
+                    &checkpoint_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let baseline = baseline
+                .as_ref()
+                .map(|path| -> Result<_> {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state(
+                        &source,
+                    )
+                    .map_err(anyhow::Error::msg)
+                })
+                .transpose()?;
+            let trust_state =
+                accept_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
+                    &history,
+                    &checkpoint,
+                    baseline.as_ref(),
+                    accepted_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&trust_state)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "accepted lifecycle gossip registry history checkpoint at generation {}",
+                trust_state.accepted_generation
+            );
+        }
+        Command::SignPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness {
+            history,
+            checkpoint,
+            witness_id,
+            witness_private_key,
+            witnessed_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(history.as_path()),
+                    Some(checkpoint.as_path()),
+                    Some(output.as_path()),
+                ],
+                "policy lifecycle gossip registry history checkpoint witness",
+            )?;
+            let history_source = fs::read_to_string(&history)
+                .with_context(|| format!("reading {}", history.display()))?;
+            let history =
+                parse_policy_lifecycle_log_gossip_organization_registry_history(&history_source)
+                    .map_err(anyhow::Error::msg)?;
+            let checkpoint_source = fs::read_to_string(&checkpoint)
+                .with_context(|| format!("reading {}", checkpoint.display()))?;
+            let checkpoint =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
+                    &checkpoint_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let private_key =
+                read_hex_key(&witness_private_key, "registry history witness private key")?;
+            let witness =
+                sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness(
+                    &history,
+                    &checkpoint,
+                    &witness_id,
+                    &private_key,
+                    witnessed_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&witness)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "witnessed lifecycle gossip registry history checkpoint as {}",
+                witness.witness_id
+            );
+        }
+        Command::VerifyPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnesses {
+            history,
+            checkpoint,
+            witnesses,
+            trusted_witness_ids,
+            trusted_witness_public_keys,
+            minimum_witnesses,
+            evaluated_at_unix,
+            require_quorum,
+            output,
+        } => {
+            if trusted_witness_ids.len() != trusted_witness_public_keys.len() {
+                bail!(
+                    "--trusted-witness-id and --trusted-witness-public-key counts must match"
+                );
+            }
+            let history_source = fs::read_to_string(&history)
+                .with_context(|| format!("reading {}", history.display()))?;
+            let history =
+                parse_policy_lifecycle_log_gossip_organization_registry_history(&history_source)
+                    .map_err(anyhow::Error::msg)?;
+            let checkpoint_source = fs::read_to_string(&checkpoint)
+                .with_context(|| format!("reading {}", checkpoint.display()))?;
+            let checkpoint =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
+                    &checkpoint_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let witnesses = witnesses
+                .iter()
+                .map(|path| -> Result<_> {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness(
+                        &source,
+                    )
+                    .map_err(anyhow::Error::msg)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let trusted_witnesses = trusted_witness_ids
+                .into_iter()
+                .zip(trusted_witness_public_keys.iter())
+                .map(|(id, path)| {
+                    read_hex_key(path, "trusted registry history witness public key")
+                        .map(|key| (id, key))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let report =
+                verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses(
+                    &history,
+                    &checkpoint,
+                    &witnesses,
+                    &trusted_witnesses,
+                    minimum_witnesses,
+                    evaluated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            if require_quorum && !report.quorum_met {
+                bail!(
+                    "registry history checkpoint witness quorum did not meet the required threshold"
+                );
+            }
+            let document = serde_json::to_string_pretty(&report)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "lifecycle gossip registry history checkpoint witness quorum: {}/{}",
+                report.valid_witnesses, report.minimum_witnesses
             );
         }
         Command::VerifyPolicyLifecycleLogGossipQuorum {
