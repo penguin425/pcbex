@@ -60,6 +60,7 @@ auditable release.
 | v1.348.0 | Independently verified policy remediation | Require an accepted clean successor and a new independent quorum before lifting one suspension for one exact digest |
 | v1.349.0 | Append-only policy lifecycle ledger | Reconstruct blocked, released, superseded, and pending suspension decisions at every retained generation |
 | v1.350.0 | Monotonic signed lifecycle checkpoints | Reject valid-but-stale, equivocated, or forked policy lifecycle ledgers across independent CI consumers |
+| v1.351.0 | Dual-signed lifecycle key rotation | Advance lifecycle signing trust only through an old-and-new-key authorized, generation-chained transition |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -68,6 +69,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should permit governed lifecycle signing-key rotation without
-breaking the monotonic checkpoint chain, using dual signatures from the old
-and new roots and retaining every transition as auditable evidence.
+The next roadmap should add independent lifecycle checkpoint witnesses so one
+compromised signing root cannot equivocate between otherwise isolated CI
+consumers.

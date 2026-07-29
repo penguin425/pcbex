@@ -414,6 +414,10 @@ inputs:
     description: Previously accepted lifecycle trust state used to reject rollback, equivocation, and forks.
     required: false
     default: ""
+  policy-lifecycle-checkpoint-key-rotation:
+    description: Optional old-and-new dual-signed key transition required when the checkpoint signing root changes.
+    required: false
+    default: ""
   policy-lifecycle-checkpoint-accepted-at-unix:
     description: Explicit Unix timestamp used to enforce the checkpoint acceptance window.
     required: false
@@ -890,6 +894,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT: ${{ inputs.policy-lifecycle-checkpoint }}
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_PUBLIC_KEY: ${{ inputs.policy-lifecycle-checkpoint-public-key }}
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE: ${{ inputs.policy-lifecycle-checkpoint-baseline-state }}
+        PCBEX_POLICY_LIFECYCLE_CHECKPOINT_KEY_ROTATION: ${{ inputs.policy-lifecycle-checkpoint-key-rotation }}
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_ACCEPTED_AT_UNIX: ${{ inputs.policy-lifecycle-checkpoint-accepted-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
