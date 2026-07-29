@@ -288,7 +288,34 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         .success()
     );
     let suspended_value: Value = serde_json::from_slice(&fs::read(&suspended).unwrap()).unwrap();
+    let suspension_value: Value = serde_json::from_slice(&fs::read(&suspension).unwrap()).unwrap();
     assert_eq!(suspended_value["organizations"][0]["status"], "suspended");
+    assert_eq!(
+        suspended_value["active_governance_sha256"],
+        suspension_value["governance_sha256"]
+    );
+    let root_only_bypass = directory.join("registry.root-only-bypass.json");
+    assert!(
+        !run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-transition",
+            path(&suspended),
+            "--authority-private-key",
+            path(&authority_next_private),
+            "--action",
+            "revoke-organization",
+            "--organization-id",
+            "independent-lab",
+            "--reason-sha256",
+            &"3".repeat(64),
+            "--effective-at-unix",
+            "2100",
+            "--output",
+            path(&root_only_bypass),
+        ])
+        .status
+        .success()
+    );
+    assert!(!root_only_bypass.exists());
 
     let successor_governance = directory.join("registry.governance.next.json");
     assert!(
@@ -368,6 +395,43 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         .status
         .success()
     );
+    let governance_rotated_value: Value =
+        serde_json::from_slice(&fs::read(&governance_rotated).unwrap()).unwrap();
+    let governance_rotation_value: Value =
+        serde_json::from_slice(&fs::read(&governance_rotation).unwrap()).unwrap();
+    assert_eq!(
+        governance_rotated_value["active_governance_sha256"],
+        governance_rotation_value["new_governance_sha256"]
+    );
+    let stale_governance_transition = directory.join("registry.stale-governance.json");
+    assert!(
+        !run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-threshold-transition",
+            path(&governance_rotated),
+            path(&governance),
+            "--authority-id",
+            "governance-a",
+            "--authority-id",
+            "governance-b",
+            "--authority-private-key",
+            path(&governance_a_private),
+            "--authority-private-key",
+            path(&governance_b_private),
+            "--action",
+            "revoke-organization",
+            "--organization-id",
+            "independent-lab",
+            "--reason-sha256",
+            &"3".repeat(64),
+            "--effective-at-unix",
+            "2700",
+            "--output",
+            path(&stale_governance_transition),
+        ])
+        .status
+        .success()
+    );
+    assert!(!stale_governance_transition.exists());
 
     let revocation = directory.join("registry.revoke.5.json");
     assert!(

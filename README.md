@@ -1693,6 +1693,15 @@ reason, and monotonic time under a separate domain. Duplicate identities or
 keys, untrusted signers, insufficient quorum, policy/root substitution,
 signature mutation, replay, and forks fail before output is written.
 
+The first threshold transition also retains its governance SHA-256 directly in
+the registry. Every later threshold transition must use that exact digest, and
+an approved governance rotation atomically replaces it with the successor
+digest. Consumers therefore reject a different or stale policy even when it
+has a valid registry-root signature, without carrying a separate trust
+pointer. Once governance is active, root-only organization transitions and
+root-only authority-key rotations are locked out instead of bypassing the
+threshold.
+
 Closed schemas cover both root-signed governance and threshold transitions.
 MCP exposes sign/apply operations as task-forbidden tools. The Action accepts
 the governance and threshold transition together, applies them atomically
@@ -1713,7 +1722,10 @@ The closed contract is emitted by
 `signed-policy-lifecycle-log-gossip-organization-registry-governance-rotation-schema`.
 MCP exposes sign/apply as task-forbidden tools. The Action accepts old policy,
 new policy, and rotation together, applies the change atomically, and uses the
-successor policy for any following threshold transition.
+successor policy for any following threshold transition. The registry schema
+exposes the nullable `active_governance_sha256` field; initialization leaves it
+unset, threshold bootstrap sets it, ordinary governed changes preserve it, and
+governance rotation is the only operation that may replace it.
 
 ### GitHub Actions hardware CI
 
@@ -1742,7 +1754,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.363.0
+    uses: penguin425/pcbex@v1.364.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2979,7 +2991,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.363.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.364.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

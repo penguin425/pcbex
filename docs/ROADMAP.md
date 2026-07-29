@@ -73,6 +73,7 @@ auditable release.
 | v1.361.0 | Lifecycle gossip registry authority key rotation | Preserve registry history while old and new authority keys jointly authorize each one-generation trust-root change |
 | v1.362.0 | Threshold lifecycle gossip registry governance | Require a configurable quorum of distinct root-authorized identities for every admission, suspension, and revocation |
 | v1.363.0 | Dual-quorum registry governance rotation | Require both retained and successor authority quorums for threshold, membership, or governance-key changes |
+| v1.364.0 | Retained active registry governance | Pin the active governance digest in registry state and reject stale validly root-signed policies or root-only bypasses |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -81,6 +82,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should retain the active governance digest directly in the
-registry state so every consumer can reject validly root-signed but stale
-governance without carrying a separate trust pointer.
+The next roadmap should authorize registry-root key rotation through both the
+retained governance quorum and a successor governance quorum bound to the new
+root, preserving sticky governance while making root-key recovery possible.
