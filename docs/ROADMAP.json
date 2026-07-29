@@ -304,6 +304,11 @@
     {
       "id": "lifecycle-public-log-gossip",
       "release": "v1.357.0",
+      "status": "released"
+    },
+    {
+      "id": "remote-lifecycle-public-log-gossip-quorum",
+      "release": "v1.358.0",
       "status": "current"
     }
   ]

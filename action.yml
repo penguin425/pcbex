@@ -526,6 +526,54 @@ inputs:
     description: Fail unless the configured independent tree-head observation is trusted and consistent.
     required: false
     default: "false"
+  policy-lifecycle-log-gossip-observation-files:
+    description: Newline-separated signed gossip observation envelopes from local observers.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-organization-ids:
+    description: Newline-separated trusted organization identities paired with local observations.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-observer-ids:
+    description: Newline-separated trusted observer identities paired with local observations.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-observer-public-key-files:
+    description: Newline-separated trusted observer keys paired with local observations.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-minimum-organizations:
+    description: Minimum distinct organizations required by the public-log gossip quorum.
+    required: false
+    default: "2"
+  policy-lifecycle-log-remote-gossip-endpoints:
+    description: Newline-separated bounded HTTPS public-log gossip observer endpoints.
+    required: false
+    default: ""
+  policy-lifecycle-log-remote-gossip-organization-ids:
+    description: Newline-separated trusted organizations paired with remote gossip endpoints.
+    required: false
+    default: ""
+  policy-lifecycle-log-remote-gossip-observer-ids:
+    description: Newline-separated trusted observer identities paired with remote gossip endpoints.
+    required: false
+    default: ""
+  policy-lifecycle-log-remote-gossip-public-key-files:
+    description: Newline-separated trusted observer keys paired with remote gossip endpoints.
+    required: false
+    default: ""
+  policy-lifecycle-log-remote-gossip-bearer-token:
+    description: Optional Bearer token sent only to configured remote gossip observers.
+    required: false
+    default: ""
+  policy-lifecycle-log-remote-gossip-timeout-seconds:
+    description: End-to-end timeout for each remote gossip observation.
+    required: false
+    default: "30"
+  fail-on-policy-lifecycle-log-gossip-quorum:
+    description: Fail unless fresh observations from distinct organizations meet the gossip quorum.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -861,6 +909,18 @@ outputs:
   policy-lifecycle-log-gossip-verified:
     description: Whether the independent observation matches or consistently relates to the local tree head.
     value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-verified }}
+  policy-lifecycle-log-gossip-quorum:
+    description: Verified distinct-organization lifecycle public-log gossip quorum report path.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-quorum }}
+  policy-lifecycle-log-gossip-quorum-met:
+    description: Whether fresh consistent gossip observations meet the organization threshold.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-quorum-met }}
+  policy-lifecycle-log-remote-gossip-observations:
+    description: Directory containing verified remote gossip observation envelopes.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-remote-gossip-observations }}
+  policy-lifecycle-log-remote-gossip-receipts:
+    description: Directory containing hash-bound remote gossip transport receipts.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-remote-gossip-receipts }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -1047,6 +1107,17 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY: ${{ inputs.policy-lifecycle-log-gossip-observer-public-key }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_CONSISTENCY_PROOF: ${{ inputs.policy-lifecycle-log-gossip-consistency-proof }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_EVALUATED_AT_UNIX: ${{ inputs.policy-lifecycle-log-gossip-evaluated-at-unix }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVATION_FILES: ${{ inputs.policy-lifecycle-log-gossip-observation-files }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_IDS: ${{ inputs.policy-lifecycle-log-gossip-organization-ids }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_IDS: ${{ inputs.policy-lifecycle-log-gossip-observer-ids }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-log-gossip-observer-public-key-files }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.policy-lifecycle-log-gossip-minimum-organizations }}
+        PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.policy-lifecycle-log-remote-gossip-endpoints }}
+        PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.policy-lifecycle-log-remote-gossip-organization-ids }}
+        PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_OBSERVER_IDS: ${{ inputs.policy-lifecycle-log-remote-gossip-observer-ids }}
+        PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-log-remote-gossip-public-key-files }}
+        PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_BEARER_TOKEN: ${{ inputs.policy-lifecycle-log-remote-gossip-bearer-token }}
+        PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS: ${{ inputs.policy-lifecycle-log-remote-gossip-timeout-seconds }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -1134,6 +1205,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_ANCHORED: ${{ steps.analyze.outputs.policy-lifecycle-log-anchored }}
         PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENT: ${{ steps.analyze.outputs.policy-lifecycle-log-consistent }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_VERIFIED: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-verified }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_QUORUM_MET: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-quorum-met }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -1161,6 +1233,7 @@ runs:
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_ANCHOR: ${{ inputs.fail-on-policy-lifecycle-log-anchor }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_CONSISTENCY: ${{ inputs.fail-on-policy-lifecycle-log-consistency }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_GOSSIP: ${{ inputs.fail-on-policy-lifecycle-log-gossip }}
+        PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_GOSSIP_QUORUM: ${{ inputs.fail-on-policy-lifecycle-log-gossip-quorum }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -1273,5 +1346,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_GOSSIP" == "true" && "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_VERIFIED" != "true" ]]; then
           echo "::error::pcbex lifecycle public-log gossip observation is absent, expired, untrusted, equivocated, or inconsistent"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_GOSSIP_QUORUM" == "true" && "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_QUORUM_MET" != "true" ]]; then
+          echo "::error::pcbex lifecycle public-log gossip lacks a fresh distinct-organization quorum"
           exit 1
         fi

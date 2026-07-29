@@ -1,8 +1,11 @@
 use serde_json::{Value, json};
 use std::{
     fs,
+    io::{Read, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, Output},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -26,6 +29,53 @@ fn temp_dir() -> PathBuf {
     let path = std::env::temp_dir().join(format!("pcbex-lifecycle-anchor-{suffix}"));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn json_server_once(response: Vec<u8>) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/gossip", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+        assert!(headers.starts_with("POST /v1/gossip HTTP/1.1\r\n"));
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length: ")
+                    .map(|value| value.parse::<usize>().unwrap())
+            })
+            .unwrap();
+        while request.len() - header_end < content_length {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        let request_json: Value =
+            serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+        assert_eq!(
+            request_json["protocol"],
+            "pcbex-policy-lifecycle-public-log-gossip-v1"
+        );
+        assert_eq!(request_json["log_id"], "lifecycle-public-log");
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response.len()
+        );
+        stream.write_all(header.as_bytes()).unwrap();
+        stream.write_all(&response).unwrap();
+    });
+    (endpoint, handle)
 }
 
 fn write_checkpoint(path: &Path, marker: u8) {
@@ -288,6 +338,217 @@ fn creates_and_verifies_policy_lifecycle_public_log_anchor() {
     assert_eq!(gossip_report["split_view_detected"], false);
     assert_eq!(gossip_report["relationship"], "observed_precedes_local");
     assert_eq!(gossip_report["observer_id"], "independent-ci");
+
+    let observer_b_private = directory.join("gossip-observer-b.key");
+    let observer_b_public = directory.join("gossip-observer-b.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&observer_b_private),
+            "--public-key",
+            path(&observer_b_public),
+        ])
+        .status
+        .success()
+    );
+    let gossip_receipt_b = directory.join("gossip-receipt-b.json");
+    let sign_gossip_b = run(&[
+        "sign-policy-lifecycle-log-gossip-receipt",
+        "--anchor",
+        path(&proof),
+        "--log-id",
+        "lifecycle-public-log",
+        "--log-public-key",
+        path(&public_key),
+        "--observer-id",
+        "independent-security",
+        "--private-key",
+        path(&observer_b_private),
+        "--received-at-unix",
+        "210",
+        "--expires-at-unix",
+        "350",
+        "--output",
+        path(&gossip_receipt_b),
+    ]);
+    assert!(
+        sign_gossip_b.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sign_gossip_b.stderr)
+    );
+    let observation_a = directory.join("gossip-observation-a.json");
+    let observation_b = directory.join("gossip-observation-b.json");
+    fs::write(
+        &observation_a,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "receipt": serde_json::from_slice::<Value>(&fs::read(&gossip_receipt).unwrap()).unwrap(),
+            "consistency_proof": serde_json::from_slice::<Value>(&fs::read(&consistency).unwrap()).unwrap()
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &observation_b,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "receipt": serde_json::from_slice::<Value>(&fs::read(&gossip_receipt_b).unwrap()).unwrap(),
+            "consistency_proof": null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for observation in [&observation_a, &observation_b] {
+        assert!(
+            run(&[
+                "validate-policy-lifecycle-log-gossip-observation",
+                path(observation)
+            ])
+            .status
+            .success()
+        );
+    }
+    let (endpoint, server) = json_server_once(fs::read(&observation_b).unwrap());
+    let remote_observation = directory.join("gossip-observation-remote.json");
+    let remote_receipt = directory.join("gossip-transport-receipt.json");
+    let remote = run(&[
+        "request-policy-lifecycle-log-gossip-observation",
+        "--local-anchor",
+        path(&proof),
+        "--endpoint",
+        &endpoint,
+        "--log-id",
+        "lifecycle-public-log",
+        "--log-public-key",
+        path(&public_key),
+        "--organization-id",
+        "security-partner",
+        "--observer-id",
+        "independent-security",
+        "--observer-public-key",
+        path(&observer_b_public),
+        "--timeout-seconds",
+        "5",
+        "--evaluated-at-unix",
+        "220",
+        "--output",
+        path(&remote_observation),
+        "--receipt-output",
+        path(&remote_receipt),
+        "--allow-http-loopback",
+    ]);
+    server.join().unwrap();
+    assert!(
+        remote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remote.stderr)
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&remote_observation).unwrap()).unwrap(),
+        serde_json::from_slice::<Value>(&fs::read(&observation_b).unwrap()).unwrap()
+    );
+    let transport: Value = serde_json::from_slice(&fs::read(&remote_receipt).unwrap()).unwrap();
+    assert_eq!(transport["verified"], true);
+    assert_eq!(transport["organization_id"], "security-partner");
+    assert_eq!(transport["observer_id"], "independent-security");
+    assert_eq!(
+        transport["adapter"],
+        "remote-policy-lifecycle-public-log-gossip-https-v1"
+    );
+
+    let gossip_quorum = directory.join("gossip-quorum.json");
+    let verify_quorum = run(&[
+        "verify-policy-lifecycle-log-gossip-quorum",
+        "--local-anchor",
+        path(&proof),
+        "--observation",
+        path(&observation_a),
+        "--observation",
+        path(&observation_b),
+        "--organization-id",
+        "independent-lab",
+        "--organization-id",
+        "security-partner",
+        "--observer-id",
+        "independent-ci",
+        "--observer-id",
+        "independent-security",
+        "--observer-public-key",
+        path(&observer_public),
+        "--observer-public-key",
+        path(&observer_b_public),
+        "--minimum-organizations",
+        "2",
+        "--log-id",
+        "lifecycle-public-log",
+        "--log-public-key",
+        path(&public_key),
+        "--evaluated-at-unix",
+        "220",
+        "--output",
+        path(&gossip_quorum),
+        "--require-quorum",
+    ]);
+    assert!(
+        verify_quorum.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify_quorum.stderr)
+    );
+    let quorum: Value = serde_json::from_slice(&fs::read(&gossip_quorum).unwrap()).unwrap();
+    assert_eq!(quorum["quorum_met"], true);
+    assert_eq!(quorum["distinct_organizations"], 2);
+    assert_eq!(quorum["all_consistent"], true);
+    assert_eq!(quorum["members"][0]["organization_id"], "independent-lab");
+    assert_eq!(
+        quorum["members"][0]["relationship"],
+        "observed_precedes_local"
+    );
+    assert_eq!(quorum["members"][1]["organization_id"], "security-partner");
+    assert_eq!(quorum["members"][1]["relationship"], "same_tree");
+    assert!(
+        run(&[
+            "validate-policy-lifecycle-log-gossip-quorum",
+            path(&gossip_quorum)
+        ])
+        .status
+        .success()
+    );
+    let duplicate_quorum = directory.join("gossip-quorum-duplicate.json");
+    assert!(
+        !run(&[
+            "verify-policy-lifecycle-log-gossip-quorum",
+            "--local-anchor",
+            path(&proof),
+            "--observation",
+            path(&observation_a),
+            "--observation",
+            path(&observation_b),
+            "--organization-id",
+            "same-organization",
+            "--organization-id",
+            "same-organization",
+            "--observer-id",
+            "independent-ci",
+            "--observer-id",
+            "independent-security",
+            "--observer-public-key",
+            path(&observer_public),
+            "--observer-public-key",
+            path(&observer_b_public),
+            "--log-id",
+            "lifecycle-public-log",
+            "--log-public-key",
+            path(&public_key),
+            "--evaluated-at-unix",
+            "220",
+            "--output",
+            path(&duplicate_quorum),
+        ])
+        .status
+        .success()
+    );
+    assert!(!duplicate_quorum.exists());
 
     let expired_report = directory.join("gossip-expired.json");
     assert!(
