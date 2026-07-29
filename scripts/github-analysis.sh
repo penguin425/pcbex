@@ -2169,31 +2169,81 @@ approval_log_gossip_quorum=""
 approval_log_gossip_quorum_met=""
 approval_log_remote_gossip_observations=""
 approval_log_remote_gossip_receipts=""
-approval_local_quorum_inputs=0
+approval_local_direct_inputs=0
 for value in \
-  "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVATION_FILES:-}" \
   "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_IDS:-}" \
   "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_IDS:-}" \
   "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES:-}"; do
-  if [[ -n "$value" ]]; then ((approval_local_quorum_inputs += 1)); fi
+  if [[ -n "$value" ]]; then ((approval_local_direct_inputs += 1)); fi
 done
-if ((approval_local_quorum_inputs != 0 && approval_local_quorum_inputs != 4)); then
-  echo "approval gossip local observations, organizations, observers, and keys must be supplied together" >&2
+if ((approval_local_direct_inputs != 0 && approval_local_direct_inputs != 3)); then
+  echo "approval gossip local organizations, observers, and keys must be supplied together" >&2
   exit 2
 fi
-approval_remote_quorum_inputs=0
+if ((approval_local_direct_inputs == 3)) \
+  && [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES:-}" ]]; then
+  echo "approval gossip local direct trust and trust states are mutually exclusive" >&2
+  exit 2
+fi
+approval_local_configured=false
+approval_trust_mode=""
+if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVATION_FILES:-}" ]]; then
+  approval_local_configured=true
+  if ((approval_local_direct_inputs == 3)); then
+    approval_trust_mode="direct"
+  elif [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES:-}" ]]; then
+    approval_trust_mode="trust-state"
+  else
+    echo "approval gossip local observations require direct trust or trust states" >&2
+    exit 2
+  fi
+elif ((approval_local_direct_inputs != 0)) \
+  || [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES:-}" ]]; then
+  echo "approval gossip local trust requires observations" >&2
+  exit 2
+fi
+approval_remote_direct_inputs=0
 for value in \
-  "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS:-}" \
   "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS:-}" \
   "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_OBSERVER_IDS:-}" \
   "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES:-}"; do
-  if [[ -n "$value" ]]; then ((approval_remote_quorum_inputs += 1)); fi
+  if [[ -n "$value" ]]; then ((approval_remote_direct_inputs += 1)); fi
 done
-if ((approval_remote_quorum_inputs != 0 && approval_remote_quorum_inputs != 4)); then
-  echo "approval gossip remote endpoints, organizations, observers, and keys must be supplied together" >&2
+if ((approval_remote_direct_inputs != 0 && approval_remote_direct_inputs != 3)); then
+  echo "approval gossip remote organizations, observers, and keys must be supplied together" >&2
   exit 2
 fi
-if ((approval_local_quorum_inputs == 4 || approval_remote_quorum_inputs == 4)); then
+if ((approval_remote_direct_inputs == 3)) \
+  && [[ -n "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES:-}" ]]; then
+  echo "approval gossip remote direct trust and trust states are mutually exclusive" >&2
+  exit 2
+fi
+approval_remote_configured=false
+approval_remote_trust_mode=""
+if [[ -n "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS:-}" ]]; then
+  approval_remote_configured=true
+  if ((approval_remote_direct_inputs == 3)); then
+    approval_remote_trust_mode="direct"
+  elif [[ -n "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES:-}" ]]; then
+    approval_remote_trust_mode="trust-state"
+  else
+    echo "approval gossip remote endpoints require direct trust or trust states" >&2
+    exit 2
+  fi
+elif ((approval_remote_direct_inputs != 0)) \
+  || [[ -n "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES:-}" ]]; then
+  echo "approval gossip remote trust requires endpoints" >&2
+  exit 2
+fi
+if [[ "$approval_local_configured" == "true" && "$approval_remote_configured" == "true" ]] \
+  && [[ "$approval_trust_mode" != "$approval_remote_trust_mode" ]]; then
+  echo "approval gossip local and remote observations must use the same trust mode" >&2
+  exit 2
+fi
+if [[ "$approval_local_configured" == "false" ]]; then
+  approval_trust_mode="$approval_remote_trust_mode"
+fi
+if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" == "true" ]]; then
   if ((approval_log_anchor_inputs != 2)) \
     || [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX:-}" ]]; then
     echo "approval gossip quorum requires local anchor proof/key and evaluation time" >&2
@@ -2208,55 +2258,79 @@ if ((approval_local_quorum_inputs == 4 || approval_remote_quorum_inputs == 4)); 
     --evaluated-at-unix "$PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX"
     --output "$approval_log_gossip_quorum"
   )
-  if ((approval_local_quorum_inputs == 4)); then
+  if [[ "$approval_local_configured" == "true" ]]; then
     mapfile -t approval_local_observations < <(
       printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVATION_FILES" | sed '/^[[:space:]]*$/d'
     )
-    mapfile -t approval_local_organizations < <(
-      printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_IDS" | sed '/^[[:space:]]*$/d'
-    )
-    mapfile -t approval_local_observers < <(
-      printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_IDS" | sed '/^[[:space:]]*$/d'
-    )
-    mapfile -t approval_local_keys < <(
-      printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
-    )
+    if [[ "$approval_trust_mode" == "direct" ]]; then
+      mapfile -t approval_local_organizations < <(
+        printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_IDS" | sed '/^[[:space:]]*$/d'
+      )
+      mapfile -t approval_local_observers < <(
+        printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_IDS" | sed '/^[[:space:]]*$/d'
+      )
+      mapfile -t approval_local_trust_evidence < <(
+        printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
+      )
+    else
+      mapfile -t approval_local_trust_evidence < <(
+        printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES" | sed '/^[[:space:]]*$/d'
+      )
+    fi
     if ((${#approval_local_observations[@]} == 0 \
-      || ${#approval_local_observations[@]} != ${#approval_local_organizations[@]} \
-      || ${#approval_local_observations[@]} != ${#approval_local_observers[@]} \
-      || ${#approval_local_observations[@]} != ${#approval_local_keys[@]} \
+      || ${#approval_local_observations[@]} != ${#approval_local_trust_evidence[@]} \
       || ${#approval_local_observations[@]} > 100)); then
-      echo "approval gossip local configuration must form 1 to 100 complete tuples" >&2
+      echo "approval gossip local configuration must form 1 to 100 complete pairs" >&2
+      exit 2
+    fi
+    if [[ "$approval_trust_mode" == "direct" ]] \
+      && ((${#approval_local_observations[@]} != ${#approval_local_organizations[@]} \
+        || ${#approval_local_observations[@]} != ${#approval_local_observers[@]})); then
+      echo "approval gossip local direct trust arrays must be paired" >&2
       exit 2
     fi
     for index in "${!approval_local_observations[@]}"; do
-      approval_quorum_arguments+=(
-        --observation "${approval_local_observations[$index]}"
-        --organization-id "${approval_local_organizations[$index]}"
-        --observer-id "${approval_local_observers[$index]}"
-        --observer-public-key "${approval_local_keys[$index]}"
-      )
+      approval_quorum_arguments+=(--observation "${approval_local_observations[$index]}")
+      if [[ "$approval_trust_mode" == "direct" ]]; then
+        approval_quorum_arguments+=(
+          --organization-id "${approval_local_organizations[$index]}"
+          --observer-id "${approval_local_observers[$index]}"
+          --observer-public-key "${approval_local_trust_evidence[$index]}"
+        )
+      else
+        approval_quorum_arguments+=(--observer-trust-state "${approval_local_trust_evidence[$index]}")
+      fi
     done
   fi
-  if ((approval_remote_quorum_inputs == 4)); then
+  if [[ "$approval_remote_configured" == "true" ]]; then
     mapfile -t approval_remote_endpoints < <(
       printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS" | sed '/^[[:space:]]*$/d'
     )
-    mapfile -t approval_remote_organizations < <(
-      printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS" | sed '/^[[:space:]]*$/d'
-    )
-    mapfile -t approval_remote_observers < <(
-      printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_OBSERVER_IDS" | sed '/^[[:space:]]*$/d'
-    )
-    mapfile -t approval_remote_keys < <(
-      printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
-    )
+    if [[ "$approval_trust_mode" == "direct" ]]; then
+      mapfile -t approval_remote_organizations < <(
+        printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS" | sed '/^[[:space:]]*$/d'
+      )
+      mapfile -t approval_remote_observers < <(
+        printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_OBSERVER_IDS" | sed '/^[[:space:]]*$/d'
+      )
+      mapfile -t approval_remote_trust_evidence < <(
+        printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
+      )
+    else
+      mapfile -t approval_remote_trust_evidence < <(
+        printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES" | sed '/^[[:space:]]*$/d'
+      )
+    fi
     if ((${#approval_remote_endpoints[@]} == 0 \
-      || ${#approval_remote_endpoints[@]} != ${#approval_remote_organizations[@]} \
-      || ${#approval_remote_endpoints[@]} != ${#approval_remote_observers[@]} \
-      || ${#approval_remote_endpoints[@]} != ${#approval_remote_keys[@]} \
+      || ${#approval_remote_endpoints[@]} != ${#approval_remote_trust_evidence[@]} \
       || ${#approval_remote_endpoints[@]} > 10)); then
-      echo "approval gossip remote configuration must form 1 to 10 complete tuples" >&2
+      echo "approval gossip remote configuration must form 1 to 10 complete pairs" >&2
+      exit 2
+    fi
+    if [[ "$approval_trust_mode" == "direct" ]] \
+      && ((${#approval_remote_endpoints[@]} != ${#approval_remote_organizations[@]} \
+        || ${#approval_remote_endpoints[@]} != ${#approval_remote_observers[@]})); then
+      echo "approval gossip remote direct trust arrays must be paired" >&2
       exit 2
     fi
     approval_log_remote_gossip_observations="${artifact_dir}/approval-log-remote-gossip-observations"
@@ -2275,31 +2349,41 @@ if ((approval_local_quorum_inputs == 4 || approval_remote_quorum_inputs == 4)); 
         --local-anchor "$PCBEX_APPROVAL_LOG_ANCHOR_PROOF"
         --endpoint "${approval_remote_endpoints[$index]}"
         --log-public-key "$PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY"
-        --organization-id "${approval_remote_organizations[$index]}"
-        --observer-id "${approval_remote_observers[$index]}"
-        --observer-public-key "${approval_remote_keys[$index]}"
         --timeout-seconds "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS:-30}"
         --evaluated-at-unix "$PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX"
         --output "$observation"
         --receipt-output "$receipt"
       )
+      if [[ "$approval_trust_mode" == "direct" ]]; then
+        remote_arguments+=(
+          --organization-id "${approval_remote_organizations[$index]}"
+          --observer-id "${approval_remote_observers[$index]}"
+          --observer-public-key "${approval_remote_trust_evidence[$index]}"
+        )
+      else
+        remote_arguments+=(--observer-trust-state "${approval_remote_trust_evidence[$index]}")
+      fi
       if [[ -n "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_BEARER_TOKEN:-}" ]]; then
         remote_arguments+=(--bearer-token-env PCBEX_APPROVAL_REMOTE_GOSSIP_TOKEN)
       fi
       "$PCBEX_BINARY" "${remote_arguments[@]}"
-      approval_quorum_arguments+=(
-        --observation "$observation"
-        --organization-id "${approval_remote_organizations[$index]}"
-        --observer-id "${approval_remote_observers[$index]}"
-        --observer-public-key "${approval_remote_keys[$index]}"
-      )
+      approval_quorum_arguments+=(--observation "$observation")
+      if [[ "$approval_trust_mode" == "direct" ]]; then
+        approval_quorum_arguments+=(
+          --organization-id "${approval_remote_organizations[$index]}"
+          --observer-id "${approval_remote_observers[$index]}"
+          --observer-public-key "${approval_remote_trust_evidence[$index]}"
+        )
+      else
+        approval_quorum_arguments+=(--observer-trust-state "${approval_remote_trust_evidence[$index]}")
+      fi
     done
     unset PCBEX_APPROVAL_REMOTE_GOSSIP_TOKEN
   fi
   "$PCBEX_BINARY" "${approval_quorum_arguments[@]}"
   approval_log_gossip_quorum_met="$(
     python3 -c \
-      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["quorum_met"]).lower())' \
+      'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(str(d.get("quorum", d)["quorum_met"]).lower())' \
       "$approval_log_gossip_quorum"
   )"
   {
@@ -2308,7 +2392,7 @@ if ((approval_local_quorum_inputs == 4 || approval_remote_quorum_inputs == 4)); 
     printf -- '- Organizations: `%s/%s`\n' \
       "$(
         python3 -c \
-          'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["distinct_organizations"])' \
+          'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(d.get("quorum", d)["distinct_organizations"])' \
           "$approval_log_gossip_quorum"
       )" \
       "${PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS:-2}"

@@ -34,6 +34,23 @@ pub use approval_gossip_quorum::{
     validate_approval_log_gossip_observation, validate_approval_log_gossip_quorum_report,
     verify_approval_log_gossip_quorum,
 };
+mod approval_gossip_trust;
+pub use approval_gossip_trust::{
+    ApprovalLogGossipObserverTrustReference, ApprovalLogGossipObserverTrustState,
+    ApprovalLogGossipTrustBoundQuorumReport, SignedApprovalLogGossipObserverKeyRotation,
+    apply_approval_log_gossip_observer_key_rotation,
+    approval_log_gossip_observer_trust_state_json_schema,
+    approval_log_gossip_observer_trust_state_sha256,
+    approval_log_gossip_observer_trusted_public_key,
+    approval_log_gossip_trust_bound_quorum_report_json_schema,
+    new_approval_log_gossip_observer_trust_state, sign_approval_log_gossip_observer_key_rotation,
+    signed_approval_log_gossip_observer_key_rotation_json_schema,
+    signed_approval_log_gossip_observer_key_rotation_sha256,
+    validate_approval_log_gossip_observer_trust_state,
+    validate_approval_log_gossip_trust_bound_quorum_report,
+    validate_signed_approval_log_gossip_observer_key_rotation,
+    verify_approval_log_gossip_quorum_with_observer_trust_states,
+};
 mod approval;
 pub use approval::{
     AiApprovalPolicy, AiModelIdentity, AiRequirement, AiRequirementAssessment, AiRequirementStatus,

@@ -377,6 +377,16 @@ jobs:
             --slurpfile receipt build/action-quorum/approval-log.gossip-b.json \
             '{schema_version: 1, receipt: $receipt[0], consistency_proof: null}' \
             > build/action-quorum/approval-log.gossip-observation-b.json
+          target/release/pcbex init-approval-log-gossip-observer-trust \
+            --organization-id independent-lab \
+            --observer-id action-gossip-observer \
+            --public-key build/action-quorum/gossip-observer.pub \
+            --output build/action-quorum/gossip-observer.trust.json
+          target/release/pcbex init-approval-log-gossip-observer-trust \
+            --organization-id security-partner \
+            --observer-id action-gossip-observer-b \
+            --public-key build/action-quorum/gossip-observer-b.pub \
+            --output build/action-quorum/gossip-observer-b.trust.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -454,15 +464,9 @@ jobs:
           approval-log-gossip-observation-files: |
             build/action-quorum/approval-log.gossip-observation-a.json
             build/action-quorum/approval-log.gossip-observation-b.json
-          approval-log-gossip-organization-ids: |
-            independent-lab
-            security-partner
-          approval-log-gossip-observer-ids: |
-            action-gossip-observer
-            action-gossip-observer-b
-          approval-log-gossip-observer-public-key-files: |
-            build/action-quorum/gossip-observer.pub
-            build/action-quorum/gossip-observer-b.pub
+          approval-log-gossip-observer-trust-state-files: |
+            build/action-quorum/gossip-observer.trust.json
+            build/action-quorum/gossip-observer-b.trust.json
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
           approval-log-witness-files: |
@@ -596,7 +600,8 @@ jobs:
           test "$APPROVAL_LOG_GOSSIP_VERIFIED" = "true"
           test "$(jq -r '.relationship' "$APPROVAL_LOG_GOSSIP_VERIFICATION")" = "same_tree"
           test "$APPROVAL_LOG_GOSSIP_QUORUM_MET" = "true"
-          test "$(jq -r '.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
+          test "$(jq -r '.trust_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
+          test "$(jq -r '.quorum.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"

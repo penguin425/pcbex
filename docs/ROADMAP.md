@@ -83,6 +83,7 @@ auditable release.
 | v1.371.0 | Approval transparency public-log consistency | Prove that newer receipt-log checkpoints extend retained signed Merkle trees without transferring the complete log |
 | v1.372.0 | Approval transparency public-log gossip | Compare fresh independently signed tree-head observations and reject split views across CI consumers |
 | v1.373.0 | Remote approval public-log gossip quorum | Acquire bounded remote observations and require fresh consistent views from distinct organizations |
+| v1.374.0 | Approval gossip observer key rotation | Bind organization observers to generation-chained trust with dual-signed key transitions |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -91,6 +92,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should bind each approval-gossip observer to a
-generation-chained trust state with dual-signed key rotations, so long-lived
-organization identities do not depend on immutable observer keys.
+The next roadmap should add an authority-signed approval-gossip organization
+registry, so admission, suspension, and permanent revocation govern which
+rotatable observers are eligible for quorum.

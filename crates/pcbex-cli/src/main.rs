@@ -20,21 +20,26 @@ use pcbex_kicad::{
     AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiApprovalQuorumReport, AiRequirement,
     AiReviewRequest, AiReviewResponse, AiReviewSession, ApprovalArtifactKind,
     ApprovalEventDescriptor, ApprovalLogAnchorProof, ApprovalLogConsistencyProof,
-    ApprovalLogGossipObservation, ApprovalLogWitnessTrustState, ApprovalTransparencyLog,
-    ElectricalPolicy, ElectricalReview, ElectricalWaiverSet, HumanEscalationCandidate,
-    HumanEscalationDecision, HumanEscalationPolicy, HumanEscalationReport,
-    RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport, SessionAiQuorumEvidence,
-    SessionRoutedAiApprovalQuorumReport, SignedAiApproval, SignedApprovalLogCheckpoint,
+    ApprovalLogGossipObservation, ApprovalLogGossipObserverTrustState,
+    ApprovalLogWitnessTrustState, ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview,
+    ElectricalWaiverSet, HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
+    HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
+    SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
+    SignedApprovalLogCheckpoint, SignedApprovalLogGossipObserverKeyRotation,
     SignedApprovalLogGossipReceipt, SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation,
     SignedHumanEscalation, SimulationArtifact, SimulationEvidence,
     ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
     ai_review_response_json_schema, append_approval_transparency_event,
-    apply_approval_log_witness_key_rotation, apply_custom_design_rules, apply_electrical_waivers,
-    apply_project_net_settings, approval_log_anchor_proof_json_schema,
-    approval_log_anchor_verification_report_json_schema,
+    apply_approval_log_gossip_observer_key_rotation, apply_approval_log_witness_key_rotation,
+    apply_custom_design_rules, apply_electrical_waivers, apply_project_net_settings,
+    approval_log_anchor_proof_json_schema, approval_log_anchor_verification_report_json_schema,
     approval_log_consistency_proof_json_schema,
     approval_log_consistency_verification_report_json_schema,
-    approval_log_gossip_observation_json_schema, approval_log_gossip_quorum_report_json_schema,
+    approval_log_gossip_observation_json_schema,
+    approval_log_gossip_observer_trust_state_json_schema,
+    approval_log_gossip_observer_trust_state_sha256,
+    approval_log_gossip_observer_trusted_public_key, approval_log_gossip_quorum_report_json_schema,
+    approval_log_gossip_trust_bound_quorum_report_json_schema,
     approval_log_gossip_verification_report_json_schema,
     approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
@@ -46,8 +51,9 @@ use pcbex_kicad::{
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review,
     human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
-    parse_electrical_policy, parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
+    new_approval_log_gossip_observer_trust_state, new_approval_log_witness_trust_state,
+    new_approval_transparency_log, parse_ai_review_response, parse_electrical_policy,
+    parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
     record_simulation_evidence, render_ai_approval_quorum_summary, render_human_escalation_summary,
     render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
     render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
@@ -55,14 +61,17 @@ use pcbex_kicad::{
     schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
     schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
     sign_ai_review, sign_ai_review_for_session, sign_approval_log_checkpoint,
-    sign_approval_log_gossip_receipt, sign_approval_log_witness,
-    sign_approval_log_witness_key_rotation, sign_human_escalation, signed_ai_approval_json_schema,
-    signed_approval_log_checkpoint_json_schema, signed_approval_log_checkpoint_sha256,
+    sign_approval_log_gossip_observer_key_rotation, sign_approval_log_gossip_receipt,
+    sign_approval_log_witness, sign_approval_log_witness_key_rotation, sign_human_escalation,
+    signed_ai_approval_json_schema, signed_approval_log_checkpoint_json_schema,
+    signed_approval_log_checkpoint_sha256,
+    signed_approval_log_gossip_observer_key_rotation_json_schema,
     signed_approval_log_gossip_receipt_json_schema, signed_approval_log_witness_json_schema,
     signed_approval_log_witness_key_rotation_json_schema, signed_human_escalation_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
     verify_approval_log_anchor_proof, verify_approval_log_checkpoint,
     verify_approval_log_consistency_proof, verify_approval_log_gossip_quorum,
+    verify_approval_log_gossip_quorum_with_observer_trust_states,
     verify_approval_log_gossip_receipt, verify_approval_log_witness_quorum,
     verify_human_escalation, verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
     verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
@@ -2632,6 +2641,21 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed approval gossip observer trust-state JSON Schema.
+    ApprovalLogGossipObserverTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed signed approval gossip observer rotation JSON Schema.
+    SignedApprovalLogGossipObserverKeyRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed trust-bound approval gossip quorum JSON Schema.
+    ApprovalLogGossipTrustBoundQuorumReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed approval-log witness quorum report JSON Schema.
     ApprovalLogWitnessQuorumReportSchema {
         #[arg(short, long)]
@@ -2982,14 +3006,17 @@ enum Command {
         #[arg(long = "observation", required = true)]
         observations: Vec<PathBuf>,
         /// Organization identity positionally paired with each observation.
-        #[arg(long = "organization-id", required = true)]
+        #[arg(long = "organization-id")]
         organization_ids: Vec<String>,
         /// Trusted observer identity positionally paired with each observation.
-        #[arg(long = "observer-id", required = true)]
+        #[arg(long = "observer-id")]
         observer_ids: Vec<String>,
         /// Trusted observer key positionally paired with each observation.
-        #[arg(long = "observer-public-key", required = true)]
+        #[arg(long = "observer-public-key")]
         observer_public_keys: Vec<PathBuf>,
+        /// Rotatable observer trust states; replaces all three direct-trust arrays.
+        #[arg(long = "observer-trust-state")]
+        observer_trust_states: Vec<PathBuf>,
         #[arg(long, default_value_t = 2)]
         minimum_organizations: u32,
         #[arg(long)]
@@ -3011,11 +3038,14 @@ enum Command {
         #[arg(long)]
         log_public_key: CompactPath,
         #[arg(long)]
-        organization_id: String,
+        organization_id: Option<String>,
         #[arg(long)]
-        observer_id: String,
+        observer_id: Option<String>,
         #[arg(long)]
-        observer_public_key: CompactPath,
+        observer_public_key: Option<CompactPath>,
+        /// Rotatable organization-bound trust state replacing direct observer trust.
+        #[arg(long)]
+        observer_trust_state: Option<CompactPath>,
         /// Environment-variable name containing an optional Bearer token.
         #[arg(long)]
         bearer_token_env: Option<String>,
@@ -3029,6 +3059,44 @@ enum Command {
         receipt_output: CompactPath,
         #[arg(long, hide = true)]
         allow_http_loopback: bool,
+    },
+    /// Initialize generation-zero trust for one organization-bound observer.
+    InitApprovalLogGossipObserverTrust {
+        #[arg(long)]
+        organization_id: String,
+        #[arg(long)]
+        observer_id: String,
+        #[arg(long)]
+        public_key: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Dual-sign one exact observer key transition with old and new keys.
+    SignApprovalLogGossipObserverKeyRotation {
+        trust_state: CompactPath,
+        #[arg(long)]
+        old_private_key: CompactPath,
+        #[arg(long)]
+        new_private_key: CompactPath,
+        #[arg(long)]
+        rotated_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify a chained dual-signed observer transition and advance trust.
+    ApplyApprovalLogGossipObserverKeyRotation {
+        trust_state: CompactPath,
+        rotation: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        public_key_output: CompactPath,
+    },
+    /// Export the currently trusted approval gossip observer public key.
+    ExportApprovalLogGossipObserverPublicKey {
+        trust_state: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
     },
     /// Verify independent witnesses over one exact approval-log checkpoint.
     VerifyApprovalLogWitnesses {
@@ -8797,6 +8865,24 @@ fn run_cli() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::ApprovalLogGossipObserverTrustStateSchema { output } => {
+            write_or_print_json(
+                &approval_log_gossip_observer_trust_state_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::SignedApprovalLogGossipObserverKeyRotationSchema { output } => {
+            write_or_print_json(
+                &signed_approval_log_gossip_observer_key_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ApprovalLogGossipTrustBoundQuorumReportSchema { output } => {
+            write_or_print_json(
+                &approval_log_gossip_trust_bound_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ApprovalLogWitnessQuorumReportSchema { output } => {
             write_or_print_json(
                 &approval_log_witness_quorum_report_json_schema(),
@@ -9793,18 +9879,26 @@ fn run_cli() -> Result<()> {
             organization_ids,
             observer_ids,
             observer_public_keys,
+            observer_trust_states,
             minimum_organizations,
             log_public_key,
             evaluated_at_unix,
             output,
             require_quorum,
         } => {
-            if observations.len() != organization_ids.len()
-                || observations.len() != observer_ids.len()
-                || observations.len() != observer_public_keys.len()
+            let direct = !organization_ids.is_empty()
+                || !observer_ids.is_empty()
+                || !observer_public_keys.is_empty();
+            let trust_bound = !observer_trust_states.is_empty();
+            if direct == trust_bound
+                || (direct
+                    && (observations.len() != organization_ids.len()
+                        || observations.len() != observer_ids.len()
+                        || observations.len() != observer_public_keys.len()))
+                || (trust_bound && observations.len() != observer_trust_states.len())
             {
                 bail!(
-                    "each --observation requires one positionally paired --organization-id, --observer-id, and --observer-public-key"
+                    "observations require exactly one positionally paired direct-trust or observer-trust-state mode"
                 );
             }
             let mut paths = vec![
@@ -9814,6 +9908,7 @@ fn run_cli() -> Result<()> {
             ];
             paths.extend(observations.iter().map(PathBuf::as_path).map(Some));
             paths.extend(observer_public_keys.iter().map(PathBuf::as_path).map(Some));
+            paths.extend(observer_trust_states.iter().map(PathBuf::as_path).map(Some));
             require_distinct_outputs(paths, "approval-log gossip quorum")?;
             let (local, _) = read_described_json::<ApprovalLogAnchorProof>(&local_anchor)?;
             let observations = observations
@@ -9825,33 +9920,64 @@ fn run_cli() -> Result<()> {
                     .map(|value| value.0)
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let observer_keys = observer_public_keys
-                .iter()
-                .map(|path| {
-                    read_hex_key(
-                        &CompactPath(path.clone().into_boxed_path()),
-                        "trusted approval gossip observer public key",
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
             let log_key = read_hex_key(&log_public_key, "trusted approval public-log key")?;
-            let report = verify_approval_log_gossip_quorum(
-                &local,
-                &observations,
-                &organization_ids,
-                &observer_ids,
-                &observer_keys,
-                minimum_organizations,
-                &log_key,
-                evaluated_at_unix,
-            )
-            .map_err(anyhow::Error::msg)?;
-            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            let (document, distinct_organizations, quorum_met) = if direct {
+                let observer_keys = observer_public_keys
+                    .iter()
+                    .map(|path| {
+                        read_hex_key(
+                            &CompactPath(path.clone().into_boxed_path()),
+                            "trusted approval gossip observer public key",
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let report = verify_approval_log_gossip_quorum(
+                    &local,
+                    &observations,
+                    &organization_ids,
+                    &observer_ids,
+                    &observer_keys,
+                    minimum_organizations,
+                    &log_key,
+                    evaluated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+                (
+                    serde_json::to_string_pretty(&report)?,
+                    report.distinct_organizations,
+                    report.quorum_met,
+                )
+            } else {
+                let states = observer_trust_states
+                    .iter()
+                    .map(|path| {
+                        read_described_json::<ApprovalLogGossipObserverTrustState>(&CompactPath(
+                            path.clone().into_boxed_path(),
+                        ))
+                        .map(|value| value.0)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let report = verify_approval_log_gossip_quorum_with_observer_trust_states(
+                    &local,
+                    &observations,
+                    &states,
+                    minimum_organizations,
+                    &log_key,
+                    evaluated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+                (
+                    serde_json::to_string_pretty(&report)?,
+                    report.quorum.distinct_organizations,
+                    report.quorum.quorum_met,
+                )
+            };
+            write_new_file(&output, &document, false)?;
             eprintln!(
                 "approval public-log gossip organization quorum: {}/{}",
-                report.distinct_organizations, report.minimum_organizations
+                distinct_organizations, minimum_organizations
             );
-            if require_quorum && !report.quorum_met {
+            if require_quorum && !quorum_met {
                 bail!("approval public-log gossip organization quorum was not met");
             }
         }
@@ -9862,6 +9988,7 @@ fn run_cli() -> Result<()> {
             organization_id,
             observer_id,
             observer_public_key,
+            observer_trust_state,
             bearer_token_env,
             timeout_seconds,
             evaluated_at_unix,
@@ -9869,11 +9996,15 @@ fn run_cli() -> Result<()> {
             receipt_output,
             allow_http_loopback,
         } => {
+            let evidence_path = observer_public_key
+                .as_ref()
+                .map(|path| path.0.as_ref())
+                .or_else(|| observer_trust_state.as_ref().map(|path| path.0.as_ref()));
             require_distinct_outputs(
                 [
                     Some(local_anchor.0.as_ref()),
                     Some(log_public_key.0.as_ref()),
-                    Some(observer_public_key.0.as_ref()),
+                    evidence_path,
                     Some(output.0.as_ref()),
                     Some(receipt_output.0.as_ref()),
                 ],
@@ -9881,8 +10012,43 @@ fn run_cli() -> Result<()> {
             )?;
             let (local, _) = read_described_json::<ApprovalLogAnchorProof>(&local_anchor)?;
             let log_key = read_hex_key(&log_public_key, "trusted approval public-log key")?;
-            let observer_key =
-                read_hex_key(&observer_public_key, "trusted approval gossip observer key")?;
+            let direct = [
+                organization_id.is_some(),
+                observer_id.is_some(),
+                observer_public_key.is_some(),
+            ];
+            if observer_trust_state.is_some() == direct.iter().all(|value| *value)
+                || (direct.iter().any(|value| *value) && !direct.iter().all(|value| *value))
+            {
+                bail!("supply exactly one complete direct observer tuple or observer trust state");
+            }
+            let (organization_id, observer_id, observer_key, trust_binding) =
+                if let Some(path) = &observer_trust_state {
+                    let (state, _) =
+                        read_described_json::<ApprovalLogGossipObserverTrustState>(path)?;
+                    let key = approval_log_gossip_observer_trusted_public_key(&state)
+                        .map_err(anyhow::Error::msg)?;
+                    let digest = approval_log_gossip_observer_trust_state_sha256(&state)
+                        .map_err(anyhow::Error::msg)?;
+                    (
+                        state.organization_id,
+                        state.observer_id,
+                        key,
+                        Some((digest, state.generation)),
+                    )
+                } else {
+                    (
+                        organization_id.expect("complete direct trust checked"),
+                        observer_id.expect("complete direct trust checked"),
+                        read_hex_key(
+                            observer_public_key
+                                .as_ref()
+                                .expect("complete direct trust checked"),
+                            "trusted approval gossip observer key",
+                        )?,
+                        None,
+                    )
+                };
             let (observation, receipt) = request_remote_approval_log_gossip(
                 &local,
                 &endpoint,
@@ -9890,6 +10056,8 @@ fn run_cli() -> Result<()> {
                 &organization_id,
                 &observer_id,
                 &observer_key,
+                trust_binding.as_ref().map(|(digest, _)| digest.as_str()),
+                trust_binding.as_ref().map(|(_, generation)| *generation),
                 bearer_token_env.as_deref(),
                 timeout_seconds,
                 evaluated_at_unix,
@@ -9905,6 +10073,116 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "verified remote approval public-log gossip from {}/{}",
                 receipt.organization_id, receipt.observer_id
+            );
+        }
+        Command::InitApprovalLogGossipObserverTrust {
+            organization_id,
+            observer_id,
+            public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(public_key.0.as_ref()), Some(output.0.as_ref())],
+                "approval gossip observer trust initialization",
+            )?;
+            let key = read_hex_key(&public_key, "approval gossip observer public key")?;
+            let state =
+                new_approval_log_gossip_observer_trust_state(&organization_id, &observer_id, &key)
+                    .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&state)?, false)?;
+            eprintln!(
+                "initialized approval gossip observer trust {}/{} generation 0",
+                state.organization_id, state.observer_id
+            );
+        }
+        Command::SignApprovalLogGossipObserverKeyRotation {
+            trust_state,
+            old_private_key,
+            new_private_key,
+            rotated_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(trust_state.0.as_ref()),
+                    Some(old_private_key.0.as_ref()),
+                    Some(new_private_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval gossip observer rotation signing",
+            )?;
+            let (state, _) =
+                read_described_json::<ApprovalLogGossipObserverTrustState>(&trust_state)?;
+            let old_key = read_hex_key(
+                &old_private_key,
+                "current approval gossip observer private key",
+            )?;
+            let new_key =
+                read_hex_key(&new_private_key, "new approval gossip observer private key")?;
+            let rotation = sign_approval_log_gossip_observer_key_rotation(
+                &state,
+                &old_key,
+                &new_key,
+                rotated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&rotation)?, false)?;
+            eprintln!(
+                "signed approval gossip observer rotation {}/{} generation {} -> {}",
+                rotation.organization_id,
+                rotation.observer_id,
+                rotation.from_generation,
+                rotation.to_generation
+            );
+        }
+        Command::ApplyApprovalLogGossipObserverKeyRotation {
+            trust_state,
+            rotation,
+            output,
+            public_key_output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(trust_state.0.as_ref()),
+                    Some(rotation.0.as_ref()),
+                    Some(output.0.as_ref()),
+                    Some(public_key_output.0.as_ref()),
+                ],
+                "approval gossip observer rotation application",
+            )?;
+            let (state, _) =
+                read_described_json::<ApprovalLogGossipObserverTrustState>(&trust_state)?;
+            let (rotation, _) =
+                read_described_json::<SignedApprovalLogGossipObserverKeyRotation>(&rotation)?;
+            let next = apply_approval_log_gossip_observer_key_rotation(&state, &rotation)
+                .map_err(anyhow::Error::msg)?;
+            let state_document = serde_json::to_string_pretty(&next)? + "\n";
+            let key_document = format!("{}\n", next.current_public_key);
+            write_new_file_set(&[
+                (output.0.as_ref(), state_document.as_str()),
+                (public_key_output.0.as_ref(), key_document.as_str()),
+            ])?;
+            eprintln!(
+                "advanced approval gossip observer trust {}/{} to generation {}",
+                next.organization_id, next.observer_id, next.generation
+            );
+        }
+        Command::ExportApprovalLogGossipObserverPublicKey {
+            trust_state,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(trust_state.0.as_ref()), Some(output.0.as_ref())],
+                "approval gossip observer key export",
+            )?;
+            let (state, _) =
+                read_described_json::<ApprovalLogGossipObserverTrustState>(&trust_state)?;
+            let key = approval_log_gossip_observer_trusted_public_key(&state)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &hex_encode(&key), false)?;
+            eprintln!(
+                "exported approval gossip observer key {}/{} generation {}",
+                state.organization_id, state.observer_id, state.generation
             );
         }
         Command::VerifyApprovalLogWitnesses {

@@ -782,6 +782,10 @@ inputs:
     description: Newline-separated trusted observer keys paired with local observations.
     required: false
     default: ""
+  approval-log-gossip-observer-trust-state-files:
+    description: Newline-separated rotatable organization-bound trust states; replaces direct local organization, observer, and key inputs.
+    required: false
+    default: ""
   approval-log-gossip-minimum-organizations:
     description: Minimum number of fresh, distinct organizations required.
     required: false
@@ -800,6 +804,10 @@ inputs:
     default: ""
   approval-log-remote-gossip-public-key-files:
     description: Newline-separated trusted observer keys paired with remote endpoints.
+    required: false
+    default: ""
+  approval-log-remote-gossip-trust-state-files:
+    description: Newline-separated rotatable observer trust states paired with remote endpoints; replaces direct remote trust inputs.
     required: false
     default: ""
   approval-log-remote-gossip-bearer-token:
@@ -1403,11 +1411,13 @@ runs:
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-gossip-organization-ids }}
         PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_IDS: ${{ inputs.approval-log-gossip-observer-ids }}
         PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES: ${{ inputs.approval-log-gossip-observer-public-key-files }}
+        PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES: ${{ inputs.approval-log-gossip-observer-trust-state-files }}
         PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.approval-log-gossip-minimum-organizations }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.approval-log-remote-gossip-endpoints }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-remote-gossip-organization-ids }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_OBSERVER_IDS: ${{ inputs.approval-log-remote-gossip-observer-ids }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES: ${{ inputs.approval-log-remote-gossip-public-key-files }}
+        PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES: ${{ inputs.approval-log-remote-gossip-trust-state-files }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_BEARER_TOKEN: ${{ inputs.approval-log-remote-gossip-bearer-token }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS: ${{ inputs.approval-log-remote-gossip-timeout-seconds }}
         PCBEX_APPROVAL_LOG_WITNESS_FILES: ${{ inputs.approval-log-witness-files }}
