@@ -929,6 +929,32 @@ in with `policy-deployment-recorded-at-unix`, publishes the new state, status,
 and active revision, and can gate promotion with
 `fail-on-policy-deployment-promotion`.
 
+After rollout, verify every production project against the exact retained
+candidate evidence:
+
+```sh
+pcbex verify-policy-deployment policy-deployment.json policy-rollout.json \
+  --candidate-policy-pack organization-policy-pack.next.json \
+  --project-id controller \
+  --board controller.kicad_pcb \
+  --expected-analysis rollout/controller-candidate \
+  --observed-analysis production/controller \
+  --verified-at-unix 1785291000 \
+  --output policy-deployment-verification.json \
+  --summary-output policy-deployment-verification.md \
+  --require-passed
+```
+
+Project coverage must exactly equal the rollout scope. Every expected bundle
+must be the simulation evidence retained by that rollout, while every observed
+bundle must use the exact active organization policy pack and unchanged board,
+engine, rules, and analysis settings. Missing projects, mismatched evidence,
+new violations, or quality regressions prevent verification. A failed report
+sets `rollback_required` and `requires_dual_control_rollback` without executing
+an automatic rollback. MCP exposes `verify_policy_deployment`; the Action
+accepts `policy-deployment-verification-*` inputs and can enforce the result
+with `fail-on-policy-deployment-verification`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -956,7 +982,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.342.0
+    uses: penguin425/pcbex@v1.343.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2193,7 +2219,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.342.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.343.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

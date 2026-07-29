@@ -303,6 +303,7 @@ impl McpServer {
                     | "sign_canary_completion"
                     | "verify_canary_completion"
                     | "advance_policy_deployment"
+                    | "verify_policy_deployment"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1046,6 +1047,47 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "verify_policy_deployment",
+            "Verify deployed policy fleet",
+            "Compare every deployed project with its exact simulated candidate evidence; any regression requires a separately approved rollback and never triggers automatic rollback.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "deployment", "rollout", "candidate_policy_pack",
+                    "project_ids", "boards", "expected_analyses",
+                    "observed_analyses", "verified_at_unix", "output"
+                ],
+                "properties": {
+                    "deployment": {"type": "string"},
+                    "rollout": {"type": "string"},
+                    "candidate_policy_pack": {"type": "string"},
+                    "project_ids": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "boards": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "expected_analyses": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "observed_analyses": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "verified_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_passed": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -1647,6 +1689,7 @@ fn call_tool(
         "sign_canary_completion" => sign_canary_completion(arguments, cancellation)?,
         "verify_canary_completion" => verify_canary_completion(arguments, cancellation)?,
         "advance_policy_deployment" => advance_policy_deployment(arguments, cancellation)?,
+        "verify_policy_deployment" => verify_policy_deployment(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2581,6 +2624,89 @@ fn advance_policy_deployment(
     Ok(execution_result(
         execution,
         json!({"output": output, "deployment": deployment}),
+    ))
+}
+
+fn verify_policy_deployment(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "deployment",
+            "rollout",
+            "candidate_policy_pack",
+            "project_ids",
+            "boards",
+            "expected_analyses",
+            "observed_analyses",
+            "verified_at_unix",
+            "output",
+            "summary_output",
+            "require_passed",
+        ],
+    )?;
+    let project_ids = required_string_array(&arguments, "project_ids", false)?;
+    let boards = required_string_array(&arguments, "boards", false)?;
+    let expected = required_string_array(&arguments, "expected_analyses", false)?;
+    let observed = required_string_array(&arguments, "observed_analyses", false)?;
+    if project_ids.len() > 1_000
+        || project_ids.len() != boards.len()
+        || project_ids.len() != expected.len()
+        || project_ids.len() != observed.len()
+    {
+        return Err(json!({
+            "detail": "post-deployment verification arrays must pair 1 to 1000 entries"
+        }));
+    }
+    let verified_at = arguments
+        .get("verified_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "verified_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-policy-deployment".into(),
+        required_string(&arguments, "deployment")?,
+        required_string(&arguments, "rollout")?,
+        "--candidate-policy-pack".into(),
+        required_string(&arguments, "candidate_policy_pack")?,
+    ];
+    for value in project_ids {
+        command.extend(["--project-id".into(), value]);
+    }
+    for value in boards {
+        command.extend(["--board".into(), value]);
+    }
+    for value in expected {
+        command.extend(["--expected-analysis".into(), value]);
+    }
+    for value in observed {
+        command.extend(["--observed-analysis".into(), value]);
+    }
+    command.extend([
+        "--verified-at-unix".into(),
+        verified_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_passed",
+        "--require-passed",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let verification = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "verification": verification}),
     ))
 }
 
@@ -3777,7 +3903,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 38);
+        assert_eq!(tools.len(), 39);
         let named = |name: &str| {
             tools
                 .iter()
@@ -3866,6 +3992,18 @@ mod tests {
         );
         assert_eq!(
             named("advance_policy_deployment")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("verify_policy_deployment")["inputSchema"]["properties"]["project_ids"]["maxItems"],
+            1000
+        );
+        assert_eq!(
+            named("verify_policy_deployment")["inputSchema"]["properties"]["require_passed"]["default"],
+            false
+        );
+        assert_eq!(
+            named("verify_policy_deployment")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(

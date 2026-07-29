@@ -733,6 +733,171 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
             .unwrap()
             .success()
     );
+    let deployed = temporary.join("deployed");
+    assert!(
+        analyze(&deployed, "--policy-pack", &verified_candidate_policy)
+            .status
+            .success()
+    );
+    let deployment_verification = temporary.join("policy-deployment-verification.json");
+    let deployment_verification_summary = temporary.join("policy-deployment-verification.md");
+    let verified_deployment = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-policy-deployment")
+        .arg(&deployment)
+        .arg(&rollout)
+        .arg("--candidate-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--project-id")
+        .arg("controller")
+        .arg("--board")
+        .arg(&board)
+        .arg("--expected-analysis")
+        .arg(&candidate)
+        .arg("--observed-analysis")
+        .arg(&deployed)
+        .arg("--verified-at-unix")
+        .arg("1900")
+        .arg("--output")
+        .arg(&deployment_verification)
+        .arg("--summary-output")
+        .arg(&deployment_verification_summary)
+        .arg("--require-passed")
+        .output()
+        .unwrap();
+    assert!(
+        verified_deployment.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verified_deployment.stderr)
+    );
+    let verification_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&deployment_verification).unwrap()).unwrap();
+    assert_eq!(verification_document["status"], "verification_passed");
+    assert_eq!(verification_document["coverage_complete"], true);
+    assert_eq!(verification_document["deployment_verified"], true);
+    assert_eq!(verification_document["rollback_required"], false);
+    assert_eq!(verification_document["automatic_rollback"], false);
+    assert_eq!(
+        verification_document["requires_dual_control_rollback"],
+        false
+    );
+    assert_eq!(verification_document["active_revision"], 2);
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-policy-deployment-verification")
+            .arg(&deployment_verification)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let verification_schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("policy-deployment-verification-schema")
+        .output()
+        .unwrap();
+    assert!(verification_schema.status.success());
+    let verification_schema: serde_json::Value =
+        serde_json::from_slice(&verification_schema.stdout).unwrap();
+    assert_eq!(verification_schema["additionalProperties"], false);
+    assert_eq!(
+        verification_schema["properties"]["automatic_rollback"]["const"],
+        false
+    );
+    let regressed_deployed = temporary.join("deployed-regressed");
+    fs::create_dir(&regressed_deployed).unwrap();
+    let mut regressed_run: serde_json::Value =
+        serde_json::from_slice(&fs::read(deployed.join("run.json")).unwrap()).unwrap();
+    regressed_run["result"]["violations"] = serde_json::json!(2);
+    fs::write(
+        regressed_deployed.join("run.json"),
+        serde_json::to_string_pretty(&regressed_run).unwrap(),
+    )
+    .unwrap();
+    let mut regressed_checks: serde_json::Value =
+        serde_json::from_slice(&fs::read(deployed.join("checks.json")).unwrap()).unwrap();
+    regressed_checks["violations"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "rule": "clearance",
+            "message": "production-only clearance regression",
+            "net_ids": [1]
+        }));
+    fs::write(
+        regressed_deployed.join("checks.json"),
+        serde_json::to_string_pretty(&regressed_checks).unwrap(),
+    )
+    .unwrap();
+    fs::copy(
+        deployed.join("quality.json"),
+        regressed_deployed.join("quality.json"),
+    )
+    .unwrap();
+    let rollback_verification = temporary.join("rollback-verification.json");
+    let rollback_evidence = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-policy-deployment")
+        .arg(&deployment)
+        .arg(&rollout)
+        .arg("--candidate-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--project-id")
+        .arg("controller")
+        .arg("--board")
+        .arg(&board)
+        .arg("--expected-analysis")
+        .arg(&candidate)
+        .arg("--observed-analysis")
+        .arg(&regressed_deployed)
+        .arg("--verified-at-unix")
+        .arg("1901")
+        .arg("--output")
+        .arg(&rollback_verification)
+        .output()
+        .unwrap();
+    assert!(
+        rollback_evidence.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rollback_evidence.stderr)
+    );
+    let rollback_verification_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&rollback_verification).unwrap()).unwrap();
+    assert_eq!(
+        rollback_verification_document["status"],
+        "rollback_required"
+    );
+    assert_eq!(rollback_verification_document["deployment_verified"], false);
+    assert_eq!(rollback_verification_document["rollback_required"], true);
+    assert_eq!(
+        rollback_verification_document["requires_dual_control_rollback"],
+        true
+    );
+    assert_eq!(rollback_verification_document["total_new_violations"], 1);
+    assert_eq!(rollback_verification_document["automatic_rollback"], false);
+    let gated_rollback = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-policy-deployment")
+        .arg(&deployment)
+        .arg(&rollout)
+        .arg("--candidate-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--project-id")
+        .arg("controller")
+        .arg("--board")
+        .arg(&board)
+        .arg("--expected-analysis")
+        .arg(&candidate)
+        .arg("--observed-analysis")
+        .arg(&regressed_deployed)
+        .arg("--verified-at-unix")
+        .arg("1901")
+        .arg("--output")
+        .arg(temporary.join("gated-rollback-verification.json"))
+        .arg("--require-passed")
+        .output()
+        .unwrap();
+    assert!(!gated_rollback.status.success());
+    assert!(
+        String::from_utf8_lossy(&gated_rollback.stderr).contains("dual-control rollback"),
+        "{}",
+        String::from_utf8_lossy(&gated_rollback.stderr)
+    );
     let replay = Command::new(env!("CARGO_BIN_EXE_pcbex"))
         .arg("advance-policy-deployment")
         .arg(&rollout)
