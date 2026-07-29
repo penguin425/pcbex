@@ -3064,6 +3064,46 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "create_approval_transparency_public_log_consistency",
+            "Create approval public-log consistency proof",
+            "Build an RFC 6962-style proof that a newer signed tree head extends a previously accepted anchor.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["old_anchor", "new_anchor", "log_checkpoints", "output"],
+                "properties": {
+                    "old_anchor": {"type": "string"},
+                    "new_anchor": {"type": "string"},
+                    "log_checkpoints": {
+                        "type": "array", "minItems": 1, "maxItems": 100000,
+                        "items": {"type": "string"}
+                    },
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_approval_transparency_public_log_consistency",
+            "Verify approval public-log consistency",
+            "Verify both accepted anchors, signed tree heads, and the minimal path proving append-only prefix extension.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["old_anchor", "new_anchor", "proof", "public_key", "output"],
+                "properties": {
+                    "old_anchor": {"type": "string"},
+                    "new_anchor": {"type": "string"},
+                    "proof": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -3476,6 +3516,12 @@ fn call_tool(
         }
         "verify_approval_transparency_public_anchor" => {
             verify_approval_transparency_public_anchor(arguments, cancellation)?
+        }
+        "create_approval_transparency_public_log_consistency" => {
+            create_approval_transparency_public_log_consistency(arguments, cancellation)?
+        }
+        "verify_approval_transparency_public_log_consistency" => {
+            verify_approval_transparency_public_log_consistency(arguments, cancellation)?
         }
         "verify_approval_transparency_witnesses" => {
             verify_approval_transparency_witnesses(arguments, cancellation)?
@@ -8149,6 +8195,64 @@ fn verify_approval_transparency_public_anchor(
     ))
 }
 
+fn create_approval_transparency_public_log_consistency(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["old_anchor", "new_anchor", "log_checkpoints", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "create-approval-log-consistency".into(),
+        "--old-anchor".into(),
+        required_string(&arguments, "old_anchor")?,
+        "--new-anchor".into(),
+        required_string(&arguments, "new_anchor")?,
+    ];
+    for checkpoint in required_string_array(&arguments, "log_checkpoints", false)? {
+        command.extend(["--log-checkpoint".into(), checkpoint]);
+    }
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let proof = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "proof": proof}),
+    ))
+}
+
+fn verify_approval_transparency_public_log_consistency(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["old_anchor", "new_anchor", "proof", "public_key", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "verify-approval-log-consistency".into(),
+        "--old-anchor".into(),
+        required_string(&arguments, "old_anchor")?,
+        "--new-anchor".into(),
+        required_string(&arguments, "new_anchor")?,
+        "--proof".into(),
+        required_string(&arguments, "proof")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -8516,7 +8620,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 96);
+        assert_eq!(tools.len(), 98);
         let named = |name: &str| {
             tools
                 .iter()
@@ -9051,6 +9155,15 @@ mod tests {
             named("create_approval_transparency_public_anchor")["inputSchema"]["properties"]["log_checkpoints"]
                 ["maxItems"],
             100000
+        );
+        assert_eq!(
+            named("create_approval_transparency_public_log_consistency")["inputSchema"]["properties"]
+                ["log_checkpoints"]["maxItems"],
+            100000
+        );
+        assert_eq!(
+            named("verify_approval_transparency_public_log_consistency")["execution"]["taskSupport"],
+            "forbidden"
         );
         assert_eq!(
             named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],

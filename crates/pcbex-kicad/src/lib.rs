@@ -10,9 +10,13 @@ use std::fmt::Write;
 
 mod anchor;
 pub use anchor::{
-    ApprovalLogAnchorProof, ApprovalLogAnchorVerificationReport, SignedApprovalPublicLogTreeHead,
+    ApprovalLogAnchorProof, ApprovalLogAnchorVerificationReport, ApprovalLogConsistencyProof,
+    ApprovalLogConsistencyVerificationReport, SignedApprovalPublicLogTreeHead,
     approval_log_anchor_proof_json_schema, approval_log_anchor_verification_report_json_schema,
-    create_approval_log_anchor_proof, verify_approval_log_anchor_proof,
+    approval_log_consistency_proof_json_schema,
+    approval_log_consistency_verification_report_json_schema, create_approval_log_anchor_proof,
+    create_approval_log_consistency_proof, verify_approval_log_anchor_proof,
+    verify_approval_log_consistency_proof,
 };
 mod approval;
 pub use approval::{

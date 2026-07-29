@@ -369,6 +369,11 @@
     {
       "id": "lifecycle-gossip-registry-history-witness-receipt-transparency",
       "release": "v1.370.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-public-log-consistency",
+      "release": "v1.371.0",
       "status": "current"
     }
   ]

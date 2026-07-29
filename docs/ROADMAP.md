@@ -80,6 +80,7 @@ auditable release.
 | v1.368.0 | Registry history witness key rotation | Advance identity-bound checkpoint-witness trust through dual-signed generation- and digest-chained key transitions |
 | v1.369.0 | Remote registry history checkpoint witnesses | Acquire and immediately verify independent checkpoint witnesses from bounded HTTPS services with hash-bound receipts |
 | v1.370.0 | Registry witness receipt transparency | Append verified remote witness receipts to signed, anchored, independently witnessed hash-chain logs |
+| v1.371.0 | Approval transparency public-log consistency | Prove that newer receipt-log checkpoints extend retained signed Merkle trees without transferring the complete log |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -88,6 +89,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should add consistency proofs between registry-witness receipt
-log checkpoints, so separate CI consumers can verify prefix extension without
-transferring or trusting a complete newer log snapshot.
+The next roadmap should add independent gossip of approval-transparency
+public-log tree heads, so CI consumers can compare signed views and detect a
+split-view operator without sharing one retained baseline.

@@ -2065,6 +2065,49 @@ if ((approval_log_anchor_inputs == 2)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+approval_log_consistency_verification=""
+approval_log_consistent=""
+approval_log_consistency_inputs=0
+if [[ -n "${PCBEX_APPROVAL_LOG_PREVIOUS_ANCHOR_PROOF:-}" ]]; then ((approval_log_consistency_inputs += 1)); fi
+if [[ -n "${PCBEX_APPROVAL_LOG_CONSISTENCY_PROOF:-}" ]]; then ((approval_log_consistency_inputs += 1)); fi
+if ((approval_log_consistency_inputs != 0 && approval_log_consistency_inputs != 2)); then
+  echo "PCBEX_APPROVAL_LOG_PREVIOUS_ANCHOR_PROOF and PCBEX_APPROVAL_LOG_CONSISTENCY_PROOF must be supplied together" >&2
+  exit 2
+fi
+if ((approval_log_consistency_inputs == 2)); then
+  if ((approval_log_anchor_inputs != 2)); then
+    echo "approval-log consistency requires the current anchor proof and public key" >&2
+    exit 2
+  fi
+  approval_log_consistency_verification="${artifact_dir}/approval-log-consistency-verification.json"
+  "$PCBEX_BINARY" verify-approval-log-consistency \
+    --old-anchor "$PCBEX_APPROVAL_LOG_PREVIOUS_ANCHOR_PROOF" \
+    --new-anchor "$PCBEX_APPROVAL_LOG_ANCHOR_PROOF" \
+    --proof "$PCBEX_APPROVAL_LOG_CONSISTENCY_PROOF" \
+    --public-key "$PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY" \
+    --output "$approval_log_consistency_verification"
+  approval_log_consistent="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["consistent"]).lower())' \
+      "$approval_log_consistency_verification"
+  )"
+  {
+    printf '\n# Approval public-log consistency\n\n'
+    printf -- '- Consistent: `%s`\n' "$approval_log_consistent"
+    printf -- '- Tree extension: `%s -> %s`\n' \
+      "$(
+        python3 -c \
+          'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["old_tree_size"])' \
+          "$approval_log_consistency_verification"
+      )" \
+      "$(
+        python3 -c \
+          'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["new_tree_size"])' \
+          "$approval_log_consistency_verification"
+      )"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 remote_witness=""
 remote_witness_receipt=""
 remote_witness_public_key=""
@@ -2280,6 +2323,8 @@ write_output approval-log-verification "$approval_log_verification"
 write_output approval-log-verified "$approval_log_verified"
 write_output approval-log-anchor-verification "$approval_log_anchor_verification"
 write_output approval-log-anchored "$approval_log_anchored"
+write_output approval-log-consistency-verification "$approval_log_consistency_verification"
+write_output approval-log-consistent "$approval_log_consistent"
 write_output approval-log-witness-quorum "$approval_log_witness_quorum"
 write_output approval-log-witness-quorum-met "$approval_log_witness_quorum_met"
 write_output remote-witness "$remote_witness"
