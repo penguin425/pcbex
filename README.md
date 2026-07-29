@@ -834,6 +834,29 @@ repository Action accepts `canary-rollout-report`,
 boolean result, and gates only when
 `fail-on-canary-rollout-authorization: "true"` is selected.
 
+After the bounded canary runs, retain a fresh analysis produced with the exact
+authorized candidate profile and compare it with the exact simulated baseline:
+
+```sh
+pcbex record-canary-monitoring policy-rollout.json \
+  canary-rollout-authorization.json \
+  --project-id controller \
+  --board hardware/controller.kicad_pcb \
+  --baseline-analysis build/controller-baseline \
+  --observed-analysis build/controller-canary \
+  --observed-at-unix 1785287200 \
+  --output canary-monitoring.json \
+  --summary-output canary-monitoring.md \
+  --require-passed
+```
+
+The report binds every analysis artifact digest to the rollout and
+authorization. Any new violation or quality regression requires rollback.
+Passing evidence only sets `promotion_eligible: true`; it always retains
+`automatic_promotion: false` and `requires_human_decision: true`. MCP exposes
+`record_canary_monitoring`, and the Action provides equivalent retained outputs
+and an opt-in `fail-on-canary-monitoring` gate.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -861,7 +884,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.339.0
+    uses: penguin425/pcbex@v1.340.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2098,7 +2121,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.339.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.340.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

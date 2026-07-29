@@ -50,6 +50,8 @@ write_output policy-rollout-profile ""
 write_output policy-rollout ""
 write_output canary-rollout-authorization ""
 write_output canary-rollout-authorized ""
+write_output canary-monitoring ""
+write_output canary-monitoring-passed ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -329,6 +331,49 @@ if ((canary_approval_inputs == 2)); then
   {
     printf '\n'
     cat "$canary_rollout_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+canary_monitoring=""
+canary_monitoring_passed=""
+monitoring_inputs=0
+for value in \
+  "${PCBEX_CANARY_MONITORING_PROJECT_ID:-}" \
+  "${PCBEX_CANARY_MONITORING_BASELINE_ANALYSIS:-}" \
+  "${PCBEX_CANARY_MONITORING_OBSERVED_ANALYSIS:-}" \
+  "${PCBEX_CANARY_MONITORING_OBSERVED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((monitoring_inputs += 1)); fi
+done
+if ((monitoring_inputs != 0 && monitoring_inputs != 4)); then
+  echo "canary monitoring project, baseline, observation, and time must be supplied together" >&2
+  exit 2
+fi
+if ((monitoring_inputs == 4)); then
+  rollout_to_monitor="${PCBEX_CANARY_ROLLOUT_REPORT:-$policy_rollout}"
+  if [[ -z "$rollout_to_monitor" || -z "$canary_rollout_authorization" ]]; then
+    echo "canary monitoring requires the exact rollout and verified authorization" >&2
+    exit 2
+  fi
+  canary_monitoring="${artifact_dir}/canary-monitoring.json"
+  canary_monitoring_summary="${artifact_dir}/canary-monitoring.md"
+  "$PCBEX_BINARY" record-canary-monitoring \
+    "$rollout_to_monitor" \
+    "$canary_rollout_authorization" \
+    --project-id "$PCBEX_CANARY_MONITORING_PROJECT_ID" \
+    --board "$PCBEX_BOARD" \
+    --baseline-analysis "$PCBEX_CANARY_MONITORING_BASELINE_ANALYSIS" \
+    --observed-analysis "$PCBEX_CANARY_MONITORING_OBSERVED_ANALYSIS" \
+    --observed-at-unix "$PCBEX_CANARY_MONITORING_OBSERVED_AT_UNIX" \
+    --output "$canary_monitoring" \
+    --summary-output "$canary_monitoring_summary"
+  canary_monitoring_passed="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["promotion_eligible"]).lower())' \
+      "$canary_monitoring"
+  )"
+  {
+    printf '\n'
+    cat "$canary_monitoring_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -728,6 +773,8 @@ write_output policy-rollout-profile "$policy_rollout_profile"
 write_output policy-rollout "$policy_rollout"
 write_output canary-rollout-authorization "$canary_rollout_authorization"
 write_output canary-rollout-authorized "$canary_rollout_authorized"
+write_output canary-monitoring "$canary_monitoring"
+write_output canary-monitoring-passed "$canary_monitoring_passed"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

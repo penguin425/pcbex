@@ -299,6 +299,7 @@ impl McpServer {
                     | "simulate_policy_rollout"
                     | "sign_rollout_approval"
                     | "verify_rollout_approvals"
+                    | "record_canary_monitoring"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -905,6 +906,46 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "record_canary_monitoring",
+            "Record bound canary monitoring",
+            "Compare exact observed canary analyses with their authorized simulated baselines; regressions require rollback and clean evidence still requires a human promotion decision.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollout", "authorization", "project_ids", "boards",
+                    "baseline_analyses", "observed_analyses",
+                    "observed_at_unix", "output"
+                ],
+                "properties": {
+                    "rollout": {"type": "string"},
+                    "authorization": {"type": "string"},
+                    "project_ids": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "boards": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "baseline_analyses": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "observed_analyses": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "observed_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_passed": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -1502,6 +1543,7 @@ fn call_tool(
         "simulate_policy_rollout" => simulate_policy_rollout(arguments, cancellation)?,
         "sign_rollout_approval" => sign_rollout_approval(arguments, cancellation)?,
         "verify_rollout_approvals" => verify_rollout_approvals(arguments, cancellation)?,
+        "record_canary_monitoring" => record_canary_monitoring(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2152,6 +2194,84 @@ fn verify_rollout_approvals(
     Ok(execution_result(
         execution,
         json!({"output": output, "authorization": authorization}),
+    ))
+}
+
+fn record_canary_monitoring(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollout",
+            "authorization",
+            "project_ids",
+            "boards",
+            "baseline_analyses",
+            "observed_analyses",
+            "observed_at_unix",
+            "output",
+            "summary_output",
+            "require_passed",
+        ],
+    )?;
+    let project_ids = required_string_array(&arguments, "project_ids", false)?;
+    let boards = required_string_array(&arguments, "boards", false)?;
+    let baselines = required_string_array(&arguments, "baseline_analyses", false)?;
+    let observed = required_string_array(&arguments, "observed_analyses", false)?;
+    if project_ids.len() > 100
+        || project_ids.len() != boards.len()
+        || project_ids.len() != baselines.len()
+        || project_ids.len() != observed.len()
+    {
+        return Err(json!({"detail": "canary monitoring arrays must pair 1 to 100 entries"}));
+    }
+    let observed_at = arguments
+        .get("observed_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "observed_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "record-canary-monitoring".into(),
+        required_string(&arguments, "rollout")?,
+        required_string(&arguments, "authorization")?,
+    ];
+    for value in project_ids {
+        command.extend(["--project-id".into(), value]);
+    }
+    for value in boards {
+        command.extend(["--board".into(), value]);
+    }
+    for value in baselines {
+        command.extend(["--baseline-analysis".into(), value]);
+    }
+    for value in observed {
+        command.extend(["--observed-analysis".into(), value]);
+    }
+    command.extend([
+        "--observed-at-unix".into(),
+        observed_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_passed",
+        "--require-passed",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let monitoring = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "monitoring": monitoring}),
     ))
 }
 
@@ -3348,7 +3468,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 34);
+        assert_eq!(tools.len(), 35);
         let named = |name: &str| {
             tools
                 .iter()
@@ -3414,6 +3534,14 @@ mod tests {
         assert_eq!(
             named("verify_rollout_approvals")["annotations"]["destructiveHint"],
             true
+        );
+        assert_eq!(
+            named("record_canary_monitoring")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("record_canary_monitoring")["inputSchema"]["properties"]["project_ids"]["maxItems"],
+            100
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],
