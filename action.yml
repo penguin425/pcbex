@@ -738,6 +738,14 @@ inputs:
     description: Trusted Ed25519 tree-head key for the public anchor log.
     required: false
     default: ""
+  approval-log-previous-anchor-proof:
+    description: Previously accepted Merkle anchor used as the prefix-consistency baseline.
+    required: false
+    default: ""
+  approval-log-consistency-proof:
+    description: Proof that the current approval-log anchor extends the previous anchor.
+    required: false
+    default: ""
   approval-log-witness-files:
     description: Newline-separated independent witness signatures over the checkpoint.
     required: false
@@ -808,6 +816,10 @@ inputs:
     default: "false"
   fail-on-approval-log-anchor:
     description: Fail unless the supplied checkpoint has a valid public-log inclusion proof.
+    required: false
+    default: "false"
+  fail-on-approval-log-consistency:
+    description: Fail unless the current public-log anchor is a proven prefix extension.
     required: false
     default: "false"
   fail-on-approval-log-witnesses:
@@ -1085,6 +1097,12 @@ outputs:
   approval-log-anchored:
     description: Whether the exact checkpoint is included under a trusted signed tree head.
     value: ${{ steps.analyze.outputs.approval-log-anchored }}
+  approval-log-consistency-verification:
+    description: Verified append-only public-log consistency report path, when supplied.
+    value: ${{ steps.analyze.outputs.approval-log-consistency-verification }}
+  approval-log-consistent:
+    description: Whether the current approval public-log tree extends the accepted previous tree.
+    value: ${{ steps.analyze.outputs.approval-log-consistent }}
   approval-log-witness-quorum:
     description: Verified approval-log witness quorum report path, when supplied.
     value: ${{ steps.analyze.outputs.approval-log-witness-quorum }}
@@ -1284,6 +1302,8 @@ runs:
         PCBEX_APPROVAL_LOG_PUBLIC_KEY: ${{ inputs.approval-log-public-key }}
         PCBEX_APPROVAL_LOG_ANCHOR_PROOF: ${{ inputs.approval-log-anchor-proof }}
         PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY: ${{ inputs.approval-log-anchor-public-key }}
+        PCBEX_APPROVAL_LOG_PREVIOUS_ANCHOR_PROOF: ${{ inputs.approval-log-previous-anchor-proof }}
+        PCBEX_APPROVAL_LOG_CONSISTENCY_PROOF: ${{ inputs.approval-log-consistency-proof }}
         PCBEX_APPROVAL_LOG_WITNESS_FILES: ${{ inputs.approval-log-witness-files }}
         PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS: ${{ inputs.approval-log-witness-public-keys }}
         PCBEX_APPROVAL_LOG_MINIMUM_WITNESSES: ${{ inputs.approval-log-minimum-witnesses }}
@@ -1338,6 +1358,7 @@ runs:
         PCBEX_SCHEMATIC_APPROVAL_MET: ${{ steps.analyze.outputs.schematic-approval-met }}
         PCBEX_APPROVAL_LOG_VERIFIED: ${{ steps.analyze.outputs.approval-log-verified }}
         PCBEX_APPROVAL_LOG_ANCHORED: ${{ steps.analyze.outputs.approval-log-anchored }}
+        PCBEX_APPROVAL_LOG_CONSISTENT: ${{ steps.analyze.outputs.approval-log-consistent }}
         PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.approval-log-witness-quorum-met }}
         PCBEX_CANARY_ROLLOUT_AUTHORIZED: ${{ steps.analyze.outputs.canary-rollout-authorized }}
         PCBEX_CANARY_MONITORING_PASSED: ${{ steps.analyze.outputs.canary-monitoring-passed }}
@@ -1366,6 +1387,7 @@ runs:
         PCBEX_FAIL_ON_SCHEMATIC_APPROVAL: ${{ inputs.fail-on-schematic-approval }}
         PCBEX_FAIL_ON_APPROVAL_LOG: ${{ inputs.fail-on-approval-log }}
         PCBEX_FAIL_ON_APPROVAL_LOG_ANCHOR: ${{ inputs.fail-on-approval-log-anchor }}
+        PCBEX_FAIL_ON_APPROVAL_LOG_CONSISTENCY: ${{ inputs.fail-on-approval-log-consistency }}
         PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES: ${{ inputs.fail-on-approval-log-witnesses }}
         PCBEX_FAIL_ON_CANARY_ROLLOUT_AUTHORIZATION: ${{ inputs.fail-on-canary-rollout-authorization }}
         PCBEX_FAIL_ON_CANARY_MONITORING: ${{ inputs.fail-on-canary-monitoring }}
@@ -1425,6 +1447,10 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_ANCHOR" == "true" && "$PCBEX_APPROVAL_LOG_ANCHORED" != "true" ]]; then
           echo "::error::pcbex approval checkpoint public-log anchor is absent or invalid"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_CONSISTENCY" == "true" && "$PCBEX_APPROVAL_LOG_CONSISTENT" != "true" ]]; then
+          echo "::error::pcbex approval public-log prefix consistency is absent or invalid"
           exit 1
         fi
         if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES" == "true" && "$PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET" != "true" ]]; then

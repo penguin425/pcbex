@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.370.0
+    uses: penguin425/pcbex@v1.371.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3128,6 +3128,37 @@ and verifier-side inclusion checking. Closed proof and report contracts are
 available from `approval-log-anchor-proof-schema` and
 `approval-log-anchor-verification-report-schema`.
 
+Separate CI consumers can retain only an earlier accepted anchor and verify
+that a newer signed tree is its exact append-only extension:
+
+```sh
+pcbex create-approval-log-consistency \
+  --old-anchor approvals.previous-anchor.json \
+  --new-anchor approvals.anchor.json \
+  --log-checkpoint earlier.checkpoint.json \
+  --log-checkpoint approvals.checkpoint.json \
+  --output approvals.consistency.json
+
+pcbex verify-approval-log-consistency \
+  --old-anchor approvals.previous-anchor.json \
+  --new-anchor approvals.anchor.json \
+  --proof approvals.consistency.json \
+  --public-key public-log.pub \
+  --output approvals.consistency-verification.json
+```
+
+Generation uses the complete newer checkpoint snapshot, but verification needs
+only both accepted anchors, the logarithmic consistency path, and the trusted
+tree-head key. It verifies both signatures and rejects log/key substitution,
+tree-size or observation-time rollback, equal-size equivocation, incomplete or
+redundant paths, and roots that do not prove prefix extension. The Action
+accepts `approval-log-previous-anchor-proof` and
+`approval-log-consistency-proof` alongside the current anchor inputs,
+publishes `approval-log-consistent`, and can enforce
+`fail-on-approval-log-consistency`. MCP exposes create/verify tools; closed
+contracts are emitted by `approval-log-consistency-proof-schema` and
+`approval-log-consistency-verification-report-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3195,7 +3226,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.370.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.371.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

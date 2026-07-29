@@ -45,6 +45,30 @@ pub struct ApprovalLogAnchorVerificationReport {
     pub anchored: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLogConsistencyProof {
+    pub schema_version: u32,
+    pub old_tree_head: SignedApprovalPublicLogTreeHead,
+    pub new_tree_head: SignedApprovalPublicLogTreeHead,
+    pub consistency_path: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLogConsistencyVerificationReport {
+    pub schema_version: u32,
+    pub log_id: String,
+    pub old_tree_size: u64,
+    pub old_root_sha256: String,
+    pub old_tree_head_observed_at_unix: u64,
+    pub new_tree_size: u64,
+    pub new_root_sha256: String,
+    pub new_tree_head_observed_at_unix: u64,
+    pub tree_head_public_key: String,
+    pub consistent: bool,
+}
+
 #[derive(Serialize)]
 struct TreeHeadPayload<'a> {
     domain: &'static str,
@@ -176,6 +200,108 @@ pub fn verify_approval_log_anchor_proof(
     })
 }
 
+pub fn create_approval_log_consistency_proof(
+    old_anchor: &ApprovalLogAnchorProof,
+    new_anchor: &ApprovalLogAnchorProof,
+    ordered_checkpoint_sha256: &[String],
+) -> Result<ApprovalLogConsistencyProof, String> {
+    validate_anchor_proof(old_anchor)?;
+    validate_anchor_proof(new_anchor)?;
+    let old_head = &old_anchor.tree_head;
+    let new_head = &new_anchor.tree_head;
+    validate_consistency_head_pair(old_head, new_head)?;
+    if ordered_checkpoint_sha256.len() != new_head.tree_size as usize {
+        return Err("approval consistency snapshot does not match the new tree size".into());
+    }
+    for digest in ordered_checkpoint_sha256 {
+        validate_sha256(digest, "approval public-log checkpoint SHA-256")?;
+    }
+    let leaves = ordered_checkpoint_sha256
+        .iter()
+        .map(|digest| leaf_hash(digest))
+        .collect::<Result<Vec<_>, _>>()?;
+    let old_size = old_head.tree_size as usize;
+    if hex_encode(&merkle_root(&leaves[..old_size])) != old_head.root_sha256 {
+        return Err(
+            "approval consistency snapshot does not reconstruct the old signed root".into(),
+        );
+    }
+    if hex_encode(&merkle_root(&leaves)) != new_head.root_sha256 {
+        return Err(
+            "approval consistency snapshot does not reconstruct the new signed root".into(),
+        );
+    }
+    let consistency_path = merkle_consistency_path(&leaves, old_size)?
+        .into_iter()
+        .map(|digest| hex_encode(&digest))
+        .collect();
+    Ok(ApprovalLogConsistencyProof {
+        schema_version: 1,
+        old_tree_head: old_head.clone(),
+        new_tree_head: new_head.clone(),
+        consistency_path,
+    })
+}
+
+pub fn verify_approval_log_consistency_proof(
+    old_anchor: &ApprovalLogAnchorProof,
+    new_anchor: &ApprovalLogAnchorProof,
+    proof: &ApprovalLogConsistencyProof,
+    trusted_public_key: &[u8; 32],
+) -> Result<ApprovalLogConsistencyVerificationReport, String> {
+    validate_anchor_proof(old_anchor)?;
+    validate_anchor_proof(new_anchor)?;
+    validate_consistency_proof(proof)?;
+    if proof.old_tree_head != old_anchor.tree_head {
+        return Err(
+            "approval consistency proof does not match the previously accepted anchor".into(),
+        );
+    }
+    if proof.new_tree_head != new_anchor.tree_head {
+        return Err("approval consistency proof does not match the current anchor".into());
+    }
+    let old_head = &proof.old_tree_head;
+    let new_head = &proof.new_tree_head;
+    verify_tree_head(old_head, trusted_public_key)?;
+    verify_tree_head(new_head, trusted_public_key)?;
+    let path = proof
+        .consistency_path
+        .iter()
+        .map(|digest| hex_decode::<32>(digest, "approval consistency node"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let old_root = hex_decode::<32>(
+        &old_head.root_sha256,
+        "approval old public-log root SHA-256",
+    )?;
+    let mut cursor = 0;
+    let (reconstructed_old, reconstructed_new) = roots_from_consistency_path(
+        old_head.tree_size,
+        new_head.tree_size,
+        true,
+        old_root,
+        &path,
+        &mut cursor,
+    )?;
+    if cursor != path.len()
+        || hex_encode(&reconstructed_old) != old_head.root_sha256
+        || hex_encode(&reconstructed_new) != new_head.root_sha256
+    {
+        return Err("approval consistency path does not reconstruct both signed roots".into());
+    }
+    Ok(ApprovalLogConsistencyVerificationReport {
+        schema_version: 1,
+        log_id: new_head.log_id.clone(),
+        old_tree_size: old_head.tree_size,
+        old_root_sha256: old_head.root_sha256.clone(),
+        old_tree_head_observed_at_unix: old_head.observed_at_unix,
+        new_tree_size: new_head.tree_size,
+        new_root_sha256: new_head.root_sha256.clone(),
+        new_tree_head_observed_at_unix: new_head.observed_at_unix,
+        tree_head_public_key: new_head.public_key.clone(),
+        consistent: true,
+    })
+}
+
 fn leaf_hash(checkpoint_sha256: &str) -> Result<[u8; 32], String> {
     validate_sha256(checkpoint_sha256, "approval public-log checkpoint SHA-256")?;
     let digest = hex_decode::<32>(checkpoint_sha256, "approval public-log checkpoint SHA-256")?;
@@ -218,6 +344,37 @@ fn merkle_audit_path(leaves: &[[u8; 32]], index: usize) -> Result<Vec<[u8; 32]>,
     }
 }
 
+fn merkle_consistency_path(leaves: &[[u8; 32]], old_size: usize) -> Result<Vec<[u8; 32]>, String> {
+    if old_size == 0 || old_size > leaves.len() {
+        return Err("approval consistency old tree size is outside the new tree".into());
+    }
+    consistency_subproof(old_size, leaves, true)
+}
+
+fn consistency_subproof(
+    old_size: usize,
+    leaves: &[[u8; 32]],
+    complete_subtree: bool,
+) -> Result<Vec<[u8; 32]>, String> {
+    if old_size == leaves.len() {
+        return if complete_subtree {
+            Ok(Vec::new())
+        } else {
+            Ok(vec![merkle_root(leaves)])
+        };
+    }
+    let split = largest_power_of_two_less_than(leaves.len());
+    if old_size <= split {
+        let mut proof = consistency_subproof(old_size, &leaves[..split], complete_subtree)?;
+        proof.push(merkle_root(&leaves[split..]));
+        Ok(proof)
+    } else {
+        let mut proof = consistency_subproof(old_size - split, &leaves[split..], false)?;
+        proof.push(merkle_root(&leaves[..split]));
+        Ok(proof)
+    }
+}
+
 fn root_from_audit_path(
     leaf: [u8; 32],
     index: u64,
@@ -249,6 +406,57 @@ fn next_audit_node(path: &[[u8; 32]], cursor: &mut usize) -> Result<[u8; 32], St
     Ok(node)
 }
 
+fn roots_from_consistency_path(
+    old_size: u64,
+    new_size: u64,
+    complete_subtree: bool,
+    trusted_old_root: [u8; 32],
+    path: &[[u8; 32]],
+    cursor: &mut usize,
+) -> Result<([u8; 32], [u8; 32]), String> {
+    if old_size == new_size {
+        let root = if complete_subtree {
+            trusted_old_root
+        } else {
+            next_consistency_node(path, cursor)?
+        };
+        return Ok((root, root));
+    }
+    let split = largest_power_of_two_less_than_u64(new_size);
+    if old_size <= split {
+        let (old_root, new_left) = roots_from_consistency_path(
+            old_size,
+            split,
+            complete_subtree,
+            trusted_old_root,
+            path,
+            cursor,
+        )?;
+        let new_right = next_consistency_node(path, cursor)?;
+        Ok((old_root, node_hash(new_left, new_right)))
+    } else {
+        let (old_right, new_right) = roots_from_consistency_path(
+            old_size - split,
+            new_size - split,
+            false,
+            trusted_old_root,
+            path,
+            cursor,
+        )?;
+        let left = next_consistency_node(path, cursor)?;
+        Ok((node_hash(left, old_right), node_hash(left, new_right)))
+    }
+}
+
+fn next_consistency_node(path: &[[u8; 32]], cursor: &mut usize) -> Result<[u8; 32], String> {
+    let node = path
+        .get(*cursor)
+        .copied()
+        .ok_or_else(|| "approval consistency path is incomplete".to_string())?;
+    *cursor += 1;
+    Ok(node)
+}
+
 fn largest_power_of_two_less_than(value: usize) -> usize {
     1_usize << (usize::BITS - (value - 1).leading_zeros() - 1)
 }
@@ -271,6 +479,96 @@ fn tree_head_payload(
         observed_at_unix,
     })
     .map_err(|error| format!("serializing approval public-log tree head: {error}"))
+}
+
+fn validate_anchor_proof(proof: &ApprovalLogAnchorProof) -> Result<(), String> {
+    if proof.schema_version != 1
+        || proof.leaf_index >= proof.tree_head.tree_size
+        || proof.audit_path.len() > MAX_AUDIT_PATH
+    {
+        return Err("invalid approval public-log anchor invariants".into());
+    }
+    validate_sha256(
+        &proof.checkpoint_sha256,
+        "approval anchor checkpoint SHA-256",
+    )?;
+    validate_tree_head_shape(&proof.tree_head)?;
+    for node in &proof.audit_path {
+        validate_sha256(node, "approval anchor audit node")?;
+    }
+    Ok(())
+}
+
+fn validate_consistency_proof(proof: &ApprovalLogConsistencyProof) -> Result<(), String> {
+    if proof.schema_version != 1 || proof.consistency_path.len() > MAX_AUDIT_PATH {
+        return Err("invalid approval public-log consistency invariants".into());
+    }
+    validate_tree_head_shape(&proof.old_tree_head)?;
+    validate_tree_head_shape(&proof.new_tree_head)?;
+    validate_consistency_head_pair(&proof.old_tree_head, &proof.new_tree_head)?;
+    for node in &proof.consistency_path {
+        validate_sha256(node, "approval consistency node")?;
+    }
+    Ok(())
+}
+
+fn validate_tree_head_shape(head: &SignedApprovalPublicLogTreeHead) -> Result<(), String> {
+    if head.schema_version != 1
+        || head.algorithm != "ed25519"
+        || head.tree_size == 0
+        || head.tree_size > MAX_ANCHOR_LEAVES as u64
+    {
+        return Err("invalid approval public-log tree-head invariants".into());
+    }
+    validate_slug(&head.log_id, "approval public-log id")?;
+    validate_sha256(&head.root_sha256, "approval public-log root SHA-256")?;
+    hex_decode::<32>(&head.public_key, "approval public-log public key")?;
+    hex_decode::<64>(&head.signature, "approval public-log signature")?;
+    Ok(())
+}
+
+fn validate_consistency_head_pair(
+    old_head: &SignedApprovalPublicLogTreeHead,
+    new_head: &SignedApprovalPublicLogTreeHead,
+) -> Result<(), String> {
+    if old_head.log_id != new_head.log_id {
+        return Err("approval consistency tree heads use different log identities".into());
+    }
+    if old_head.public_key != new_head.public_key {
+        return Err("approval consistency tree heads use different log keys".into());
+    }
+    if new_head.tree_size < old_head.tree_size {
+        return Err("approval public-log tree size rolled back".into());
+    }
+    if new_head.observed_at_unix < old_head.observed_at_unix {
+        return Err("approval public-log observation time rolled back".into());
+    }
+    if new_head.tree_size == old_head.tree_size && new_head.root_sha256 != old_head.root_sha256 {
+        return Err("approval public log equivocated at one tree size".into());
+    }
+    Ok(())
+}
+
+fn verify_tree_head(
+    head: &SignedApprovalPublicLogTreeHead,
+    trusted_public_key: &[u8; 32],
+) -> Result<(), String> {
+    validate_tree_head_shape(head)?;
+    let public_key = hex_decode::<32>(&head.public_key, "approval public-log public key")?;
+    if &public_key != trusted_public_key {
+        return Err("approval public-log key does not match the trusted public key".into());
+    }
+    let signature = hex_decode::<64>(&head.signature, "approval public-log signature")?;
+    let payload = tree_head_payload(
+        &head.log_id,
+        head.tree_size,
+        &head.root_sha256,
+        head.observed_at_unix,
+    )?;
+    VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| format!("invalid approval public-log public key: {error}"))?
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
+        .map_err(|error| format!("invalid approval public-log signature: {error}"))
 }
 
 fn validate_slug(value: &str, label: &str) -> Result<(), String> {
@@ -378,6 +676,69 @@ pub fn approval_log_anchor_verification_report_json_schema() -> Value {
     })
 }
 
+pub fn approval_log_consistency_proof_json_schema() -> Value {
+    let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
+    let tree_head = json!({
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "log_id", "tree_size", "root_sha256",
+            "observed_at_unix", "algorithm", "public_key", "signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "log_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+            "tree_size": {"type": "integer", "minimum": 1, "maximum": MAX_ANCHOR_LEAVES},
+            "root_sha256": digest.clone(),
+            "observed_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    });
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/approval-log-consistency-proof-v1.json",
+        "title": "pcbex approval public-log consistency proof",
+        "type": "object", "additionalProperties": false,
+        "required": ["schema_version", "old_tree_head", "new_tree_head", "consistency_path"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "old_tree_head": tree_head.clone(),
+            "new_tree_head": tree_head,
+            "consistency_path": {
+                "type": "array", "maxItems": MAX_AUDIT_PATH, "items": digest
+            }
+        }
+    })
+}
+
+pub fn approval_log_consistency_verification_report_json_schema() -> Value {
+    let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/approval-log-consistency-verification-report-v1.json",
+        "title": "pcbex approval public-log consistency verification report",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "log_id", "old_tree_size", "old_root_sha256",
+            "old_tree_head_observed_at_unix", "new_tree_size", "new_root_sha256",
+            "new_tree_head_observed_at_unix", "tree_head_public_key", "consistent"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "log_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+            "old_tree_size": {"type": "integer", "minimum": 1},
+            "old_root_sha256": digest.clone(),
+            "old_tree_head_observed_at_unix": {"type": "integer", "minimum": 0},
+            "new_tree_size": {"type": "integer", "minimum": 1},
+            "new_root_sha256": digest,
+            "new_tree_head_observed_at_unix": {"type": "integer", "minimum": 0},
+            "tree_head_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "consistent": {"const": true}
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,6 +804,71 @@ mod tests {
         assert_eq!(
             approval_log_anchor_verification_report_json_schema()["additionalProperties"],
             false
+        );
+        assert_eq!(
+            approval_log_consistency_proof_json_schema()["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            approval_log_consistency_verification_report_json_schema()["additionalProperties"],
+            false
+        );
+    }
+
+    #[test]
+    fn verifies_prefix_consistency_and_rejects_rollback_equivocation_and_tampering() {
+        let log = new_approval_transparency_log("approvals").unwrap();
+        let checkpoints = (1_u8..=6)
+            .map(|secret| sign_approval_log_checkpoint(&log, "origin", &[secret; 32]).unwrap())
+            .collect::<Vec<_>>();
+        let digests = checkpoints
+            .iter()
+            .map(signed_approval_log_checkpoint_sha256)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let old_anchor = create_approval_log_anchor_proof(
+            &checkpoints[2],
+            &digests[..3],
+            2,
+            "public-log",
+            100,
+            &[9; 32],
+        )
+        .unwrap();
+        let new_anchor = create_approval_log_anchor_proof(
+            &checkpoints[5],
+            &digests,
+            5,
+            "public-log",
+            101,
+            &[9; 32],
+        )
+        .unwrap();
+        let proof =
+            create_approval_log_consistency_proof(&old_anchor, &new_anchor, &digests).unwrap();
+        let key = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
+        let report =
+            verify_approval_log_consistency_proof(&old_anchor, &new_anchor, &proof, &key).unwrap();
+        assert!(report.consistent);
+        assert_eq!(report.old_tree_size, 3);
+        assert_eq!(report.new_tree_size, 6);
+
+        let mut tampered = proof.clone();
+        tampered.consistency_path[0] = "0".repeat(64);
+        assert!(
+            verify_approval_log_consistency_proof(&old_anchor, &new_anchor, &tampered, &key)
+                .is_err()
+        );
+        assert!(create_approval_log_consistency_proof(&new_anchor, &old_anchor, &digests).is_err());
+
+        let mut equivocation = new_anchor.clone();
+        equivocation.tree_head.tree_size = old_anchor.tree_head.tree_size;
+        assert!(
+            create_approval_log_consistency_proof(&old_anchor, &equivocation, &digests).is_err()
+        );
+        assert!(
+            verify_approval_log_consistency_proof(&old_anchor, &new_anchor, &proof, &[8; 32])
+                .is_err()
         );
     }
 }

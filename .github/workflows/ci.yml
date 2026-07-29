@@ -331,7 +331,22 @@ jobs:
             --log-id action-public-log \
             --private-key build/action-quorum/public-log.key \
             --observed-at-unix 2 \
+            --output build/action-quorum/approval-log.previous-anchor.json
+          target/release/pcbex create-approval-log-anchor \
+            build/action-quorum/approval-log.checkpoint.json \
+            --log-checkpoint build/action-quorum/approval-log.checkpoint.json \
+            --log-checkpoint build/action-quorum/approval-log.checkpoint.json \
+            --leaf-index 1 \
+            --log-id action-public-log \
+            --private-key build/action-quorum/public-log.key \
+            --observed-at-unix 3 \
             --output build/action-quorum/approval-log.anchor.json
+          target/release/pcbex create-approval-log-consistency \
+            --old-anchor build/action-quorum/approval-log.previous-anchor.json \
+            --new-anchor build/action-quorum/approval-log.anchor.json \
+            --log-checkpoint build/action-quorum/approval-log.checkpoint.json \
+            --log-checkpoint build/action-quorum/approval-log.checkpoint.json \
+            --output build/action-quorum/approval-log.consistency.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -398,6 +413,9 @@ jobs:
           approval-log-anchor-proof: build/action-quorum/approval-log.anchor.json
           approval-log-anchor-public-key: build/action-quorum/public-log.pub
           fail-on-approval-log-anchor: "true"
+          approval-log-previous-anchor-proof: build/action-quorum/approval-log.previous-anchor.json
+          approval-log-consistency-proof: build/action-quorum/approval-log.consistency.json
+          fail-on-approval-log-consistency: "true"
           approval-log-witness-files: |
             build/action-quorum/witness-a.json
             build/action-quorum/witness-b.json
@@ -484,6 +502,8 @@ jobs:
           APPROVAL_LOG_VERIFIED: ${{ steps.pcbex.outputs.approval-log-verified }}
           APPROVAL_LOG_ANCHOR_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-anchor-verification }}
           APPROVAL_LOG_ANCHORED: ${{ steps.pcbex.outputs.approval-log-anchored }}
+          APPROVAL_LOG_CONSISTENCY_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-consistency-verification }}
+          APPROVAL_LOG_CONSISTENT: ${{ steps.pcbex.outputs.approval-log-consistent }}
           REMOTE_WITNESS: ${{ steps.pcbex.outputs.remote-witness }}
           REMOTE_WITNESS_RECEIPT: ${{ steps.pcbex.outputs.remote-witness-receipt }}
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
@@ -517,6 +537,9 @@ jobs:
           test "$(jq -r '.coverage_complete' "$POLICY_DEPLOYMENT_VERIFICATION")" = "true"
           test "$(jq -r '.automatic_rollback' "$POLICY_DEPLOYMENT_VERIFICATION")" = "false"
           test "$(jq -r '.requires_dual_control_rollback' "$POLICY_DEPLOYMENT_VERIFICATION")" = "false"
+          test "$APPROVAL_LOG_CONSISTENT" = "true"
+          test "$(jq -r '.old_tree_size' "$APPROVAL_LOG_CONSISTENCY_VERIFICATION")" = "1"
+          test "$(jq -r '.new_tree_size' "$APPROVAL_LOG_CONSISTENCY_VERIFICATION")" = "2"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"
@@ -559,7 +582,7 @@ jobs:
           test "$(jq -r '.entry_count' "$APPROVAL_LOG_VERIFICATION")" = "1"
           test -s "$APPROVAL_LOG_ANCHOR_VERIFICATION"
           test "$APPROVAL_LOG_ANCHORED" = "true"
-          test "$(jq -r '.tree_size' "$APPROVAL_LOG_ANCHOR_VERIFICATION")" = "1"
+          test "$(jq -r '.tree_size' "$APPROVAL_LOG_ANCHOR_VERIFICATION")" = "2"
           test -s "$REMOTE_WITNESS"
           test -s "$REMOTE_WITNESS_RECEIPT"
           test "$(jq -r '.witness_id' "$REMOTE_WITNESS")" = "action-remote-witness"

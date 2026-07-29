@@ -466,6 +466,27 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .status
         .success()
     );
+    let old_anchor = directory.join("checkpoint.old-anchor.json");
+    assert!(
+        run(&[
+            "create-approval-log-anchor",
+            path(&checkpoint),
+            "--log-checkpoint",
+            path(&checkpoint),
+            "--leaf-index",
+            "0",
+            "--log-id",
+            "public-approvals",
+            "--private-key",
+            path(&anchor_private),
+            "--observed-at-unix",
+            "105",
+            "--output",
+            path(&old_anchor),
+        ])
+        .status
+        .success()
+    );
     let anchor = directory.join("checkpoint.anchor.json");
     assert!(
         run(&[
@@ -509,6 +530,79 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     let anchor_report: Value = serde_json::from_slice(&fs::read(&anchor_report).unwrap()).unwrap();
     assert_eq!(anchor_report["anchored"], true);
     assert_eq!(anchor_report["tree_size"], 3);
+
+    let consistency = directory.join("checkpoint.consistency.json");
+    assert!(
+        run(&[
+            "create-approval-log-consistency",
+            "--old-anchor",
+            path(&old_anchor),
+            "--new-anchor",
+            path(&anchor),
+            "--log-checkpoint",
+            path(&checkpoint),
+            "--log-checkpoint",
+            path(&checkpoint),
+            "--log-checkpoint",
+            path(&checkpoint),
+            "--output",
+            path(&consistency),
+        ])
+        .status
+        .success()
+    );
+    let consistency_report = directory.join("checkpoint.consistency-verification.json");
+    assert!(
+        run(&[
+            "verify-approval-log-consistency",
+            "--old-anchor",
+            path(&old_anchor),
+            "--new-anchor",
+            path(&anchor),
+            "--proof",
+            path(&consistency),
+            "--public-key",
+            path(&anchor_public),
+            "--output",
+            path(&consistency_report),
+        ])
+        .status
+        .success()
+    );
+    let consistency_report: Value =
+        serde_json::from_slice(&fs::read(&consistency_report).unwrap()).unwrap();
+    assert_eq!(consistency_report["consistent"], true);
+    assert_eq!(consistency_report["old_tree_size"], 1);
+    assert_eq!(consistency_report["new_tree_size"], 3);
+
+    let mut tampered_consistency: Value =
+        serde_json::from_slice(&fs::read(&consistency).unwrap()).unwrap();
+    tampered_consistency["consistency_path"][0] = "0".repeat(64).into();
+    let tampered_consistency_path = directory.join("checkpoint.tampered-consistency.json");
+    fs::write(
+        &tampered_consistency_path,
+        serde_json::to_vec_pretty(&tampered_consistency).unwrap(),
+    )
+    .unwrap();
+    let rejected_consistency = directory.join("checkpoint.rejected-consistency.json");
+    assert!(
+        !run(&[
+            "verify-approval-log-consistency",
+            "--old-anchor",
+            path(&old_anchor),
+            "--new-anchor",
+            path(&anchor),
+            "--proof",
+            path(&tampered_consistency_path),
+            "--public-key",
+            path(&anchor_public),
+            "--output",
+            path(&rejected_consistency),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_consistency.exists());
 
     let checkpoint_value: SignedApprovalLogCheckpoint =
         serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
