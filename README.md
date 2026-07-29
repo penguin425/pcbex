@@ -1901,6 +1901,36 @@ trust states, retains every response and receipt, and composes them with local
 artifacts in the same fail-closed quorum. MCP exposes the same HTTPS-only
 operation as an open-world, task-forbidden tool.
 
+Verified remote registry-history witness receipts can also become first-class
+append-only transparency events. This reuses the existing signed approval-log
+checkpoint, public-anchor, independent-witness, remote-witness, and witness-key
+rotation machinery:
+
+```sh
+pcbex init-approval-log --log-id registry-witness-receipts \
+  --output receipt-log.0.json
+pcbex append-approval-log receipt-log.0.json \
+  --artifact independent-a.remote-receipt.json \
+  --kind remote-registry-history-checkpoint-witness-receipt \
+  --recorded-at-unix 1785303000 --output receipt-log.1.json
+pcbex sign-approval-log receipt-log.1.json \
+  --private-key receipt-log.key --signer-id registry-receipt-log \
+  --output receipt-log.checkpoint.json
+```
+
+Append structurally validates the closed receipt, transport adapter,
+HTTPS-or-test-loopback policy, response bound, true verification decision,
+checkpoint/trust-state hashes, request/response hashes, witness key, identity,
+and optional key-generation binding before creating a new immutable log
+snapshot. Its normalized event retains the receipt digest, exact checkpoint
+digest, request/response digests, and witness identity. Mutation after append,
+replay that breaks sequence, truncation, reordering, or a false verification
+decision fails before output. The log signer remains responsible for admitting
+receipts produced by its trusted acquisition boundary. The existing MCP append
+tool accepts this artifact kind, and the Action's signed transparency-log
+verification, public anchor, and witness-quorum gates apply without a separate
+trust mechanism.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1928,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.369.0
+    uses: penguin425/pcbex@v1.370.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3165,7 +3195,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.369.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.370.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

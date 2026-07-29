@@ -364,6 +364,11 @@
     {
       "id": "remote-lifecycle-gossip-registry-history-checkpoint-witnesses",
       "release": "v1.369.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-gossip-registry-history-witness-receipt-transparency",
+      "release": "v1.370.0",
       "status": "current"
     }
   ]

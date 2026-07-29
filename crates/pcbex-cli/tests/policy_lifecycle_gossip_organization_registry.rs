@@ -845,6 +845,104 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         remote_receipt_value["checkpoint_sha256"],
         checkpoint_trust_value["checkpoint_sha256"]
     );
+    let receipt_log_empty = directory.join("registry.history.receipts.log.0.json");
+    let receipt_log = directory.join("registry.history.receipts.log.1.json");
+    let receipt_log_checkpoint = directory.join("registry.history.receipts.checkpoint.json");
+    let receipt_log_verification = directory.join("registry.history.receipts.verification.json");
+    assert!(
+        run(&[
+            "init-approval-log",
+            "--log-id",
+            "registry-history-witness-receipts",
+            "--output",
+            path(&receipt_log_empty),
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        run(&[
+            "append-approval-log",
+            path(&receipt_log_empty),
+            "--artifact",
+            path(&remote_receipt),
+            "--kind",
+            "remote-registry-history-checkpoint-witness-receipt",
+            "--recorded-at-unix",
+            "3401",
+            "--output",
+            path(&receipt_log),
+        ])
+        .status
+        .success()
+    );
+    let receipt_log_value = read_json(&receipt_log);
+    assert_eq!(
+        receipt_log_value["entries"][0]["event"]["artifact_kind"],
+        "remote_registry_history_checkpoint_witness_receipt"
+    );
+    assert_eq!(
+        receipt_log_value["entries"][0]["event"]["request_sha256"],
+        remote_receipt_value["request_sha256"]
+    );
+    assert!(
+        run(&[
+            "sign-approval-log",
+            path(&receipt_log),
+            "--private-key",
+            path(&authority_final_private),
+            "--signer-id",
+            "registry-receipt-log",
+            "--output",
+            path(&receipt_log_checkpoint),
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        run(&[
+            "verify-approval-log",
+            path(&receipt_log),
+            "--checkpoint",
+            path(&receipt_log_checkpoint),
+            "--public-key",
+            path(&authority_final_public),
+            "--output",
+            path(&receipt_log_verification),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(read_json(&receipt_log_verification)["verified"], true);
+
+    let mut tampered_remote_receipt = remote_receipt_value.clone();
+    tampered_remote_receipt["verified"] = false.into();
+    let tampered_remote_receipt_path =
+        directory.join("registry.history.checkpoint.tampered-remote-receipt.json");
+    fs::write(
+        &tampered_remote_receipt_path,
+        serde_json::to_vec_pretty(&tampered_remote_receipt).unwrap(),
+    )
+    .unwrap();
+    let rejected_receipt_log = directory.join("registry.history.receipts.rejected.json");
+    assert!(
+        !run(&[
+            "append-approval-log",
+            path(&receipt_log),
+            "--artifact",
+            path(&tampered_remote_receipt_path),
+            "--kind",
+            "remote-registry-history-checkpoint-witness-receipt",
+            "--recorded-at-unix",
+            "3402",
+            "--output",
+            path(&rejected_receipt_log),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_receipt_log.exists());
+
     let (untrusted_endpoint, untrusted_server) =
         remote_registry_history_witness_server(read_json(&witness_a));
     let rejected_remote_witness =
