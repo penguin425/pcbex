@@ -264,6 +264,11 @@
     {
       "id": "append-only-policy-lifecycle-ledger",
       "release": "v1.349.0",
+      "status": "released"
+    },
+    {
+      "id": "monotonic-signed-lifecycle-checkpoints",
+      "release": "v1.350.0",
       "status": "current"
     }
   ]

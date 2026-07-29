@@ -80,6 +80,7 @@ mod policy_deployment_rollback;
 mod policy_deployment_verification;
 mod policy_incident_ledger;
 mod policy_lifecycle;
+mod policy_lifecycle_checkpoint;
 mod policy_pack;
 mod policy_recommendation;
 mod policy_remediation;
@@ -127,6 +128,11 @@ use policy_lifecycle::{
     parse_policy_lifecycle_snapshot, policy_lifecycle_ledger_json_schema,
     policy_lifecycle_snapshot_json_schema, render_policy_lifecycle_summary,
     snapshot_policy_lifecycle,
+};
+use policy_lifecycle_checkpoint::{
+    parse_policy_lifecycle_trust_state, parse_signed_policy_lifecycle_checkpoint,
+    policy_lifecycle_trust_state_json_schema, sign_policy_lifecycle_checkpoint,
+    signed_policy_lifecycle_checkpoint_json_schema, verify_policy_lifecycle_checkpoint,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -811,6 +817,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed policy-lifecycle checkpoint JSON Schema.
+    SignedPolicyLifecycleCheckpointSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed policy-lifecycle checkpoint.
+    ValidatePolicyLifecycleCheckpoint {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed monotonic policy-lifecycle trust-state JSON Schema.
+    PolicyLifecycleTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a retained policy-lifecycle trust state.
+    ValidatePolicyLifecycleTrustState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1299,6 +1327,35 @@ enum Command {
         generation: u64,
         #[arg(short, long)]
         output: PathBuf,
+    },
+    /// Sign the exact head and normalized digest of an append-only lifecycle ledger.
+    SignPolicyLifecycleCheckpoint {
+        ledger: PathBuf,
+        #[arg(long)]
+        issued_at_unix: u64,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify a checkpoint and monotonically advance retained lifecycle trust.
+    VerifyPolicyLifecycleCheckpoint {
+        ledger: PathBuf,
+        checkpoint: PathBuf,
+        #[arg(long)]
+        public_key: PathBuf,
+        /// Previously accepted state used to reject rollback, equivocation, and forks.
+        #[arg(long)]
+        baseline_state: Option<PathBuf>,
+        #[arg(long)]
+        accepted_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fail unless the checkpoint is accepted (useful for CI policy gates).
+        #[arg(long)]
+        require_accepted: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2939,6 +2996,28 @@ fn main() -> Result<()> {
             let snapshot = parse_policy_lifecycle_snapshot(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(snapshot)?, output.as_ref())?;
         }
+        Command::SignedPolicyLifecycleCheckpointSchema { output } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_checkpoint_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleCheckpoint { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let checkpoint =
+                parse_signed_policy_lifecycle_checkpoint(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(checkpoint)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleTrustStateSchema { output } => {
+            write_or_print_json(&policy_lifecycle_trust_state_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyLifecycleTrustState { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state = parse_policy_lifecycle_trust_state(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -4530,6 +4609,79 @@ fn main() -> Result<()> {
                 "policy lifecycle snapshot generation {}: {} pending suspension(s)",
                 snapshot.generation, snapshot.awaiting_remediation
             );
+        }
+        Command::SignPolicyLifecycleCheckpoint {
+            ledger,
+            issued_at_unix,
+            private_key,
+            signer_id,
+            output,
+        } => {
+            let source = fs::read_to_string(&ledger)
+                .with_context(|| format!("reading {}", ledger.display()))?;
+            let ledger = parse_policy_lifecycle_ledger(&source).map_err(anyhow::Error::msg)?;
+            let secret = read_hex_key(
+                &private_key,
+                "policy lifecycle checkpoint signing private key",
+            )?;
+            let checkpoint =
+                sign_policy_lifecycle_checkpoint(&ledger, issued_at_unix, &signer_id, &secret)
+                    .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&checkpoint)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed policy lifecycle checkpoint generation {} as {}",
+                checkpoint.generation, checkpoint.signer_id
+            );
+        }
+        Command::VerifyPolicyLifecycleCheckpoint {
+            ledger,
+            checkpoint,
+            public_key,
+            baseline_state,
+            accepted_at_unix,
+            output,
+            require_accepted,
+        } => {
+            let ledger_source = fs::read_to_string(&ledger)
+                .with_context(|| format!("reading {}", ledger.display()))?;
+            let ledger =
+                parse_policy_lifecycle_ledger(&ledger_source).map_err(anyhow::Error::msg)?;
+            let checkpoint_source = fs::read_to_string(&checkpoint)
+                .with_context(|| format!("reading {}", checkpoint.display()))?;
+            let checkpoint = parse_signed_policy_lifecycle_checkpoint(&checkpoint_source)
+                .map_err(anyhow::Error::msg)?;
+            let public_key = read_hex_key(
+                &public_key,
+                "trusted policy lifecycle checkpoint public key",
+            )?;
+            let baseline = baseline_state
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_lifecycle_trust_state(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .transpose()?;
+            let state = verify_policy_lifecycle_checkpoint(
+                &ledger,
+                &checkpoint,
+                &public_key,
+                baseline.as_ref(),
+                accepted_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "accepted policy lifecycle checkpoint generation {} signed by {}",
+                state.accepted_generation, state.signer_id
+            );
+            if require_accepted && state.status != "checkpoint_accepted" {
+                bail!("policy lifecycle checkpoint was not accepted");
+            }
         }
         Command::RecordSimulationEvidence {
             declaration,

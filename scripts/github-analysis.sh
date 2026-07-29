@@ -77,6 +77,8 @@ write_output policy-remediation-status ""
 write_output policy-lifecycle-ledger ""
 write_output policy-lifecycle-generation ""
 write_output policy-lifecycle-awaiting-remediation ""
+write_output policy-lifecycle-trust-state ""
+write_output policy-lifecycle-checkpoint-accepted ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -886,6 +888,51 @@ print(data["awaiting_remediation"])
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+policy_lifecycle_trust_state=""
+policy_lifecycle_checkpoint_accepted=""
+lifecycle_checkpoint_inputs=0
+for value in \
+  "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_PUBLIC_KEY:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_ACCEPTED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((lifecycle_checkpoint_inputs += 1)); fi
+done
+if ((lifecycle_checkpoint_inputs != 0 && lifecycle_checkpoint_inputs != 3)); then
+  echo "policy lifecycle checkpoint, public key, and accepted-at timestamp must be supplied together" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE:-}" ]] \
+  && ((lifecycle_checkpoint_inputs != 3)); then
+  echo "policy lifecycle checkpoint baseline state requires complete checkpoint inputs" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_LEDGER:-}" ]] \
+  && ((lifecycle_checkpoint_inputs != 3)); then
+  echo "policy lifecycle checkpoint ledger requires complete checkpoint inputs" >&2
+  exit 2
+fi
+if ((lifecycle_checkpoint_inputs == 3)); then
+  lifecycle_checkpoint_ledger="${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_LEDGER:-$policy_lifecycle_ledger}"
+  if [[ -z "$lifecycle_checkpoint_ledger" ]]; then
+    echo "policy lifecycle checkpoint verification requires an explicit or newly generated ledger" >&2
+    exit 2
+  fi
+  policy_lifecycle_trust_state="${artifact_dir}/policy-lifecycle-trust-state.json"
+  lifecycle_checkpoint_arguments=(verify-policy-lifecycle-checkpoint \
+    "$lifecycle_checkpoint_ledger" \
+    "$PCBEX_POLICY_LIFECYCLE_CHECKPOINT" \
+    --public-key "$PCBEX_POLICY_LIFECYCLE_CHECKPOINT_PUBLIC_KEY" \
+    --accepted-at-unix "$PCBEX_POLICY_LIFECYCLE_CHECKPOINT_ACCEPTED_AT_UNIX" \
+    --output "$policy_lifecycle_trust_state" \
+    --require-accepted)
+  if [[ -n "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE:-}" ]]; then
+    lifecycle_checkpoint_arguments+=( \
+      --baseline-state "$PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE")
+  fi
+  "$PCBEX_BINARY" "${lifecycle_checkpoint_arguments[@]}"
+  policy_lifecycle_checkpoint_accepted=true
+fi
+
 has_schematic=false
 has_baseline_schematic=false
 if [[ -n "${PCBEX_SCHEMATIC:-}" ]]; then has_schematic=true; fi
@@ -1309,6 +1356,8 @@ write_output policy-remediation-status "$policy_remediation_status"
 write_output policy-lifecycle-ledger "$policy_lifecycle_ledger"
 write_output policy-lifecycle-generation "$policy_lifecycle_generation"
 write_output policy-lifecycle-awaiting-remediation "$policy_lifecycle_awaiting_remediation"
+write_output policy-lifecycle-trust-state "$policy_lifecycle_trust_state"
+write_output policy-lifecycle-checkpoint-accepted "$policy_lifecycle_checkpoint_accepted"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"
