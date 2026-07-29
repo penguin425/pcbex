@@ -70,6 +70,7 @@ auditable release.
 | v1.358.0 | Remote lifecycle public-log gossip quorum | Acquire bounded remote observations and require fresh consistent views from distinct organizations |
 | v1.359.0 | Lifecycle gossip observer key rotation | Bind each organization observer to generation-chained trust and require dual-signed key transitions |
 | v1.360.0 | Lifecycle gossip organization trust registry | Authority-sign observer admission, organization suspension, and permanent revocation before quorum eligibility |
+| v1.361.0 | Lifecycle gossip registry authority key rotation | Preserve registry history while old and new authority keys jointly authorize each one-generation trust-root change |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -78,6 +79,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should add dual-signed organization-registry authority-key
-rotation so governance can recover from planned authority changes without
-resetting admission, suspension, and revocation history.
+The next roadmap should add threshold registry governance so admission,
+suspension, and revocation require a configurable quorum of distinct
+authority identities rather than one online signing key.

@@ -1624,6 +1624,38 @@ and application as task-forbidden tools. The Action accepts
 `policy-lifecycle-log-gossip-organization-trust-registry` only with
 trust-state mode.
 
+Rotate the registry authority without resetting its organization history:
+
+```sh
+pcbex sign-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation \
+  gossip-registry.json \
+  --old-private-key gossip-registry-authority.key \
+  --new-private-key gossip-registry-authority.next.key \
+  --rotated-at-unix 1785302000 \
+  --output gossip-registry-authority.rotation.json
+
+pcbex apply-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation \
+  gossip-registry.json gossip-registry-authority.rotation.json \
+  --output gossip-registry.next.json \
+  --public-key-output gossip-registry-authority.next.pub
+```
+
+The rotation occupies the next generation in the same registry transition
+chain and binds the registry identity, prior transition digest, old/new keys,
+and monotonic rotation time. Both old-key authorization and new-key possession
+must verify. All admitted observers and suspension/revocation decisions remain
+unchanged. Replay, fork, skipped generation, registry substitution, wrong-old
+key, same-key replacement, signature mutation, and time reversal fail before
+either output is written. The next ordinary registry transition must be signed
+by the new authority and extend the rotation digest.
+
+The closed rotation contract is emitted by
+`signed-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation-schema`.
+MCP exposes sign/apply operations as task-forbidden tools. The Action can apply
+one retained rotation with
+`policy-lifecycle-log-gossip-organization-registry-authority-key-rotation`
+before registry-bound quorum verification.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1651,7 +1683,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.360.0
+    uses: penguin425/pcbex@v1.361.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2888,7 +2920,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.360.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.361.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

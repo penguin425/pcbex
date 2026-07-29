@@ -33,10 +33,13 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     let directory = temp_dir();
     let authority_private = directory.join("authority.key");
     let authority_public = directory.join("authority.pub");
+    let authority_next_private = directory.join("authority.next.key");
+    let authority_next_public = directory.join("authority.next.pub");
     let observer_private = directory.join("observer.key");
     let observer_public = directory.join("observer.pub");
     for (private, public) in [
         (&authority_private, &authority_public),
+        (&authority_next_private, &authority_next_public),
         (&observer_private, &observer_public),
     ] {
         assert!(
@@ -126,13 +129,77 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         "observer-a"
     );
 
-    let suspension = directory.join("registry.suspend.2.json");
+    let authority_rotation = directory.join("registry.authority-rotation.2.json");
+    assert!(
+        run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation",
+            path(&admitted),
+            "--old-private-key",
+            path(&authority_private),
+            "--new-private-key",
+            path(&authority_next_private),
+            "--rotated-at-unix",
+            "1500",
+            "--output",
+            path(&authority_rotation),
+        ])
+        .status
+        .success()
+    );
+    let rotated = directory.join("registry.2.json");
+    let exported_authority = directory.join("registry.authority.next.pub");
+    assert!(
+        run(&[
+            "apply-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation",
+            path(&admitted),
+            path(&authority_rotation),
+            "--output",
+            path(&rotated),
+            "--public-key-output",
+            path(&exported_authority),
+        ])
+        .status
+        .success()
+    );
+    let rotated_value: Value = serde_json::from_slice(&fs::read(&rotated).unwrap()).unwrap();
+    assert_eq!(rotated_value["generation"], 2);
+    assert_eq!(
+        fs::read_to_string(&exported_authority).unwrap(),
+        fs::read_to_string(&authority_next_public).unwrap()
+    );
+    assert!(
+        run(&[
+            "validate-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation",
+            path(&authority_rotation),
+        ])
+        .status
+        .success()
+    );
+    let replayed_rotation = directory.join("registry.rotation-replayed.json");
+    let replayed_rotation_public = directory.join("registry.rotation-replayed.pub");
+    assert!(
+        !run(&[
+            "apply-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation",
+            path(&rotated),
+            path(&authority_rotation),
+            "--output",
+            path(&replayed_rotation),
+            "--public-key-output",
+            path(&replayed_rotation_public),
+        ])
+        .status
+        .success()
+    );
+    assert!(!replayed_rotation.exists());
+    assert!(!replayed_rotation_public.exists());
+
+    let suspension = directory.join("registry.suspend.3.json");
     assert!(
         run(&[
             "sign-policy-lifecycle-log-gossip-organization-registry-transition",
-            path(&admitted),
+            path(&rotated),
             "--authority-private-key",
-            path(&authority_private),
+            path(&authority_next_private),
             "--action",
             "suspend-organization",
             "--organization-id",
@@ -147,11 +214,11 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         .status
         .success()
     );
-    let suspended = directory.join("registry.2.json");
+    let suspended = directory.join("registry.3.json");
     assert!(
         run(&[
             "apply-policy-lifecycle-log-gossip-organization-registry-transition",
-            path(&admitted),
+            path(&rotated),
             path(&suspension),
             "--output",
             path(&suspended),
@@ -162,13 +229,13 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     let suspended_value: Value = serde_json::from_slice(&fs::read(&suspended).unwrap()).unwrap();
     assert_eq!(suspended_value["organizations"][0]["status"], "suspended");
 
-    let revocation = directory.join("registry.revoke.3.json");
+    let revocation = directory.join("registry.revoke.4.json");
     assert!(
         run(&[
             "sign-policy-lifecycle-log-gossip-organization-registry-transition",
             path(&suspended),
             "--authority-private-key",
-            path(&authority_private),
+            path(&authority_next_private),
             "--action",
             "revoke-organization",
             "--organization-id",
@@ -183,7 +250,7 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         .status
         .success()
     );
-    let revoked = directory.join("registry.3.json");
+    let revoked = directory.join("registry.4.json");
     assert!(
         run(&[
             "apply-policy-lifecycle-log-gossip-organization-registry-transition",

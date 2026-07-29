@@ -319,6 +319,11 @@
     {
       "id": "lifecycle-gossip-organization-trust-registry",
       "release": "v1.360.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-gossip-registry-authority-key-rotation",
+      "release": "v1.361.0",
       "status": "current"
     }
   ]

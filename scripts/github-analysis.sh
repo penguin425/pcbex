@@ -1151,7 +1151,13 @@ if [[ "$local_gossip_configured" == "true" && "$remote_gossip_configured" == "tr
   echo "local and remote gossip observations must use the same trust mode" >&2
   exit 2
 fi
-if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}" ]]; then
+policy_lifecycle_log_gossip_organization_registry="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}"
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]] \
+  && [[ -z "$policy_lifecycle_log_gossip_organization_registry" ]]; then
+  echo "gossip organization registry authority rotation requires a retained registry" >&2
+  exit 2
+fi
+if [[ -n "$policy_lifecycle_log_gossip_organization_registry" ]]; then
   if [[ "$local_gossip_trust_mode" == "direct" || "$remote_gossip_trust_mode" == "direct" ]]; then
     echo "gossip organization trust registry requires observer trust-state mode" >&2
     exit 2
@@ -1170,6 +1176,17 @@ if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "tr
     echo "policy lifecycle gossip quorum requires an explicit evaluation time" >&2
     exit 2
   fi
+  if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]]; then
+    rotated_gossip_registry="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry.json"
+    rotated_gossip_registry_key="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-authority.pub"
+    "$PCBEX_BINARY" \
+      apply-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation \
+      "$policy_lifecycle_log_gossip_organization_registry" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION" \
+      --output "$rotated_gossip_registry" \
+      --public-key-output "$rotated_gossip_registry_key"
+    policy_lifecycle_log_gossip_organization_registry="$rotated_gossip_registry"
+  fi
   policy_lifecycle_log_gossip_quorum="${artifact_dir}/policy-lifecycle-log-gossip-quorum.json"
   gossip_quorum_arguments=(verify-policy-lifecycle-log-gossip-quorum \
     --local-anchor "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PROOF" \
@@ -1178,10 +1195,10 @@ if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "tr
     --log-public-key "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY" \
     --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_EVALUATED_AT_UNIX" \
     --output "$policy_lifecycle_log_gossip_quorum")
-  if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}" ]]; then
+  if [[ -n "$policy_lifecycle_log_gossip_organization_registry" ]]; then
     gossip_quorum_arguments+=( \
       --organization-trust-registry \
-      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY")
+      "$policy_lifecycle_log_gossip_organization_registry")
   fi
   if [[ "$local_gossip_configured" == "true" ]]; then
     while IFS= read -r observation; do
