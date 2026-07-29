@@ -17,5 +17,6 @@ serde_json.workspace = true
 sha2.workspace = true
 getrandom.workspace = true
 ed25519-dalek.workspace = true
+ureq.workspace = true
 pcbex-core = { path = "../pcbex-core" }
 pcbex-kicad = { path = "../pcbex-kicad" }

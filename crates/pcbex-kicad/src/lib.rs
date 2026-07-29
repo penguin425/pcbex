@@ -43,7 +43,7 @@ pub use transparency::{
     new_approval_transparency_log, sign_approval_log_checkpoint, sign_approval_log_witness,
     signed_approval_log_checkpoint_json_schema, signed_approval_log_checkpoint_sha256,
     signed_approval_log_witness_json_schema, verify_approval_log_checkpoint,
-    verify_approval_log_witness_quorum,
+    verify_approval_log_witness_quorum, verify_signed_approval_log_witness,
 };
 mod electrical;
 pub use electrical::{

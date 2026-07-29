@@ -66,6 +66,7 @@ use std::{
 mod manufacturing_feedback;
 mod mcp;
 mod policy_pack;
+mod remote_witness;
 
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
@@ -82,6 +83,7 @@ use policy_pack::{
     policy_trust_state_json_schema, sign_policy_pack, signed_policy_pack_json_schema,
     verify_signed_policy_pack,
 };
+use remote_witness::{remote_witness_receipt_json_schema, request_remote_witness};
 
 #[derive(Parser)]
 #[command(version, about = "Deterministic PCB physical-design engine")]
@@ -560,6 +562,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed remote-witness transport receipt JSON Schema.
+    RemoteWitnessReceiptSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Prepare a complete, digest-bound request for an AI schematic reviewer.
     PrepareAiReview {
         input: PathBuf,
@@ -776,6 +783,26 @@ enum Command {
         /// Fail after writing the report unless the witness threshold is met.
         #[arg(long)]
         require_quorum: bool,
+    },
+    /// Request and immediately verify a witness from a bounded HTTPS service.
+    RequestApprovalLogWitness {
+        checkpoint: CompactPath,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        public_key: CompactPath,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+        timeout_seconds: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        receipt_output: CompactPath,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -2001,6 +2028,9 @@ fn main() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::RemoteWitnessReceiptSchema { output } => {
+            write_or_print_json(&remote_witness_receipt_json_schema(), output.as_ref())?;
+        }
         Command::PrepareAiReview {
             input,
             electrical_review,
@@ -2692,6 +2722,47 @@ fn main() -> Result<()> {
             if require_quorum && !report.quorum_met {
                 bail!("approval-log witness quorum was not met");
             }
+        }
+        Command::RequestApprovalLogWitness {
+            checkpoint,
+            endpoint,
+            public_key,
+            bearer_token_env,
+            timeout_seconds,
+            output,
+            receipt_output,
+            allow_http_loopback,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(checkpoint.0.as_ref()),
+                    Some(output.0.as_ref()),
+                    Some(receipt_output.0.as_ref()),
+                ],
+                "remote witness",
+            )?;
+            let (checkpoint, _) = read_described_json::<SignedApprovalLogCheckpoint>(&checkpoint)?;
+            let trusted = read_hex_key(&public_key, "trusted remote witness public key")?;
+            let (witness, receipt) = request_remote_witness(
+                &checkpoint,
+                &endpoint,
+                &trusted,
+                bearer_token_env.as_deref(),
+                timeout_seconds,
+                allow_http_loopback,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let witness_json = serde_json::to_string_pretty(&witness)?;
+            let receipt_json = serde_json::to_string_pretty(&receipt)?;
+            write_new_file(&output, &witness_json, false)?;
+            if let Err(error) = write_new_file(&receipt_output, &receipt_json, false) {
+                fs::remove_file(output.0.as_ref()).ok();
+                return Err(error);
+            }
+            eprintln!(
+                "verified remote approval-log witness {} for {}",
+                witness.witness_id, witness.log_id
+            );
         }
         Command::DfmProfiles { output } => {
             let profiles = serde_json::to_string_pretty(&dfm_profiles())?;

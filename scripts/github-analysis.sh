@@ -56,6 +56,8 @@ write_output approval-log-verification ""
 write_output approval-log-verified ""
 write_output approval-log-witness-quorum ""
 write_output approval-log-witness-quorum-met ""
+write_output remote-witness ""
+write_output remote-witness-receipt ""
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -360,6 +362,47 @@ if ((approval_log_inputs == 3)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+remote_witness=""
+remote_witness_receipt=""
+remote_witness_inputs=0
+if [[ -n "${PCBEX_REMOTE_WITNESS_ENDPOINT:-}" ]]; then ((remote_witness_inputs += 1)); fi
+if [[ -n "${PCBEX_REMOTE_WITNESS_PUBLIC_KEY:-}" ]]; then ((remote_witness_inputs += 1)); fi
+if ((remote_witness_inputs != 0 && remote_witness_inputs != 2)); then
+  echo "PCBEX_REMOTE_WITNESS_ENDPOINT and PCBEX_REMOTE_WITNESS_PUBLIC_KEY must be supplied together" >&2
+  exit 2
+fi
+if ((remote_witness_inputs == 2)); then
+  if [[ -z "${PCBEX_APPROVAL_LOG_CHECKPOINT:-}" ]]; then
+    echo "remote witness requires PCBEX_APPROVAL_LOG_CHECKPOINT" >&2
+    exit 2
+  fi
+  remote_witness="${artifact_dir}/remote-witness.json"
+  remote_witness_receipt="${artifact_dir}/remote-witness-receipt.json"
+  remote_arguments=(request-approval-log-witness \
+    "$PCBEX_APPROVAL_LOG_CHECKPOINT" \
+    --endpoint "$PCBEX_REMOTE_WITNESS_ENDPOINT" \
+    --public-key "$PCBEX_REMOTE_WITNESS_PUBLIC_KEY" \
+    --timeout-seconds "${PCBEX_REMOTE_WITNESS_TIMEOUT_SECONDS:-30}" \
+    --output "$remote_witness" \
+    --receipt-output "$remote_witness_receipt")
+  if [[ -n "${PCBEX_REMOTE_WITNESS_BEARER_TOKEN:-}" ]]; then
+    remote_arguments+=(--bearer-token-env PCBEX_REMOTE_WITNESS_BEARER_TOKEN)
+  fi
+  if [[ "${PCBEX_REMOTE_WITNESS_ALLOW_HTTP_LOOPBACK:-false}" == "true" ]]; then
+    remote_arguments+=(--allow-http-loopback)
+  fi
+  "$PCBEX_BINARY" "${remote_arguments[@]}"
+  {
+    printf '\n# Remote approval-log witness\n\n'
+    printf -- '- Witness: `%s`\n' "$(
+      python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["witness_id"])' \
+        "$remote_witness"
+    )"
+    printf -- '- Verified: `true`\n'
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 approval_log_witness_quorum=""
 approval_log_witness_quorum_met=""
 witness_inputs=0
@@ -369,7 +412,7 @@ if ((witness_inputs != 0 && witness_inputs != 2)); then
   echo "PCBEX_APPROVAL_LOG_WITNESS_FILES and PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS must be supplied together" >&2
   exit 2
 fi
-if ((witness_inputs == 2)); then
+if ((witness_inputs == 2)) || [[ -n "$remote_witness" ]]; then
   if [[ -z "${PCBEX_APPROVAL_LOG_CHECKPOINT:-}" ]]; then
     echo "approval-log witnesses require PCBEX_APPROVAL_LOG_CHECKPOINT" >&2
     exit 2
@@ -385,6 +428,10 @@ if ((witness_inputs == 2)); then
   while IFS= read -r public_key; do
     if [[ -n "$public_key" ]]; then witness_arguments+=(--public-key "$public_key"); fi
   done <<< "${PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS:-}"
+  if [[ -n "$remote_witness" ]]; then
+    witness_arguments+=(--witness "$remote_witness")
+    witness_arguments+=(--public-key "$PCBEX_REMOTE_WITNESS_PUBLIC_KEY")
+  fi
   "$PCBEX_BINARY" "${witness_arguments[@]}"
   approval_log_witness_quorum_met="$(
     python3 -c \
@@ -456,4 +503,6 @@ write_output approval-log-verification "$approval_log_verification"
 write_output approval-log-verified "$approval_log_verified"
 write_output approval-log-witness-quorum "$approval_log_witness_quorum"
 write_output approval-log-witness-quorum-met "$approval_log_witness_quorum_met"
+write_output remote-witness "$remote_witness"
+write_output remote-witness-receipt "$remote_witness_receipt"
 write_output status ok

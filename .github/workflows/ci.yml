@@ -47,6 +47,7 @@ jobs:
             }' > build/action-feedback/declaration.json
           printf '%s\n' 'inspection passed' > build/action-feedback/inspection.txt
       - name: Prepare AI approval quorum fixture
+        id: approval-fixture
         run: |
           cargo build --package pcbex --release --locked
           mkdir -p build/action-quorum
@@ -188,9 +189,28 @@ jobs:
               --observed-at-unix 2 \
               --output "build/action-quorum/witness-$witness.json"
           done
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/remote-witness.key \
+            --public-key build/action-quorum/remote-witness.pub
+          RUNNER_TRACKING_ID="" nohup python3 scripts/tests/remote_witness_server.py \
+            --pcbex target/release/pcbex \
+            --checkpoint build/action-quorum/approval-log.checkpoint.json \
+            --private-key build/action-quorum/remote-witness.key \
+            --endpoint-output build/action-quorum/remote-witness.endpoint \
+            > build/action-quorum/remote-witness.server.log 2>&1 </dev/null &
+          for attempt in {1..50}; do
+            [[ -s build/action-quorum/remote-witness.endpoint ]] && break
+            sleep 0.1
+          done
+          test -s build/action-quorum/remote-witness.endpoint
+          printf 'remote-witness-endpoint=%s\n' \
+            "$(tr -d '\n' < build/action-quorum/remote-witness.endpoint)" \
+            >> "$GITHUB_OUTPUT"
       - name: Exercise the public composite action
         id: pcbex
         uses: ./
+        env:
+          PCBEX_REMOTE_WITNESS_ALLOW_HTTP_LOOPBACK: "true"
         with:
           board: examples/simple.kicad_pcb
           baseline-board: examples/simple.kicad_pcb
@@ -223,6 +243,8 @@ jobs:
           approval-log-witness-public-keys: |
             build/action-quorum/witness-a.pub
             build/action-quorum/witness-b.pub
+          remote-witness-endpoint: ${{ steps.approval-fixture.outputs.remote-witness-endpoint }}
+          remote-witness-public-key: build/action-quorum/remote-witness.pub
           fail-on-approval-log-witnesses: "true"
           manufacturing-feedback-declaration: build/action-feedback/declaration.json
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
@@ -253,6 +275,8 @@ jobs:
           SCHEMATIC_APPROVAL_MET: ${{ steps.pcbex.outputs.schematic-approval-met }}
           APPROVAL_LOG_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-verification }}
           APPROVAL_LOG_VERIFIED: ${{ steps.pcbex.outputs.approval-log-verified }}
+          REMOTE_WITNESS: ${{ steps.pcbex.outputs.remote-witness }}
+          REMOTE_WITNESS_RECEIPT: ${{ steps.pcbex.outputs.remote-witness-receipt }}
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
           APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-witness-quorum-met }}
           SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
@@ -288,9 +312,13 @@ jobs:
           test -s "$APPROVAL_LOG_VERIFICATION"
           test "$APPROVAL_LOG_VERIFIED" = "true"
           test "$(jq -r '.entry_count' "$APPROVAL_LOG_VERIFICATION")" = "1"
+          test -s "$REMOTE_WITNESS"
+          test -s "$REMOTE_WITNESS_RECEIPT"
+          test "$(jq -r '.witness_id' "$REMOTE_WITNESS")" = "action-remote-witness"
+          test "$(jq -r '.verified' "$REMOTE_WITNESS_RECEIPT")" = "true"
           test -s "$APPROVAL_LOG_WITNESS_QUORUM"
           test "$APPROVAL_LOG_WITNESS_QUORUM_MET" = "true"
-          test "$(jq -r '.valid_witnesses' "$APPROVAL_LOG_WITNESS_QUORUM")" = "2"
+          test "$(jq -r '.valid_witnesses' "$APPROVAL_LOG_WITNESS_QUORUM")" = "3"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then
             [[ "$COMMENT_URL" == https://github.com/* ]]
           else

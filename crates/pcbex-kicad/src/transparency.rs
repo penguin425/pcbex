@@ -345,6 +345,43 @@ pub fn sign_approval_log_witness(
     })
 }
 
+pub fn verify_signed_approval_log_witness(
+    checkpoint: &SignedApprovalLogCheckpoint,
+    witness: &SignedApprovalLogWitness,
+    trusted_public_key: &[u8; 32],
+) -> Result<(), String> {
+    let checkpoint_sha256 = signed_approval_log_checkpoint_sha256(checkpoint)?;
+    if witness.schema_version != 1 || witness.algorithm != "ed25519" {
+        return Err("unsupported approval-log witness contract".into());
+    }
+    validate_slug(&witness.witness_id, "approval-log witness id")?;
+    if witness.checkpoint_sha256 != checkpoint_sha256
+        || witness.log_id != checkpoint.log_id
+        || witness.entry_count != checkpoint.entry_count
+        || witness.head_sha256 != checkpoint.head_sha256
+    {
+        return Err("approval-log witness is bound to a different checkpoint".into());
+    }
+    let public_key =
+        hex_decode_array::<32>(&witness.public_key, "approval-log witness public key")?;
+    if &public_key != trusted_public_key {
+        return Err("approval-log witness key does not match its trusted public key".into());
+    }
+    let signature = hex_decode_array::<64>(&witness.signature, "approval-log witness signature")?;
+    let payload = witness_payload(
+        &witness.checkpoint_sha256,
+        &witness.log_id,
+        witness.entry_count,
+        witness.head_sha256.as_deref(),
+        &witness.witness_id,
+        witness.observed_at_unix,
+    )?;
+    VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| format!("invalid approval-log witness public key: {error}"))?
+        .verify_strict(&payload, &Signature::from_bytes(&signature))
+        .map_err(|error| format!("invalid approval-log witness signature: {error}"))
+}
+
 pub fn verify_approval_log_witness_quorum(
     checkpoint: &SignedApprovalLogCheckpoint,
     witnesses: &[(&SignedApprovalLogWitness, &[u8; 32])],
@@ -360,41 +397,12 @@ pub fn verify_approval_log_witness_quorum(
     let mut witness_ids = Vec::with_capacity(witnesses.len());
     let mut witness_public_keys = Vec::with_capacity(witnesses.len());
     for (witness, trusted_key) in witnesses {
-        if witness.schema_version != 1 || witness.algorithm != "ed25519" {
-            return Err("unsupported approval-log witness contract".into());
-        }
-        validate_slug(&witness.witness_id, "approval-log witness id")?;
-        if witness.checkpoint_sha256 != checkpoint_sha256
-            || witness.log_id != checkpoint.log_id
-            || witness.entry_count != checkpoint.entry_count
-            || witness.head_sha256 != checkpoint.head_sha256
-        {
-            return Err("approval-log witness is bound to a different checkpoint".into());
-        }
-        let public_key =
-            hex_decode_array::<32>(&witness.public_key, "approval-log witness public key")?;
-        if &public_key != *trusted_key {
-            return Err("approval-log witness key does not match its trusted public key".into());
-        }
         if witness_ids.contains(&witness.witness_id)
             || witness_public_keys.contains(&witness.public_key)
         {
             return Err("approval-log witness identities and keys must be unique".into());
         }
-        let signature =
-            hex_decode_array::<64>(&witness.signature, "approval-log witness signature")?;
-        let payload = witness_payload(
-            &witness.checkpoint_sha256,
-            &witness.log_id,
-            witness.entry_count,
-            witness.head_sha256.as_deref(),
-            &witness.witness_id,
-            witness.observed_at_unix,
-        )?;
-        VerifyingKey::from_bytes(&public_key)
-            .map_err(|error| format!("invalid approval-log witness public key: {error}"))?
-            .verify_strict(&payload, &Signature::from_bytes(&signature))
-            .map_err(|error| format!("invalid approval-log witness signature: {error}"))?;
+        verify_signed_approval_log_witness(checkpoint, witness, trusted_key)?;
         witness_ids.push(witness.witness_id.clone());
         witness_public_keys.push(witness.public_key.clone());
     }

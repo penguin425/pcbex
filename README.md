@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.331.0
+    uses: penguin425/pcbex@v1.332.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1778,6 +1778,34 @@ set is below threshold. Callers first verify the log and origin checkpoint,
 then verify its witnesses. The Action accepts paired
 `approval-log-witness-files` and `approval-log-witness-public-keys`, and can
 enforce them with `fail-on-approval-log-witnesses`.
+
+Witnesses can also run as independent HTTPS services. pcbex sends one closed,
+versioned request and accepts only a response that verifies against the
+separately configured Ed25519 trust root:
+
+```sh
+export PCBEX_WITNESS_TOKEN='short-lived service credential'
+pcbex request-approval-log-witness approvals.checkpoint.json \
+  --endpoint https://witness-a.example/v1/witness \
+  --public-key witness-a.pub \
+  --bearer-token-env PCBEX_WITNESS_TOKEN \
+  --timeout-seconds 30 \
+  --output witness-a.json \
+  --receipt-output witness-a.receipt.json
+```
+
+Remote endpoints must use HTTPS, cannot contain query parameters, never follow
+redirects, and have a 600-second absolute timeout ceiling plus a 1 MiB response
+limit. Bearer values are read from an environment variable and are never
+placed in process arguments or receipts. The response must be
+`application/json`, strictly deserialize as a signed witness, match the exact
+checkpoint, use the configured public key, and pass Ed25519 verification
+before either output is written. The hash-bound transport receipt records the
+endpoint, request/response digests and size, and verified witness identity.
+The Action can request one remote witness with `remote-witness-endpoint` and
+`remote-witness-public-key`; it automatically includes that result in the
+configured witness quorum. MCP exposes the same bounded operation without the
+test-only loopback escape hatch.
 
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit

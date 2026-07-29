@@ -1,8 +1,12 @@
+use pcbex_kicad::{SignedApprovalLogCheckpoint, approval_public_key, sign_approval_log_witness};
 use serde_json::{Value, json};
 use std::{
     fs,
+    io::{Read, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, Output},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -26,6 +30,64 @@ fn temp_dir() -> PathBuf {
     let path = std::env::temp_dir().join(format!("pcbex-approval-log-{suffix}"));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn remote_witness_server(
+    checkpoint: SignedApprovalLogCheckpoint,
+    secret: [u8; 32],
+    expected_bearer: Option<&'static str>,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/witness", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+        assert!(headers.starts_with("POST /v1/witness HTTP/1.1\r\n"));
+        if let Some(token) = expected_bearer {
+            assert!(headers.to_ascii_lowercase().contains(&format!(
+                "authorization: bearer {}\r\n",
+                token.to_ascii_lowercase()
+            )));
+        }
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length: ")
+                    .map(|value| value.parse::<usize>().unwrap())
+            })
+            .unwrap();
+        while request.len() - header_end < content_length {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        let body: Value =
+            serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+        assert_eq!(body["protocol"], "pcbex-approval-log-witness-v1");
+        assert_eq!(body["checkpoint"]["log_id"], checkpoint.log_id);
+        let witness =
+            sign_approval_log_witness(&checkpoint, "remote-witness-a", 104, &secret).unwrap();
+        let response = serde_json::to_vec(&witness).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response.len()
+        )
+        .unwrap();
+        stream.write_all(&response).unwrap();
+    });
+    (endpoint, handle)
 }
 
 #[test]
@@ -247,6 +309,96 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         serde_json::from_slice(&fs::read(&witness_report).unwrap()).unwrap();
     assert_eq!(witness_report["quorum_met"], true);
     assert_eq!(witness_report["valid_witnesses"], 2);
+
+    let checkpoint_value: SignedApprovalLogCheckpoint =
+        serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
+    let remote_secret = [42_u8; 32];
+    let remote_public = directory.join("remote-witness.pub");
+    fs::write(&remote_public, approval_public_key(&remote_secret)).unwrap();
+    let (endpoint, server) =
+        remote_witness_server(checkpoint_value, remote_secret, Some("integration-secret"));
+    let remote_witness = directory.join("remote-witness.json");
+    let remote_receipt = directory.join("remote-witness-receipt.json");
+    let remote = Command::new(binary())
+        .args([
+            "request-approval-log-witness",
+            path(&checkpoint),
+            "--endpoint",
+            &endpoint,
+            "--public-key",
+            path(&remote_public),
+            "--bearer-token-env",
+            "PCBEX_TEST_REMOTE_WITNESS_TOKEN",
+            "--timeout-seconds",
+            "5",
+            "--output",
+            path(&remote_witness),
+            "--receipt-output",
+            path(&remote_receipt),
+            "--allow-http-loopback",
+        ])
+        .env("PCBEX_TEST_REMOTE_WITNESS_TOKEN", "integration-secret")
+        .output()
+        .unwrap();
+    assert!(
+        remote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remote.stderr)
+    );
+    server.join().unwrap();
+    let remote_receipt: Value =
+        serde_json::from_slice(&fs::read(&remote_receipt).unwrap()).unwrap();
+    assert_eq!(remote_receipt["verified"], true);
+    assert_eq!(remote_receipt["witness_id"], "remote-witness-a");
+    assert!(remote_receipt["response_bytes"].as_u64().unwrap() > 0);
+
+    let mismatched_checkpoint: SignedApprovalLogCheckpoint =
+        serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
+    let (mismatched_endpoint, mismatched_server) =
+        remote_witness_server(mismatched_checkpoint, remote_secret, None);
+    let mismatched_witness = directory.join("mismatched-remote.json");
+    let mismatched_receipt = directory.join("mismatched-remote-receipt.json");
+    assert!(
+        !run(&[
+            "request-approval-log-witness",
+            path(&checkpoint),
+            "--endpoint",
+            &mismatched_endpoint,
+            "--public-key",
+            path(&witness_a_public),
+            "--output",
+            path(&mismatched_witness),
+            "--receipt-output",
+            path(&mismatched_receipt),
+            "--allow-http-loopback",
+        ])
+        .status
+        .success()
+    );
+    mismatched_server.join().unwrap();
+    assert!(!mismatched_witness.exists());
+    assert!(!mismatched_receipt.exists());
+
+    let rejected_remote = directory.join("rejected-remote.json");
+    let rejected_receipt = directory.join("rejected-remote-receipt.json");
+    assert!(
+        !run(&[
+            "request-approval-log-witness",
+            path(&checkpoint),
+            "--endpoint",
+            "http://example.com/v1/witness",
+            "--public-key",
+            path(&remote_public),
+            "--output",
+            path(&rejected_remote),
+            "--receipt-output",
+            path(&rejected_receipt),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_remote.exists());
+    assert!(!rejected_receipt.exists());
 
     let log: Value = serde_json::from_slice(&fs::read(&second).unwrap()).unwrap();
     assert_eq!(log["entries"][0]["sequence"], 0);
