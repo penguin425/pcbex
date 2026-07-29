@@ -1,8 +1,11 @@
 use serde_json::Value;
 use std::{
     fs,
+    io::{Read, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, Output},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -12,6 +15,47 @@ fn binary() -> PathBuf {
 
 fn run(arguments: &[&str]) -> Output {
     Command::new(binary()).args(arguments).output().unwrap()
+}
+
+fn run_with_env(arguments: &[&str], name: &str, value: &str) -> Output {
+    Command::new(binary())
+        .args(arguments)
+        .env(name, value)
+        .output()
+        .unwrap()
+}
+
+fn serve_policy(
+    body: Vec<u8>,
+    expected_authorization: Option<&str>,
+) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/current", listener.local_addr().unwrap());
+    let authorization = expected_authorization.map(str::to_string);
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            let count = stream.read(&mut buffer).unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&buffer[..count]);
+        }
+        let request = String::from_utf8(request).unwrap();
+        assert!(request.starts_with("GET /v1/current HTTP/1.1\r\n"));
+        assert!(request.contains("\r\naccept: application/json\r\n"));
+        if let Some(authorization) = authorization {
+            assert!(request.contains(&format!("\r\nauthorization: {authorization}\r\n")));
+        }
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(&body).unwrap();
+    });
+    (endpoint, handle)
 }
 
 fn path(value: &Path) -> &str {
@@ -143,6 +187,84 @@ fn signs_verifies_extracts_and_rejects_policy_pack_tampering() {
     );
     let state: Value = serde_json::from_slice(&fs::read(&newer_state).unwrap()).unwrap();
     assert_eq!(state["accepted_revision"], 2);
+
+    let (endpoint, server) = serve_policy(
+        fs::read(&newer_signed).unwrap(),
+        Some("Bearer registry-secret"),
+    );
+    let fetched_signed = directory.join("fetched-signed-policy-pack.json");
+    let fetched_pack = directory.join("fetched-policy-pack.json");
+    let fetched_state = directory.join("fetched-policy-trust-state.json");
+    let fetched_receipt = directory.join("fetched-policy-receipt.json");
+    let fetched = run_with_env(
+        &[
+            "fetch-policy-pack",
+            "--endpoint",
+            &endpoint,
+            "--public-key",
+            path(&public_key),
+            "--baseline-state",
+            path(&trust_state),
+            "--bearer-token-env",
+            "PCBEX_TEST_POLICY_TOKEN",
+            "--signed-output",
+            path(&fetched_signed),
+            "--output",
+            path(&fetched_pack),
+            "--state-output",
+            path(&fetched_state),
+            "--receipt-output",
+            path(&fetched_receipt),
+            "--allow-http-loopback",
+        ],
+        "PCBEX_TEST_POLICY_TOKEN",
+        "registry-secret",
+    );
+    server.join().unwrap();
+    assert!(fetched.status.success(), "{fetched:?}");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&fetched_pack).unwrap()).unwrap(),
+        serde_json::from_slice::<Value>(&fs::read(&newer_pack_path).unwrap()).unwrap()
+    );
+    let receipt: Value = serde_json::from_slice(&fs::read(&fetched_receipt).unwrap()).unwrap();
+    assert_eq!(receipt["verified"], true);
+    assert_eq!(receipt["policy_pack_revision"], 2);
+    assert_eq!(receipt["baseline_revision"], 1);
+
+    let (rollback_endpoint, rollback_server) = serve_policy(fs::read(&signed).unwrap(), None);
+    let rollback_signed = directory.join("rollback-signed.json");
+    let rollback_pack = directory.join("rollback-pack.json");
+    let rollback_state = directory.join("rollback-state.json");
+    let rollback_receipt = directory.join("rollback-receipt.json");
+    let rollback = run(&[
+        "fetch-policy-pack",
+        "--endpoint",
+        &rollback_endpoint,
+        "--public-key",
+        path(&public_key),
+        "--baseline-state",
+        path(&newer_state),
+        "--signed-output",
+        path(&rollback_signed),
+        "--output",
+        path(&rollback_pack),
+        "--state-output",
+        path(&rollback_state),
+        "--receipt-output",
+        path(&rollback_receipt),
+        "--allow-http-loopback",
+    ]);
+    rollback_server.join().unwrap();
+    assert!(!rollback.status.success());
+    for output in [
+        rollback_signed,
+        rollback_pack,
+        rollback_state,
+        rollback_receipt,
+    ] {
+        assert!(!output.exists());
+    }
+
     assert!(
         !run(&[
             "verify-policy-pack",
@@ -243,4 +365,8 @@ fn signs_verifies_extracts_and_rejects_policy_pack_tampering() {
     assert!(state_schema.status.success());
     let state_schema: Value = serde_json::from_slice(&state_schema.stdout).unwrap();
     assert_eq!(state_schema["additionalProperties"], false);
+    let receipt_schema = run(&["remote-policy-pack-receipt-schema"]);
+    assert!(receipt_schema.status.success());
+    let receipt_schema: Value = serde_json::from_slice(&receipt_schema.stdout).unwrap();
+    assert_eq!(receipt_schema["additionalProperties"], false);
 }

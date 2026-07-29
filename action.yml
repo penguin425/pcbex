@@ -42,14 +42,26 @@ inputs:
     description: Optional signed organization policy pack; requires policy-public-key.
     required: false
     default: ""
+  policy-pack-url:
+    description: Optional HTTPS registry URL returning a signed organization policy pack.
+    required: false
+    default: ""
   policy-public-key:
-    description: Trusted Ed25519 public-key file used only with signed-policy-pack.
+    description: Trusted Ed25519 public-key file used with signed-policy-pack or policy-pack-url.
     required: false
     default: ""
   policy-trust-state:
     description: Optional previously accepted trust state used to reject signed-pack rollback or equivocation.
     required: false
     default: ""
+  policy-pack-bearer-token:
+    description: Optional Bearer token for policy-pack-url; kept out of process arguments and receipts.
+    required: false
+    default: ""
+  policy-pack-timeout-seconds:
+    description: Total timeout for policy-pack-url retrieval.
+    required: false
+    default: "30"
   manufacturing-feedback-declaration:
     description: Optional strict fabrication feedback declaration bound to the analyzed board.
     required: false
@@ -247,8 +259,14 @@ outputs:
     description: URL of the created or updated pull-request comment, when enabled.
     value: ${{ steps.comment.outputs.comment-url }}
   verified-policy-trust-state:
-    description: Newly accepted policy trust-state path when signed-policy-pack is used.
+    description: Newly accepted policy trust-state path for a signed local or remotely fetched pack.
     value: ${{ steps.analyze.outputs.verified-policy-trust-state }}
+  fetched-signed-policy-pack:
+    description: Verified signed policy-pack response retained from policy-pack-url.
+    value: ${{ steps.analyze.outputs.fetched-signed-policy-pack }}
+  policy-pack-fetch-receipt:
+    description: Hash-bound HTTPS retrieval receipt for policy-pack-url.
+    value: ${{ steps.analyze.outputs.policy-pack-fetch-receipt }}
   manufacturing-feedback:
     description: Digest-bound normalized manufacturing feedback path, when supplied.
     value: ${{ steps.analyze.outputs.manufacturing-feedback }}
@@ -337,8 +355,11 @@ runs:
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
         PCBEX_POLICY_PACK: ${{ inputs.policy-pack }}
         PCBEX_SIGNED_POLICY_PACK: ${{ inputs.signed-policy-pack }}
+        PCBEX_POLICY_PACK_URL: ${{ inputs.policy-pack-url }}
         PCBEX_POLICY_PUBLIC_KEY: ${{ inputs.policy-public-key }}
         PCBEX_POLICY_TRUST_STATE: ${{ inputs.policy-trust-state }}
+        PCBEX_POLICY_PACK_BEARER_TOKEN: ${{ inputs.policy-pack-bearer-token }}
+        PCBEX_POLICY_PACK_TIMEOUT_SECONDS: ${{ inputs.policy-pack-timeout-seconds }}
         PCBEX_MANUFACTURING_FEEDBACK_DECLARATION: ${{ inputs.manufacturing-feedback-declaration }}
         PCBEX_MANUFACTURING_FEEDBACK_ARTIFACTS: ${{ inputs.manufacturing-feedback-artifacts }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}

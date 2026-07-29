@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.334.0
+    uses: penguin425/pcbex@v1.335.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1109,6 +1109,33 @@ the normal protected-branch review process.
 The MCP server exposes the same authenticated extraction boundary as
 `verify_policy_pack`, including `baseline_state` and `state_output`; it never
 receives or exposes the signing private key.
+
+CI can retrieve the signed envelope directly from an organization registry:
+
+```sh
+pcbex fetch-policy-pack \
+  --endpoint https://policies.example/v1/current \
+  --public-key policy-root.pub \
+  --baseline-state accepted-policy.trust.json \
+  --bearer-token-env PCBEX_POLICY_TOKEN \
+  --signed-output build/policy.signed.json \
+  --output build/policy.json \
+  --state-output build/policy.trust.json \
+  --receipt-output build/policy.fetch-receipt.json
+```
+
+Retrieval requires HTTPS, follows no redirects, accepts no URL query or
+userinfo, bounds the total timeout and response to 4 MiB, and reads an optional
+Bearer value only from the named environment variable. The response is
+strictly parsed, signature-verified, and checked against the monotonic baseline
+before any output is created. The four outputs are recovered together on a
+write failure. The receipt binds the endpoint, raw response digest and size,
+pack identity/revision/digest, signer key, and exact baseline without retaining
+the token. `remote-policy-pack-receipt-schema` publishes its closed contract.
+MCP exposes the same HTTPS-only `fetch_policy_pack` operation. The Action uses
+`policy-pack-url`, `policy-public-key`, optional `policy-trust-state`, and
+optional `policy-pack-bearer-token`, and retains both the signed response and
+receipt as analysis artifacts.
 
 For the composite Action, write the trusted public key from a protected
 repository variable or secret into a runner-temporary file before invoking

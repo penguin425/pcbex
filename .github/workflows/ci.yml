@@ -348,6 +348,7 @@ jobs:
             test -z "$COMMENT_URL"
           fi
       - name: Prepare signed policy trust fixture
+        id: policy-fixture
         run: |
           mkdir -p build/action-policy
           target/release/pcbex policy-keygen \
@@ -362,24 +363,46 @@ jobs:
             --public-key build/action-policy/policy.pub \
             --output build/action-policy/accepted-policy.json \
             --state-output build/action-policy/accepted-state.json
+          RUNNER_TRACKING_ID="" nohup python3 scripts/tests/policy_pack_server.py \
+            --signed-policy-pack build/action-policy/policy.signed.json \
+            --endpoint-output build/action-policy/policy.endpoint \
+            --bearer-token action-policy-token \
+            > build/action-policy/policy.server.log 2>&1 </dev/null &
+          for attempt in {1..50}; do
+            [[ -s build/action-policy/policy.endpoint ]] && break
+            sleep 0.1
+          done
+          test -s build/action-policy/policy.endpoint
+          printf 'policy-endpoint=%s\n' \
+            "$(tr -d '\n' < build/action-policy/policy.endpoint)" \
+            >> "$GITHUB_OUTPUT"
       - name: Exercise signed policy rollback protection
         id: signed-pcbex
         uses: ./
+        env:
+          PCBEX_POLICY_PACK_ALLOW_HTTP_LOOPBACK: "true"
         with:
           board: examples/simple.kicad_pcb
-          signed-policy-pack: build/action-policy/policy.signed.json
+          policy-pack-url: ${{ steps.policy-fixture.outputs.policy-endpoint }}
           policy-public-key: build/action-policy/policy.pub
           policy-trust-state: build/action-policy/accepted-state.json
+          policy-pack-bearer-token: action-policy-token
           output-dir: build/signed-action-analysis
           fail-on-violations: "false"
           artifact-name: pcbex-signed-action-smoke
       - name: Verify signed policy trust output
         env:
           TRUST_STATE: ${{ steps.signed-pcbex.outputs.verified-policy-trust-state }}
+          FETCHED_SIGNED: ${{ steps.signed-pcbex.outputs.fetched-signed-policy-pack }}
+          FETCH_RECEIPT: ${{ steps.signed-pcbex.outputs.policy-pack-fetch-receipt }}
         run: |
           test -s "$TRUST_STATE"
           test "$(jq -r '.accepted_revision' "$TRUST_STATE")" = "1"
           test "$(jq -r '.policy_pack_id' "$TRUST_STATE")" = "acme-production-v1"
+          test -s "$FETCHED_SIGNED"
+          test -s "$FETCH_RECEIPT"
+          test "$(jq -r '.verified' "$FETCH_RECEIPT")" = "true"
+          test "$(jq -r '.baseline_revision' "$FETCH_RECEIPT")" = "1"
 
   rust:
     name: Rust

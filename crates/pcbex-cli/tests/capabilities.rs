@@ -46,6 +46,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "verify-approval-log-anchor",
         "verify-approval-log-witnesses",
         "request-approval-log-witness",
+        "fetch-policy-pack",
         "mcp-server",
         "fabricate",
     ] {
