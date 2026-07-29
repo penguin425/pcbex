@@ -310,6 +310,149 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     assert_eq!(witness_report["quorum_met"], true);
     assert_eq!(witness_report["valid_witnesses"], 2);
 
+    let witness_a_next_key = directory.join("witness-a-next.key");
+    let witness_a_next_public = directory.join("witness-a-next.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&witness_a_next_key),
+            "--public-key",
+            path(&witness_a_next_public),
+        ])
+        .status
+        .success()
+    );
+    let witness_trust = directory.join("witness-a.trust.json");
+    assert!(
+        run(&[
+            "init-approval-log-witness-trust",
+            "--witness-id",
+            "witness-a",
+            "--public-key",
+            path(&witness_a_public),
+            "--output",
+            path(&witness_trust),
+        ])
+        .status
+        .success()
+    );
+    let rotation = directory.join("witness-a.rotation.json");
+    assert!(
+        run(&[
+            "sign-approval-log-witness-key-rotation",
+            path(&witness_trust),
+            "--old-private-key",
+            path(&witness_a_key),
+            "--new-private-key",
+            path(&witness_a_next_key),
+            "--rotated-at-unix",
+            "104",
+            "--output",
+            path(&rotation),
+        ])
+        .status
+        .success()
+    );
+    let rotated_trust = directory.join("witness-a.rotated-trust.json");
+    let exported_public = directory.join("witness-a.rotated.pub");
+    assert!(
+        run(&[
+            "apply-approval-log-witness-key-rotation",
+            path(&witness_trust),
+            path(&rotation),
+            "--output",
+            path(&rotated_trust),
+            "--public-key-output",
+            path(&exported_public),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read_to_string(&exported_public).unwrap(),
+        fs::read_to_string(&witness_a_next_public).unwrap()
+    );
+    let validated_public = directory.join("witness-a.validated.pub");
+    assert!(
+        run(&[
+            "export-approval-log-witness-public-key",
+            path(&rotated_trust),
+            "--output",
+            path(&validated_public),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read_to_string(&validated_public).unwrap(),
+        fs::read_to_string(&witness_a_next_public).unwrap()
+    );
+    let rotated_trust_value: Value =
+        serde_json::from_slice(&fs::read(&rotated_trust).unwrap()).unwrap();
+    assert_eq!(rotated_trust_value["generation"], 1);
+    assert!(
+        rotated_trust_value["last_rotation_sha256"]
+            .as_str()
+            .is_some_and(|digest| digest.len() == 64)
+    );
+    let rotated_witness_a = directory.join("witness-a.rotated.json");
+    assert!(
+        run(&[
+            "witness-approval-log",
+            path(&checkpoint),
+            "--private-key",
+            path(&witness_a_next_key),
+            "--witness-id",
+            "witness-a",
+            "--observed-at-unix",
+            "105",
+            "--output",
+            path(&rotated_witness_a),
+        ])
+        .status
+        .success()
+    );
+    let rotated_quorum = directory.join("witness-rotated-quorum.json");
+    assert!(
+        run(&[
+            "verify-approval-log-witnesses",
+            path(&checkpoint),
+            "--witness",
+            path(&rotated_witness_a),
+            "--witness",
+            path(&witness_b),
+            "--public-key",
+            path(&validated_public),
+            "--public-key",
+            path(&witness_b_public),
+            "--minimum-witnesses",
+            "2",
+            "--output",
+            path(&rotated_quorum),
+            "--require-quorum",
+        ])
+        .status
+        .success()
+    );
+    let replayed_trust = directory.join("witness-a.replayed-trust.json");
+    let replayed_public = directory.join("witness-a.replayed.pub");
+    assert!(
+        !run(&[
+            "apply-approval-log-witness-key-rotation",
+            path(&rotated_trust),
+            path(&rotation),
+            "--output",
+            path(&replayed_trust),
+            "--public-key-output",
+            path(&replayed_public),
+        ])
+        .status
+        .success()
+    );
+    assert!(!replayed_trust.exists());
+    assert!(!replayed_public.exists());
+
     let checkpoint_value: SignedApprovalLogCheckpoint =
         serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
     let remote_secret = [42_u8; 32];

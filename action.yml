@@ -130,6 +130,10 @@ inputs:
     description: Trusted Ed25519 public-key file for the remote witness.
     required: false
     default: ""
+  remote-witness-trust-state:
+    description: Rotatable witness trust-state file; mutually exclusive with remote-witness-public-key.
+    required: false
+    default: ""
   remote-witness-bearer-token:
     description: Optional secret Bearer token sent only to the configured remote witness.
     required: false
@@ -337,6 +341,7 @@ runs:
         PCBEX_APPROVAL_LOG_MINIMUM_WITNESSES: ${{ inputs.approval-log-minimum-witnesses }}
         PCBEX_REMOTE_WITNESS_ENDPOINT: ${{ inputs.remote-witness-endpoint }}
         PCBEX_REMOTE_WITNESS_PUBLIC_KEY: ${{ inputs.remote-witness-public-key }}
+        PCBEX_REMOTE_WITNESS_TRUST_STATE: ${{ inputs.remote-witness-trust-state }}
         PCBEX_REMOTE_WITNESS_BEARER_TOKEN: ${{ inputs.remote-witness-bearer-token }}
         PCBEX_REMOTE_WITNESS_TIMEOUT_SECONDS: ${{ inputs.remote-witness-timeout-seconds }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}

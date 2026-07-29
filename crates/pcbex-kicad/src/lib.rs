@@ -36,13 +36,18 @@ pub use human_escalation::{
 mod transparency;
 pub use transparency::{
     ApprovalArtifactKind, ApprovalEventDescriptor, ApprovalLogVerificationReport,
-    ApprovalLogWitnessQuorumReport, ApprovalTransparencyEntry, ApprovalTransparencyLog,
-    SignedApprovalLogCheckpoint, SignedApprovalLogWitness, append_approval_transparency_event,
-    approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
-    approval_transparency_log_json_schema, approval_transparency_log_sha256,
+    ApprovalLogWitnessQuorumReport, ApprovalLogWitnessTrustState, ApprovalTransparencyEntry,
+    ApprovalTransparencyLog, SignedApprovalLogCheckpoint, SignedApprovalLogWitness,
+    SignedApprovalLogWitnessKeyRotation, append_approval_transparency_event,
+    apply_approval_log_witness_key_rotation, approval_log_verification_report_json_schema,
+    approval_log_witness_quorum_report_json_schema, approval_log_witness_trust_state_json_schema,
+    approval_log_witness_trusted_public_key, approval_transparency_log_json_schema,
+    approval_transparency_log_sha256, new_approval_log_witness_trust_state,
     new_approval_transparency_log, sign_approval_log_checkpoint, sign_approval_log_witness,
-    signed_approval_log_checkpoint_json_schema, signed_approval_log_checkpoint_sha256,
-    signed_approval_log_witness_json_schema, verify_approval_log_checkpoint,
+    sign_approval_log_witness_key_rotation, signed_approval_log_checkpoint_json_schema,
+    signed_approval_log_checkpoint_sha256, signed_approval_log_witness_json_schema,
+    signed_approval_log_witness_key_rotation_json_schema,
+    signed_approval_log_witness_key_rotation_sha256, verify_approval_log_checkpoint,
     verify_approval_log_witness_quorum, verify_signed_approval_log_witness,
 };
 mod electrical;

@@ -1062,6 +1062,76 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "init_approval_transparency_witness_trust",
+            "Initialize witness key trust",
+            "Create generation-zero trust state for one approval-log witness identity and public key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["witness_id", "public_key", "output"],
+                "properties": {
+                    "witness_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_approval_transparency_witness_key_rotation",
+            "Sign witness key rotation",
+            "Create an old-key authorization plus new-key possession proof for exactly one generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "old_private_key", "new_private_key", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_approval_transparency_witness_key_rotation",
+            "Apply witness key rotation",
+            "Verify both signatures and advance a hash-chained witness trust state by one generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "rotation", "output", "public_key_output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "public_key_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "export_approval_transparency_witness_public_key",
+            "Export current witness key",
+            "Strictly validate a witness trust state and export its current public key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -1200,6 +1270,18 @@ fn call_tool(
         }
         "witness_approval_transparency_log" => {
             witness_approval_transparency_log(arguments, cancellation)?
+        }
+        "init_approval_transparency_witness_trust" => {
+            init_approval_transparency_witness_trust(arguments, cancellation)?
+        }
+        "sign_approval_transparency_witness_key_rotation" => {
+            sign_approval_transparency_witness_key_rotation(arguments, cancellation)?
+        }
+        "apply_approval_transparency_witness_key_rotation" => {
+            apply_approval_transparency_witness_key_rotation(arguments, cancellation)?
+        }
+        "export_approval_transparency_witness_public_key" => {
+            export_approval_transparency_witness_public_key(arguments, cancellation)?
         }
         "verify_approval_transparency_witnesses" => {
             verify_approval_transparency_witnesses(arguments, cancellation)?
@@ -2106,6 +2188,114 @@ fn witness_approval_transparency_log(
     ))
 }
 
+fn init_approval_transparency_witness_trust(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["witness_id", "public_key", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "init-approval-log-witness-trust".into(),
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": trust_state}),
+    ))
+}
+
+fn sign_approval_transparency_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-approval-log-witness-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+    ];
+    optional_nonnegative_integer(
+        &arguments,
+        "rotated_at_unix",
+        "--rotated-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_approval_transparency_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["trust_state", "rotation", "output", "public_key_output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let public_key_output = required_string(&arguments, "public_key_output")?;
+    let command = vec![
+        "apply-approval-log-witness-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+        "--public-key-output".into(),
+        public_key_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "public_key_output": public_key_output,
+            "trust_state": trust_state
+        }),
+    ))
+}
+
+fn export_approval_transparency_witness_public_key(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["trust_state", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "export-approval-log-witness-public-key".into(),
+        required_string(&arguments, "trust_state")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    Ok(execution_result(execution, json!({"output": output})))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -2457,7 +2647,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 22);
+        assert_eq!(tools.len(), 26);
         let named = |name: &str| {
             tools
                 .iter()
@@ -2561,6 +2751,10 @@ mod tests {
             named("request_remote_approval_transparency_witness")["inputSchema"]["properties"]["endpoint"]
                 ["pattern"],
             "^https://"
+        );
+        assert_eq!(
+            named("apply_approval_transparency_witness_key_rotation")["inputSchema"]["required"][3],
+            "public_key_output"
         );
         let verify_policy = tools
             .iter()

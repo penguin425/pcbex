@@ -364,24 +364,41 @@ fi
 
 remote_witness=""
 remote_witness_receipt=""
-remote_witness_inputs=0
-if [[ -n "${PCBEX_REMOTE_WITNESS_ENDPOINT:-}" ]]; then ((remote_witness_inputs += 1)); fi
-if [[ -n "${PCBEX_REMOTE_WITNESS_PUBLIC_KEY:-}" ]]; then ((remote_witness_inputs += 1)); fi
-if ((remote_witness_inputs != 0 && remote_witness_inputs != 2)); then
-  echo "PCBEX_REMOTE_WITNESS_ENDPOINT and PCBEX_REMOTE_WITNESS_PUBLIC_KEY must be supplied together" >&2
+remote_witness_public_key=""
+remote_witness_trust_sources=0
+if [[ -n "${PCBEX_REMOTE_WITNESS_PUBLIC_KEY:-}" ]]; then ((remote_witness_trust_sources += 1)); fi
+if [[ -n "${PCBEX_REMOTE_WITNESS_TRUST_STATE:-}" ]]; then ((remote_witness_trust_sources += 1)); fi
+if ((remote_witness_trust_sources > 1)); then
+  echo "PCBEX_REMOTE_WITNESS_PUBLIC_KEY and PCBEX_REMOTE_WITNESS_TRUST_STATE are mutually exclusive" >&2
   exit 2
 fi
-if ((remote_witness_inputs == 2)); then
+if [[ -n "${PCBEX_REMOTE_WITNESS_ENDPOINT:-}" ]] && ((remote_witness_trust_sources != 1)); then
+  echo "remote witness endpoint requires exactly one public key or trust state" >&2
+  exit 2
+fi
+if [[ -z "${PCBEX_REMOTE_WITNESS_ENDPOINT:-}" ]] && ((remote_witness_trust_sources != 0)); then
+  echo "remote witness trust requires PCBEX_REMOTE_WITNESS_ENDPOINT" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_REMOTE_WITNESS_ENDPOINT:-}" ]]; then
   if [[ -z "${PCBEX_APPROVAL_LOG_CHECKPOINT:-}" ]]; then
     echo "remote witness requires PCBEX_APPROVAL_LOG_CHECKPOINT" >&2
     exit 2
+  fi
+  if [[ -n "${PCBEX_REMOTE_WITNESS_TRUST_STATE:-}" ]]; then
+    remote_witness_public_key="${artifact_dir}/remote-witness-trusted.pub"
+    "$PCBEX_BINARY" export-approval-log-witness-public-key \
+      "$PCBEX_REMOTE_WITNESS_TRUST_STATE" \
+      --output "$remote_witness_public_key"
+  else
+    remote_witness_public_key="$PCBEX_REMOTE_WITNESS_PUBLIC_KEY"
   fi
   remote_witness="${artifact_dir}/remote-witness.json"
   remote_witness_receipt="${artifact_dir}/remote-witness-receipt.json"
   remote_arguments=(request-approval-log-witness \
     "$PCBEX_APPROVAL_LOG_CHECKPOINT" \
     --endpoint "$PCBEX_REMOTE_WITNESS_ENDPOINT" \
-    --public-key "$PCBEX_REMOTE_WITNESS_PUBLIC_KEY" \
+    --public-key "$remote_witness_public_key" \
     --timeout-seconds "${PCBEX_REMOTE_WITNESS_TIMEOUT_SECONDS:-30}" \
     --output "$remote_witness" \
     --receipt-output "$remote_witness_receipt")
@@ -430,7 +447,7 @@ if ((witness_inputs == 2)) || [[ -n "$remote_witness" ]]; then
   done <<< "${PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS:-}"
   if [[ -n "$remote_witness" ]]; then
     witness_arguments+=(--witness "$remote_witness")
-    witness_arguments+=(--public-key "$PCBEX_REMOTE_WITNESS_PUBLIC_KEY")
+    witness_arguments+=(--public-key "$remote_witness_public_key")
   fi
   "$PCBEX_BINARY" "${witness_arguments[@]}"
   approval_log_witness_quorum_met="$(

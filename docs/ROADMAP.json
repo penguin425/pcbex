@@ -179,6 +179,11 @@
     {
       "id": "remote-approval-transparency-witness",
       "release": "v1.332.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-witness-key-rotation",
+      "release": "v1.333.0",
       "status": "current"
     }
   ]

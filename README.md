@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.332.0
+    uses: penguin425/pcbex@v1.333.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1806,6 +1806,41 @@ The Action can request one remote witness with `remote-witness-endpoint` and
 `remote-witness-public-key`; it automatically includes that result in the
 configured witness quorum. MCP exposes the same bounded operation without the
 test-only loopback escape hatch.
+
+Long-lived witness identities can rotate keys without replacing an unaudited
+configuration value:
+
+```sh
+pcbex init-approval-log-witness-trust \
+  --witness-id witness-a \
+  --public-key witness-a.pub \
+  --output witness-a.trust.0.json
+
+pcbex sign-approval-log-witness-key-rotation witness-a.trust.0.json \
+  --old-private-key .secrets/witness-a.key \
+  --new-private-key .secrets/witness-a-next.key \
+  --rotated-at-unix 1785283200 \
+  --output witness-a.rotation.1.json
+
+pcbex apply-approval-log-witness-key-rotation \
+  witness-a.trust.0.json witness-a.rotation.1.json \
+  --output witness-a.trust.1.json \
+  --public-key-output witness-a.current.pub
+```
+
+Each rotation is domain-separated and signed by both the currently trusted
+key and the new key. The proof binds witness identity, exact consecutive
+generations, the previous rotation digest, both public keys, and a monotonic
+rotation timestamp. Applying a proof therefore rejects rollback, replay, forks,
+key substitution, and registration of a new key whose private half is not
+controlled. Input snapshots are never overwritten. The exported key can be
+used with the existing witness verifier; the Action also accepts
+`remote-witness-trust-state` instead of `remote-witness-public-key` and
+validates/exports its current key before making the HTTPS request. Closed
+contracts are available from `approval-log-witness-trust-state-schema` and
+`signed-approval-log-witness-key-rotation-schema`. MCP exposes initialize,
+sign, apply, and validated-export operations with destructive-action
+annotations.
 
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
