@@ -1542,14 +1542,93 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "init_policy_lifecycle_witness_trust",
+            "Initialize lifecycle witness key trust",
+            "Create generation-zero trust state binding one lifecycle-checkpoint witness identity to its current Ed25519 key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["witness_id", "public_key", "output"],
+                "properties": {
+                    "witness_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                    },
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_policy_lifecycle_witness_key_rotation",
+            "Sign lifecycle witness key rotation",
+            "Create old-key authorization and new-key possession proof for exactly one identity-bound witness-key generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "old_private_key", "new_private_key",
+                    "rotated_at_unix", "output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_policy_lifecycle_witness_key_rotation",
+            "Apply lifecycle witness key rotation",
+            "Verify both signatures and advance one digest-chained lifecycle-witness trust state by exactly one generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "rotation", "output", "public_key_output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "public_key_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "export_policy_lifecycle_witness_public_key",
+            "Export lifecycle witness key",
+            "Strictly validate retained lifecycle-witness trust and export its current key for legacy consumers.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_policy_lifecycle_checkpoint_witnesses",
             "Verify policy lifecycle witnesses",
             "Require a bounded quorum of distinct independently trusted keys over one exact accepted lifecycle checkpoint.",
             json!({
                 "type": "object", "additionalProperties": false,
-                "required": [
-                    "trust_state", "witnesses", "public_keys",
-                    "evaluated_at_unix", "output"
+                "required": ["trust_state", "witnesses", "evaluated_at_unix", "output"],
+                "oneOf": [
+                    {"required": ["public_keys"]},
+                    {"required": ["witness_key_trust_states"]}
                 ],
                 "properties": {
                     "trust_state": {"type": "string"},
@@ -1558,6 +1637,10 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "items": {"type": "string"}
                     },
                     "public_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "witness_key_trust_states": {
                         "type": "array", "minItems": 1, "maxItems": 100,
                         "items": {"type": "string"}
                     },
@@ -1580,13 +1663,18 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             json!({
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "trust_state", "endpoint", "public_key",
-                    "evaluated_at_unix", "output", "receipt_output"
+                    "trust_state", "endpoint", "evaluated_at_unix",
+                    "output", "receipt_output"
+                ],
+                "oneOf": [
+                    {"required": ["public_key"]},
+                    {"required": ["witness_key_trust_state"]}
                 ],
                 "properties": {
                     "trust_state": {"type": "string"},
                     "endpoint": {"type": "string", "pattern": "^https://"},
                     "public_key": {"type": "string"},
+                    "witness_key_trust_state": {"type": "string"},
                     "bearer_token_env": {
                         "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
                     },
@@ -2242,6 +2330,18 @@ fn call_tool(
         }
         "witness_policy_lifecycle_checkpoint" => {
             witness_policy_lifecycle_checkpoint(arguments, cancellation)?
+        }
+        "init_policy_lifecycle_witness_trust" => {
+            init_policy_lifecycle_witness_trust(arguments, cancellation)?
+        }
+        "sign_policy_lifecycle_witness_key_rotation" => {
+            sign_policy_lifecycle_witness_key_rotation(arguments, cancellation)?
+        }
+        "apply_policy_lifecycle_witness_key_rotation" => {
+            apply_policy_lifecycle_witness_key_rotation(arguments, cancellation)?
+        }
+        "export_policy_lifecycle_witness_public_key" => {
+            export_policy_lifecycle_witness_public_key(arguments, cancellation)?
         }
         "verify_policy_lifecycle_checkpoint_witnesses" => {
             verify_policy_lifecycle_checkpoint_witnesses(arguments, cancellation)?
@@ -4223,6 +4323,115 @@ fn witness_policy_lifecycle_checkpoint(
     ))
 }
 
+fn init_policy_lifecycle_witness_trust(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["witness_id", "public_key", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "init-policy-lifecycle-witness-trust".into(),
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": trust_state}),
+    ))
+}
+
+fn sign_policy_lifecycle_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let rotated_at_unix = arguments
+        .get("rotated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "rotated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-policy-lifecycle-witness-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+        "--rotated-at-unix".into(),
+        rotated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "key_rotation": rotation}),
+    ))
+}
+
+fn apply_policy_lifecycle_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["trust_state", "rotation", "output", "public_key_output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let public_key_output = required_string(&arguments, "public_key_output")?;
+    let command = vec![
+        "apply-policy-lifecycle-witness-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+        "--public-key-output".into(),
+        public_key_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "public_key_output": public_key_output,
+            "trust_state": trust_state
+        }),
+    ))
+}
+
+fn export_policy_lifecycle_witness_public_key(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["trust_state", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "export-policy-lifecycle-witness-public-key".into(),
+        required_string(&arguments, "trust_state")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    Ok(execution_result(execution, json!({"output": output})))
+}
+
 fn verify_policy_lifecycle_checkpoint_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -4233,6 +4442,7 @@ fn verify_policy_lifecycle_checkpoint_witnesses(
             "trust_state",
             "witnesses",
             "public_keys",
+            "witness_key_trust_states",
             "minimum_witnesses",
             "evaluated_at_unix",
             "output",
@@ -4240,10 +4450,27 @@ fn verify_policy_lifecycle_checkpoint_witnesses(
         ],
     )?;
     let witnesses = required_string_array(&arguments, "witnesses", false)?;
-    let public_keys = required_string_array(&arguments, "public_keys", false)?;
-    if witnesses.len() != public_keys.len() || witnesses.len() > 100 {
+    let public_keys = arguments
+        .contains_key("public_keys")
+        .then(|| required_string_array(&arguments, "public_keys", false))
+        .transpose()?;
+    let witness_key_trust_states = arguments
+        .contains_key("witness_key_trust_states")
+        .then(|| required_string_array(&arguments, "witness_key_trust_states", false))
+        .transpose()?;
+    if public_keys.is_some() == witness_key_trust_states.is_some() {
         return Err(json!({
-            "detail": "witnesses and public_keys must be paired and cannot exceed 100"
+            "detail": "exactly one of public_keys or witness_key_trust_states is required"
+        }));
+    }
+    let key_evidence_count = public_keys
+        .as_ref()
+        .map(Vec::len)
+        .or_else(|| witness_key_trust_states.as_ref().map(Vec::len))
+        .unwrap_or_default();
+    if witnesses.len() != key_evidence_count || witnesses.len() > 100 {
+        return Err(json!({
+            "detail": "witnesses and trusted key evidence must be paired and cannot exceed 100"
         }));
     }
     let minimum_witnesses = arguments
@@ -4263,8 +4490,15 @@ fn verify_policy_lifecycle_checkpoint_witnesses(
     for witness in witnesses {
         command.extend(["--witness".into(), witness]);
     }
-    for public_key in public_keys {
-        command.extend(["--public-key".into(), public_key]);
+    if let Some(public_keys) = public_keys {
+        for public_key in public_keys {
+            command.extend(["--public-key".into(), public_key]);
+        }
+    }
+    if let Some(trust_states) = witness_key_trust_states {
+        for trust_state in trust_states {
+            command.extend(["--witness-key-trust-state".into(), trust_state]);
+        }
     }
     command.extend([
         "--minimum-witnesses".into(),
@@ -4298,6 +4532,7 @@ fn request_remote_policy_lifecycle_checkpoint_witness(
             "trust_state",
             "endpoint",
             "public_key",
+            "witness_key_trust_state",
             "bearer_token_env",
             "timeout_seconds",
             "evaluated_at_unix",
@@ -4311,14 +4546,27 @@ fn request_remote_policy_lifecycle_checkpoint_witness(
         .ok_or_else(|| json!({"detail": "evaluated_at_unix must be a non-negative integer"}))?;
     let output = required_string(&arguments, "output")?;
     let receipt_output = required_string(&arguments, "receipt_output")?;
+    let public_key = arguments.get("public_key").and_then(Value::as_str);
+    let witness_key_trust_state = arguments
+        .get("witness_key_trust_state")
+        .and_then(Value::as_str);
+    if public_key.is_some() == witness_key_trust_state.is_some() {
+        return Err(json!({
+            "detail": "exactly one of public_key or witness_key_trust_state is required"
+        }));
+    }
     let mut command = vec![
         "request-policy-lifecycle-checkpoint-witness".into(),
         required_string(&arguments, "trust_state")?,
         "--endpoint".into(),
         required_string(&arguments, "endpoint")?,
-        "--public-key".into(),
-        required_string(&arguments, "public_key")?,
     ];
+    if let Some(public_key) = public_key {
+        command.extend(["--public-key".into(), public_key.into()]);
+    }
+    if let Some(trust_state) = witness_key_trust_state {
+        command.extend(["--witness-key-trust-state".into(), trust_state.into()]);
+    }
     optional_option(
         &arguments,
         "bearer_token_env",
@@ -5562,7 +5810,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 57);
+        assert_eq!(tools.len(), 61);
         let named = |name: &str| {
             tools
                 .iter()
@@ -5758,6 +6006,23 @@ mod tests {
         );
         assert_eq!(
             named("witness_policy_lifecycle_checkpoint")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("init_policy_lifecycle_witness_trust")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("sign_policy_lifecycle_witness_key_rotation")["inputSchema"]["properties"]["rotated_at_unix"]
+                ["minimum"],
+            0
+        );
+        assert_eq!(
+            named("apply_policy_lifecycle_witness_key_rotation")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("export_policy_lifecycle_witness_public_key")["execution"]["taskSupport"],
             "forbidden"
         );
         assert_eq!(

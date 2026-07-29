@@ -951,29 +951,56 @@ policy_lifecycle_witness_quorum_met=""
 policy_lifecycle_remote_witnesses=""
 policy_lifecycle_remote_witness_receipts=""
 lifecycle_local_witness_inputs=0
+lifecycle_local_key_inputs=0
+lifecycle_local_key_mode=""
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_WITNESS_FILES:-}" ]]; then
   ((lifecycle_local_witness_inputs += 1))
 fi
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES:-}" ]]; then
-  ((lifecycle_local_witness_inputs += 1))
+  ((lifecycle_local_key_inputs += 1))
+  lifecycle_local_key_mode="public-key"
 fi
-if ((lifecycle_local_witness_inputs == 1)); then
-  echo "local lifecycle witness files and public keys must be supplied together" >&2
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_WITNESS_KEY_TRUST_STATE_FILES:-}" ]]; then
+  ((lifecycle_local_key_inputs += 1))
+  lifecycle_local_key_mode="trust-state"
+fi
+if ((lifecycle_local_key_inputs > 1)); then
+  echo "local lifecycle witness public keys and key trust states are mutually exclusive" >&2
+  exit 2
+fi
+if ((lifecycle_local_witness_inputs != lifecycle_local_key_inputs)); then
+  echo "local lifecycle witness files and exactly one trusted key source must be supplied together" >&2
   exit 2
 fi
 remote_lifecycle_witness_inputs=0
+remote_lifecycle_key_inputs=0
+remote_lifecycle_key_mode=""
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_ENDPOINTS:-}" ]]; then
   ((remote_lifecycle_witness_inputs += 1))
 fi
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_PUBLIC_KEY_FILES:-}" ]]; then
-  ((remote_lifecycle_witness_inputs += 1))
+  ((remote_lifecycle_key_inputs += 1))
+  remote_lifecycle_key_mode="public-key"
 fi
-if ((remote_lifecycle_witness_inputs == 1)); then
-  echo "remote lifecycle witness endpoints and public keys must be supplied together" >&2
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_KEY_TRUST_STATE_FILES:-}" ]]; then
+  ((remote_lifecycle_key_inputs += 1))
+  remote_lifecycle_key_mode="trust-state"
+fi
+if ((remote_lifecycle_key_inputs > 1)); then
+  echo "remote lifecycle witness public keys and key trust states are mutually exclusive" >&2
+  exit 2
+fi
+if ((remote_lifecycle_witness_inputs != remote_lifecycle_key_inputs)); then
+  echo "remote lifecycle witness endpoints and exactly one trusted key source must be supplied together" >&2
+  exit 2
+fi
+if ((lifecycle_local_witness_inputs == 1 && remote_lifecycle_witness_inputs == 1)) \
+  && [[ "$lifecycle_local_key_mode" != "$remote_lifecycle_key_mode" ]]; then
+  echo "local and remote lifecycle witnesses must use the same trusted key source mode" >&2
   exit 2
 fi
 lifecycle_witness_configured=false
-if ((lifecycle_local_witness_inputs == 2 || remote_lifecycle_witness_inputs == 2)); then
+if ((lifecycle_local_witness_inputs == 1 || remote_lifecycle_witness_inputs == 1)); then
   lifecycle_witness_configured=true
 fi
 if [[ "$lifecycle_witness_configured" == "true" ]] \
@@ -998,29 +1025,43 @@ if [[ "$lifecycle_witness_configured" == "true" ]]; then
     --minimum-witnesses "${PCBEX_POLICY_LIFECYCLE_WITNESS_MINIMUM:-2}" \
     --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX" \
     --output "$policy_lifecycle_witness_quorum")
-  if ((lifecycle_local_witness_inputs == 2)); then
+  if ((lifecycle_local_witness_inputs == 1)); then
     while IFS= read -r witness; do
       if [[ -n "$witness" ]]; then
         lifecycle_witness_arguments+=(--witness "$witness")
       fi
     done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_FILES"
-    while IFS= read -r public_key; do
-      if [[ -n "$public_key" ]]; then
-        lifecycle_witness_arguments+=(--public-key "$public_key")
-      fi
-    done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES"
+    if [[ "$lifecycle_local_key_mode" == "public-key" ]]; then
+      while IFS= read -r public_key; do
+        if [[ -n "$public_key" ]]; then
+          lifecycle_witness_arguments+=(--public-key "$public_key")
+        fi
+      done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES"
+    else
+      while IFS= read -r key_trust_state; do
+        if [[ -n "$key_trust_state" ]]; then
+          lifecycle_witness_arguments+=(--witness-key-trust-state "$key_trust_state")
+        fi
+      done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_KEY_TRUST_STATE_FILES"
+    fi
   fi
-  if ((remote_lifecycle_witness_inputs == 2)); then
+  if ((remote_lifecycle_witness_inputs == 1)); then
     mapfile -t lifecycle_remote_endpoints < <(
       printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_ENDPOINTS" | sed '/^[[:space:]]*$/d'
     )
-    mapfile -t lifecycle_remote_public_keys < <(
-      printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
-    )
+    if [[ "$remote_lifecycle_key_mode" == "public-key" ]]; then
+      mapfile -t lifecycle_remote_key_evidence < <(
+        printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
+      )
+    else
+      mapfile -t lifecycle_remote_key_evidence < <(
+        printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_KEY_TRUST_STATE_FILES" | sed '/^[[:space:]]*$/d'
+      )
+    fi
     if ((${#lifecycle_remote_endpoints[@]} == 0 \
-      || ${#lifecycle_remote_endpoints[@]} != ${#lifecycle_remote_public_keys[@]} \
+      || ${#lifecycle_remote_endpoints[@]} != ${#lifecycle_remote_key_evidence[@]} \
       || ${#lifecycle_remote_endpoints[@]} > 10)); then
-      echo "remote lifecycle witness endpoints and public keys must form 1 to 10 pairs" >&2
+      echo "remote lifecycle witness endpoints and trusted key evidence must form 1 to 10 pairs" >&2
       exit 2
     fi
     policy_lifecycle_remote_witnesses="${artifact_dir}/policy-lifecycle-remote-witnesses"
@@ -1032,11 +1073,16 @@ if [[ "$lifecycle_witness_configured" == "true" ]]; then
       remote_lifecycle_arguments=(request-policy-lifecycle-checkpoint-witness \
         "$lifecycle_witness_state" \
         --endpoint "${lifecycle_remote_endpoints[$index]}" \
-        --public-key "${lifecycle_remote_public_keys[$index]}" \
         --timeout-seconds "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_TIMEOUT_SECONDS:-30}" \
         --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX" \
         --output "$remote_witness_path" \
         --receipt-output "$remote_receipt_path")
+      if [[ "$remote_lifecycle_key_mode" == "public-key" ]]; then
+        remote_lifecycle_arguments+=(--public-key "${lifecycle_remote_key_evidence[$index]}")
+      else
+        remote_lifecycle_arguments+=( \
+          --witness-key-trust-state "${lifecycle_remote_key_evidence[$index]}")
+      fi
       if [[ -n "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_BEARER_TOKEN:-}" ]]; then
         remote_lifecycle_arguments+=(--bearer-token-env PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_BEARER_TOKEN)
       fi
@@ -1045,7 +1091,12 @@ if [[ "$lifecycle_witness_configured" == "true" ]]; then
       fi
       "$PCBEX_BINARY" "${remote_lifecycle_arguments[@]}"
       lifecycle_witness_arguments+=(--witness "$remote_witness_path")
-      lifecycle_witness_arguments+=(--public-key "${lifecycle_remote_public_keys[$index]}")
+      if [[ "$remote_lifecycle_key_mode" == "public-key" ]]; then
+        lifecycle_witness_arguments+=(--public-key "${lifecycle_remote_key_evidence[$index]}")
+      else
+        lifecycle_witness_arguments+=( \
+          --witness-key-trust-state "${lifecycle_remote_key_evidence[$index]}")
+      fi
     done
   fi
   "$PCBEX_BINARY" "${lifecycle_witness_arguments[@]}"

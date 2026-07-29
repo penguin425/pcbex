@@ -31,6 +31,8 @@ pub struct RemotePolicyLifecycleWitnessReceipt {
     pub evaluated_at_unix: u64,
     pub witness_id: String,
     pub witness_public_key: String,
+    pub witness_key_trust_state_sha256: Option<String>,
+    pub witness_key_generation: Option<u64>,
     pub observed_at_unix: u64,
     pub verified: bool,
 }
@@ -46,6 +48,7 @@ pub fn remote_policy_lifecycle_witness_receipt_json_schema() -> Value {
             "schema_version", "adapter", "endpoint", "checkpoint_sha256",
             "request_sha256", "response_sha256", "response_bytes",
             "evaluated_at_unix", "witness_id", "witness_public_key",
+            "witness_key_trust_state_sha256", "witness_key_generation",
             "observed_at_unix", "verified"
         ],
         "properties": {
@@ -67,6 +70,18 @@ pub fn remote_policy_lifecycle_witness_receipt_json_schema() -> Value {
                 "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
             },
             "witness_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "witness_key_trust_state_sha256": {
+                "oneOf": [
+                    {"type": "null"},
+                    {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                ]
+            },
+            "witness_key_generation": {
+                "oneOf": [
+                    {"type": "null"},
+                    {"type": "integer", "minimum": 0}
+                ]
+            },
             "observed_at_unix": {"type": "integer", "minimum": 0},
             "verified": {"const": true}
         }
@@ -172,6 +187,8 @@ pub fn request_remote_policy_lifecycle_witness(
         evaluated_at_unix,
         witness_id: witness.witness_id.clone(),
         witness_public_key: witness.public_key.clone(),
+        witness_key_trust_state_sha256: None,
+        witness_key_generation: None,
         observed_at_unix: witness.observed_at_unix,
         verified: true,
     };
@@ -238,6 +255,11 @@ mod tests {
         assert_eq!(
             remote_policy_lifecycle_witness_receipt_json_schema()["additionalProperties"],
             false
+        );
+        assert_eq!(
+            remote_policy_lifecycle_witness_receipt_json_schema()["properties"]["witness_key_generation"]
+                ["oneOf"][0]["type"],
+            "null"
         );
         assert!(validate_endpoint("https://witness.example/v1/lifecycle", false).is_ok());
         assert!(

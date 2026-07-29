@@ -7,9 +7,12 @@ use std::collections::BTreeSet;
 
 pub const SIGNED_POLICY_LIFECYCLE_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 pub const POLICY_LIFECYCLE_TRUST_STATE_SCHEMA_VERSION: u32 = 1;
+pub const POLICY_LIFECYCLE_WITNESS_TRUST_STATE_SCHEMA_VERSION: u32 = 1;
 const SIGNATURE_DOMAIN: &str = "pcbex-policy-lifecycle-checkpoint-v1";
 const KEY_ROTATION_DOMAIN: &str = "pcbex-policy-lifecycle-checkpoint-key-rotation-v1";
 const WITNESS_DOMAIN: &str = "pcbex-policy-lifecycle-checkpoint-witness-v1";
+const WITNESS_KEY_ROTATION_DOMAIN: &str =
+    "pcbex-policy-lifecycle-checkpoint-witness-key-rotation-v1";
 const MAXIMUM_ACCEPTANCE_DELAY_SECONDS: u64 = 86_400;
 const MAXIMUM_WITNESS_AGE_SECONDS: u64 = 86_400;
 
@@ -88,6 +91,33 @@ pub struct SignedPolicyLifecycleCheckpointWitness {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PolicyLifecycleWitnessTrustState {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub generation: u64,
+    pub current_public_key: String,
+    pub last_rotation_sha256: Option<String>,
+    pub last_rotated_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedPolicyLifecycleWitnessKeyRotation {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_rotation_sha256: Option<String>,
+    pub old_public_key: String,
+    pub new_public_key: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_signature: String,
+    pub new_signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyLifecycleWitnessQuorumReport {
     pub schema_version: u32,
     pub status: String,
@@ -138,6 +168,186 @@ struct WitnessPayload<'a> {
     head_sha256: &'a str,
     witness_id: &'a str,
     observed_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct WitnessKeyRotationPayload<'a> {
+    domain: &'static str,
+    witness_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&'a str>,
+    old_public_key: &'a str,
+    new_public_key: &'a str,
+    rotated_at_unix: u64,
+}
+
+pub fn new_policy_lifecycle_witness_trust_state(
+    witness_id: &str,
+    public_key: &[u8; 32],
+) -> Result<PolicyLifecycleWitnessTrustState, String> {
+    validate_slug(witness_id)?;
+    VerifyingKey::from_bytes(public_key)
+        .map_err(|error| format!("invalid policy lifecycle witness public key: {error}"))?;
+    Ok(PolicyLifecycleWitnessTrustState {
+        schema_version: POLICY_LIFECYCLE_WITNESS_TRUST_STATE_SCHEMA_VERSION,
+        witness_id: witness_id.into(),
+        generation: 0,
+        current_public_key: hex_encode(public_key),
+        last_rotation_sha256: None,
+        last_rotated_at_unix: None,
+    })
+}
+
+pub fn policy_lifecycle_witness_trusted_public_key(
+    state: &PolicyLifecycleWitnessTrustState,
+) -> Result<[u8; 32], String> {
+    validate_policy_lifecycle_witness_trust_state(state)?;
+    decode_hex_array::<32>(
+        &state.current_public_key,
+        "current policy lifecycle witness public key",
+    )
+}
+
+pub fn policy_lifecycle_witness_trust_state_sha256(
+    state: &PolicyLifecycleWitnessTrustState,
+) -> Result<String, String> {
+    validate_policy_lifecycle_witness_trust_state(state)?;
+    normalized_sha256(state, "policy lifecycle witness trust state")
+}
+
+pub fn sign_policy_lifecycle_witness_key_rotation(
+    state: &PolicyLifecycleWitnessTrustState,
+    old_secret_key: &[u8; 32],
+    new_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<SignedPolicyLifecycleWitnessKeyRotation, String> {
+    validate_policy_lifecycle_witness_trust_state(state)?;
+    let old_key = SigningKey::from_bytes(old_secret_key);
+    let new_key = SigningKey::from_bytes(new_secret_key);
+    let old_public_key = hex_encode(&old_key.verifying_key().to_bytes());
+    let new_public_key = hex_encode(&new_key.verifying_key().to_bytes());
+    if old_public_key != state.current_public_key {
+        return Err(
+            "old policy lifecycle witness key does not match the current trust state".into(),
+        );
+    }
+    if new_public_key == old_public_key {
+        return Err("new policy lifecycle witness key must differ from the current key".into());
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err("policy lifecycle witness key rotation timestamps must be monotonic".into());
+    }
+    let to_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "policy lifecycle witness key generation overflow".to_string())?;
+    let payload = witness_key_rotation_payload(
+        &state.witness_id,
+        state.generation,
+        to_generation,
+        state.last_rotation_sha256.as_deref(),
+        &old_public_key,
+        &new_public_key,
+        rotated_at_unix,
+    )?;
+    Ok(SignedPolicyLifecycleWitnessKeyRotation {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        from_generation: state.generation,
+        to_generation,
+        previous_rotation_sha256: state.last_rotation_sha256.clone(),
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+        algorithm: "ed25519".into(),
+        old_signature: hex_encode(&old_key.sign(&payload).to_bytes()),
+        new_signature: hex_encode(&new_key.sign(&payload).to_bytes()),
+    })
+}
+
+pub fn apply_policy_lifecycle_witness_key_rotation(
+    state: &PolicyLifecycleWitnessTrustState,
+    rotation: &SignedPolicyLifecycleWitnessKeyRotation,
+) -> Result<PolicyLifecycleWitnessTrustState, String> {
+    validate_policy_lifecycle_witness_trust_state(state)?;
+    validate_signed_policy_lifecycle_witness_key_rotation(rotation)?;
+    if rotation.witness_id != state.witness_id
+        || rotation.from_generation != state.generation
+        || rotation.previous_rotation_sha256 != state.last_rotation_sha256
+        || rotation.old_public_key != state.current_public_key
+    {
+        return Err(
+            "policy lifecycle witness key rotation does not extend the current trust state".into(),
+        );
+    }
+    let expected_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "policy lifecycle witness key generation overflow".to_string())?;
+    if rotation.to_generation != expected_generation {
+        return Err(
+            "policy lifecycle witness key rotation must advance exactly one generation".into(),
+        );
+    }
+    if rotation.new_public_key == rotation.old_public_key {
+        return Err("new policy lifecycle witness key must differ from the current key".into());
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err("policy lifecycle witness key rotation timestamps must be monotonic".into());
+    }
+    let payload = witness_key_rotation_payload(
+        &rotation.witness_id,
+        rotation.from_generation,
+        rotation.to_generation,
+        rotation.previous_rotation_sha256.as_deref(),
+        &rotation.old_public_key,
+        &rotation.new_public_key,
+        rotation.rotated_at_unix,
+    )?;
+    for (key, signature, label) in [
+        (
+            &rotation.old_public_key,
+            &rotation.old_signature,
+            "old policy lifecycle witness key rotation",
+        ),
+        (
+            &rotation.new_public_key,
+            &rotation.new_signature,
+            "new policy lifecycle witness key rotation",
+        ),
+    ] {
+        let key = decode_hex_array::<32>(key, label)?;
+        let signature = Signature::from_bytes(&decode_hex_array::<64>(signature, label)?);
+        VerifyingKey::from_bytes(&key)
+            .map_err(|error| format!("invalid {label} public key: {error}"))?
+            .verify_strict(&payload, &signature)
+            .map_err(|_| format!("{label} signature verification failed"))?;
+    }
+    let rotation_sha256 = signed_policy_lifecycle_witness_key_rotation_sha256(rotation)?;
+    let next = PolicyLifecycleWitnessTrustState {
+        schema_version: POLICY_LIFECYCLE_WITNESS_TRUST_STATE_SCHEMA_VERSION,
+        witness_id: state.witness_id.clone(),
+        generation: rotation.to_generation,
+        current_public_key: rotation.new_public_key.clone(),
+        last_rotation_sha256: Some(rotation_sha256),
+        last_rotated_at_unix: Some(rotation.rotated_at_unix),
+    };
+    validate_policy_lifecycle_witness_trust_state(&next)?;
+    Ok(next)
+}
+
+pub fn signed_policy_lifecycle_witness_key_rotation_sha256(
+    rotation: &SignedPolicyLifecycleWitnessKeyRotation,
+) -> Result<String, String> {
+    validate_signed_policy_lifecycle_witness_key_rotation(rotation)?;
+    normalized_sha256(rotation, "policy lifecycle witness key rotation")
 }
 
 pub fn sign_policy_lifecycle_checkpoint_witness(
@@ -273,6 +483,55 @@ pub fn verify_policy_lifecycle_checkpoint_witness(
         .map_err(|error| format!("invalid policy lifecycle witness key: {error}"))?
         .verify_strict(&payload, &signature)
         .map_err(|_| "policy lifecycle witness signature verification failed".to_string())
+}
+
+pub fn verify_policy_lifecycle_checkpoint_witness_with_trust_state(
+    state: &PolicyLifecycleTrustState,
+    witness: &SignedPolicyLifecycleCheckpointWitness,
+    witness_trust_state: &PolicyLifecycleWitnessTrustState,
+    evaluated_at_unix: u64,
+) -> Result<(), String> {
+    validate_policy_lifecycle_witness_trust_state(witness_trust_state)?;
+    if witness.witness_id != witness_trust_state.witness_id {
+        return Err(
+            "policy lifecycle witness identity does not match its retained trust state".into(),
+        );
+    }
+    let trusted_key = policy_lifecycle_witness_trusted_public_key(witness_trust_state)?;
+    verify_policy_lifecycle_checkpoint_witness(state, witness, &trusted_key, evaluated_at_unix)
+}
+
+pub fn verify_policy_lifecycle_checkpoint_witnesses_with_trust_states(
+    state: &PolicyLifecycleTrustState,
+    witnesses: &[SignedPolicyLifecycleCheckpointWitness],
+    witness_trust_states: &[PolicyLifecycleWitnessTrustState],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<PolicyLifecycleWitnessQuorumReport, String> {
+    if witnesses.len() != witness_trust_states.len() || witnesses.len() > 100 {
+        return Err(
+            "policy lifecycle witnesses and witness trust states must be paired and bounded".into(),
+        );
+    }
+    for (witness, trust_state) in witnesses.iter().zip(witness_trust_states) {
+        validate_policy_lifecycle_witness_trust_state(trust_state)?;
+        if witness.witness_id != trust_state.witness_id {
+            return Err(
+                "policy lifecycle witness identity does not match its retained trust state".into(),
+            );
+        }
+    }
+    let trusted_keys = witness_trust_states
+        .iter()
+        .map(policy_lifecycle_witness_trusted_public_key)
+        .collect::<Result<Vec<_>, _>>()?;
+    verify_policy_lifecycle_checkpoint_witnesses(
+        state,
+        witnesses,
+        &trusted_keys,
+        minimum_witnesses,
+        evaluated_at_unix,
+    )
 }
 
 pub fn sign_policy_lifecycle_key_rotation(
@@ -485,6 +744,25 @@ pub fn parse_signed_policy_lifecycle_checkpoint_witness(
     Ok(witness)
 }
 
+pub fn parse_policy_lifecycle_witness_trust_state(
+    source: &str,
+) -> Result<PolicyLifecycleWitnessTrustState, String> {
+    let state = serde_json::from_str(source)
+        .map_err(|error| format!("invalid policy lifecycle witness trust-state JSON: {error}"))?;
+    validate_policy_lifecycle_witness_trust_state(&state)?;
+    Ok(state)
+}
+
+pub fn parse_signed_policy_lifecycle_witness_key_rotation(
+    source: &str,
+) -> Result<SignedPolicyLifecycleWitnessKeyRotation, String> {
+    let rotation = serde_json::from_str(source).map_err(|error| {
+        format!("invalid signed policy lifecycle witness key-rotation JSON: {error}")
+    })?;
+    validate_signed_policy_lifecycle_witness_key_rotation(&rotation)?;
+    Ok(rotation)
+}
+
 pub fn parse_policy_lifecycle_witness_quorum_report(
     source: &str,
 ) -> Result<PolicyLifecycleWitnessQuorumReport, String> {
@@ -590,6 +868,56 @@ pub fn validate_signed_policy_lifecycle_checkpoint_witness(
     validate_slug(&witness.witness_id)?;
     validate_hex(&witness.public_key, 32)?;
     validate_hex(&witness.signature, 64)
+}
+
+pub fn validate_policy_lifecycle_witness_trust_state(
+    state: &PolicyLifecycleWitnessTrustState,
+) -> Result<(), String> {
+    if state.schema_version != POLICY_LIFECYCLE_WITNESS_TRUST_STATE_SCHEMA_VERSION {
+        return Err("unsupported policy lifecycle witness trust state".into());
+    }
+    validate_slug(&state.witness_id)?;
+    let public_key = decode_hex_array::<32>(
+        &state.current_public_key,
+        "current policy lifecycle witness public key",
+    )?;
+    VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| format!("invalid current policy lifecycle witness public key: {error}"))?;
+    match (
+        state.generation,
+        &state.last_rotation_sha256,
+        state.last_rotated_at_unix,
+    ) {
+        (0, None, None) => Ok(()),
+        (0, _, _) => {
+            Err("initial policy lifecycle witness trust state cannot reference a rotation".into())
+        }
+        (_, Some(digest), Some(_)) => validate_digest(digest),
+        _ => Err(
+            "rotated policy lifecycle witness trust state requires complete rotation evidence"
+                .into(),
+        ),
+    }
+}
+
+pub fn validate_signed_policy_lifecycle_witness_key_rotation(
+    rotation: &SignedPolicyLifecycleWitnessKeyRotation,
+) -> Result<(), String> {
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.to_generation != rotation.from_generation.saturating_add(1)
+        || rotation.old_public_key == rotation.new_public_key
+    {
+        return Err("invalid signed policy lifecycle witness key rotation invariants".into());
+    }
+    validate_slug(&rotation.witness_id)?;
+    if let Some(digest) = &rotation.previous_rotation_sha256 {
+        validate_digest(digest)?;
+    }
+    validate_hex(&rotation.old_public_key, 32)?;
+    validate_hex(&rotation.new_public_key, 32)?;
+    validate_hex(&rotation.old_signature, 64)?;
+    validate_hex(&rotation.new_signature, 64)
 }
 
 pub fn validate_policy_lifecycle_witness_quorum_report(
@@ -835,6 +1163,29 @@ fn witness_payload(
     .map_err(|error| format!("serializing policy lifecycle witness payload: {error}"))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn witness_key_rotation_payload(
+    witness_id: &str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&str>,
+    old_public_key: &str,
+    new_public_key: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&WitnessKeyRotationPayload {
+        domain: WITNESS_KEY_ROTATION_DOMAIN,
+        witness_id,
+        from_generation,
+        to_generation,
+        previous_rotation_sha256,
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+    })
+    .map_err(|error| format!("serializing policy lifecycle witness key rotation payload: {error}"))
+}
+
 fn validate_acceptance_time(issued_at_unix: u64, accepted_at_unix: u64) -> Result<(), String> {
     if accepted_at_unix < issued_at_unix
         || accepted_at_unix - issued_at_unix > MAXIMUM_ACCEPTANCE_DELAY_SECONDS
@@ -972,6 +1323,63 @@ pub fn signed_policy_lifecycle_checkpoint_witness_json_schema() -> Value {
             "algorithm": {"const": "ed25519"},
             "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
+pub fn policy_lifecycle_witness_trust_state_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/policy-lifecycle-witness-trust-state-v1.json",
+        "title": "pcbex policy lifecycle witness key trust state",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "generation", "current_public_key",
+            "last_rotation_sha256", "last_rotated_at_unix"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 0},
+            "current_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "last_rotation_sha256": {
+                "oneOf": [{"type": "null"}, digest_schema()]
+            },
+            "last_rotated_at_unix": {
+                "oneOf": [
+                    {"type": "null"},
+                    {"type": "integer", "minimum": 0}
+                ]
+            }
+        }
+    })
+}
+
+pub fn signed_policy_lifecycle_witness_key_rotation_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-policy-lifecycle-witness-key-rotation-v1.json",
+        "title": "Signed pcbex policy lifecycle witness key rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "from_generation", "to_generation",
+            "previous_rotation_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "from_generation": {"type": "integer", "minimum": 0},
+            "to_generation": {"type": "integer", "minimum": 1},
+            "previous_rotation_sha256": {
+                "oneOf": [{"type": "null"}, digest_schema()]
+            },
+            "old_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "new_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "rotated_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "old_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"},
+            "new_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
         }
     })
 }
@@ -1277,10 +1685,142 @@ mod tests {
             policy_lifecycle_trust_state_json_schema(),
             signed_policy_lifecycle_key_rotation_json_schema(),
             signed_policy_lifecycle_checkpoint_witness_json_schema(),
+            policy_lifecycle_witness_trust_state_json_schema(),
+            signed_policy_lifecycle_witness_key_rotation_json_schema(),
             policy_lifecycle_witness_quorum_json_schema(),
         ] {
             assert_eq!(schema["additionalProperties"], false);
         }
+    }
+
+    #[test]
+    fn rotates_lifecycle_witness_keys_with_dual_signed_chained_transitions() {
+        let old_secret = [41_u8; 32];
+        let next_secret = [42_u8; 32];
+        let final_secret = [43_u8; 32];
+        let old_public = SigningKey::from_bytes(&old_secret)
+            .verifying_key()
+            .to_bytes();
+        let initial = new_policy_lifecycle_witness_trust_state("witness-a", &old_public).unwrap();
+        assert_eq!(initial.generation, 0);
+        assert_eq!(
+            policy_lifecycle_witness_trusted_public_key(&initial).unwrap(),
+            old_public
+        );
+
+        let first =
+            sign_policy_lifecycle_witness_key_rotation(&initial, &old_secret, &next_secret, 1_000)
+                .unwrap();
+        let rotated = apply_policy_lifecycle_witness_key_rotation(&initial, &first).unwrap();
+        assert_eq!(rotated.generation, 1);
+        assert_eq!(rotated.last_rotated_at_unix, Some(1_000));
+        assert_eq!(
+            rotated.last_rotation_sha256,
+            Some(signed_policy_lifecycle_witness_key_rotation_sha256(&first).unwrap())
+        );
+        assert!(apply_policy_lifecycle_witness_key_rotation(&rotated, &first).is_err());
+
+        let second = sign_policy_lifecycle_witness_key_rotation(
+            &rotated,
+            &next_secret,
+            &final_secret,
+            1_001,
+        )
+        .unwrap();
+        let twice_rotated = apply_policy_lifecycle_witness_key_rotation(&rotated, &second).unwrap();
+        assert_eq!(twice_rotated.generation, 2);
+        assert_eq!(
+            second.previous_rotation_sha256,
+            rotated.last_rotation_sha256
+        );
+
+        let mut tampered = second.clone();
+        tampered.new_signature = "00".repeat(64);
+        assert!(apply_policy_lifecycle_witness_key_rotation(&rotated, &tampered).is_err());
+        let mut fork = second;
+        fork.previous_rotation_sha256 = Some("00".repeat(32));
+        assert!(apply_policy_lifecycle_witness_key_rotation(&rotated, &fork).is_err());
+        assert!(
+            sign_policy_lifecycle_witness_key_rotation(
+                &rotated,
+                &old_secret,
+                &final_secret,
+                1_002,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_policy_lifecycle_witness_key_rotation(
+                &rotated,
+                &next_secret,
+                &next_secret,
+                1_002,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_policy_lifecycle_witness_key_rotation(&rotated, &next_secret, &final_secret, 999,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn retained_lifecycle_witness_identity_verifies_rotated_key() {
+        let (ledger, _) = ledgers();
+        let root_secret = [44_u8; 32];
+        let root_public = SigningKey::from_bytes(&root_secret)
+            .verifying_key()
+            .to_bytes();
+        let checkpoint =
+            sign_policy_lifecycle_checkpoint(&ledger, 1_000, "release-root", &root_secret).unwrap();
+        let state = verify_policy_lifecycle_checkpoint(
+            &ledger,
+            &checkpoint,
+            &root_public,
+            None,
+            None,
+            1_001,
+        )
+        .unwrap();
+        let old_secret = [45_u8; 32];
+        let new_secret = [46_u8; 32];
+        let old_public = SigningKey::from_bytes(&old_secret)
+            .verifying_key()
+            .to_bytes();
+        let initial = new_policy_lifecycle_witness_trust_state("witness-a", &old_public).unwrap();
+        let rotation =
+            sign_policy_lifecycle_witness_key_rotation(&initial, &old_secret, &new_secret, 1_050)
+                .unwrap();
+        let trusted = apply_policy_lifecycle_witness_key_rotation(&initial, &rotation).unwrap();
+        let witness =
+            sign_policy_lifecycle_checkpoint_witness(&state, "witness-a", 1_100, &new_secret)
+                .unwrap();
+        verify_policy_lifecycle_checkpoint_witness_with_trust_state(
+            &state, &witness, &trusted, 1_101,
+        )
+        .unwrap();
+        let report = verify_policy_lifecycle_checkpoint_witnesses_with_trust_states(
+            &state,
+            std::slice::from_ref(&witness),
+            std::slice::from_ref(&trusted),
+            2,
+            1_101,
+        )
+        .unwrap();
+        assert!(!report.quorum_met);
+
+        let mut substituted = trusted;
+        substituted.witness_id = "witness-b".into();
+        assert!(
+            verify_policy_lifecycle_checkpoint_witness_with_trust_state(
+                &state,
+                &witness,
+                &substituted,
+                1_101,
+            )
+            .unwrap_err()
+            .contains("identity")
+        );
     }
 
     #[test]
