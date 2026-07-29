@@ -72,6 +72,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod canary_completion;
 mod manufacturing_feedback;
 mod mcp;
 mod policy_pack;
@@ -81,6 +82,11 @@ mod policy_rollout_approval;
 mod remote_policy;
 mod remote_witness;
 
+use canary_completion::{
+    CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
+    parse_signed_canary_decision, render_canary_completion_summary, sign_canary_completion,
+    signed_canary_decision_json_schema, verify_canary_completion,
+};
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
     evidence_descriptor, manufacturing_feedback_comparison_json_schema,
@@ -150,6 +156,21 @@ enum ReportFormat {
 enum HumanDecisionArg {
     Approve,
     Reject,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum CanaryCompletionDecisionArg {
+    Promote,
+    Rollback,
+}
+
+impl From<CanaryCompletionDecisionArg> for CanaryCompletionDecision {
+    fn from(value: CanaryCompletionDecisionArg) -> Self {
+        match value {
+            CanaryCompletionDecisionArg::Promote => Self::Promote,
+            CanaryCompletionDecisionArg::Rollback => Self::Rollback,
+        }
+    }
 }
 
 impl From<HumanDecisionArg> for HumanEscalationDecision {
@@ -547,6 +568,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed canary-completion decision JSON Schema.
+    SignedCanaryCompletionSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed canary-completion quorum JSON Schema.
+    CanaryCompletionSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed canary-completion decision.
+    ValidateCanaryCompletionDecision {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a canary-completion quorum report.
+    ValidateCanaryCompletion {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -694,6 +737,44 @@ enum Command {
         summary_output: Option<PathBuf>,
         #[arg(long)]
         require_passed: bool,
+    },
+    /// Sign an explicit promotion or rollback decision over exact monitoring evidence.
+    SignCanaryCompletion {
+        rollout: PathBuf,
+        monitoring: PathBuf,
+        authorization: PathBuf,
+        #[arg(long, value_enum)]
+        decision: CanaryCompletionDecisionArg,
+        #[arg(long)]
+        decided_at_unix: u64,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify trusted dual-control signatures and finalize promotion or rollback.
+    VerifyCanaryCompletion {
+        rollout: PathBuf,
+        monitoring: PathBuf,
+        authorization: PathBuf,
+        #[arg(long)]
+        policy_pack: PathBuf,
+        #[arg(long = "decision", required = true)]
+        decisions: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_decisions: u32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        require_finalized: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2166,6 +2247,24 @@ fn main() -> Result<()> {
             let report = parse_canary_monitoring_report(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
+        Command::SignedCanaryCompletionSchema { output } => {
+            write_or_print_json(&signed_canary_decision_json_schema(), output.as_ref())?;
+        }
+        Command::CanaryCompletionSchema { output } => {
+            write_or_print_json(&canary_completion_json_schema(), output.as_ref())?;
+        }
+        Command::ValidateCanaryCompletionDecision { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let decision = parse_signed_canary_decision(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(decision)?, output.as_ref())?;
+        }
+        Command::ValidateCanaryCompletion { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report = parse_canary_completion_report(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -2693,6 +2792,115 @@ fn main() -> Result<()> {
             );
             if require_passed && !report.promotion_eligible {
                 bail!("canary monitoring requires rollback");
+            }
+        }
+        Command::SignCanaryCompletion {
+            rollout,
+            monitoring,
+            authorization,
+            decision,
+            decided_at_unix,
+            private_key,
+            signer_id,
+            reason,
+            ticket,
+            output,
+        } => {
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let monitoring_source = fs::read_to_string(&monitoring)
+                .with_context(|| format!("reading {}", monitoring.display()))?;
+            let monitoring =
+                parse_canary_monitoring_report(&monitoring_source).map_err(anyhow::Error::msg)?;
+            let authorization_source = fs::read_to_string(&authorization)
+                .with_context(|| format!("reading {}", authorization.display()))?;
+            let authorization =
+                parse_canary_authorization(&authorization_source).map_err(anyhow::Error::msg)?;
+            let secret = read_hex_key(&private_key, "canary completion private key")?;
+            let signed = sign_canary_completion(
+                &rollout,
+                &monitoring,
+                &authorization,
+                decision.into(),
+                decided_at_unix,
+                &reason,
+                &ticket,
+                &signer_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&signed)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed {:?} canary completion decision as {}",
+                signed.decision, signed.signer_id
+            );
+        }
+        Command::VerifyCanaryCompletion {
+            rollout,
+            monitoring,
+            authorization,
+            policy_pack,
+            decisions,
+            minimum_decisions,
+            output,
+            summary_output,
+            require_finalized,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "canary completion",
+            )?;
+            if decisions.len() > 100 {
+                bail!("canary completion accepts at most 100 decisions");
+            }
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let monitoring_source = fs::read_to_string(&monitoring)
+                .with_context(|| format!("reading {}", monitoring.display()))?;
+            let monitoring =
+                parse_canary_monitoring_report(&monitoring_source).map_err(anyhow::Error::msg)?;
+            let authorization_source = fs::read_to_string(&authorization)
+                .with_context(|| format!("reading {}", authorization.display()))?;
+            let authorization =
+                parse_canary_authorization(&authorization_source).map_err(anyhow::Error::msg)?;
+            let policy = load_policy_pack(&policy_pack)?.0;
+            let decisions = decisions
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_canary_decision(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let report = verify_canary_completion(
+                &rollout,
+                &monitoring,
+                &authorization,
+                &policy,
+                &decisions,
+                minimum_decisions,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&report)? + "\n";
+            let summary = render_canary_completion_summary(&report);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "canary completion: {} promotion, {} rollback decision(s): {}",
+                report.promotions, report.rollbacks, report.status
+            );
+            if require_finalized && !report.finalized {
+                bail!("canary completion did not receive a valid unanimous quorum");
             }
         }
         Command::RecordSimulationEvidence {

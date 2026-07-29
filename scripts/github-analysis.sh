@@ -52,6 +52,9 @@ write_output canary-rollout-authorization ""
 write_output canary-rollout-authorized ""
 write_output canary-monitoring ""
 write_output canary-monitoring-passed ""
+write_output canary-completion ""
+write_output canary-completion-finalized ""
+write_output canary-completion-decision ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -374,6 +377,48 @@ if ((monitoring_inputs == 4)); then
   {
     printf '\n'
     cat "$canary_monitoring_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+canary_completion=""
+canary_completion_finalized=""
+canary_completion_decision=""
+if [[ -n "${PCBEX_CANARY_COMPLETION_DECISION_FILES:-}" ]]; then
+  completion_rollout="${PCBEX_CANARY_ROLLOUT_REPORT:-$policy_rollout}"
+  completion_monitoring="${PCBEX_CANARY_COMPLETION_MONITORING_REPORT:-$canary_monitoring}"
+  if [[ -z "$completion_rollout" || -z "$completion_monitoring" || -z "$canary_rollout_authorization" || -z "$effective_policy_pack" ]]; then
+    echo "canary completion requires rollout, monitoring, verified authorization, and an organization policy pack" >&2
+    exit 2
+  fi
+  canary_completion="${artifact_dir}/canary-completion.json"
+  canary_completion_summary="${artifact_dir}/canary-completion.md"
+  completion_arguments=(verify-canary-completion \
+    "$completion_rollout" \
+    "$completion_monitoring" \
+    "$canary_rollout_authorization" \
+    --policy-pack "$effective_policy_pack" \
+    --minimum-decisions "${PCBEX_CANARY_COMPLETION_MINIMUM_DECISIONS:-2}" \
+    --output "$canary_completion" \
+    --summary-output "$canary_completion_summary")
+  while IFS= read -r decision; do
+    if [[ -n "$decision" ]]; then
+      completion_arguments+=(--decision "$decision")
+    fi
+  done <<< "${PCBEX_CANARY_COMPLETION_DECISION_FILES:-}"
+  "$PCBEX_BINARY" "${completion_arguments[@]}"
+  readarray -t completion_values < <(
+    python3 -c '
+import json,sys
+data=json.load(open(sys.argv[1], encoding="utf-8"))
+print(str(data["finalized"]).lower())
+print(data["final_decision"] or "")
+' "$canary_completion"
+  )
+  canary_completion_finalized="${completion_values[0]}"
+  canary_completion_decision="${completion_values[1]}"
+  {
+    printf '\n'
+    cat "$canary_completion_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -775,6 +820,9 @@ write_output canary-rollout-authorization "$canary_rollout_authorization"
 write_output canary-rollout-authorized "$canary_rollout_authorized"
 write_output canary-monitoring "$canary_monitoring"
 write_output canary-monitoring-passed "$canary_monitoring_passed"
+write_output canary-completion "$canary_completion"
+write_output canary-completion-finalized "$canary_completion_finalized"
+write_output canary-completion-decision "$canary_completion_decision"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"
