@@ -54,6 +54,8 @@ write_output human-escalation-approved ""
 write_output schematic-approval-met ""
 write_output approval-log-verification ""
 write_output approval-log-verified ""
+write_output approval-log-anchor-verification ""
+write_output approval-log-anchored ""
 write_output approval-log-witness-quorum ""
 write_output approval-log-witness-quorum-met ""
 write_output remote-witness ""
@@ -362,6 +364,42 @@ if ((approval_log_inputs == 3)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+approval_log_anchor_verification=""
+approval_log_anchored=""
+approval_log_anchor_inputs=0
+if [[ -n "${PCBEX_APPROVAL_LOG_ANCHOR_PROOF:-}" ]]; then ((approval_log_anchor_inputs += 1)); fi
+if [[ -n "${PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY:-}" ]]; then ((approval_log_anchor_inputs += 1)); fi
+if ((approval_log_anchor_inputs != 0 && approval_log_anchor_inputs != 2)); then
+  echo "PCBEX_APPROVAL_LOG_ANCHOR_PROOF and PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY must be supplied together" >&2
+  exit 2
+fi
+if ((approval_log_anchor_inputs == 2)); then
+  if [[ -z "${PCBEX_APPROVAL_LOG_CHECKPOINT:-}" ]]; then
+    echo "approval-log public anchor requires PCBEX_APPROVAL_LOG_CHECKPOINT" >&2
+    exit 2
+  fi
+  approval_log_anchor_verification="${artifact_dir}/approval-log-anchor-verification.json"
+  "$PCBEX_BINARY" verify-approval-log-anchor \
+    "$PCBEX_APPROVAL_LOG_CHECKPOINT" \
+    --proof "$PCBEX_APPROVAL_LOG_ANCHOR_PROOF" \
+    --public-key "$PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY" \
+    --output "$approval_log_anchor_verification"
+  approval_log_anchored="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["anchored"]).lower())' \
+      "$approval_log_anchor_verification"
+  )"
+  {
+    printf '\n# Approval public-log anchor\n\n'
+    printf -- '- Anchored: `%s`\n' "$approval_log_anchored"
+    printf -- '- Tree size: `%s`\n' "$(
+      python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["tree_size"])' \
+        "$approval_log_anchor_verification"
+    )"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 remote_witness=""
 remote_witness_receipt=""
 remote_witness_public_key=""
@@ -518,6 +556,8 @@ write_output human-escalation-approved "$human_escalation_approved"
 write_output schematic-approval-met "$schematic_approval_met"
 write_output approval-log-verification "$approval_log_verification"
 write_output approval-log-verified "$approval_log_verified"
+write_output approval-log-anchor-verification "$approval_log_anchor_verification"
+write_output approval-log-anchored "$approval_log_anchored"
 write_output approval-log-witness-quorum "$approval_log_witness_quorum"
 write_output approval-log-witness-quorum-met "$approval_log_witness_quorum_met"
 write_output remote-witness "$remote_witness"

@@ -184,6 +184,11 @@
     {
       "id": "approval-transparency-witness-key-rotation",
       "release": "v1.333.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-public-log-anchoring",
+      "release": "v1.334.0",
       "status": "current"
     }
   ]

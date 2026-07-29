@@ -42,6 +42,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "sign-approval-log-witness-key-rotation",
         "apply-approval-log-witness-key-rotation",
         "export-approval-log-witness-public-key",
+        "create-approval-log-anchor",
+        "verify-approval-log-anchor",
         "verify-approval-log-witnesses",
         "request-approval-log-witness",
         "mcp-server",
