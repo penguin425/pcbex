@@ -310,6 +310,8 @@ impl McpServer {
                     | "append_policy_incident_ledger"
                     | "apply_policy_suspension_decision"
                     | "apply_policy_remediation"
+                    | "append_policy_lifecycle_event"
+                    | "snapshot_policy_lifecycle"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1050,6 +1052,10 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "type": "array", "maxItems": 100,
                         "items": {"type": "string"}
                     },
+                    "policy_lifecycle_ledgers": {
+                        "type": "array", "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
                     "recorded_at_unix": {"type": "integer", "minimum": 0},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
@@ -1393,6 +1399,49 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             }),
             false,
             true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "append_policy_lifecycle_event",
+            "Append policy lifecycle event",
+            "Retain one complete suspension decision or independently verified remediation in an immutable hash-chained lifecycle ledger.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["output"],
+                "properties": {
+                    "baseline_ledger": {"type": "string"},
+                    "suspension": {"type": "string"},
+                    "remediation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_no_pending_suspensions": {
+                        "type": "boolean", "default": false
+                    }
+                },
+                "oneOf": [
+                    {"required": ["suspension"], "not": {"required": ["remediation"]}},
+                    {"required": ["remediation"], "not": {"required": ["suspension"]}}
+                ]
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "snapshot_policy_lifecycle",
+            "Snapshot historical policy lifecycle",
+            "Recompute blocked, released, superseded, and continued policy decisions at one retained historical generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["ledger", "generation", "output"],
+                "properties": {
+                    "ledger": {"type": "string"},
+                    "generation": {"type": "integer", "minimum": 1},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            false,
             tasks_supported.then_some("optional"),
         ),
         tool(
@@ -2022,6 +2071,8 @@ fn call_tool(
             sign_policy_remediation_approval(arguments, cancellation)?
         }
         "apply_policy_remediation" => apply_policy_remediation(arguments, cancellation)?,
+        "append_policy_lifecycle_event" => append_policy_lifecycle_event(arguments, cancellation)?,
+        "snapshot_policy_lifecycle" => snapshot_policy_lifecycle(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2890,6 +2941,7 @@ fn advance_policy_deployment(
             "baseline_state",
             "suspension_states",
             "remediation_states",
+            "policy_lifecycle_ledgers",
             "recorded_at_unix",
             "output",
             "summary_output",
@@ -2963,6 +3015,23 @@ fn advance_policy_deployment(
                 .filter(|state| !state.is_empty())
                 .ok_or_else(|| json!({"detail": "remediation_states entries must be strings"}))?;
             command.extend(["--remediation-state".into(), state.into()]);
+        }
+    }
+    if let Some(ledgers) = arguments.get("policy_lifecycle_ledgers") {
+        let ledgers = ledgers
+            .as_array()
+            .ok_or_else(|| json!({"detail": "policy_lifecycle_ledgers must be an array"}))?;
+        if ledgers.len() > 100 {
+            return Err(json!({"detail": "policy_lifecycle_ledgers cannot exceed 100 entries"}));
+        }
+        for ledger in ledgers {
+            let ledger = ledger
+                .as_str()
+                .filter(|ledger| !ledger.is_empty())
+                .ok_or_else(
+                    || json!({"detail": "policy_lifecycle_ledgers entries must be strings"}),
+                )?;
+            command.extend(["--policy-lifecycle-ledger".into(), ledger.into()]);
         }
     }
     command.extend([
@@ -3720,6 +3789,90 @@ fn apply_policy_remediation(
     Ok(execution_result(
         execution,
         json!({"output": output, "remediation": state}),
+    ))
+}
+
+fn append_policy_lifecycle_event(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "baseline_ledger",
+            "suspension",
+            "remediation",
+            "output",
+            "summary_output",
+            "require_no_pending_suspensions",
+        ],
+    )?;
+    let suspension = optional_string(&arguments, "suspension")?;
+    let remediation = optional_string(&arguments, "remediation")?;
+    if suspension.is_some() == remediation.is_some() {
+        return Err(json!({
+            "detail": "exactly one of suspension or remediation must be supplied"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec!["append-policy-lifecycle-event".into()];
+    optional_option(
+        &arguments,
+        "baseline_ledger",
+        "--baseline-ledger",
+        &mut command,
+    )?;
+    if let Some(suspension) = suspension {
+        command.extend(["--suspension".into(), suspension]);
+    }
+    if let Some(remediation) = remediation {
+        command.extend(["--remediation".into(), remediation]);
+    }
+    command.extend(["--output".into(), output.clone()]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_no_pending_suspensions",
+        "--require-no-pending-suspensions",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let ledger = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "ledger": ledger}),
+    ))
+}
+
+fn snapshot_policy_lifecycle(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["ledger", "generation", "output"])?;
+    let generation = arguments
+        .get("generation")
+        .and_then(Value::as_u64)
+        .filter(|generation| *generation > 0)
+        .ok_or_else(|| json!({"detail": "generation must be a positive integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "snapshot-policy-lifecycle".into(),
+        required_string(&arguments, "ledger")?,
+        "--generation".into(),
+        generation.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let snapshot = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "snapshot": snapshot}),
     ))
 }
 
@@ -4755,6 +4908,22 @@ fn required_string(
         .ok_or_else(|| json!({"detail": format!("{name} must be a non-empty string")}))
 }
 
+fn optional_string(
+    arguments: &Map<String, Value>,
+    name: &str,
+) -> std::result::Result<Option<String>, Value> {
+    arguments
+        .get(name)
+        .map(|value| {
+            value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| json!({"detail": format!("{name} must be a non-empty string")}))
+        })
+        .transpose()
+}
+
 fn optional_option(
     arguments: &Map<String, Value>,
     name: &str,
@@ -4916,7 +5085,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 49);
+        assert_eq!(tools.len(), 51);
         let named = |name: &str| {
             tools
                 .iter()
@@ -5080,6 +5249,22 @@ mod tests {
         );
         assert_eq!(
             named("apply_policy_remediation")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("append_policy_lifecycle_event")["inputSchema"]["oneOf"][0]["required"][0],
+            "suspension"
+        );
+        assert_eq!(
+            named("append_policy_lifecycle_event")["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named("snapshot_policy_lifecycle")["inputSchema"]["properties"]["generation"]["minimum"],
+            1
+        );
+        assert_eq!(
+            named("snapshot_policy_lifecycle")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(
