@@ -77,6 +77,7 @@ auditable release.
 | v1.365.0 | Governed registry root rotation | Require retained and new-root successor quorums to atomically replace the registry root and active governance |
 | v1.366.0 | Complete registry history audit | Replay mixed legacy, threshold, governance, and governed-root events from genesis without trusting copied snapshots |
 | v1.367.0 | Witnessed registry history checkpoints | Pin root-signed complete-history heads and require fresh distinct witnesses over one exact audited generation |
+| v1.368.0 | Registry history witness key rotation | Advance identity-bound checkpoint-witness trust through dual-signed generation- and digest-chained key transitions |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -85,6 +86,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should make registry-history witness trust rotatable through
-identity-bound dual-signed key transitions, so long-lived independent monitors
-can replace expiring or compromised keys without resetting checkpoint trust.
+The next roadmap should acquire registry-history checkpoint witnesses from
+bounded HTTPS services and retain hash-bound transport receipts, so independent
+organizations can contribute freshness evidence without pre-staging artifacts.

@@ -49,6 +49,8 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     let successor_a_public = directory.join("successor-a.pub");
     let successor_b_private = directory.join("successor-b.key");
     let successor_b_public = directory.join("successor-b.pub");
+    let witness_next_private = directory.join("witness-next.key");
+    let witness_next_public = directory.join("witness-next.pub");
     for (private, public) in [
         (&authority_private, &authority_public),
         (&authority_next_private, &authority_next_public),
@@ -59,6 +61,7 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         (&governance_c_private, &governance_c_public),
         (&successor_a_private, &successor_a_public),
         (&successor_b_private, &successor_b_public),
+        (&witness_next_private, &witness_next_public),
     ] {
         assert!(
             run(&[
@@ -671,10 +674,67 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     let checkpoint_trust_value = read_json(&checkpoint_trust);
     assert_eq!(checkpoint_trust_value["accepted_generation"], 6);
 
+    let witness_trust_a = directory.join("registry.history.witness-a.trust.json");
+    let witness_trust_b = directory.join("registry.history.witness-b.trust.json");
+    for (witness_id, public_key, output) in [
+        ("independent-a", &governance_a_public, &witness_trust_a),
+        ("independent-b", &governance_b_public, &witness_trust_b),
+    ] {
+        assert!(
+            run(&[
+                "init-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-trust",
+                "--witness-id",
+                witness_id,
+                "--public-key",
+                path(public_key),
+                "--output",
+                path(output),
+            ])
+            .status
+            .success()
+        );
+    }
+    let witness_rotation = directory.join("registry.history.witness-a.rotation.json");
+    assert!(
+        run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-key-rotation",
+            path(&witness_trust_a),
+            "--old-private-key",
+            path(&governance_a_private),
+            "--new-private-key",
+            path(&witness_next_private),
+            "--rotated-at-unix",
+            "3250",
+            "--output",
+            path(&witness_rotation),
+        ])
+        .status
+        .success()
+    );
+    let witness_trust_a_rotated = directory.join("registry.history.witness-a.trust.rotated.json");
+    let witness_key_export = directory.join("registry.history.witness-a.rotated.pub");
+    assert!(
+        run(&[
+            "apply-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-key-rotation",
+            path(&witness_trust_a),
+            path(&witness_rotation),
+            "--output",
+            path(&witness_trust_a_rotated),
+            "--public-key-output",
+            path(&witness_key_export),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read_to_string(&witness_key_export).unwrap(),
+        fs::read_to_string(&witness_next_public).unwrap()
+    );
+
     let witness_a = directory.join("registry.history.checkpoint.witness-a.json");
     let witness_b = directory.join("registry.history.checkpoint.witness-b.json");
     for (witness_id, private_key, output) in [
-        ("independent-a", &governance_a_private, &witness_a),
+        ("independent-a", &witness_next_private, &witness_a),
         ("independent-b", &governance_b_private, &witness_b),
     ] {
         assert!(
@@ -705,14 +765,10 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
             path(&witness_b),
             "--witness",
             path(&witness_a),
-            "--trusted-witness-id",
-            "independent-a",
-            "--trusted-witness-id",
-            "independent-b",
-            "--trusted-witness-public-key",
-            path(&governance_a_public),
-            "--trusted-witness-public-key",
-            path(&governance_b_public),
+            "--witness-trust-state",
+            path(&witness_trust_a_rotated),
+            "--witness-trust-state",
+            path(&witness_trust_b),
             "--minimum-witnesses",
             "2",
             "--evaluated-at-unix",
@@ -746,6 +802,14 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
             "validate-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum",
             &witness_quorum,
         ),
+        (
+            "validate-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-trust-state",
+            &witness_trust_a_rotated,
+        ),
+        (
+            "validate-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-key-rotation",
+            &witness_rotation,
+        ),
     ] {
         assert!(run(&[command, path(input)]).status.success());
     }
@@ -760,14 +824,10 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
             path(&witness_a),
             "--witness",
             path(&witness_b),
-            "--trusted-witness-id",
-            "independent-a",
-            "--trusted-witness-id",
-            "independent-b",
-            "--trusted-witness-public-key",
-            path(&governance_a_public),
-            "--trusted-witness-public-key",
-            path(&governance_b_public),
+            "--witness-trust-state",
+            path(&witness_trust_a_rotated),
+            "--witness-trust-state",
+            path(&witness_trust_b),
             "--minimum-witnesses",
             "3",
             "--evaluated-at-unix",

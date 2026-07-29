@@ -2344,8 +2344,11 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             json!({
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "history", "checkpoint", "witnesses", "trusted_witness_ids",
-                    "trusted_witness_public_keys", "evaluated_at_unix", "output"
+                    "history", "checkpoint", "witnesses", "evaluated_at_unix", "output"
+                ],
+                "oneOf": [
+                    {"required": ["trusted_witness_ids", "trusted_witness_public_keys"]},
+                    {"required": ["witness_trust_states"]}
                 ],
                 "properties": {
                     "history": {"type": "string"},
@@ -2362,12 +2365,89 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "type": "array", "minItems": 1, "maxItems": 100,
                         "items": {"type": "string"}
                     },
+                    "witness_trust_states": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
                     "minimum_witnesses": {
                         "type": "integer", "minimum": 2, "maximum": 100,
                         "default": 2
                     },
                     "evaluated_at_unix": {"type": "integer", "minimum": 0},
                     "require_quorum": {"type": "boolean", "default": false},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "init_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_trust",
+            "Initialize registry history witness trust",
+            "Pin one witness identity to its initial Ed25519 public key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["witness_id", "public_key", "output"],
+                "properties": {
+                    "witness_id": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation",
+            "Sign registry history witness key rotation",
+            "Require both current-key authorization and successor-key possession for one exact next generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "old_private_key", "new_private_key",
+                    "rotated_at_unix", "output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation",
+            "Apply registry history witness key rotation",
+            "Verify both signatures and chain continuity before atomically advancing trust and exporting the key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "rotation", "output", "public_key_output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "public_key_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "export_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key",
+            "Export registry history witness key",
+            "Validate a witness trust state and export its current public key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
                     "output": {"type": "string"}
                 }
             }),
@@ -3280,6 +3360,26 @@ fn call_tool(
             verify_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witnesses(
                 arguments,
                 cancellation,
+            )?
+        }
+        "init_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_trust" => {
+            init_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_trust(
+                arguments, cancellation,
+            )?
+        }
+        "sign_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation" => {
+            sign_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                arguments, cancellation,
+            )?
+        }
+        "apply_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation" => {
+            apply_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                arguments, cancellation,
+            )?
+        }
+        "export_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key" => {
+            export_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key(
+                arguments, cancellation,
             )?
         }
         "verify_policy_lifecycle_public_log_gossip_quorum" => {
@@ -6684,6 +6784,7 @@ fn verify_policy_lifecycle_public_log_gossip_organization_registry_history_check
             "witnesses",
             "trusted_witness_ids",
             "trusted_witness_public_keys",
+            "witness_trust_states",
             "minimum_witnesses",
             "evaluated_at_unix",
             "require_quorum",
@@ -6691,11 +6792,13 @@ fn verify_policy_lifecycle_public_log_gossip_organization_registry_history_check
         ],
     )?;
     let witnesses = required_string_array(&arguments, "witnesses", false)?;
-    let trusted_ids = required_string_array(&arguments, "trusted_witness_ids", false)?;
-    let trusted_keys = required_string_array(&arguments, "trusted_witness_public_keys", false)?;
-    if trusted_ids.len() != trusted_keys.len() {
+    let trusted_ids = required_string_array(&arguments, "trusted_witness_ids", true)?;
+    let trusted_keys = required_string_array(&arguments, "trusted_witness_public_keys", true)?;
+    let trust_states = required_string_array(&arguments, "witness_trust_states", true)?;
+    let direct = !trusted_ids.is_empty() || !trusted_keys.is_empty();
+    if direct == !trust_states.is_empty() || (direct && trusted_ids.len() != trusted_keys.len()) {
         return Err(json!({
-            "detail": "trusted_witness_ids and trusted_witness_public_keys counts must match"
+            "detail": "supply exactly one paired direct or witness-trust-state key source"
         }));
     }
     let evaluated_at_unix = arguments
@@ -6723,11 +6826,17 @@ fn verify_policy_lifecycle_public_log_gossip_organization_registry_history_check
     for witness in witnesses {
         command.extend(["--witness".into(), witness]);
     }
-    for id in trusted_ids {
-        command.extend(["--trusted-witness-id".into(), id]);
-    }
-    for key in trusted_keys {
-        command.extend(["--trusted-witness-public-key".into(), key]);
+    if direct {
+        for id in trusted_ids {
+            command.extend(["--trusted-witness-id".into(), id]);
+        }
+        for key in trusted_keys {
+            command.extend(["--trusted-witness-public-key".into(), key]);
+        }
+    } else {
+        for state in trust_states {
+            command.extend(["--witness-trust-state".into(), state]);
+        }
     }
     command.extend([
         "--minimum-witnesses".into(),
@@ -6748,6 +6857,117 @@ fn verify_policy_lifecycle_public_log_gossip_organization_registry_history_check
         execution,
         json!({"output": output, "quorum": quorum}),
     ))
+}
+
+fn init_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_trust(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["witness_id", "public_key", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "init-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-trust"
+            .into(),
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": trust_state}),
+    ))
+}
+
+fn sign_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let rotated_at = arguments
+        .get("rotated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "rotated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+        "--rotated-at-unix".into(),
+        rotated_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["trust_state", "rotation", "output", "public_key_output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let key_output = required_string(&arguments, "public_key_output")?;
+    let command = vec![
+        "apply-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+        "--public-key-output".into(),
+        key_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "public_key_output": key_output,
+            "trust_state": trust_state
+        }),
+    ))
+}
+
+fn export_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["trust_state", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "export-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-key"
+            .into(),
+        required_string(&arguments, "trust_state")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    Ok(execution_result(execution, json!({"output": output})))
 }
 
 fn verify_policy_lifecycle_public_log_gossip_quorum(
@@ -8175,7 +8395,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 91);
+        assert_eq!(tools.len(), 95);
         let named = |name: &str| {
             tools
                 .iter()
@@ -8583,6 +8803,18 @@ mod tests {
                 "verify_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witnesses"
             )["inputSchema"]["properties"]["minimum_witnesses"]["minimum"],
             2
+        );
+        assert_eq!(
+            named(
+                "sign_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation"
+            )["inputSchema"]["properties"]["rotated_at_unix"]["minimum"],
+            0
+        );
+        assert_eq!(
+            named(
+                "apply_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation"
+            )["execution"]["taskSupport"],
+            "forbidden"
         );
         assert_eq!(
             named("request_remote_policy_lifecycle_public_log_gossip")["annotations"]["openWorldHint"],

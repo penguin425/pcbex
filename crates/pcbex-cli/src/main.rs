@@ -220,17 +220,26 @@ use policy_lifecycle_gossip_registry::{
 };
 use policy_lifecycle_gossip_registry_checkpoint::{
     accept_policy_lifecycle_log_gossip_organization_registry_history_checkpoint,
+    apply_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation,
+    new_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state,
     parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report,
+    parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness,
+    parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation,
     policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state_json_schema,
     policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema,
+    policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state_json_schema,
+    policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key,
     sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint,
     sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness,
+    sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation,
     signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_json_schema,
     signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_json_schema,
+    signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation_json_schema,
     verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses,
+    verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states,
 };
 use policy_lifecycle_gossip_trust::{
     apply_policy_lifecycle_log_gossip_observer_key_rotation,
@@ -1247,6 +1256,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed rotatable registry-history witness trust-state JSON Schema.
+    PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a registry-history witness trust state.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed dual-signed registry-history witness rotation JSON Schema.
+    SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a registry-history witness key rotation.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed registry-history checkpoint witness-quorum JSON Schema.
     PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
         #[arg(short, long)]
@@ -2257,6 +2288,42 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Pin the initial public key for one registry-history checkpoint witness.
+    InitPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrust {
+        #[arg(long)]
+        witness_id: String,
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Create an old-and-new-key signed one-generation witness rotation.
+    SignPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+        trust_state: PathBuf,
+        #[arg(long)]
+        old_private_key: PathBuf,
+        #[arg(long)]
+        new_private_key: PathBuf,
+        #[arg(long)]
+        rotated_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify a witness key rotation and atomically advance its trust state.
+    ApplyPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+        trust_state: PathBuf,
+        rotation: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        public_key_output: PathBuf,
+    },
+    /// Export the currently trusted registry-history witness public key.
+    ExportPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKey {
+        trust_state: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Independently audit and witness one exact registry-history checkpoint.
     SignPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness {
         history: PathBuf,
@@ -2276,10 +2343,15 @@ enum Command {
         checkpoint: PathBuf,
         #[arg(long = "witness", required = true)]
         witnesses: Vec<PathBuf>,
-        #[arg(long = "trusted-witness-id", required = true)]
+        #[arg(long = "trusted-witness-id")]
         trusted_witness_ids: Vec<String>,
-        #[arg(long = "trusted-witness-public-key", required = true)]
+        #[arg(long = "trusted-witness-public-key")]
         trusted_witness_public_keys: Vec<PathBuf>,
+        #[arg(
+            long = "witness-trust-state",
+            conflicts_with_all = ["trusted_witness_ids", "trusted_witness_public_keys"]
+        )]
+        witness_trust_states: Vec<PathBuf>,
         #[arg(long, default_value_t = 2)]
         minimum_witnesses: u32,
         #[arg(long)]
@@ -4456,6 +4528,48 @@ fn run_cli() -> Result<()> {
                 )
                 .map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(witness)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustStateSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state =
+                parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotationSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let rotation =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(rotation)?, output.as_ref())?;
         }
         Command::PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
             output,
@@ -7733,6 +7847,109 @@ fn run_cli() -> Result<()> {
                 trust_state.accepted_generation
             );
         }
+        Command::InitPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrust {
+            witness_id,
+            public_key,
+            output,
+        } => {
+            let public_key = read_hex_key(&public_key, "registry history witness public key")?;
+            let state =
+                new_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                    &witness_id,
+                    &public_key,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+        }
+        Command::SignPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+            trust_state,
+            old_private_key,
+            new_private_key,
+            rotated_at_unix,
+            output,
+        } => {
+            let source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state =
+                parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let old_key = read_hex_key(&old_private_key, "old registry history witness key")?;
+            let new_key = read_hex_key(&new_private_key, "new registry history witness key")?;
+            let rotation =
+                sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                    &state,
+                    &old_key,
+                    &new_key,
+                    rotated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&rotation)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+        }
+        Command::ApplyPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+            trust_state,
+            rotation,
+            output,
+            public_key_output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(output.as_path()),
+                    Some(public_key_output.as_path()),
+                    Some(trust_state.as_path()),
+                    Some(rotation.as_path()),
+                ],
+                "registry history witness key rotation",
+            )?;
+            let state_source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state =
+                parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                    &state_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let rotation_source = fs::read_to_string(&rotation)
+                .with_context(|| format!("reading {}", rotation.display()))?;
+            let rotation =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                    &rotation_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let next =
+                apply_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                    &state,
+                    &rotation,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let state_document = serde_json::to_string_pretty(&next)? + "\n";
+            let key_document = format!("{}\n", next.current_public_key);
+            write_new_file_set(&[
+                (output.as_path(), state_document.as_str()),
+                (public_key_output.as_path(), key_document.as_str()),
+            ])?;
+        }
+        Command::ExportPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKey {
+            trust_state,
+            output,
+        } => {
+            let source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state =
+                parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let key =
+                policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+                    &state,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = format!("{}\n", hex_encode(&key));
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+        }
         Command::SignPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness {
             history,
             checkpoint,
@@ -7785,12 +8002,18 @@ fn run_cli() -> Result<()> {
             witnesses,
             trusted_witness_ids,
             trusted_witness_public_keys,
+            witness_trust_states,
             minimum_witnesses,
             evaluated_at_unix,
             require_quorum,
             output,
         } => {
-            if trusted_witness_ids.len() != trusted_witness_public_keys.len() {
+            let direct_trust =
+                !trusted_witness_ids.is_empty() || !trusted_witness_public_keys.is_empty();
+            if direct_trust == !witness_trust_states.is_empty() {
+                bail!("supply exactly one direct or trust-state witness key source");
+            }
+            if direct_trust && trusted_witness_ids.len() != trusted_witness_public_keys.len() {
                 bail!(
                     "--trusted-witness-id and --trusted-witness-public-key counts must match"
                 );
@@ -7826,7 +8049,18 @@ fn run_cli() -> Result<()> {
                         .map(|key| (id, key))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let report =
+            let trust_states = witness_trust_states
+                .iter()
+                .map(|path| -> Result<_> {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                        &source,
+                    )
+                    .map_err(anyhow::Error::msg)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let report = if direct_trust {
                 verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses(
                     &history,
                     &checkpoint,
@@ -7835,7 +8069,17 @@ fn run_cli() -> Result<()> {
                     minimum_witnesses,
                     evaluated_at_unix,
                 )
-                .map_err(anyhow::Error::msg)?;
+            } else {
+                verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states(
+                    &history,
+                    &checkpoint,
+                    &witnesses,
+                    &trust_states,
+                    minimum_witnesses,
+                    evaluated_at_unix,
+                )
+            }
+            .map_err(anyhow::Error::msg)?;
             if require_quorum && !report.quorum_met {
                 bail!(
                     "registry history checkpoint witness quorum did not meet the required threshold"
