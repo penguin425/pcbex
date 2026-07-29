@@ -1266,6 +1266,44 @@ task-forbidden and quorum verification as an optional task. The Action accepts
 `policy-lifecycle-witness-*`, publishes the report and quorum result, and can
 fail closed with `fail-on-policy-lifecycle-witness-quorum: "true"`.
 
+Remote security domains can produce those observations without placing witness
+private keys on CI runners:
+
+```sh
+pcbex request-policy-lifecycle-checkpoint-witness \
+  policy-lifecycle.trust.json \
+  --endpoint https://witness-a.example/v1/lifecycle \
+  --public-key witness-a.pub \
+  --bearer-token-env PCBEX_LIFECYCLE_WITNESS_TOKEN \
+  --timeout-seconds 30 \
+  --evaluated-at-unix 1785301301 \
+  --output witness-a.json \
+  --receipt-output witness-a.receipt.json
+```
+
+The request includes the complete accepted trust state, including its signed
+checkpoint, so the remote service can independently validate the lifecycle
+root instead of trusting client-supplied digest fields. The client permits
+HTTPS only, refuses redirects, URL credentials, and query strings, applies a
+1–600 second end-to-end timeout, and limits the response to 1 MiB of
+`application/json`. The Bearer token is read from the named environment
+variable and is excluded from arguments and receipts. Before either output is
+created, the response must strictly deserialize, match the exact accepted
+checkpoint, use the separately trusted key, have a fresh observation time, and
+pass Ed25519 verification. The closed receipt binds the
+endpoint, checkpoint, request and response digests, response size, evaluation
+time, witness identity, key, and observation time; emit its schema with
+`remote-policy-lifecycle-witness-receipt-schema`.
+
+MCP exposes the same operation as the open-world, task-forbidden
+`request_remote_policy_lifecycle_checkpoint_witness` tool. The Action accepts
+up to ten paired endpoints and trusted keys through
+`policy-lifecycle-remote-witness-endpoints` and
+`policy-lifecycle-remote-witness-public-key-files`, retains every verified
+response and receipt, then includes all remote results in the existing quorum
+gate. An optional `policy-lifecycle-remote-witness-bearer-token` remains an
+environment-only secret.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1293,7 +1331,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.352.0
+    uses: penguin425/pcbex@v1.353.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2530,7 +2568,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.352.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.353.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

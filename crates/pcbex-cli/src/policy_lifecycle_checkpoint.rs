@@ -198,45 +198,13 @@ pub fn verify_policy_lifecycle_checkpoint_witnesses(
     let mut witness_ids = BTreeSet::new();
     let mut witness_public_keys = BTreeSet::new();
     for (witness, trusted_key) in witnesses.iter().zip(trusted_public_keys) {
-        validate_signed_policy_lifecycle_checkpoint_witness(witness)?;
-        if witness.checkpoint_sha256 != state.checkpoint_sha256
-            || witness.policy_pack_id != state.policy_pack_id
-            || witness.generation != state.accepted_generation
-            || witness.head_sha256 != state.head_sha256
-        {
-            return Err("policy lifecycle witness is bound to a different checkpoint".into());
-        }
+        verify_policy_lifecycle_checkpoint_witness(state, witness, trusted_key, evaluated_at_unix)?;
         let trusted_key_hex = hex_encode(trusted_key);
-        if witness.public_key != trusted_key_hex {
-            return Err("policy lifecycle witness public key is not trusted".into());
-        }
-        if witness.observed_at_unix < state.issued_at_unix
-            || evaluated_at_unix < witness.observed_at_unix
-            || evaluated_at_unix - witness.observed_at_unix > MAXIMUM_WITNESS_AGE_SECONDS
-        {
-            return Err("policy lifecycle witness is outside the 24-hour evaluation window".into());
-        }
         if !witness_ids.insert(witness.witness_id.clone())
             || !witness_public_keys.insert(trusted_key_hex)
         {
             return Err("policy lifecycle witnesses must use distinct identities and keys".into());
         }
-        let payload = witness_payload(
-            &witness.checkpoint_sha256,
-            &witness.policy_pack_id,
-            witness.generation,
-            &witness.head_sha256,
-            &witness.witness_id,
-            witness.observed_at_unix,
-        )?;
-        let signature = Signature::from_bytes(&decode_hex_array::<64>(
-            &witness.signature,
-            "policy lifecycle witness signature",
-        )?);
-        VerifyingKey::from_bytes(trusted_key)
-            .map_err(|error| format!("invalid policy lifecycle witness key: {error}"))?
-            .verify_strict(&payload, &signature)
-            .map_err(|_| "policy lifecycle witness signature verification failed".to_string())?;
     }
     let valid_witnesses = u32::try_from(witnesses.len())
         .map_err(|_| "policy lifecycle witness count overflow".to_string())?;
@@ -260,6 +228,51 @@ pub fn verify_policy_lifecycle_checkpoint_witnesses(
         witness_public_keys: witness_public_keys.into_iter().collect(),
         quorum_met,
     })
+}
+
+pub fn verify_policy_lifecycle_checkpoint_witness(
+    state: &PolicyLifecycleTrustState,
+    witness: &SignedPolicyLifecycleCheckpointWitness,
+    trusted_public_key: &[u8; 32],
+    evaluated_at_unix: u64,
+) -> Result<(), String> {
+    validate_policy_lifecycle_trust_state(state)?;
+    validate_signed_policy_lifecycle_checkpoint_witness(witness)?;
+    if evaluated_at_unix < state.issued_at_unix {
+        return Err("policy lifecycle witness evaluation predates the checkpoint".into());
+    }
+    if witness.checkpoint_sha256 != state.checkpoint_sha256
+        || witness.policy_pack_id != state.policy_pack_id
+        || witness.generation != state.accepted_generation
+        || witness.head_sha256 != state.head_sha256
+    {
+        return Err("policy lifecycle witness is bound to a different checkpoint".into());
+    }
+    if witness.public_key != hex_encode(trusted_public_key) {
+        return Err("policy lifecycle witness public key is not trusted".into());
+    }
+    if witness.observed_at_unix < state.issued_at_unix
+        || evaluated_at_unix < witness.observed_at_unix
+        || evaluated_at_unix - witness.observed_at_unix > MAXIMUM_WITNESS_AGE_SECONDS
+    {
+        return Err("policy lifecycle witness is outside the 24-hour evaluation window".into());
+    }
+    let payload = witness_payload(
+        &witness.checkpoint_sha256,
+        &witness.policy_pack_id,
+        witness.generation,
+        &witness.head_sha256,
+        &witness.witness_id,
+        witness.observed_at_unix,
+    )?;
+    let signature = Signature::from_bytes(&decode_hex_array::<64>(
+        &witness.signature,
+        "policy lifecycle witness signature",
+    )?);
+    VerifyingKey::from_bytes(trusted_public_key)
+        .map_err(|error| format!("invalid policy lifecycle witness key: {error}"))?
+        .verify_strict(&payload, &signature)
+        .map_err(|_| "policy lifecycle witness signature verification failed".to_string())
 }
 
 pub fn sign_policy_lifecycle_key_rotation(
@@ -1083,6 +1096,12 @@ mod tests {
     use crate::{
         policy_lifecycle::append_policy_lifecycle_event,
         policy_remediation::tests::lifecycle_test_states,
+        remote_policy_lifecycle_witness::request_remote_policy_lifecycle_witness,
+    };
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
     };
 
     fn ledgers() -> (PolicyLifecycleLedger, PolicyLifecycleLedger) {
@@ -1432,5 +1451,114 @@ mod tests {
                 .unwrap_err()
                 .contains("signature verification failed")
         );
+    }
+
+    #[test]
+    fn retrieves_and_verifies_a_bounded_remote_lifecycle_witness() {
+        let (generation_one, _) = ledgers();
+        let checkpoint_key = [71_u8; 32];
+        let checkpoint_public = SigningKey::from_bytes(&checkpoint_key)
+            .verifying_key()
+            .to_bytes();
+        let checkpoint = sign_policy_lifecycle_checkpoint(
+            &generation_one,
+            1_000,
+            "release-root",
+            &checkpoint_key,
+        )
+        .unwrap();
+        let state = verify_policy_lifecycle_checkpoint(
+            &generation_one,
+            &checkpoint,
+            &checkpoint_public,
+            None,
+            None,
+            1_001,
+        )
+        .unwrap();
+        let witness_key = [72_u8; 32];
+        let witness_public = SigningKey::from_bytes(&witness_key)
+            .verifying_key()
+            .to_bytes();
+        let served_state = state.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!(
+            "http://{}/v1/lifecycle-witness",
+            listener.local_addr().unwrap()
+        );
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            let header_end = loop {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+                if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    break index + 4;
+                }
+            };
+            let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+            assert!(headers.starts_with("POST /v1/lifecycle-witness HTTP/1.1\r\n"));
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .map(|value| value.parse::<usize>().unwrap())
+                })
+                .unwrap();
+            while request.len() - header_end < content_length {
+                let count = stream.read(&mut buffer).unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+            }
+            let body: Value =
+                serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+            assert_eq!(
+                body["protocol"],
+                "pcbex-policy-lifecycle-checkpoint-witness-v1"
+            );
+            assert_eq!(
+                body["trust_state"]["checkpoint_sha256"],
+                served_state.checkpoint_sha256
+            );
+            assert_eq!(body["trust_state"]["accepted_generation"], 1);
+            assert_eq!(
+                body["trust_state"]["signed_checkpoint"]["head_sha256"],
+                served_state.head_sha256
+            );
+            let witness = sign_policy_lifecycle_checkpoint_witness(
+                &served_state,
+                "remote-lifecycle-a",
+                1_010,
+                &witness_key,
+            )
+            .unwrap();
+            let response = serde_json::to_vec(&witness).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                response.len()
+            )
+            .unwrap();
+            stream.write_all(&response).unwrap();
+        });
+        let (witness, receipt) = request_remote_policy_lifecycle_witness(
+            &state,
+            &endpoint,
+            &witness_public,
+            None,
+            5,
+            1_011,
+            true,
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(witness.witness_id, "remote-lifecycle-a");
+        assert_eq!(receipt.checkpoint_sha256, state.checkpoint_sha256);
+        assert_eq!(receipt.witness_public_key, witness.public_key);
+        assert_eq!(receipt.evaluated_at_unix, 1_011);
+        assert!(receipt.verified);
     }
 }

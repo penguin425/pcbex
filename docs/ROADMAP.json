@@ -279,6 +279,11 @@
     {
       "id": "independent-lifecycle-checkpoint-witnesses",
       "release": "v1.352.0",
+      "status": "released"
+    },
+    {
+      "id": "remote-lifecycle-checkpoint-witnesses",
+      "release": "v1.353.0",
       "status": "current"
     }
   ]

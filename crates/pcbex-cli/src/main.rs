@@ -89,6 +89,7 @@ mod policy_rollout;
 mod policy_rollout_approval;
 mod policy_suspension;
 mod remote_policy;
+mod remote_policy_lifecycle_witness;
 mod remote_witness;
 
 use canary_completion::{
@@ -182,6 +183,9 @@ use policy_suspension::{
     sign_policy_suspension_decision, signed_policy_suspension_decision_json_schema,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
+use remote_policy_lifecycle_witness::{
+    remote_policy_lifecycle_witness_receipt_json_schema, request_remote_policy_lifecycle_witness,
+};
 use remote_witness::{remote_witness_receipt_json_schema, request_remote_witness};
 
 #[derive(Parser)]
@@ -878,6 +882,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed remote lifecycle-witness transport receipt JSON Schema.
+    RemotePolicyLifecycleWitnessReceiptSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1438,6 +1447,29 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         require_quorum: bool,
+    },
+    /// Request and immediately verify a lifecycle witness from bounded HTTPS.
+    RequestPolicyLifecycleCheckpointWitness {
+        trust_state: CompactPath,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        public_key: CompactPath,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+        timeout_seconds: u64,
+        /// Explicit client evaluation time used to enforce witness freshness.
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        receipt_output: CompactPath,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -3138,6 +3170,12 @@ fn main() -> Result<()> {
             let report = parse_policy_lifecycle_witness_quorum_report(&source)
                 .map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
+        Command::RemotePolicyLifecycleWitnessReceiptSchema { output } => {
+            write_or_print_json(
+                &remote_policy_lifecycle_witness_receipt_json_schema(),
+                output.as_ref(),
+            )?;
         }
         Command::RecordManufacturingFeedback {
             declaration,
@@ -4913,6 +4951,54 @@ fn main() -> Result<()> {
             if require_quorum && !report.quorum_met {
                 bail!("policy lifecycle checkpoint witness quorum was not met");
             }
+        }
+        Command::RequestPolicyLifecycleCheckpointWitness {
+            trust_state,
+            endpoint,
+            public_key,
+            bearer_token_env,
+            timeout_seconds,
+            evaluated_at_unix,
+            output,
+            receipt_output,
+            allow_http_loopback,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(trust_state.0.as_ref()),
+                    Some(public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                    Some(receipt_output.0.as_ref()),
+                ],
+                "remote policy lifecycle witness",
+            )?;
+            let source = fs::read_to_string(trust_state.0.as_ref())
+                .with_context(|| format!("reading {}", trust_state.0.display()))?;
+            let state = parse_policy_lifecycle_trust_state(&source).map_err(anyhow::Error::msg)?;
+            let trusted = read_hex_key(
+                public_key.0.as_ref(),
+                "trusted remote policy lifecycle witness public key",
+            )?;
+            let (witness, receipt) = request_remote_policy_lifecycle_witness(
+                &state,
+                &endpoint,
+                &trusted,
+                bearer_token_env.as_deref(),
+                timeout_seconds,
+                evaluated_at_unix,
+                allow_http_loopback,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let witness_json = serde_json::to_string_pretty(&witness)? + "\n";
+            let receipt_json = serde_json::to_string_pretty(&receipt)? + "\n";
+            write_new_file_set(&[
+                (output.0.as_ref(), witness_json.as_str()),
+                (receipt_output.0.as_ref(), receipt_json.as_str()),
+            ])?;
+            eprintln!(
+                "verified remote policy lifecycle witness {} for generation {}",
+                witness.witness_id, witness.generation
+            );
         }
         Command::RecordSimulationEvidence {
             declaration,
