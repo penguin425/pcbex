@@ -70,6 +70,8 @@ write_output rollback-incident-closure ""
 write_output rollback-incident-status ""
 write_output policy-incident-ledger ""
 write_output policy-incident-suspension-review-required ""
+write_output policy-suspension-state ""
+write_output policy-suspension-status ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -480,6 +482,11 @@ if [[ -n "${PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX:-}" ]]; then
   if [[ -n "${PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE:-}" ]]; then
     deployment_arguments+=(--baseline-state "$PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE")
   fi
+  while IFS= read -r suspension_state; do
+    if [[ -n "$suspension_state" ]]; then
+      deployment_arguments+=(--suspension-state "$suspension_state")
+    fi
+  done <<< "${PCBEX_POLICY_SUSPENSION_STATE_FILES:-}"
   while IFS= read -r decision; do
     if [[ -n "$decision" ]]; then
       deployment_arguments+=(--decision "$decision")
@@ -731,6 +738,43 @@ if [[ "${PCBEX_RECORD_POLICY_INCIDENT:-false}" == "true" ]]; then
   {
     printf '\n'
     cat "$policy_incident_ledger_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+policy_suspension_state=""
+policy_suspension_status=""
+if [[ -n "${PCBEX_POLICY_SUSPENSION_RECORDED_AT_UNIX:-}" ]]; then
+  suspension_ledger="${PCBEX_POLICY_SUSPENSION_LEDGER:-$policy_incident_ledger}"
+  suspension_policy="${PCBEX_POLICY_SUSPENSION_POLICY_PACK:-$effective_policy_pack}"
+  if [[ -z "$suspension_ledger" || -z "$suspension_policy" || -z "${PCBEX_POLICY_SUSPENSION_FAILED_REVISION:-}" || -z "${PCBEX_POLICY_SUSPENSION_FAILED_POLICY_PACK_SHA256:-}" || -z "${PCBEX_POLICY_SUSPENSION_DECISION_FILES:-}" ]]; then
+    echo "policy suspension requires a repeated-incident ledger, trust policy, failed revision/digest, and signed decisions" >&2
+    exit 2
+  fi
+  policy_suspension_state="${artifact_dir}/policy-suspension-state.json"
+  policy_suspension_summary="${artifact_dir}/policy-suspension-state.md"
+  suspension_arguments=(apply-policy-suspension-decision \
+    "$suspension_ledger" \
+    --policy-pack "$suspension_policy" \
+    --failed-revision "$PCBEX_POLICY_SUSPENSION_FAILED_REVISION" \
+    --failed-policy-pack-sha256 "$PCBEX_POLICY_SUSPENSION_FAILED_POLICY_PACK_SHA256" \
+    --minimum-decisions "${PCBEX_POLICY_SUSPENSION_MINIMUM_DECISIONS:-2}" \
+    --recorded-at-unix "$PCBEX_POLICY_SUSPENSION_RECORDED_AT_UNIX" \
+    --output "$policy_suspension_state" \
+    --summary-output "$policy_suspension_summary")
+  while IFS= read -r decision; do
+    if [[ -n "$decision" ]]; then
+      suspension_arguments+=(--decision "$decision")
+    fi
+  done <<< "${PCBEX_POLICY_SUSPENSION_DECISION_FILES:-}"
+  "$PCBEX_BINARY" "${suspension_arguments[@]}"
+  policy_suspension_status="$(
+    python3 -c \
+      'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' \
+      "$policy_suspension_state"
+  )"
+  {
+    printf '\n'
+    cat "$policy_suspension_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -1150,6 +1194,8 @@ write_output rollback-incident-closure "$rollback_incident_closure"
 write_output rollback-incident-status "$rollback_incident_status"
 write_output policy-incident-ledger "$policy_incident_ledger"
 write_output policy-incident-suspension-review-required "$policy_incident_suspension_review_required"
+write_output policy-suspension-state "$policy_suspension_state"
+write_output policy-suspension-status "$policy_suspension_status"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

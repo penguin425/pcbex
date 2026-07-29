@@ -518,6 +518,61 @@ fn entry_sha256(entry: &PolicyIncidentEntry) -> Result<String, String> {
     )
 }
 
+#[cfg(test)]
+pub(crate) fn repeated_incident_test_ledger() -> PolicyIncidentLedger {
+    repeated_incident_test_ledger_for_digest(std::iter::repeat_n('3', 64).collect())
+}
+
+#[cfg(test)]
+pub(crate) fn repeated_incident_test_ledger_for_digest(
+    failed_policy_pack_sha256: String,
+) -> PolicyIncidentLedger {
+    fn digest(byte: char) -> String {
+        std::iter::repeat_n(byte, 64).collect()
+    }
+    fn entry(
+        sequence: u64,
+        previous: Option<String>,
+        offset: u64,
+        failed_policy_pack_sha256: &str,
+    ) -> PolicyIncidentEntry {
+        let mut entry = PolicyIncidentEntry {
+            schema_version: 1,
+            sequence,
+            previous_entry_sha256: previous,
+            closure_sha256: digest(if sequence == 1 { 'a' } else { 'b' }),
+            rollback_sha256: digest(if sequence == 1 { 'c' } else { 'd' }),
+            recovery_sha256: digest(if sequence == 1 { 'e' } else { 'f' }),
+            failed_verification_sha256: digest(if sequence == 1 { '1' } else { '2' }),
+            policy_pack_id: "acme-production-v1".into(),
+            failed_revision: 3,
+            failed_policy_pack_sha256: failed_policy_pack_sha256.into(),
+            restored_revision: 2,
+            restored_policy_pack_sha256: digest('4'),
+            detected_at_unix: offset,
+            rollback_applied_at_unix: offset + 2,
+            recovery_verified_at_unix: offset + 5,
+            closed_at_unix: offset + 8,
+            time_to_rollback_seconds: 2,
+            time_to_recovery_seconds: 5,
+            time_to_close_seconds: 8,
+            ticket: format!("HW-{sequence}"),
+            operator_id: "incident-operator".into(),
+            entry_sha256: String::new(),
+        };
+        entry.entry_sha256 = entry_sha256(&entry).unwrap();
+        entry
+    }
+    let first = entry(1, None, 100, &failed_policy_pack_sha256);
+    let second = entry(
+        2,
+        Some(first.entry_sha256.clone()),
+        200,
+        &failed_policy_pack_sha256,
+    );
+    metrics("acme-production-v1".into(), 2, 2, vec![first, second]).unwrap()
+}
+
 fn normalized_sha256<T: Serialize>(value: &T, label: &str) -> Result<String, String> {
     let bytes = serde_json::to_vec(value)
         .map_err(|error| format!("serializing normalized {label}: {error}"))?;

@@ -308,6 +308,7 @@ impl McpServer {
                     | "verify_policy_rollback_recovery"
                     | "close_rollback_incident"
                     | "append_policy_incident_ledger"
+                    | "apply_policy_suspension_decision"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1040,6 +1041,10 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "type": "integer", "minimum": 2, "maximum": 100, "default": 2
                     },
                     "baseline_state": {"type": "string"},
+                    "suspension_states": {
+                        "type": "array", "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
                     "recorded_at_unix": {"type": "integer", "minimum": 0},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
@@ -1253,6 +1258,67 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
                     "require_no_suspension_review": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "sign_policy_suspension_decision",
+            "Sign policy suspension decision",
+            "Sign an explicit human suspend or continue decision bound to one repeated-incident candidate and the exact incident-ledger head.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "ledger", "failed_revision", "failed_policy_pack_sha256",
+                    "decision", "decided_at_unix", "private_key", "signer_id",
+                    "reason", "ticket", "output"
+                ],
+                "properties": {
+                    "ledger": {"type": "string"},
+                    "failed_revision": {"type": "integer", "minimum": 1},
+                    "failed_policy_pack_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "decision": {"enum": ["suspend", "continue"]},
+                    "decided_at_unix": {"type": "integer", "minimum": 0},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "ticket": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            Some("forbidden"),
+        ),
+        tool(
+            "apply_policy_suspension_decision",
+            "Apply policy suspension decision",
+            "Verify a unanimous dual-control human quorum over repeated incident evidence and retain an exact-digest promotion deny decision.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "ledger", "policy_pack", "failed_revision",
+                    "failed_policy_pack_sha256", "decisions",
+                    "recorded_at_unix", "output"
+                ],
+                "properties": {
+                    "ledger": {"type": "string"},
+                    "policy_pack": {"type": "string"},
+                    "failed_revision": {"type": "integer", "minimum": 1},
+                    "failed_policy_pack_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "decisions": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "minimum_decisions": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_suspended": {"type": "boolean", "default": false}
                 }
             }),
             false,
@@ -1876,6 +1942,12 @@ fn call_tool(
         }
         "close_rollback_incident" => close_rollback_incident(arguments, cancellation)?,
         "append_policy_incident_ledger" => append_policy_incident_ledger(arguments, cancellation)?,
+        "sign_policy_suspension_decision" => {
+            sign_policy_suspension_decision(arguments, cancellation)?
+        }
+        "apply_policy_suspension_decision" => {
+            apply_policy_suspension_decision(arguments, cancellation)?
+        }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2742,6 +2814,7 @@ fn advance_policy_deployment(
             "decisions",
             "minimum_decisions",
             "baseline_state",
+            "suspension_states",
             "recorded_at_unix",
             "output",
             "summary_output",
@@ -2787,6 +2860,21 @@ fn advance_policy_deployment(
         "--baseline-state",
         &mut command,
     )?;
+    if let Some(states) = arguments.get("suspension_states") {
+        let states = states
+            .as_array()
+            .ok_or_else(|| json!({"detail": "suspension_states must be an array"}))?;
+        if states.len() > 100 {
+            return Err(json!({"detail": "suspension_states cannot exceed 100 entries"}));
+        }
+        for state in states {
+            let state = state
+                .as_str()
+                .filter(|state| !state.is_empty())
+                .ok_or_else(|| json!({"detail": "suspension_states entries must be strings"}))?;
+            command.extend(["--suspension-state".into(), state.into()]);
+        }
+    }
     command.extend([
         "--recorded-at-unix".into(),
         recorded_at.to_string(),
@@ -3271,6 +3359,144 @@ fn append_policy_incident_ledger(
     Ok(execution_result(
         execution,
         json!({"output": output, "ledger": ledger}),
+    ))
+}
+
+fn sign_policy_suspension_decision(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "ledger",
+            "failed_revision",
+            "failed_policy_pack_sha256",
+            "decision",
+            "decided_at_unix",
+            "private_key",
+            "signer_id",
+            "reason",
+            "ticket",
+            "output",
+        ],
+    )?;
+    let revision = arguments
+        .get("failed_revision")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0 && *value <= u32::MAX as u64)
+        .ok_or_else(|| json!({"detail": "failed_revision must be a positive u32"}))?;
+    let decided_at = arguments
+        .get("decided_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "decided_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-policy-suspension-decision".into(),
+        required_string(&arguments, "ledger")?,
+        "--failed-revision".into(),
+        revision.to_string(),
+        "--failed-policy-pack-sha256".into(),
+        required_string(&arguments, "failed_policy_pack_sha256")?,
+        "--decision".into(),
+        required_string(&arguments, "decision")?,
+        "--decided-at-unix".into(),
+        decided_at.to_string(),
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--reason".into(),
+        required_string(&arguments, "reason")?,
+        "--ticket".into(),
+        required_string(&arguments, "ticket")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let decision = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "decision": decision}),
+    ))
+}
+
+fn apply_policy_suspension_decision(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "ledger",
+            "policy_pack",
+            "failed_revision",
+            "failed_policy_pack_sha256",
+            "decisions",
+            "minimum_decisions",
+            "recorded_at_unix",
+            "output",
+            "summary_output",
+            "require_suspended",
+        ],
+    )?;
+    let decisions = required_string_array(&arguments, "decisions", false)?;
+    if decisions.len() > 100 {
+        return Err(json!({"detail": "decisions cannot exceed 100 entries"}));
+    }
+    let revision = arguments
+        .get("failed_revision")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0 && *value <= u32::MAX as u64)
+        .ok_or_else(|| json!({"detail": "failed_revision must be a positive u32"}))?;
+    let recorded_at = arguments
+        .get("recorded_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "recorded_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "apply-policy-suspension-decision".into(),
+        required_string(&arguments, "ledger")?,
+        "--policy-pack".into(),
+        required_string(&arguments, "policy_pack")?,
+        "--failed-revision".into(),
+        revision.to_string(),
+        "--failed-policy-pack-sha256".into(),
+        required_string(&arguments, "failed_policy_pack_sha256")?,
+    ];
+    for decision in decisions {
+        command.extend(["--decision".into(), decision]);
+    }
+    if let Some(value) = arguments.get("minimum_decisions") {
+        let value = value
+            .as_u64()
+            .filter(|value| (2..=100).contains(value))
+            .ok_or_else(|| json!({"detail": "minimum_decisions must be 2 to 100"}))?;
+        command.extend(["--minimum-decisions".into(), value.to_string()]);
+    }
+    command.extend([
+        "--recorded-at-unix".into(),
+        recorded_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_suspended",
+        "--require-suspended",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "suspension": state}),
     ))
 }
 
@@ -4467,7 +4693,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 45);
+        assert_eq!(tools.len(), 47);
         let named = |name: &str| {
             tools
                 .iter()
@@ -4606,6 +4832,19 @@ mod tests {
         );
         assert_eq!(
             named("append_policy_incident_ledger")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("sign_policy_suspension_decision")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("apply_policy_suspension_decision")["inputSchema"]["properties"]["minimum_decisions"]
+                ["default"],
+            2
+        );
+        assert_eq!(
+            named("apply_policy_suspension_decision")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(

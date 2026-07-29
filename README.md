@@ -1067,6 +1067,42 @@ duration tampering, policy identity changes, and threshold changes fail
 closed. MCP exposes `append_policy_incident_ledger`; the Action can opt in with
 `record-policy-incident` and retain the resulting ledger as evidence.
 
+Resolve a repeated-incident candidate with a signed dual-control decision:
+
+```sh
+pcbex sign-policy-suspension-decision policy-incident-ledger.json \
+  --failed-revision 7 \
+  --failed-policy-pack-sha256 "$FAILED_POLICY_SHA256" \
+  --decision suspend \
+  --decided-at-unix 1785300000 \
+  --private-key reviewer-a.key \
+  --signer-id reviewer-a \
+  --reason "Repeated production clearance regression" \
+  --ticket HW-421 \
+  --output suspension-a.json
+
+pcbex apply-policy-suspension-decision policy-incident-ledger.json \
+  --policy-pack organization-policy.json \
+  --failed-revision 7 \
+  --failed-policy-pack-sha256 "$FAILED_POLICY_SHA256" \
+  --decision suspension-a.json \
+  --decision suspension-b.json \
+  --recorded-at-unix 1785300060 \
+  --output policy-suspension.json \
+  --require-suspended
+```
+
+Each Ed25519 signature binds the complete ledger digest and head, exact failed
+revision and policy digest, incident count, threshold, decision, reason, ticket,
+and review time. Applying a decision requires at least two distinct trusted
+human signers and keys, unanimous `suspend` or `continue` votes, and a bounded
+24-hour review window. The retained state embeds the original signatures so
+digest mutation cannot create a deny decision. `advance-policy-deployment`
+accepts repeatable `--suspension-state` evidence and rejects an exact suspended
+candidate digest before writing deployment state. Suspension is never
+automatic. MCP exposes signing and application tools; the Action accepts
+`policy-suspension-*` inputs and enforces the same promotion deny gate.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1094,7 +1130,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.346.0
+    uses: penguin425/pcbex@v1.347.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2331,7 +2367,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.346.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.347.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

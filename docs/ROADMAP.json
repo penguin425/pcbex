@@ -249,6 +249,11 @@
     {
       "id": "hash-chained-policy-incident-ledger",
       "release": "v1.346.0",
+      "status": "released"
+    },
+    {
+      "id": "signed-policy-suspension-decision",
+      "release": "v1.347.0",
       "status": "current"
     }
   ]

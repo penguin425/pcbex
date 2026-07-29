@@ -84,6 +84,7 @@ mod policy_recommendation;
 mod policy_rollback_recovery;
 mod policy_rollout;
 mod policy_rollout_approval;
+mod policy_suspension;
 mod remote_policy;
 mod remote_witness;
 
@@ -148,6 +149,12 @@ use policy_rollout_approval::{
     parse_signed_rollout_approval, render_canary_authorization_summary, sign_rollout_approval,
     signed_rollout_approval_json_schema, verify_rollout_approvals,
 };
+use policy_suspension::{
+    PolicySuspensionDecision, apply_policy_suspension_decision, enforce_policy_suspensions,
+    parse_policy_suspension_state, parse_signed_policy_suspension_decision,
+    policy_suspension_state_json_schema, render_policy_suspension_summary,
+    sign_policy_suspension_decision, signed_policy_suspension_decision_json_schema,
+};
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_witness::{remote_witness_receipt_json_schema, request_remote_witness};
 
@@ -193,6 +200,21 @@ enum HumanDecisionArg {
 enum CanaryCompletionDecisionArg {
     Promote,
     Rollback,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum PolicySuspensionDecisionArg {
+    Suspend,
+    Continue,
+}
+
+impl From<PolicySuspensionDecisionArg> for PolicySuspensionDecision {
+    fn from(value: PolicySuspensionDecisionArg) -> Self {
+        match value {
+            PolicySuspensionDecisionArg::Suspend => Self::Suspend,
+            PolicySuspensionDecisionArg::Continue => Self::Continue,
+        }
+    }
 }
 
 impl From<CanaryCompletionDecisionArg> for CanaryCompletionDecision {
@@ -709,6 +731,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed policy-suspension decision JSON Schema.
+    SignedPolicySuspensionDecisionSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed policy-suspension decision.
+    ValidatePolicySuspensionDecision {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed policy-suspension state JSON Schema.
+    PolicySuspensionStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a retained policy-suspension state.
+    ValidatePolicySuspensionState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -915,6 +959,9 @@ enum Command {
         /// Previously retained deployment state; required for rollback.
         #[arg(long)]
         baseline_state: Option<PathBuf>,
+        /// Retained suspension decisions that deny exact candidate digests.
+        #[arg(long = "suspension-state")]
+        suspension_states: Vec<PathBuf>,
         #[arg(long)]
         recorded_at_unix: u64,
         #[arg(short, long)]
@@ -1071,6 +1118,50 @@ enum Command {
         /// Fail after writing when repeated incidents require human suspension review.
         #[arg(long)]
         require_no_suspension_review: bool,
+    },
+    /// Sign a suspend/continue decision over one repeated-incident candidate.
+    SignPolicySuspensionDecision {
+        ledger: PathBuf,
+        #[arg(long)]
+        failed_revision: u32,
+        #[arg(long)]
+        failed_policy_pack_sha256: String,
+        #[arg(long, value_enum)]
+        decision: PolicySuspensionDecisionArg,
+        #[arg(long)]
+        decided_at_unix: u64,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Apply a trusted unanimous quorum and retain an exact-digest suspension state.
+    ApplyPolicySuspensionDecision {
+        ledger: PathBuf,
+        #[arg(long)]
+        policy_pack: PathBuf,
+        #[arg(long)]
+        failed_revision: u32,
+        #[arg(long)]
+        failed_policy_pack_sha256: String,
+        #[arg(long = "decision", required = true)]
+        decisions: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_decisions: u32,
+        #[arg(long)]
+        recorded_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        require_suspended: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2649,6 +2740,28 @@ fn main() -> Result<()> {
             let ledger = parse_policy_incident_ledger(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(ledger)?, output.as_ref())?;
         }
+        Command::SignedPolicySuspensionDecisionSchema { output } => {
+            write_or_print_json(
+                &signed_policy_suspension_decision_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicySuspensionDecision { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let decision =
+                parse_signed_policy_suspension_decision(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(decision)?, output.as_ref())?;
+        }
+        Command::PolicySuspensionStateSchema { output } => {
+            write_or_print_json(&policy_suspension_state_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicySuspensionState { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state = parse_policy_suspension_state(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -3298,6 +3411,7 @@ fn main() -> Result<()> {
             decisions,
             minimum_decisions,
             baseline_state,
+            suspension_states,
             recorded_at_unix,
             output,
             summary_output,
@@ -3324,6 +3438,18 @@ fn main() -> Result<()> {
                 parse_canary_authorization(&authorization_source).map_err(anyhow::Error::msg)?;
             let policy = load_policy_pack(&policy_pack)?.0;
             let candidate_policy = load_policy_pack(&candidate_policy_pack)?.0;
+            let suspension_states = suspension_states
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_suspension_state(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            enforce_policy_suspensions(&candidate_policy, &suspension_states)
+                .map_err(anyhow::Error::msg)?;
             let source_trust_state = load_policy_trust_state(&source_policy_trust_state)?;
             let candidate_trust_state = load_policy_trust_state(&candidate_policy_trust_state)?;
             let decisions = decisions
@@ -3913,6 +4039,95 @@ fn main() -> Result<()> {
             );
             if require_no_suspension_review && ledger.requires_human_suspension_review {
                 bail!("policy incident ledger requires human suspension review");
+            }
+        }
+        Command::SignPolicySuspensionDecision {
+            ledger,
+            failed_revision,
+            failed_policy_pack_sha256,
+            decision,
+            decided_at_unix,
+            private_key,
+            signer_id,
+            reason,
+            ticket,
+            output,
+        } => {
+            let ledger_source = fs::read_to_string(&ledger)
+                .with_context(|| format!("reading {}", ledger.display()))?;
+            let ledger =
+                parse_policy_incident_ledger(&ledger_source).map_err(anyhow::Error::msg)?;
+            let secret = read_secret_key(&private_key)?;
+            let signed = sign_policy_suspension_decision(
+                &ledger,
+                failed_revision,
+                &failed_policy_pack_sha256,
+                decision.into(),
+                decided_at_unix,
+                &reason,
+                &ticket,
+                &signer_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&signed)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!("signed policy suspension decision as {signer_id}");
+        }
+        Command::ApplyPolicySuspensionDecision {
+            ledger,
+            policy_pack,
+            failed_revision,
+            failed_policy_pack_sha256,
+            decisions,
+            minimum_decisions,
+            recorded_at_unix,
+            output,
+            summary_output,
+            require_suspended,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy suspension state",
+            )?;
+            if decisions.len() > 100 {
+                bail!("policy suspension accepts at most 100 decisions");
+            }
+            let ledger_source = fs::read_to_string(&ledger)
+                .with_context(|| format!("reading {}", ledger.display()))?;
+            let ledger =
+                parse_policy_incident_ledger(&ledger_source).map_err(anyhow::Error::msg)?;
+            let policy = load_policy_pack(&policy_pack)?.0;
+            let decisions = decisions
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_policy_suspension_decision(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let state = apply_policy_suspension_decision(
+                &ledger,
+                &policy,
+                failed_revision,
+                &failed_policy_pack_sha256,
+                &decisions,
+                minimum_decisions,
+                recorded_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            let summary = render_policy_suspension_summary(&state);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!("policy suspension decision retained: {}", state.status);
+            if require_suspended && !state.policy_suspended {
+                bail!("policy suspension quorum chose to continue under review");
             }
         }
         Command::RecordSimulationEvidence {
