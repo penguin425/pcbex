@@ -83,6 +83,8 @@ write_output policy-lifecycle-witness-quorum ""
 write_output policy-lifecycle-witness-quorum-met ""
 write_output policy-lifecycle-remote-witnesses ""
 write_output policy-lifecycle-remote-witness-receipts ""
+write_output policy-lifecycle-log-anchor-verification ""
+write_output policy-lifecycle-log-anchored ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -946,6 +948,34 @@ if ((lifecycle_checkpoint_inputs == 3)); then
   policy_lifecycle_checkpoint_accepted=true
 fi
 
+policy_lifecycle_log_anchor_verification=""
+policy_lifecycle_log_anchored=""
+lifecycle_anchor_inputs=0
+for value in \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PROOF:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_ID:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY:-}"; do
+  if [[ -n "$value" ]]; then ((lifecycle_anchor_inputs += 1)); fi
+done
+if ((lifecycle_anchor_inputs != 0 && lifecycle_anchor_inputs != 3)); then
+  echo "policy lifecycle anchor proof, trusted log id, and public key must be supplied together" >&2
+  exit 2
+fi
+if ((lifecycle_anchor_inputs == 3)); then
+  if ((lifecycle_checkpoint_inputs != 3)); then
+    echo "policy lifecycle public-log anchoring requires a configured verified checkpoint" >&2
+    exit 2
+  fi
+  policy_lifecycle_log_anchor_verification="${artifact_dir}/policy-lifecycle-log-anchor-verification.json"
+  "$PCBEX_BINARY" verify-policy-lifecycle-log-anchor \
+    "$PCBEX_POLICY_LIFECYCLE_CHECKPOINT" \
+    --proof "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PROOF" \
+    --log-id "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_ID" \
+    --public-key "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY" \
+    --output "$policy_lifecycle_log_anchor_verification"
+  policy_lifecycle_log_anchored=true
+fi
+
 policy_lifecycle_witness_quorum=""
 policy_lifecycle_witness_quorum_met=""
 policy_lifecycle_remote_witnesses=""
@@ -1536,6 +1566,8 @@ write_output policy-lifecycle-witness-quorum "$policy_lifecycle_witness_quorum"
 write_output policy-lifecycle-witness-quorum-met "$policy_lifecycle_witness_quorum_met"
 write_output policy-lifecycle-remote-witnesses "$policy_lifecycle_remote_witnesses"
 write_output policy-lifecycle-remote-witness-receipts "$policy_lifecycle_remote_witness_receipts"
+write_output policy-lifecycle-log-anchor-verification "$policy_lifecycle_log_anchor_verification"
+write_output policy-lifecycle-log-anchored "$policy_lifecycle_log_anchored"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

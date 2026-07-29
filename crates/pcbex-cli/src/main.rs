@@ -80,6 +80,7 @@ mod policy_deployment_rollback;
 mod policy_deployment_verification;
 mod policy_incident_ledger;
 mod policy_lifecycle;
+mod policy_lifecycle_anchor;
 mod policy_lifecycle_checkpoint;
 mod policy_pack;
 mod policy_recommendation;
@@ -129,6 +130,13 @@ use policy_lifecycle::{
     parse_policy_lifecycle_snapshot, policy_lifecycle_ledger_json_schema,
     policy_lifecycle_snapshot_json_schema, render_policy_lifecycle_summary,
     snapshot_policy_lifecycle,
+};
+use policy_lifecycle_anchor::{
+    MAX_POLICY_LIFECYCLE_ANCHOR_LEAVES, PolicyLifecycleLogAnchorProof,
+    create_policy_lifecycle_log_anchor_proof, parse_policy_lifecycle_log_anchor_proof,
+    policy_lifecycle_log_anchor_proof_json_schema,
+    policy_lifecycle_log_anchor_verification_report_json_schema,
+    policy_lifecycle_signed_checkpoint_sha256, verify_policy_lifecycle_log_anchor_proof,
 };
 use policy_lifecycle_checkpoint::{
     apply_policy_lifecycle_witness_key_rotation, new_policy_lifecycle_witness_trust_state,
@@ -916,6 +924,22 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed lifecycle public-log anchor proof JSON Schema.
+    PolicyLifecycleLogAnchorProofSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a lifecycle public-log anchor proof.
+    ValidatePolicyLifecycleLogAnchorProof {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed lifecycle public-log anchor verification JSON Schema.
+    PolicyLifecycleLogAnchorVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1550,6 +1574,37 @@ enum Command {
         /// Test-only escape hatch; permits only loopback HTTP.
         #[arg(long, hide = true)]
         allow_http_loopback: bool,
+    },
+    /// Build and sign a Merkle inclusion proof as a lifecycle public-log operator.
+    CreatePolicyLifecycleLogAnchor {
+        checkpoint: CompactPath,
+        /// Ordered checkpoints; repeat in exact public-log leaf order.
+        #[arg(long = "log-checkpoint", required = true)]
+        log_checkpoints: Vec<PathBuf>,
+        #[arg(long)]
+        leaf_index: u64,
+        #[arg(long)]
+        log_id: String,
+        #[arg(long)]
+        private_key: CompactPath,
+        /// Explicit tree-head observation time; defaults to the current clock.
+        #[arg(long)]
+        observed_at_unix: Option<u64>,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify lifecycle-checkpoint inclusion under a trusted signed tree head.
+    VerifyPolicyLifecycleLogAnchor {
+        checkpoint: CompactPath,
+        #[arg(long)]
+        proof: CompactPath,
+        /// Separately trusted public-log identity.
+        #[arg(long)]
+        log_id: String,
+        #[arg(long)]
+        public_key: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -3280,6 +3335,25 @@ fn main() -> Result<()> {
         Command::RemotePolicyLifecycleWitnessReceiptSchema { output } => {
             write_or_print_json(
                 &remote_policy_lifecycle_witness_receipt_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::PolicyLifecycleLogAnchorProofSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_anchor_proof_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogAnchorProof { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let proof =
+                parse_policy_lifecycle_log_anchor_proof(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(proof)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogAnchorVerificationReportSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_anchor_verification_report_json_schema(),
                 output.as_ref(),
             )?;
         }
@@ -5279,6 +5353,95 @@ fn main() -> Result<()> {
             eprintln!(
                 "verified remote policy lifecycle witness {} for generation {}",
                 witness.witness_id, witness.generation
+            );
+        }
+        Command::CreatePolicyLifecycleLogAnchor {
+            checkpoint,
+            log_checkpoints,
+            leaf_index,
+            log_id,
+            private_key,
+            observed_at_unix,
+            output,
+        } => {
+            if log_checkpoints.len() > MAX_POLICY_LIFECYCLE_ANCHOR_LEAVES {
+                bail!(
+                    "policy lifecycle public log cannot exceed {} checkpoints",
+                    MAX_POLICY_LIFECYCLE_ANCHOR_LEAVES
+                );
+            }
+            if output.0.as_ref() == checkpoint.0.as_ref()
+                || output.0.as_ref() == private_key.0.as_ref()
+                || log_checkpoints
+                    .iter()
+                    .any(|path| path.as_path() == output.0.as_ref())
+            {
+                bail!("policy lifecycle anchor output must use a separate path");
+            }
+            let checkpoint_source = fs::read_to_string(checkpoint.0.as_ref())
+                .with_context(|| format!("reading {}", checkpoint.0.display()))?;
+            let checkpoint = parse_signed_policy_lifecycle_checkpoint(&checkpoint_source)
+                .map_err(anyhow::Error::msg)?;
+            let checkpoint_digests = log_checkpoints
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    let checkpoint = parse_signed_policy_lifecycle_checkpoint(&source)
+                        .map_err(anyhow::Error::msg)?;
+                    policy_lifecycle_signed_checkpoint_sha256(&checkpoint)
+                        .map_err(anyhow::Error::msg)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let secret = read_hex_key(&private_key, "policy lifecycle public-log private key")?;
+            let proof = create_policy_lifecycle_log_anchor_proof(
+                &checkpoint,
+                &checkpoint_digests,
+                leaf_index,
+                &log_id,
+                observed_at_unix.unwrap_or(current_unix_seconds()?),
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&proof)?, false)?;
+            eprintln!(
+                "anchored policy lifecycle checkpoint at {}/{} in {}",
+                proof.leaf_index, proof.tree_head.tree_size, proof.tree_head.log_id
+            );
+        }
+        Command::VerifyPolicyLifecycleLogAnchor {
+            checkpoint,
+            proof,
+            log_id,
+            public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(checkpoint.0.as_ref()),
+                    Some(proof.0.as_ref()),
+                    Some(public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "policy lifecycle anchor verification",
+            )?;
+            let checkpoint_source = fs::read_to_string(checkpoint.0.as_ref())
+                .with_context(|| format!("reading {}", checkpoint.0.display()))?;
+            let checkpoint = parse_signed_policy_lifecycle_checkpoint(&checkpoint_source)
+                .map_err(anyhow::Error::msg)?;
+            let proof_source = fs::read_to_string(proof.0.as_ref())
+                .with_context(|| format!("reading {}", proof.0.display()))?;
+            let proof: PolicyLifecycleLogAnchorProof =
+                parse_policy_lifecycle_log_anchor_proof(&proof_source)
+                    .map_err(anyhow::Error::msg)?;
+            let trusted = read_hex_key(&public_key, "trusted policy lifecycle public-log key")?;
+            let report =
+                verify_policy_lifecycle_log_anchor_proof(&checkpoint, &proof, &log_id, &trusted)
+                    .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "verified policy lifecycle checkpoint anchor {}/{} in {}",
+                report.leaf_index, report.tree_size, report.log_id
             );
         }
         Command::RecordSimulationEvidence {
