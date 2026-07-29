@@ -1656,6 +1656,49 @@ one retained rotation with
 `policy-lifecycle-log-gossip-organization-registry-authority-key-rotation`
 before registry-bound quorum verification.
 
+Require a quorum of distinct authority identities for registry decisions:
+
+```sh
+pcbex sign-policy-lifecycle-log-gossip-organization-registry-governance \
+  gossip-registry.json \
+  --registry-authority-private-key gossip-registry-authority.key \
+  --minimum-approvals 2 \
+  --authority-id security --authority-public-key security.pub \
+  --authority-id hardware --authority-public-key hardware.pub \
+  --authority-id compliance --authority-public-key compliance.pub \
+  --issued-at-unix 1785302100 \
+  --output gossip-registry.governance.json
+
+pcbex sign-policy-lifecycle-log-gossip-organization-registry-threshold-transition \
+  gossip-registry.json gossip-registry.governance.json \
+  --authority-id security --authority-private-key security.key \
+  --authority-id hardware --authority-private-key hardware.key \
+  --action suspend-organization \
+  --organization-id compromised-lab \
+  --reason-sha256 "$INCIDENT_SHA256" \
+  --effective-at-unix 1785302200 \
+  --output gossip-registry.suspend.json
+
+pcbex apply-policy-lifecycle-log-gossip-organization-registry-threshold-transition \
+  gossip-registry.json gossip-registry.governance.json \
+  gossip-registry.suspend.json \
+  --output gossip-registry.next.json
+```
+
+The retained registry root signs the governance policy, which fixes a
+configurable threshold and an ordered set of distinct authority identities and
+keys. Every admission, suspension, or revocation then binds that exact policy
+digest, registry identity, prior transition digest, next generation, action,
+reason, and monotonic time under a separate domain. Duplicate identities or
+keys, untrusted signers, insufficient quorum, policy/root substitution,
+signature mutation, replay, and forks fail before output is written.
+
+Closed schemas cover both root-signed governance and threshold transitions.
+MCP exposes sign/apply operations as task-forbidden tools. The Action accepts
+the governance and threshold transition together, applies them atomically
+after any authority-key rotation, and uses only the resulting registry for
+quorum verification.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1683,7 +1726,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.361.0
+    uses: penguin425/pcbex@v1.362.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2920,7 +2963,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.361.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.362.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

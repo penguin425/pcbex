@@ -71,6 +71,7 @@ auditable release.
 | v1.359.0 | Lifecycle gossip observer key rotation | Bind each organization observer to generation-chained trust and require dual-signed key transitions |
 | v1.360.0 | Lifecycle gossip organization trust registry | Authority-sign observer admission, organization suspension, and permanent revocation before quorum eligibility |
 | v1.361.0 | Lifecycle gossip registry authority key rotation | Preserve registry history while old and new authority keys jointly authorize each one-generation trust-root change |
+| v1.362.0 | Threshold lifecycle gossip registry governance | Require a configurable quorum of distinct root-authorized identities for every admission, suspension, and revocation |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -79,6 +80,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should add threshold registry governance so admission,
-suspension, and revocation require a configurable quorum of distinct
-authority identities rather than one online signing key.
+The next roadmap should add threshold-governance rotation so membership,
+threshold, and authority-key changes require approval by both the retained and
+successor governance quorums.
