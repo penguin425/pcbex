@@ -133,10 +133,14 @@ use policy_lifecycle::{
 };
 use policy_lifecycle_anchor::{
     MAX_POLICY_LIFECYCLE_ANCHOR_LEAVES, PolicyLifecycleLogAnchorProof,
-    create_policy_lifecycle_log_anchor_proof, parse_policy_lifecycle_log_anchor_proof,
+    create_policy_lifecycle_log_anchor_proof, create_policy_lifecycle_log_consistency_proof,
+    parse_policy_lifecycle_log_anchor_proof, parse_policy_lifecycle_log_consistency_proof,
     policy_lifecycle_log_anchor_proof_json_schema,
     policy_lifecycle_log_anchor_verification_report_json_schema,
+    policy_lifecycle_log_consistency_proof_json_schema,
+    policy_lifecycle_log_consistency_verification_report_json_schema,
     policy_lifecycle_signed_checkpoint_sha256, verify_policy_lifecycle_log_anchor_proof,
+    verify_policy_lifecycle_log_consistency_proof,
 };
 use policy_lifecycle_checkpoint::{
     apply_policy_lifecycle_witness_key_rotation, new_policy_lifecycle_witness_trust_state,
@@ -940,6 +944,22 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed lifecycle public-log consistency proof JSON Schema.
+    PolicyLifecycleLogConsistencyProofSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a lifecycle public-log consistency proof.
+    ValidatePolicyLifecycleLogConsistencyProof {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed lifecycle public-log consistency verification JSON Schema.
+    PolicyLifecycleLogConsistencyVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1596,6 +1616,34 @@ enum Command {
     /// Verify lifecycle-checkpoint inclusion under a trusted signed tree head.
     VerifyPolicyLifecycleLogAnchor {
         checkpoint: CompactPath,
+        #[arg(long)]
+        proof: CompactPath,
+        /// Separately trusted public-log identity.
+        #[arg(long)]
+        log_id: String,
+        #[arg(long)]
+        public_key: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Build a logarithmic proof that one signed lifecycle-log tree extends another.
+    CreatePolicyLifecycleLogConsistency {
+        #[arg(long)]
+        previous_anchor: CompactPath,
+        #[arg(long)]
+        current_anchor: CompactPath,
+        /// Ordered checkpoints in the complete current public-log snapshot.
+        #[arg(long = "log-checkpoint", required = true)]
+        log_checkpoints: Vec<PathBuf>,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify append-only consistency between retained and current lifecycle anchors.
+    VerifyPolicyLifecycleLogConsistency {
+        #[arg(long)]
+        previous_anchor: CompactPath,
+        #[arg(long)]
+        current_anchor: CompactPath,
         #[arg(long)]
         proof: CompactPath,
         /// Separately trusted public-log identity.
@@ -3354,6 +3402,25 @@ fn main() -> Result<()> {
         Command::PolicyLifecycleLogAnchorVerificationReportSchema { output } => {
             write_or_print_json(
                 &policy_lifecycle_log_anchor_verification_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::PolicyLifecycleLogConsistencyProofSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_consistency_proof_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogConsistencyProof { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let proof = parse_policy_lifecycle_log_consistency_proof(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(proof)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogConsistencyVerificationReportSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_consistency_verification_report_json_schema(),
                 output.as_ref(),
             )?;
         }
@@ -5442,6 +5509,102 @@ fn main() -> Result<()> {
             eprintln!(
                 "verified policy lifecycle checkpoint anchor {}/{} in {}",
                 report.leaf_index, report.tree_size, report.log_id
+            );
+        }
+        Command::CreatePolicyLifecycleLogConsistency {
+            previous_anchor,
+            current_anchor,
+            log_checkpoints,
+            output,
+        } => {
+            if log_checkpoints.len() > MAX_POLICY_LIFECYCLE_ANCHOR_LEAVES {
+                bail!(
+                    "policy lifecycle public log cannot exceed {} checkpoints",
+                    MAX_POLICY_LIFECYCLE_ANCHOR_LEAVES
+                );
+            }
+            require_distinct_outputs(
+                [
+                    Some(previous_anchor.0.as_ref()),
+                    Some(current_anchor.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ]
+                .into_iter()
+                .chain(log_checkpoints.iter().map(|path| Some(path.as_path()))),
+                "policy lifecycle consistency proof",
+            )?;
+            let previous_source = fs::read_to_string(previous_anchor.0.as_ref())
+                .with_context(|| format!("reading {}", previous_anchor.0.display()))?;
+            let previous = parse_policy_lifecycle_log_anchor_proof(&previous_source)
+                .map_err(anyhow::Error::msg)?;
+            let current_source = fs::read_to_string(current_anchor.0.as_ref())
+                .with_context(|| format!("reading {}", current_anchor.0.display()))?;
+            let current = parse_policy_lifecycle_log_anchor_proof(&current_source)
+                .map_err(anyhow::Error::msg)?;
+            let checkpoint_digests = log_checkpoints
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    let checkpoint = parse_signed_policy_lifecycle_checkpoint(&source)
+                        .map_err(anyhow::Error::msg)?;
+                    policy_lifecycle_signed_checkpoint_sha256(&checkpoint)
+                        .map_err(anyhow::Error::msg)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let proof = create_policy_lifecycle_log_consistency_proof(
+                &previous,
+                &current,
+                &checkpoint_digests,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&proof)?, false)?;
+            eprintln!(
+                "created policy lifecycle public-log consistency proof {} -> {} in {}",
+                proof.old_tree_head.tree_size,
+                proof.new_tree_head.tree_size,
+                proof.new_tree_head.log_id
+            );
+        }
+        Command::VerifyPolicyLifecycleLogConsistency {
+            previous_anchor,
+            current_anchor,
+            proof,
+            log_id,
+            public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(previous_anchor.0.as_ref()),
+                    Some(current_anchor.0.as_ref()),
+                    Some(proof.0.as_ref()),
+                    Some(public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "policy lifecycle consistency verification",
+            )?;
+            let previous_source = fs::read_to_string(previous_anchor.0.as_ref())
+                .with_context(|| format!("reading {}", previous_anchor.0.display()))?;
+            let previous = parse_policy_lifecycle_log_anchor_proof(&previous_source)
+                .map_err(anyhow::Error::msg)?;
+            let current_source = fs::read_to_string(current_anchor.0.as_ref())
+                .with_context(|| format!("reading {}", current_anchor.0.display()))?;
+            let current = parse_policy_lifecycle_log_anchor_proof(&current_source)
+                .map_err(anyhow::Error::msg)?;
+            let proof_source = fs::read_to_string(proof.0.as_ref())
+                .with_context(|| format!("reading {}", proof.0.display()))?;
+            let proof = parse_policy_lifecycle_log_consistency_proof(&proof_source)
+                .map_err(anyhow::Error::msg)?;
+            let trusted = read_hex_key(&public_key, "trusted policy lifecycle public-log key")?;
+            let report = verify_policy_lifecycle_log_consistency_proof(
+                &previous, &current, &proof, &log_id, &trusted,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "verified policy lifecycle public-log consistency {} -> {} in {}",
+                report.old_tree_size, report.new_tree_size, report.log_id
             );
         }
         Command::RecordSimulationEvidence {

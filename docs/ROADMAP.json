@@ -294,6 +294,11 @@
     {
       "id": "lifecycle-public-log-anchoring",
       "release": "v1.355.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-public-log-consistency",
+      "release": "v1.356.0",
       "status": "current"
     }
   ]

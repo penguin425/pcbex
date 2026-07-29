@@ -129,6 +129,117 @@ fn creates_and_verifies_policy_lifecycle_public_log_anchor() {
     assert_eq!(report["leaf_index"], 1);
     assert_eq!(report["tree_head_observed_at_unix"], 200);
 
+    let previous_proof = directory.join("anchor.previous.json");
+    let create_previous = run(&[
+        "create-policy-lifecycle-log-anchor",
+        path(&checkpoints[1]),
+        "--log-checkpoint",
+        path(&checkpoints[0]),
+        "--log-checkpoint",
+        path(&checkpoints[1]),
+        "--leaf-index",
+        "1",
+        "--log-id",
+        "lifecycle-public-log",
+        "--private-key",
+        path(&private_key),
+        "--observed-at-unix",
+        "150",
+        "--output",
+        path(&previous_proof),
+    ]);
+    assert!(
+        create_previous.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create_previous.stderr)
+    );
+    let consistency = directory.join("consistency.json");
+    let create_consistency = run(&[
+        "create-policy-lifecycle-log-consistency",
+        "--previous-anchor",
+        path(&previous_proof),
+        "--current-anchor",
+        path(&proof),
+        "--log-checkpoint",
+        path(&checkpoints[0]),
+        "--log-checkpoint",
+        path(&checkpoints[1]),
+        "--log-checkpoint",
+        path(&checkpoints[2]),
+        "--output",
+        path(&consistency),
+    ]);
+    assert!(
+        create_consistency.status.success(),
+        "{}",
+        String::from_utf8_lossy(&create_consistency.stderr)
+    );
+    assert!(
+        run(&[
+            "validate-policy-lifecycle-log-consistency-proof",
+            path(&consistency)
+        ])
+        .status
+        .success()
+    );
+    let consistency_report = directory.join("consistency-verification.json");
+    let verify_consistency = run(&[
+        "verify-policy-lifecycle-log-consistency",
+        "--previous-anchor",
+        path(&previous_proof),
+        "--current-anchor",
+        path(&proof),
+        "--proof",
+        path(&consistency),
+        "--log-id",
+        "lifecycle-public-log",
+        "--public-key",
+        path(&public_key),
+        "--output",
+        path(&consistency_report),
+    ]);
+    assert!(
+        verify_consistency.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify_consistency.stderr)
+    );
+    let consistency_report: Value =
+        serde_json::from_slice(&fs::read(&consistency_report).unwrap()).unwrap();
+    assert_eq!(consistency_report["consistent"], true);
+    assert_eq!(consistency_report["old_tree_size"], 2);
+    assert_eq!(consistency_report["new_tree_size"], 3);
+
+    let mut tampered_consistency: Value =
+        serde_json::from_slice(&fs::read(&consistency).unwrap()).unwrap();
+    tampered_consistency["consistency_path"][0] = Value::String("0".repeat(64));
+    let tampered_consistency_path = directory.join("consistency.tampered.json");
+    fs::write(
+        &tampered_consistency_path,
+        serde_json::to_vec_pretty(&tampered_consistency).unwrap(),
+    )
+    .unwrap();
+    let rejected_consistency_report = directory.join("consistency.rejected.json");
+    assert!(
+        !run(&[
+            "verify-policy-lifecycle-log-consistency",
+            "--previous-anchor",
+            path(&previous_proof),
+            "--current-anchor",
+            path(&proof),
+            "--proof",
+            path(&tampered_consistency_path),
+            "--log-id",
+            "lifecycle-public-log",
+            "--public-key",
+            path(&public_key),
+            "--output",
+            path(&rejected_consistency_report),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_consistency_report.exists());
+
     let mut tampered: Value = serde_json::from_slice(&fs::read(&proof).unwrap()).unwrap();
     tampered["tree_head"]["signature"] = Value::String("0".repeat(128));
     let tampered_path = directory.join("anchor.tampered.json");

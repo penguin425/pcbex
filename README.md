@@ -1387,6 +1387,46 @@ Closed contracts are available from
 and boolean result, and can fail closed with
 `fail-on-policy-lifecycle-log-anchor: "true"`.
 
+Retain the last accepted anchor and require an append-only transition before
+accepting the next signed tree head:
+
+```sh
+pcbex create-policy-lifecycle-log-consistency \
+  --previous-anchor policy-lifecycle.anchor.previous.json \
+  --current-anchor policy-lifecycle.anchor.json \
+  --log-checkpoint policy-lifecycle.previous.checkpoint.json \
+  --log-checkpoint policy-lifecycle.checkpoint.json \
+  --output policy-lifecycle.consistency.json
+
+pcbex verify-policy-lifecycle-log-consistency \
+  --previous-anchor policy-lifecycle.anchor.previous.json \
+  --current-anchor policy-lifecycle.anchor.json \
+  --proof policy-lifecycle.consistency.json \
+  --log-id organization-lifecycle-log \
+  --public-key lifecycle-public-log.pub \
+  --output policy-lifecycle.consistency-verification.json
+```
+
+The bounded RFC 6962-style consistency path reconstructs both signed roots
+without retaining every checkpoint in the consumer. Verification requires the
+proof's old tree head to equal the explicitly retained anchor and its new tree
+head to equal the current anchor. It verifies both signatures under one
+separately trusted log identity and key, and rejects size rollback,
+same-size root equivocation, observation-time rollback, path mutation,
+incomplete or extra nodes, non-prefix history, key substitution, and log
+substitution. Generation requires the complete current checkpoint snapshot,
+checks both signed roots before writing, and emits only a logarithmic proof.
+
+Closed contracts are available from
+`policy-lifecycle-log-consistency-proof-schema` and
+`policy-lifecycle-log-consistency-verification-report-schema`. MCP exposes
+`create_policy_lifecycle_public_log_consistency` and
+`verify_policy_lifecycle_public_log_consistency`. The Action accepts
+`policy-lifecycle-log-previous-anchor-proof` and
+`policy-lifecycle-log-consistency-proof` alongside the current anchor,
+publishes the verification report and boolean result, and can fail closed with
+`fail-on-policy-lifecycle-log-consistency: "true"`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1414,7 +1454,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.355.0
+    uses: penguin425/pcbex@v1.356.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2651,7 +2691,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.355.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.356.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
