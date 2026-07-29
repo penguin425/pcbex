@@ -299,6 +299,11 @@
     {
       "id": "lifecycle-public-log-consistency",
       "release": "v1.356.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-public-log-gossip",
+      "release": "v1.357.0",
       "status": "current"
     }
   ]

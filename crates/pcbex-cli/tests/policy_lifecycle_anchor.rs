@@ -209,6 +209,114 @@ fn creates_and_verifies_policy_lifecycle_public_log_anchor() {
     assert_eq!(consistency_report["old_tree_size"], 2);
     assert_eq!(consistency_report["new_tree_size"], 3);
 
+    let observer_private = directory.join("gossip-observer.key");
+    let observer_public = directory.join("gossip-observer.pub");
+    let observer_keygen = run(&[
+        "approval-keygen",
+        "--private-key",
+        path(&observer_private),
+        "--public-key",
+        path(&observer_public),
+    ]);
+    assert!(
+        observer_keygen.status.success(),
+        "{}",
+        String::from_utf8_lossy(&observer_keygen.stderr)
+    );
+    let gossip_receipt = directory.join("gossip-receipt.json");
+    let sign_gossip = run(&[
+        "sign-policy-lifecycle-log-gossip-receipt",
+        "--anchor",
+        path(&previous_proof),
+        "--log-id",
+        "lifecycle-public-log",
+        "--log-public-key",
+        path(&public_key),
+        "--observer-id",
+        "independent-ci",
+        "--private-key",
+        path(&observer_private),
+        "--received-at-unix",
+        "160",
+        "--expires-at-unix",
+        "300",
+        "--output",
+        path(&gossip_receipt),
+    ]);
+    assert!(
+        sign_gossip.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sign_gossip.stderr)
+    );
+    assert!(
+        run(&[
+            "validate-policy-lifecycle-log-gossip-receipt",
+            path(&gossip_receipt)
+        ])
+        .status
+        .success()
+    );
+    let gossip_report = directory.join("gossip-verification.json");
+    let verify_gossip = run(&[
+        "verify-policy-lifecycle-log-gossip-receipt",
+        "--local-anchor",
+        path(&proof),
+        "--receipt",
+        path(&gossip_receipt),
+        "--consistency-proof",
+        path(&consistency),
+        "--log-id",
+        "lifecycle-public-log",
+        "--log-public-key",
+        path(&public_key),
+        "--observer-id",
+        "independent-ci",
+        "--observer-public-key",
+        path(&observer_public),
+        "--evaluated-at-unix",
+        "200",
+        "--output",
+        path(&gossip_report),
+    ]);
+    assert!(
+        verify_gossip.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify_gossip.stderr)
+    );
+    let gossip_report: Value = serde_json::from_slice(&fs::read(&gossip_report).unwrap()).unwrap();
+    assert_eq!(gossip_report["verified"], true);
+    assert_eq!(gossip_report["split_view_detected"], false);
+    assert_eq!(gossip_report["relationship"], "observed_precedes_local");
+    assert_eq!(gossip_report["observer_id"], "independent-ci");
+
+    let expired_report = directory.join("gossip-expired.json");
+    assert!(
+        !run(&[
+            "verify-policy-lifecycle-log-gossip-receipt",
+            "--local-anchor",
+            path(&proof),
+            "--receipt",
+            path(&gossip_receipt),
+            "--consistency-proof",
+            path(&consistency),
+            "--log-id",
+            "lifecycle-public-log",
+            "--log-public-key",
+            path(&public_key),
+            "--observer-id",
+            "independent-ci",
+            "--observer-public-key",
+            path(&observer_public),
+            "--evaluated-at-unix",
+            "301",
+            "--output",
+            path(&expired_report),
+        ])
+        .status
+        .success()
+    );
+    assert!(!expired_report.exists());
+
     let mut tampered_consistency: Value =
         serde_json::from_slice(&fs::read(&consistency).unwrap()).unwrap();
     tampered_consistency["consistency_path"][0] = Value::String("0".repeat(64));

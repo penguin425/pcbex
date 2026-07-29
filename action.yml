@@ -502,6 +502,30 @@ inputs:
     description: Fail unless the current lifecycle public log consistently extends the retained anchor.
     required: false
     default: "false"
+  policy-lifecycle-log-gossip-receipt:
+    description: Independently signed observation of a trusted lifecycle public-log tree head.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-observer-id:
+    description: Separately trusted identity that signed the lifecycle public-log observation.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-observer-public-key:
+    description: Trusted Ed25519 public-key file for the independent gossip observer.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-consistency-proof:
+    description: Consistency proof between the observed and current tree heads when their sizes differ.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-evaluated-at-unix:
+    description: Explicit evaluation time used to enforce the gossip receipt validity window.
+    required: false
+    default: ""
+  fail-on-policy-lifecycle-log-gossip:
+    description: Fail unless the configured independent tree-head observation is trusted and consistent.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -831,6 +855,12 @@ outputs:
   policy-lifecycle-log-consistent:
     description: Whether the current signed tree is an append-only extension of the retained anchor.
     value: ${{ steps.analyze.outputs.policy-lifecycle-log-consistent }}
+  policy-lifecycle-log-gossip-verification:
+    description: Verified independent lifecycle public-log observation report path, when configured.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-verification }}
+  policy-lifecycle-log-gossip-verified:
+    description: Whether the independent observation matches or consistently relates to the local tree head.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-verified }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -1012,6 +1042,11 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY: ${{ inputs.policy-lifecycle-log-anchor-public-key }}
         PCBEX_POLICY_LIFECYCLE_LOG_PREVIOUS_ANCHOR_PROOF: ${{ inputs.policy-lifecycle-log-previous-anchor-proof }}
         PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENCY_PROOF: ${{ inputs.policy-lifecycle-log-consistency-proof }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_RECEIPT: ${{ inputs.policy-lifecycle-log-gossip-receipt }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_ID: ${{ inputs.policy-lifecycle-log-gossip-observer-id }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY: ${{ inputs.policy-lifecycle-log-gossip-observer-public-key }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_CONSISTENCY_PROOF: ${{ inputs.policy-lifecycle-log-gossip-consistency-proof }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_EVALUATED_AT_UNIX: ${{ inputs.policy-lifecycle-log-gossip-evaluated-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -1098,6 +1133,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.policy-lifecycle-witness-quorum-met }}
         PCBEX_POLICY_LIFECYCLE_LOG_ANCHORED: ${{ steps.analyze.outputs.policy-lifecycle-log-anchored }}
         PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENT: ${{ steps.analyze.outputs.policy-lifecycle-log-consistent }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_VERIFIED: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-verified }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -1124,6 +1160,7 @@ runs:
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_WITNESS_QUORUM: ${{ inputs.fail-on-policy-lifecycle-witness-quorum }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_ANCHOR: ${{ inputs.fail-on-policy-lifecycle-log-anchor }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_CONSISTENCY: ${{ inputs.fail-on-policy-lifecycle-log-consistency }}
+        PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_GOSSIP: ${{ inputs.fail-on-policy-lifecycle-log-gossip }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -1232,5 +1269,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_CONSISTENCY" == "true" && "$PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENT" != "true" ]]; then
           echo "::error::pcbex lifecycle public log rolled back, equivocated, split views, or lacks a verified consistency proof"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_GOSSIP" == "true" && "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_VERIFIED" != "true" ]]; then
+          echo "::error::pcbex lifecycle public-log gossip observation is absent, expired, untrusted, equivocated, or inconsistent"
           exit 1
         fi

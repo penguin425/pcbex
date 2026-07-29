@@ -66,6 +66,7 @@ auditable release.
 | v1.354.0 | Lifecycle witness key rotation | Advance identity-bound witness trust through dual-signed, generation- and digest-chained key transitions |
 | v1.355.0 | Lifecycle public-log anchoring | Verify lifecycle-checkpoint inclusion under a separately trusted signed Merkle tree head |
 | v1.356.0 | Lifecycle public-log consistency | Reject signed tree rollback, equivocation, and non-prefix split views across retained anchors |
+| v1.357.0 | Lifecycle public-log gossip | Compare independent signed tree-head observations without requiring a shared retained baseline |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -74,6 +75,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should exchange signed lifecycle tree heads through
-independent gossip receipts so consumers without a shared retained baseline
-can detect operator split views across organizations and CI boundaries.
+The next roadmap should acquire gossip receipts from bounded remote observer
+services and require a fresh quorum of distinct organizations before accepting
+one lifecycle public-log view.

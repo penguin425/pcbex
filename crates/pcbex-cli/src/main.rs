@@ -82,6 +82,7 @@ mod policy_incident_ledger;
 mod policy_lifecycle;
 mod policy_lifecycle_anchor;
 mod policy_lifecycle_checkpoint;
+mod policy_lifecycle_gossip;
 mod policy_pack;
 mod policy_recommendation;
 mod policy_remediation;
@@ -159,6 +160,13 @@ use policy_lifecycle_checkpoint::{
     verify_policy_lifecycle_checkpoint_witness_with_trust_state,
     verify_policy_lifecycle_checkpoint_witnesses,
     verify_policy_lifecycle_checkpoint_witnesses_with_trust_states,
+};
+use policy_lifecycle_gossip::{
+    parse_policy_lifecycle_log_gossip_receipt,
+    policy_lifecycle_log_gossip_verification_report_json_schema,
+    sign_policy_lifecycle_log_gossip_receipt,
+    signed_policy_lifecycle_log_gossip_receipt_json_schema,
+    verify_policy_lifecycle_log_gossip_receipt,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -960,6 +968,22 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed lifecycle public-log gossip receipt JSON Schema.
+    SignedPolicyLifecycleLogGossipReceiptSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed lifecycle public-log gossip receipt.
+    ValidatePolicyLifecycleLogGossipReceipt {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed lifecycle public-log gossip verification JSON Schema.
+    PolicyLifecycleLogGossipVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1651,6 +1675,48 @@ enum Command {
         log_id: String,
         #[arg(long)]
         public_key: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Re-sign one trusted lifecycle-log tree head as an independent observer.
+    SignPolicyLifecycleLogGossipReceipt {
+        #[arg(long)]
+        anchor: CompactPath,
+        #[arg(long)]
+        log_id: String,
+        #[arg(long)]
+        log_public_key: CompactPath,
+        #[arg(long)]
+        observer_id: String,
+        #[arg(long)]
+        private_key: CompactPath,
+        /// Explicit receipt time; defaults to the current clock.
+        #[arg(long)]
+        received_at_unix: Option<u64>,
+        #[arg(long)]
+        expires_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify one independent observation against a local lifecycle-log anchor.
+    VerifyPolicyLifecycleLogGossipReceipt {
+        #[arg(long)]
+        local_anchor: CompactPath,
+        #[arg(long)]
+        receipt: CompactPath,
+        /// Required when the observed and local tree sizes differ.
+        #[arg(long)]
+        consistency_proof: Option<CompactPath>,
+        #[arg(long)]
+        log_id: String,
+        #[arg(long)]
+        log_public_key: CompactPath,
+        #[arg(long)]
+        observer_id: String,
+        #[arg(long)]
+        observer_public_key: CompactPath,
+        #[arg(long)]
+        evaluated_at_unix: u64,
         #[arg(short, long)]
         output: CompactPath,
     },
@@ -3421,6 +3487,25 @@ fn main() -> Result<()> {
         Command::PolicyLifecycleLogConsistencyVerificationReportSchema { output } => {
             write_or_print_json(
                 &policy_lifecycle_log_consistency_verification_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::SignedPolicyLifecycleLogGossipReceiptSchema { output } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_receipt_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipReceipt { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let receipt =
+                parse_policy_lifecycle_log_gossip_receipt(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(receipt)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipVerificationReportSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_verification_report_json_schema(),
                 output.as_ref(),
             )?;
         }
@@ -5605,6 +5690,111 @@ fn main() -> Result<()> {
             eprintln!(
                 "verified policy lifecycle public-log consistency {} -> {} in {}",
                 report.old_tree_size, report.new_tree_size, report.log_id
+            );
+        }
+        Command::SignPolicyLifecycleLogGossipReceipt {
+            anchor,
+            log_id,
+            log_public_key,
+            observer_id,
+            private_key,
+            received_at_unix,
+            expires_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(anchor.0.as_ref()),
+                    Some(log_public_key.0.as_ref()),
+                    Some(private_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "policy lifecycle gossip receipt signing",
+            )?;
+            let source = fs::read_to_string(anchor.0.as_ref())
+                .with_context(|| format!("reading {}", anchor.0.display()))?;
+            let anchor =
+                parse_policy_lifecycle_log_anchor_proof(&source).map_err(anyhow::Error::msg)?;
+            let trusted_log_key =
+                read_hex_key(&log_public_key, "trusted policy lifecycle public-log key")?;
+            let observer_secret =
+                read_hex_key(&private_key, "policy lifecycle gossip observer private key")?;
+            let receipt = sign_policy_lifecycle_log_gossip_receipt(
+                &anchor,
+                &log_id,
+                &trusted_log_key,
+                &observer_id,
+                received_at_unix.unwrap_or(current_unix_seconds()?),
+                expires_at_unix,
+                &observer_secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&receipt)?, false)?;
+            eprintln!(
+                "signed lifecycle public-log tree {}/{} observation as {}",
+                receipt.tree_head.tree_size, receipt.tree_head.log_id, receipt.observer_id
+            );
+        }
+        Command::VerifyPolicyLifecycleLogGossipReceipt {
+            local_anchor,
+            receipt,
+            consistency_proof,
+            log_id,
+            log_public_key,
+            observer_id,
+            observer_public_key,
+            evaluated_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(local_anchor.0.as_ref()),
+                    Some(receipt.0.as_ref()),
+                    consistency_proof.as_ref().map(|path| path.0.as_ref()),
+                    Some(log_public_key.0.as_ref()),
+                    Some(observer_public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "policy lifecycle gossip verification",
+            )?;
+            let local_source = fs::read_to_string(local_anchor.0.as_ref())
+                .with_context(|| format!("reading {}", local_anchor.0.display()))?;
+            let local = parse_policy_lifecycle_log_anchor_proof(&local_source)
+                .map_err(anyhow::Error::msg)?;
+            let receipt_source = fs::read_to_string(receipt.0.as_ref())
+                .with_context(|| format!("reading {}", receipt.0.display()))?;
+            let receipt = parse_policy_lifecycle_log_gossip_receipt(&receipt_source)
+                .map_err(anyhow::Error::msg)?;
+            let consistency = consistency_proof
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path.0.as_ref())
+                        .with_context(|| format!("reading {}", path.0.display()))?;
+                    parse_policy_lifecycle_log_consistency_proof(&source)
+                        .map_err(anyhow::Error::msg)
+                })
+                .transpose()?;
+            let trusted_log_key =
+                read_hex_key(&log_public_key, "trusted policy lifecycle public-log key")?;
+            let trusted_observer_key = read_hex_key(
+                &observer_public_key,
+                "trusted policy lifecycle gossip observer key",
+            )?;
+            let report = verify_policy_lifecycle_log_gossip_receipt(
+                &local,
+                &receipt,
+                consistency.as_ref(),
+                &log_id,
+                &trusted_log_key,
+                &observer_id,
+                &trusted_observer_key,
+                evaluated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "verified lifecycle public-log gossip from {}: {}",
+                report.observer_id, report.relationship
             );
         }
         Command::RecordSimulationEvidence {

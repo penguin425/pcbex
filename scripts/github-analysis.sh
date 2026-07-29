@@ -87,6 +87,8 @@ write_output policy-lifecycle-log-anchor-verification ""
 write_output policy-lifecycle-log-anchored ""
 write_output policy-lifecycle-log-consistency-verification ""
 write_output policy-lifecycle-log-consistent ""
+write_output policy-lifecycle-log-gossip-verification ""
+write_output policy-lifecycle-log-gossip-verified ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -1013,6 +1015,62 @@ if ((lifecycle_consistency_inputs == 2)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+policy_lifecycle_log_gossip_verification=""
+policy_lifecycle_log_gossip_verified=""
+lifecycle_gossip_inputs=0
+for value in \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_RECEIPT:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_ID:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_EVALUATED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((lifecycle_gossip_inputs += 1)); fi
+done
+if ((lifecycle_gossip_inputs != 0 && lifecycle_gossip_inputs != 4)); then
+  echo "lifecycle gossip receipt, observer id, public key, and evaluation time must be supplied together" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_CONSISTENCY_PROOF:-}" ]] \
+  && ((lifecycle_gossip_inputs != 4)); then
+  echo "lifecycle gossip consistency proof requires complete gossip inputs" >&2
+  exit 2
+fi
+if ((lifecycle_gossip_inputs == 4)); then
+  if ((lifecycle_anchor_inputs != 3)); then
+    echo "policy lifecycle public-log gossip requires a configured current anchor" >&2
+    exit 2
+  fi
+  policy_lifecycle_log_gossip_verification="${artifact_dir}/policy-lifecycle-log-gossip-verification.json"
+  gossip_arguments=(verify-policy-lifecycle-log-gossip-receipt \
+    --local-anchor "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PROOF" \
+    --receipt "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_RECEIPT" \
+    --log-id "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_ID" \
+    --log-public-key "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY" \
+    --observer-id "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_ID" \
+    --observer-public-key "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY" \
+    --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_EVALUATED_AT_UNIX" \
+    --output "$policy_lifecycle_log_gossip_verification")
+  if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_CONSISTENCY_PROOF:-}" ]]; then
+    gossip_arguments+=( \
+      --consistency-proof "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_CONSISTENCY_PROOF")
+  fi
+  "$PCBEX_BINARY" "${gossip_arguments[@]}"
+  policy_lifecycle_log_gossip_verified="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["verified"]).lower())' \
+      "$policy_lifecycle_log_gossip_verification"
+  )"
+  {
+    printf '\n# Lifecycle public-log gossip\n\n'
+    printf -- '- Verified: `%s`\n' "$policy_lifecycle_log_gossip_verified"
+    printf -- '- Observer: `%s`\n' "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_ID"
+    printf -- '- Relationship: `%s`\n' "$(
+      python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["relationship"])' \
+        "$policy_lifecycle_log_gossip_verification"
+    )"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 policy_lifecycle_witness_quorum=""
 policy_lifecycle_witness_quorum_met=""
 policy_lifecycle_remote_witnesses=""
@@ -1607,6 +1665,8 @@ write_output policy-lifecycle-log-anchor-verification "$policy_lifecycle_log_anc
 write_output policy-lifecycle-log-anchored "$policy_lifecycle_log_anchored"
 write_output policy-lifecycle-log-consistency-verification "$policy_lifecycle_log_consistency_verification"
 write_output policy-lifecycle-log-consistent "$policy_lifecycle_log_consistent"
+write_output policy-lifecycle-log-gossip-verification "$policy_lifecycle_log_gossip_verification"
+write_output policy-lifecycle-log-gossip-verified "$policy_lifecycle_log_gossip_verified"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"
