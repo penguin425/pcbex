@@ -60,6 +60,8 @@ pub struct PolicyLifecycleLogGossipOrganizationRegistry {
     pub registry_id: String,
     pub generation: u64,
     pub authority_public_key: String,
+    #[serde(default)]
+    pub active_governance_sha256: Option<String>,
     pub last_transition_sha256: Option<String>,
     pub last_updated_at_unix: Option<u64>,
     pub organizations: Vec<PolicyLifecycleLogGossipOrganizationRegistryEntry>,
@@ -260,6 +262,7 @@ pub fn new_policy_lifecycle_log_gossip_organization_registry(
         registry_id: registry_id.into(),
         generation: 0,
         authority_public_key: hex_encode(authority_public_key),
+        active_governance_sha256: None,
         last_transition_sha256: None,
         last_updated_at_unix: None,
         organizations: Vec::new(),
@@ -277,6 +280,11 @@ pub fn sign_policy_lifecycle_log_gossip_organization_registry_transition(
     effective_at_unix: u64,
 ) -> Result<SignedPolicyLifecycleLogGossipOrganizationRegistryTransition, String> {
     validate_policy_lifecycle_log_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err(
+            "gossip registry with active governance requires a threshold transition".into(),
+        );
+    }
     validate_slug(organization_id, "gossip registry organization id")?;
     validate_sha256(reason_sha256, "gossip registry transition reason SHA-256")?;
     if registry
@@ -331,6 +339,9 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_transition(
     transition: &SignedPolicyLifecycleLogGossipOrganizationRegistryTransition,
 ) -> Result<PolicyLifecycleLogGossipOrganizationRegistry, String> {
     validate_policy_lifecycle_log_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err("gossip registry with active governance rejects root-only transitions".into());
+    }
     validate_signed_policy_lifecycle_log_gossip_organization_registry_transition(transition)?;
     if transition.registry_id != registry.registry_id
         || transition.from_generation != registry.generation
@@ -384,6 +395,7 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_transition(
         registry_id: registry.registry_id.clone(),
         generation: transition.to_generation,
         authority_public_key: registry.authority_public_key.clone(),
+        active_governance_sha256: None,
         last_transition_sha256: Some(
             signed_policy_lifecycle_log_gossip_organization_registry_transition_sha256(transition)?,
         ),
@@ -401,6 +413,11 @@ pub fn sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rota
     rotated_at_unix: u64,
 ) -> Result<SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation, String> {
     validate_policy_lifecycle_log_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err(
+            "gossip registry with active governance rejects root-only authority rotation".into(),
+        );
+    }
     let old_key = SigningKey::from_bytes(old_secret_key);
     let new_key = SigningKey::from_bytes(new_secret_key);
     let old_public_key = hex_encode(&old_key.verifying_key().to_bytes());
@@ -454,6 +471,11 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rot
     rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation,
 ) -> Result<PolicyLifecycleLogGossipOrganizationRegistry, String> {
     validate_policy_lifecycle_log_gossip_organization_registry(registry)?;
+    if registry.active_governance_sha256.is_some() {
+        return Err(
+            "gossip registry with active governance rejects root-only authority rotation".into(),
+        );
+    }
     validate_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
         rotation,
     )?;
@@ -512,6 +534,7 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rot
         registry_id: registry.registry_id.clone(),
         generation: rotation.to_generation,
         authority_public_key: rotation.new_public_key.clone(),
+        active_governance_sha256: None,
         last_transition_sha256: Some(
             signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_sha256(
                 rotation,
@@ -604,6 +627,13 @@ pub fn sign_policy_lifecycle_log_gossip_organization_registry_threshold_transiti
         transition_observer_binding(&action, organization_id, observer_trust_state)?;
     let governance_sha256 =
         signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(governance)?;
+    if registry
+        .active_governance_sha256
+        .as_deref()
+        .is_some_and(|retained| retained != governance_sha256)
+    {
+        return Err("gossip registry governance does not match retained active governance".into());
+    }
     let to_generation = registry
         .generation
         .checked_add(1)
@@ -686,6 +716,13 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_threshold_transit
     )?;
     let governance_sha256 =
         signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(governance)?;
+    if registry
+        .active_governance_sha256
+        .as_deref()
+        .is_some_and(|retained| retained != governance_sha256)
+    {
+        return Err("gossip registry governance does not match retained active governance".into());
+    }
     if transition.registry_id != registry.registry_id
         || transition.from_generation != registry.generation
         || transition.to_generation
@@ -774,6 +811,7 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_threshold_transit
         registry_id: registry.registry_id.clone(),
         generation: transition.to_generation,
         authority_public_key: registry.authority_public_key.clone(),
+        active_governance_sha256: Some(governance_sha256),
         last_transition_sha256: Some(
             signed_policy_lifecycle_log_gossip_organization_registry_threshold_transition_sha256(
                 transition,
@@ -801,6 +839,9 @@ pub fn sign_policy_lifecycle_log_gossip_organization_registry_governance_rotatio
         signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(old_governance)?;
     let new_governance_sha256 =
         signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(new_governance)?;
+    if registry.active_governance_sha256.as_deref() != Some(old_governance_sha256.as_str()) {
+        return Err("old governance does not match retained active governance".into());
+    }
     if old_governance_sha256 == new_governance_sha256 {
         return Err("successor gossip registry governance must differ".into());
     }
@@ -859,6 +900,9 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_governance_rotati
         signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(old_governance)?;
     let new_sha256 =
         signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(new_governance)?;
+    if registry.active_governance_sha256.as_deref() != Some(old_sha256.as_str()) {
+        return Err("old governance does not match retained active governance".into());
+    }
     if rotation.registry_id != registry.registry_id
         || rotation.from_generation != registry.generation
         || rotation.to_generation
@@ -896,6 +940,7 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_governance_rotati
         registry_id: registry.registry_id.clone(),
         generation: rotation.to_generation,
         authority_public_key: registry.authority_public_key.clone(),
+        active_governance_sha256: Some(new_sha256),
         last_transition_sha256: Some(
             signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation_sha256(
                 rotation,
@@ -1102,12 +1147,17 @@ pub fn validate_policy_lifecycle_log_gossip_organization_registry(
         &registry.authority_public_key,
         "gossip registry authority public key",
     )?;
+    if let Some(digest) = &registry.active_governance_sha256 {
+        validate_sha256(digest, "active gossip registry governance SHA-256")?;
+    }
     match (
         registry.generation,
         &registry.last_transition_sha256,
         registry.last_updated_at_unix,
     ) {
-        (0, None, None) if registry.organizations.is_empty() => {}
+        (0, None, None)
+            if registry.organizations.is_empty() && registry.active_governance_sha256.is_none() => {
+        }
         (0, _, _) => return Err("initial gossip registry must be empty and unadvanced".into()),
         (_, Some(digest), Some(_)) => {
             validate_sha256(digest, "last gossip registry transition SHA-256")?
@@ -1435,6 +1485,9 @@ pub fn policy_lifecycle_log_gossip_organization_registry_json_schema() -> Value 
             "registry_id": slug_schema(),
             "generation": {"type": "integer", "minimum": 0},
             "authority_public_key": key_schema(),
+            "active_governance_sha256": {
+                "oneOf": [{"type": "null"}, digest_schema()]
+            },
             "last_transition_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
             "last_updated_at_unix": {"oneOf": [
                 {"type": "null"}, {"type": "integer", "minimum": 0}
@@ -2313,6 +2366,20 @@ mod tests {
             policy_lifecycle_log_gossip_registry_bound_quorum_report_json_schema()["additionalProperties"],
             false
         );
+        let initial = new_policy_lifecycle_log_gossip_organization_registry(
+            "production-gossip",
+            &SigningKey::from_bytes(&[70; 32]).verifying_key().to_bytes(),
+        )
+        .unwrap();
+        let mut legacy_value = serde_json::to_value(initial).unwrap();
+        legacy_value
+            .as_object_mut()
+            .unwrap()
+            .remove("active_governance_sha256");
+        let legacy: PolicyLifecycleLogGossipOrganizationRegistry =
+            serde_json::from_value(legacy_value).unwrap();
+        assert!(legacy.active_governance_sha256.is_none());
+        validate_policy_lifecycle_log_gossip_organization_registry(&legacy).unwrap();
     }
 
     #[test]
@@ -2379,6 +2446,100 @@ mod tests {
             .unwrap();
         assert_eq!(admitted.generation, 1);
         assert_eq!(admitted.organizations.len(), 1);
+        let retained_governance_sha256 =
+            signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(&governance)
+                .unwrap();
+        assert_eq!(
+            admitted.active_governance_sha256.as_deref(),
+            Some(retained_governance_sha256.as_str())
+        );
+        let alternate_governance =
+            sign_policy_lifecycle_log_gossip_organization_registry_governance(
+                &admitted,
+                &root_secret,
+                3,
+                [
+                    ("authority-a", authority_a),
+                    ("authority-b", authority_b),
+                    ("authority-c", authority_c),
+                ]
+                .into_iter()
+                .map(
+                    |(authority_id, secret)| PolicyLifecycleLogGossipRegistryGovernanceAuthority {
+                        authority_id: authority_id.into(),
+                        public_key: hex_encode(
+                            &SigningKey::from_bytes(&secret).verifying_key().to_bytes(),
+                        ),
+                    },
+                )
+                .collect(),
+                2_500,
+            )
+            .unwrap();
+        assert!(
+            sign_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                &admitted,
+                &alternate_governance,
+                &[
+                    ("authority-a".into(), authority_a),
+                    ("authority-b".into(), authority_b),
+                    ("authority-c".into(), authority_c),
+                ],
+                PolicyLifecycleLogGossipOrganizationRegistryAction::SuspendOrganization,
+                "independent-lab",
+                None,
+                &"b".repeat(64),
+                3_000,
+            )
+            .is_err()
+        );
+        let mut unbound_copy = admitted.clone();
+        unbound_copy.active_governance_sha256 = None;
+        let stale_policy_transition =
+            sign_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                &unbound_copy,
+                &alternate_governance,
+                &[
+                    ("authority-a".into(), authority_a),
+                    ("authority-b".into(), authority_b),
+                    ("authority-c".into(), authority_c),
+                ],
+                PolicyLifecycleLogGossipOrganizationRegistryAction::SuspendOrganization,
+                "independent-lab",
+                None,
+                &"b".repeat(64),
+                3_000,
+            )
+            .unwrap();
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                &admitted,
+                &alternate_governance,
+                &stale_policy_transition,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_policy_lifecycle_log_gossip_organization_registry_transition(
+                &admitted,
+                &root_secret,
+                PolicyLifecycleLogGossipOrganizationRegistryAction::SuspendOrganization,
+                "independent-lab",
+                None,
+                &"b".repeat(64),
+                3_000,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &admitted,
+                &root_secret,
+                &[76; 32],
+                3_000,
+            )
+            .is_err()
+        );
         assert!(
             apply_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
                 &admitted,
@@ -2466,28 +2627,65 @@ mod tests {
             1_000,
         )
         .unwrap();
+        let trust = new_policy_lifecycle_log_gossip_observer_trust_state(
+            "independent-lab",
+            "observer-a",
+            &SigningKey::from_bytes(&[86; 32]).verifying_key().to_bytes(),
+        )
+        .unwrap();
+        let admission =
+            sign_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                &initial,
+                &old,
+                &[("old-a".into(), old_a), ("old-b".into(), old_b)],
+                PolicyLifecycleLogGossipOrganizationRegistryAction::AdmitObserver,
+                "independent-lab",
+                Some(&trust),
+                &"a".repeat(64),
+                2_000,
+            )
+            .unwrap();
+        let governed =
+            apply_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                &initial, &old, &admission,
+            )
+            .unwrap();
+        let old_sha256 =
+            signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(&old)
+                .unwrap();
+        assert_eq!(
+            governed.active_governance_sha256.as_deref(),
+            Some(old_sha256.as_str())
+        );
         let new = sign_policy_lifecycle_log_gossip_organization_registry_governance(
-            &initial,
+            &governed,
             &root,
             2,
             authorities(&[("new-a", new_a), ("new-b", new_b)]),
-            2_000,
+            3_000,
         )
         .unwrap();
         let rotation = sign_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
-            &initial,
+            &governed,
             &old,
             &new,
             &[("old-a".into(), old_a), ("old-b".into(), old_b)],
             &[("new-a".into(), new_a), ("new-b".into(), new_b)],
-            3_000,
+            4_000,
         )
         .unwrap();
         let rotated = apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
-            &initial, &old, &new, &rotation,
+            &governed, &old, &new, &rotation,
         )
         .unwrap();
-        assert_eq!(rotated.generation, 1);
+        assert_eq!(rotated.generation, 2);
+        let new_sha256 =
+            signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(&new)
+                .unwrap();
+        assert_eq!(
+            rotated.active_governance_sha256.as_deref(),
+            Some(new_sha256.as_str())
+        );
         assert!(
             apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
                 &rotated, &old, &new, &rotation,
@@ -2498,7 +2696,7 @@ mod tests {
         old_tampered.old_approvals[0].signature = "0".repeat(128);
         assert!(
             apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
-                &initial,
+                &governed,
                 &old,
                 &new,
                 &old_tampered,
@@ -2509,7 +2707,7 @@ mod tests {
         new_tampered.new_approvals.pop();
         assert!(
             apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
-                &initial,
+                &governed,
                 &old,
                 &new,
                 &new_tampered,
@@ -2518,12 +2716,12 @@ mod tests {
         );
         assert!(
             sign_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
-                &initial,
+                &governed,
                 &old,
                 &new,
                 &[("old-a".into(), old_a)],
                 &[("new-a".into(), new_a), ("new-b".into(), new_b)],
-                3_000,
+                4_000,
             )
             .is_err()
         );

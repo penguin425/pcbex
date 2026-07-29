@@ -334,6 +334,11 @@
     {
       "id": "lifecycle-gossip-registry-governance-rotation",
       "release": "v1.363.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-gossip-registry-active-governance",
+      "release": "v1.364.0",
       "status": "current"
     }
   ]
