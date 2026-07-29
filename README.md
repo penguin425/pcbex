@@ -890,6 +890,45 @@ finalize. The completion report continues to declare
 `automatic_promotion: false`. MCP and the repository Action expose the same
 two-stage signing and verification boundary.
 
+The finalized signatures can then advance a separately protected deployment
+state:
+
+```sh
+pcbex advance-policy-deployment policy-rollout.json \
+  canary-monitoring.json \
+  canary-rollout-authorization.json \
+  --policy-pack organization-policy-pack.json \
+  --candidate-policy-pack organization-policy-pack.next.json \
+  --source-policy-trust-state organization-policy-pack.trust.json \
+  --candidate-policy-trust-state organization-policy-pack.next.trust.json \
+  --decision completion-a.json \
+  --decision completion-b.json \
+  --baseline-state previous-policy-deployment.json \
+  --recorded-at-unix 1785287400 \
+  --output policy-deployment.json \
+  --summary-output policy-deployment.md \
+  --require-promotion
+```
+
+The command verifies the original completion signatures again rather than
+trusting a derived report. The source and candidate trust states must bind
+their exact packs and retain the same policy signer and public key. Each state
+generation binds its predecessor, both accepted trust states, rollout,
+authorization, monitoring, completion, active revision, highest considered
+revision, and explicit rollback target.
+A deployment candidate must have a higher revision, contain the exact
+rollout-derived DFM profile, and retain the source pack's electrical policy, AI
+requirements, simulation requirement, and trusted keys unchanged.
+A candidate revision must be strictly newer than every previously considered
+revision, including one that was rolled back, so old decisions and repaired
+content under a reused revision cannot be replayed. Bootstrap promotion is
+allowed; rollback requires a prior active state. Automatic application remains
+false, and every new state is retained with post-deployment verification
+`pending`. MCP exposes `advance_policy_deployment`. The repository Action opts
+in with `policy-deployment-recorded-at-unix`, publishes the new state, status,
+and active revision, and can gate promotion with
+`fail-on-policy-deployment-promotion`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -917,7 +956,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.341.0
+    uses: penguin425/pcbex@v1.342.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2154,7 +2193,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.341.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.342.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

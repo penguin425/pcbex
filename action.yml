@@ -154,6 +154,30 @@ inputs:
     description: Fail unless a unanimous trusted canary completion quorum is finalized.
     required: false
     default: "false"
+  policy-deployment-source-trust-state:
+    description: Accepted signed-policy trust state exactly matching the source policy pack.
+    required: false
+    default: ""
+  policy-deployment-candidate-trust-state:
+    description: Accepted signed-policy trust state that monotonically advances the source signing root.
+    required: false
+    default: ""
+  policy-deployment-candidate-policy-pack:
+    description: Signed-and-accepted higher-revision policy pack containing the exact approved rollout profile.
+    required: false
+    default: ""
+  policy-deployment-baseline-state:
+    description: Optional previously retained hash-chained deployment state; required to confirm rollback.
+    required: false
+    default: ""
+  policy-deployment-recorded-at-unix:
+    description: Opt-in Unix timestamp for advancing the monotonic deployment state.
+    required: false
+    default: ""
+  fail-on-policy-deployment-promotion:
+    description: Fail unless the finalized candidate is recorded as the active policy revision.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -387,6 +411,15 @@ outputs:
   canary-completion-decision:
     description: Final promote or rollback decision, when finalized.
     value: ${{ steps.analyze.outputs.canary-completion-decision }}
+  policy-deployment:
+    description: Hash-chained monotonic policy deployment state.
+    value: ${{ steps.analyze.outputs.policy-deployment }}
+  policy-deployment-status:
+    description: Whether promotion was applied or rollback was confirmed.
+    value: ${{ steps.analyze.outputs.policy-deployment-status }}
+  policy-deployment-active-revision:
+    description: Active organization-policy revision after the retained decision.
+    value: ${{ steps.analyze.outputs.policy-deployment-active-revision }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -494,6 +527,11 @@ runs:
         PCBEX_CANARY_COMPLETION_MONITORING_REPORT: ${{ inputs.canary-completion-monitoring-report }}
         PCBEX_CANARY_COMPLETION_DECISION_FILES: ${{ inputs.canary-completion-decision-files }}
         PCBEX_CANARY_COMPLETION_MINIMUM_DECISIONS: ${{ inputs.canary-completion-minimum-decisions }}
+        PCBEX_POLICY_DEPLOYMENT_SOURCE_TRUST_STATE: ${{ inputs.policy-deployment-source-trust-state }}
+        PCBEX_POLICY_DEPLOYMENT_CANDIDATE_TRUST_STATE: ${{ inputs.policy-deployment-candidate-trust-state }}
+        PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK: ${{ inputs.policy-deployment-candidate-policy-pack }}
+        PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE: ${{ inputs.policy-deployment-baseline-state }}
+        PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX: ${{ inputs.policy-deployment-recorded-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -567,6 +605,7 @@ runs:
         PCBEX_CANARY_ROLLOUT_AUTHORIZED: ${{ steps.analyze.outputs.canary-rollout-authorized }}
         PCBEX_CANARY_MONITORING_PASSED: ${{ steps.analyze.outputs.canary-monitoring-passed }}
         PCBEX_CANARY_COMPLETION_FINALIZED: ${{ steps.analyze.outputs.canary-completion-finalized }}
+        PCBEX_POLICY_DEPLOYMENT_STATUS: ${{ steps.analyze.outputs.policy-deployment-status }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -580,6 +619,7 @@ runs:
         PCBEX_FAIL_ON_CANARY_ROLLOUT_AUTHORIZATION: ${{ inputs.fail-on-canary-rollout-authorization }}
         PCBEX_FAIL_ON_CANARY_MONITORING: ${{ inputs.fail-on-canary-monitoring }}
         PCBEX_FAIL_ON_CANARY_COMPLETION: ${{ inputs.fail-on-canary-completion }}
+        PCBEX_FAIL_ON_POLICY_DEPLOYMENT_PROMOTION: ${{ inputs.fail-on-policy-deployment-promotion }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -636,5 +676,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_CANARY_COMPLETION" == "true" && "$PCBEX_CANARY_COMPLETION_FINALIZED" != "true" ]]; then
           echo "::error::pcbex canary completion lacks a unanimous trusted human decision"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_DEPLOYMENT_PROMOTION" == "true" && "$PCBEX_POLICY_DEPLOYMENT_STATUS" != "promotion_applied" ]]; then
+          echo "::error::pcbex policy deployment was absent or retained rollback instead of promotion"
           exit 1
         fi
