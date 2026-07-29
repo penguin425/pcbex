@@ -2078,6 +2078,37 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "sign_policy_lifecycle_public_log_gossip_organization_registry_successor_governance",
+            "Sign successor lifecycle gossip registry governance",
+            "Use a distinct prospective registry-root private key to sign the exact successor threshold policy required for governed root rotation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "registry", "successor_registry_authority_private_key",
+                    "minimum_approvals", "authority_ids", "authority_public_keys",
+                    "issued_at_unix", "output"
+                ],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "successor_registry_authority_private_key": {"type": "string"},
+                    "minimum_approvals": {"type": "integer", "minimum": 2, "maximum": 100},
+                    "authority_ids": {
+                        "type": "array", "minItems": 2, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "authority_public_keys": {
+                        "type": "array", "minItems": 2, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "issued_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "sign_policy_lifecycle_public_log_gossip_organization_registry_threshold_transition",
             "Sign lifecycle gossip registry threshold transition",
             "Create one admission, suspension, or revocation carrying a quorum of distinct governance-authority signatures.",
@@ -2172,6 +2203,57 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "new_governance": {"type": "string"},
                     "rotation": {"type": "string"},
                     "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation",
+            "Sign governed lifecycle gossip registry root rotation",
+            "Require retained and successor governance quorums over one exact registry-root, governance-digest, generation, and chain transition.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "registry", "old_governance", "new_governance",
+                    "old_authority_ids", "old_authority_private_keys",
+                    "new_authority_ids", "new_authority_private_keys",
+                    "rotated_at_unix", "output"
+                ],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "old_governance": {"type": "string"},
+                    "new_governance": {"type": "string"},
+                    "old_authority_ids": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "old_authority_private_keys": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "new_authority_ids": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "new_authority_private_keys": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation",
+            "Apply governed lifecycle gossip registry root rotation",
+            "Verify both root-signed policies, both authority quorums, new-root possession, and chain continuity before atomically replacing the root and active governance digest.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "registry", "old_governance", "new_governance", "rotation",
+                    "output", "public_key_output"
+                ],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "old_governance": {"type": "string"},
+                    "new_governance": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "public_key_output": {"type": "string"}
                 }
             }),
             false,
@@ -3013,6 +3095,12 @@ fn call_tool(
                 cancellation,
             )?
         }
+        "sign_policy_lifecycle_public_log_gossip_organization_registry_successor_governance" => {
+            sign_policy_lifecycle_public_log_gossip_organization_registry_successor_governance(
+                arguments,
+                cancellation,
+            )?
+        }
         "sign_policy_lifecycle_public_log_gossip_organization_registry_threshold_transition" => {
             sign_policy_lifecycle_public_log_gossip_organization_registry_threshold_transition(
                 arguments,
@@ -3033,6 +3121,18 @@ fn call_tool(
         }
         "apply_policy_lifecycle_public_log_gossip_organization_registry_governance_rotation" => {
             apply_policy_lifecycle_public_log_gossip_organization_registry_governance_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation" => {
+            sign_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "apply_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation" => {
+            apply_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation(
                 arguments,
                 cancellation,
             )?
@@ -5937,6 +6037,63 @@ fn sign_policy_lifecycle_public_log_gossip_organization_registry_governance(
     ))
 }
 
+fn sign_policy_lifecycle_public_log_gossip_organization_registry_successor_governance(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "registry",
+            "successor_registry_authority_private_key",
+            "minimum_approvals",
+            "authority_ids",
+            "authority_public_keys",
+            "issued_at_unix",
+            "output",
+        ],
+    )?;
+    let minimum_approvals = arguments
+        .get("minimum_approvals")
+        .and_then(Value::as_u64)
+        .filter(|value| (2..=100).contains(value))
+        .ok_or_else(|| json!({"detail": "minimum_approvals must be an integer from 2 to 100"}))?;
+    let issued_at_unix = arguments
+        .get("issued_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "issued_at_unix must be a non-negative integer"}))?;
+    let authority_ids = required_string_array(&arguments, "authority_ids", false)?;
+    let authority_public_keys = required_string_array(&arguments, "authority_public_keys", false)?;
+    if authority_ids.len() != authority_public_keys.len() {
+        return Err(json!({"detail": "authority_ids and authority_public_keys counts must match"}));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-policy-lifecycle-log-gossip-organization-registry-successor-governance".into(),
+        required_string(&arguments, "registry")?,
+        "--successor-registry-authority-private-key".into(),
+        required_string(&arguments, "successor_registry_authority_private_key")?,
+        "--minimum-approvals".into(),
+        minimum_approvals.to_string(),
+    ];
+    for (authority_id, public_key) in authority_ids.iter().zip(&authority_public_keys) {
+        command.extend(["--authority-id".into(), authority_id.clone()]);
+        command.extend(["--authority-public-key".into(), public_key.clone()]);
+    }
+    command.extend([
+        "--issued-at-unix".into(),
+        issued_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let governance = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "governance": governance}),
+    ))
+}
+
 fn sign_policy_lifecycle_public_log_gossip_organization_registry_threshold_transition(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -6122,6 +6279,106 @@ fn apply_policy_lifecycle_public_log_gossip_organization_registry_governance_rot
     Ok(execution_result(
         execution,
         json!({"output": output, "registry": registry}),
+    ))
+}
+
+fn sign_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    let names = [
+        "registry",
+        "old_governance",
+        "new_governance",
+        "old_authority_ids",
+        "old_authority_private_keys",
+        "new_authority_ids",
+        "new_authority_private_keys",
+        "rotated_at_unix",
+        "output",
+    ];
+    reject_unknown(&arguments, &names)?;
+    let old_ids = required_string_array(&arguments, "old_authority_ids", false)?;
+    let old_keys = required_string_array(&arguments, "old_authority_private_keys", false)?;
+    let new_ids = required_string_array(&arguments, "new_authority_ids", false)?;
+    let new_keys = required_string_array(&arguments, "new_authority_private_keys", false)?;
+    if old_ids.len() != old_keys.len() || new_ids.len() != new_keys.len() {
+        return Err(
+            json!({"detail": "governed authority rotation identity and key counts must match"}),
+        );
+    }
+    let rotated_at = arguments
+        .get("rotated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "rotated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation"
+            .into(),
+        required_string(&arguments, "registry")?,
+        required_string(&arguments, "old_governance")?,
+        required_string(&arguments, "new_governance")?,
+    ];
+    for (id, key) in old_ids.iter().zip(&old_keys) {
+        command.extend(["--old-authority-id".into(), id.clone()]);
+        command.extend(["--old-authority-private-key".into(), key.clone()]);
+    }
+    for (id, key) in new_ids.iter().zip(&new_keys) {
+        command.extend(["--new-authority-id".into(), id.clone()]);
+        command.extend(["--new-authority-private-key".into(), key.clone()]);
+    }
+    command.extend([
+        "--rotated-at-unix".into(),
+        rotated_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "registry",
+            "old_governance",
+            "new_governance",
+            "rotation",
+            "output",
+            "public_key_output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let public_key_output = required_string(&arguments, "public_key_output")?;
+    let command = vec![
+        "apply-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation"
+            .into(),
+        required_string(&arguments, "registry")?,
+        required_string(&arguments, "old_governance")?,
+        required_string(&arguments, "new_governance")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+        "--public-key-output".into(),
+        public_key_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let registry = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "public_key_output": public_key_output,
+            "registry": registry
+        }),
     ))
 }
 
@@ -7550,7 +7807,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 83);
+        assert_eq!(tools.len(), 86);
         let named = |name: &str| {
             tools
                 .iter()
@@ -7890,6 +8147,12 @@ mod tests {
         );
         assert_eq!(
             named(
+                "sign_policy_lifecycle_public_log_gossip_organization_registry_successor_governance"
+            )["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named(
                 "sign_policy_lifecycle_public_log_gossip_organization_registry_threshold_transition"
             )["inputSchema"]["properties"]["authority_private_keys"]["minItems"],
             2
@@ -7911,6 +8174,18 @@ mod tests {
                 "apply_policy_lifecycle_public_log_gossip_organization_registry_governance_rotation"
             )["execution"]["taskSupport"],
             "forbidden"
+        );
+        assert_eq!(
+            named(
+                "sign_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation"
+            )["inputSchema"]["properties"]["new_authority_ids"]["minItems"],
+            2
+        );
+        assert_eq!(
+            named(
+                "apply_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation"
+            )["inputSchema"]["properties"]["public_key_output"]["type"],
+            "string"
         );
         assert_eq!(
             named("request_remote_policy_lifecycle_public_log_gossip")["annotations"]["openWorldHint"],

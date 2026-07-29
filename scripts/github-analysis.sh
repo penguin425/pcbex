@@ -1153,25 +1153,50 @@ if [[ "$local_gossip_configured" == "true" && "$remote_gossip_configured" == "tr
 fi
 policy_lifecycle_log_gossip_organization_registry="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}"
 policy_lifecycle_log_gossip_organization_registry_governance="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}"
-governance_rotation_inputs=0
+governance_policy_inputs=0
 for value in \
   "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_OLD:-}" \
-  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW:-}" \
-  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION:-}"; do
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW:-}"; do
   if [[ -n "$value" ]]; then
-    governance_rotation_inputs=$((governance_rotation_inputs + 1))
+    governance_policy_inputs=$((governance_policy_inputs + 1))
   fi
 done
-if ((governance_rotation_inputs != 0 && governance_rotation_inputs != 3)); then
-  echo "gossip governance rotation requires old policy, new policy, and rotation" >&2
+governance_rotation_configured=false
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION:-}" ]]; then
+  governance_rotation_configured=true
+fi
+governed_authority_rotation_configured=false
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNED_AUTHORITY_KEY_ROTATION:-}" ]]; then
+  governed_authority_rotation_configured=true
+fi
+if [[ "$governance_rotation_configured" == "true" \
+  && "$governed_authority_rotation_configured" == "true" ]]; then
+  echo "gossip governance and governed authority rotations are mutually exclusive" >&2
   exit 2
 fi
-if ((governance_rotation_inputs == 3)); then
+if ((governance_policy_inputs != 0 && governance_policy_inputs != 2)); then
+  echo "gossip registry rotation requires both old and new governance policies" >&2
+  exit 2
+fi
+if [[ "$governance_rotation_configured" == "true" \
+  || "$governed_authority_rotation_configured" == "true" ]]; then
+  if ((governance_policy_inputs != 2)); then
+    echo "gossip registry rotation requires old policy, new policy, and rotation" >&2
+    exit 2
+  fi
   if [[ -z "$policy_lifecycle_log_gossip_organization_registry" ]]; then
-    echo "gossip governance rotation requires a retained registry" >&2
+    echo "gossip registry rotation requires a retained registry" >&2
     exit 2
   fi
   policy_lifecycle_log_gossip_organization_registry_governance="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW}"
+elif ((governance_policy_inputs != 0)); then
+  echo "old and new gossip governance policies require a rotation artifact" >&2
+  exit 2
+fi
+if [[ "$governed_authority_rotation_configured" == "true" \
+  && -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]]; then
+  echo "root-only and governed gossip registry authority rotations are mutually exclusive" >&2
+  exit 2
 fi
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]] \
   && [[ -z "$policy_lifecycle_log_gossip_organization_registry" ]]; then
@@ -1218,7 +1243,7 @@ if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "tr
       --public-key-output "$rotated_gossip_registry_key"
     policy_lifecycle_log_gossip_organization_registry="$rotated_gossip_registry"
   fi
-  if ((governance_rotation_inputs == 3)); then
+  if [[ "$governance_rotation_configured" == "true" ]]; then
     governance_rotated_gossip_registry="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-governance-rotated.json"
     "$PCBEX_BINARY" \
       apply-policy-lifecycle-log-gossip-organization-registry-governance-rotation \
@@ -1228,6 +1253,19 @@ if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "tr
       "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION" \
       --output "$governance_rotated_gossip_registry"
     policy_lifecycle_log_gossip_organization_registry="$governance_rotated_gossip_registry"
+  fi
+  if [[ "$governed_authority_rotation_configured" == "true" ]]; then
+    governed_authority_rotated_gossip_registry="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-governed-authority-rotated.json"
+    governed_authority_rotated_gossip_registry_key="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-governed-authority.pub"
+    "$PCBEX_BINARY" \
+      apply-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation \
+      "$policy_lifecycle_log_gossip_organization_registry" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_OLD" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNED_AUTHORITY_KEY_ROTATION" \
+      --output "$governed_authority_rotated_gossip_registry" \
+      --public-key-output "$governed_authority_rotated_gossip_registry_key"
+    policy_lifecycle_log_gossip_organization_registry="$governed_authority_rotated_gossip_registry"
   fi
   if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]]; then
     governed_gossip_registry="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-governed.json"

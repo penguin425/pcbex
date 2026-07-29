@@ -1725,7 +1725,55 @@ new policy, and rotation together, applies the change atomically, and uses the
 successor policy for any following threshold transition. The registry schema
 exposes the nullable `active_governance_sha256` field; initialization leaves it
 unset, threshold bootstrap sets it, ordinary governed changes preserve it, and
-governance rotation is the only operation that may replace it.
+only governance or governed-root rotation may replace it.
+
+After governance activation, rotate a lost or expiring registry root without
+dropping the retained threshold:
+
+```sh
+pcbex sign-policy-lifecycle-log-gossip-organization-registry-successor-governance \
+  gossip-registry.json \
+  --successor-registry-authority-private-key gossip-registry-root.next.key \
+  --minimum-approvals 2 \
+  --authority-id next-security --authority-public-key next-security.pub \
+  --authority-id next-hardware --authority-public-key next-hardware.pub \
+  --issued-at-unix 1785302300 \
+  --output gossip-registry.governance.next-root.json
+
+pcbex sign-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation \
+  gossip-registry.json \
+  gossip-registry.governance.json \
+  gossip-registry.governance.next-root.json \
+  --old-authority-id security --old-authority-private-key security.key \
+  --old-authority-id hardware --old-authority-private-key hardware.key \
+  --new-authority-id next-security --new-authority-private-key next-security.key \
+  --new-authority-id next-hardware --new-authority-private-key next-hardware.key \
+  --rotated-at-unix 1785302400 \
+  --output gossip-registry.root.rotation.json
+
+pcbex apply-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation \
+  gossip-registry.json \
+  gossip-registry.governance.json \
+  gossip-registry.governance.next-root.json \
+  gossip-registry.root.rotation.json \
+  --output gossip-registry.next-root.json \
+  --public-key-output gossip-registry-root.next.pub
+```
+
+The successor policy's root signature proves possession of the prospective
+root private key. Both the retained active governance quorum and the successor
+quorum independently approve one domain-separated payload binding the old/new
+root keys, old/new policy digests, exact next generation, prior transition
+digest, and monotonic time. Applying it replaces the root and active governance
+digest atomically while preserving every organization decision. Missing
+quorum, stale or forged successor policy, root/policy/key substitution,
+signature mutation, replay, fork, and time rollback fail before either output
+is written. The Action reuses its old/new governance inputs with
+`policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation`;
+ordinary governance rotation and root-only rotation are mutually exclusive.
+MCP exposes successor-policy creation and sign/apply rotation as task-forbidden
+tools, and the closed artifact contract is available from
+`signed-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation-schema`.
 
 ### GitHub Actions hardware CI
 
@@ -1754,7 +1802,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.364.0
+    uses: penguin425/pcbex@v1.365.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2991,7 +3039,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.364.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.365.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
