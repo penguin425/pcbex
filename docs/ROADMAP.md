@@ -56,6 +56,7 @@ auditable release.
 | v1.344.0 | Verification-bound dual-control rollback | Restore only the retained predecessor after two trusted humans sign exact failed production evidence |
 | v1.345.0 | Verified rollback-incident closure | Verify the complete restored fleet and require an independent trusted operator signature before closure |
 | v1.346.0 | Hash-chained policy incident ledger | Retain closed rollbacks, recovery metrics, and repeated-revision suspension candidates without automatic suspension |
+| v1.347.0 | Signed policy suspension decision | Bind dual-control human suspension to repeated incidents and deny exact suspended digests at promotion |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -64,6 +65,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should bind a human suspension decision to repeated incident
-evidence and prevent a suspended policy digest from being promoted again until
-an independently approved remediation revision is verified.
+The next roadmap should retain an independently approved remediation revision,
+verify it against the suspended incident evidence, and lift a suspension only
+for that exact verified successor digest.

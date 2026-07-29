@@ -170,6 +170,10 @@ inputs:
     description: Optional previously retained hash-chained deployment state; required to confirm rollback.
     required: false
     default: ""
+  policy-suspension-state-files:
+    description: Newline-separated retained signed suspension states that deny exact candidate digests.
+    required: false
+    default: ""
   policy-deployment-recorded-at-unix:
     description: Opt-in Unix timestamp for advancing the monotonic deployment state.
     required: false
@@ -296,6 +300,38 @@ inputs:
     default: "2"
   fail-on-policy-incident-suspension-review:
     description: Fail when repeated incidents require a human decision about suspending a policy revision.
+    required: false
+    default: "false"
+  policy-suspension-ledger:
+    description: Repeated-incident ledger; defaults to the ledger produced in this run.
+    required: false
+    default: ""
+  policy-suspension-policy-pack:
+    description: Policy pack containing the trusted human suspension keys; defaults to the effective policy.
+    required: false
+    default: ""
+  policy-suspension-failed-revision:
+    description: Repeatedly failed revision selected for a human suspension decision.
+    required: false
+    default: ""
+  policy-suspension-failed-policy-pack-sha256:
+    description: Exact repeatedly failed policy-pack digest selected for review.
+    required: false
+    default: ""
+  policy-suspension-decision-files:
+    description: Newline-separated signed human suspend or continue decisions.
+    required: false
+    default: ""
+  policy-suspension-minimum-decisions:
+    description: Minimum distinct trusted human decisions required.
+    required: false
+    default: "2"
+  policy-suspension-recorded-at-unix:
+    description: Opt-in Unix timestamp for retaining the unanimous suspension decision.
+    required: false
+    default: ""
+  fail-on-policy-suspension:
+    description: Fail unless the reviewed failed policy digest is explicitly suspended.
     required: false
     default: "false"
   ai-review-request:
@@ -576,6 +612,12 @@ outputs:
   policy-incident-suspension-review-required:
     description: Whether repeated failed revisions require human suspension review.
     value: ${{ steps.analyze.outputs.policy-incident-suspension-review-required }}
+  policy-suspension-state:
+    description: Dual-control signed policy suspension state.
+    value: ${{ steps.analyze.outputs.policy-suspension-state }}
+  policy-suspension-status:
+    description: Whether the reviewed policy digest was suspended or continued under review.
+    value: ${{ steps.analyze.outputs.policy-suspension-status }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -687,6 +729,7 @@ runs:
         PCBEX_POLICY_DEPLOYMENT_CANDIDATE_TRUST_STATE: ${{ inputs.policy-deployment-candidate-trust-state }}
         PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK: ${{ inputs.policy-deployment-candidate-policy-pack }}
         PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE: ${{ inputs.policy-deployment-baseline-state }}
+        PCBEX_POLICY_SUSPENSION_STATE_FILES: ${{ inputs.policy-suspension-state-files }}
         PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX: ${{ inputs.policy-deployment-recorded-at-unix }}
         PCBEX_POLICY_DEPLOYMENT_VERIFICATION_STATE: ${{ inputs.policy-deployment-verification-state }}
         PCBEX_POLICY_DEPLOYMENT_VERIFICATION_PROJECT_ID: ${{ inputs.policy-deployment-verification-project-id }}
@@ -713,6 +756,13 @@ runs:
         PCBEX_RECORD_POLICY_INCIDENT: ${{ inputs.record-policy-incident }}
         PCBEX_POLICY_INCIDENT_LEDGER_BASELINE: ${{ inputs.policy-incident-ledger-baseline }}
         PCBEX_POLICY_INCIDENT_SUSPENSION_THRESHOLD: ${{ inputs.policy-incident-suspension-threshold }}
+        PCBEX_POLICY_SUSPENSION_LEDGER: ${{ inputs.policy-suspension-ledger }}
+        PCBEX_POLICY_SUSPENSION_POLICY_PACK: ${{ inputs.policy-suspension-policy-pack }}
+        PCBEX_POLICY_SUSPENSION_FAILED_REVISION: ${{ inputs.policy-suspension-failed-revision }}
+        PCBEX_POLICY_SUSPENSION_FAILED_POLICY_PACK_SHA256: ${{ inputs.policy-suspension-failed-policy-pack-sha256 }}
+        PCBEX_POLICY_SUSPENSION_DECISION_FILES: ${{ inputs.policy-suspension-decision-files }}
+        PCBEX_POLICY_SUSPENSION_MINIMUM_DECISIONS: ${{ inputs.policy-suspension-minimum-decisions }}
+        PCBEX_POLICY_SUSPENSION_RECORDED_AT_UNIX: ${{ inputs.policy-suspension-recorded-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -792,6 +842,7 @@ runs:
         PCBEX_POLICY_ROLLBACK_RECOVERY_VERIFIED: ${{ steps.analyze.outputs.policy-rollback-recovery-verified }}
         PCBEX_ROLLBACK_INCIDENT_STATUS: ${{ steps.analyze.outputs.rollback-incident-status }}
         PCBEX_POLICY_INCIDENT_SUSPENSION_REVIEW_REQUIRED: ${{ steps.analyze.outputs.policy-incident-suspension-review-required }}
+        PCBEX_POLICY_SUSPENSION_STATUS: ${{ steps.analyze.outputs.policy-suspension-status }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -811,6 +862,7 @@ runs:
         PCBEX_FAIL_ON_POLICY_ROLLBACK_RECOVERY: ${{ inputs.fail-on-policy-rollback-recovery }}
         PCBEX_FAIL_ON_ROLLBACK_INCIDENT_CLOSURE: ${{ inputs.fail-on-rollback-incident-closure }}
         PCBEX_FAIL_ON_POLICY_INCIDENT_SUSPENSION_REVIEW: ${{ inputs.fail-on-policy-incident-suspension-review }}
+        PCBEX_FAIL_ON_POLICY_SUSPENSION: ${{ inputs.fail-on-policy-suspension }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -891,5 +943,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_INCIDENT_SUSPENSION_REVIEW" == "true" && "$PCBEX_POLICY_INCIDENT_SUSPENSION_REVIEW_REQUIRED" != "false" ]]; then
           echo "::error::pcbex policy incident history requires human suspension review"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_SUSPENSION" == "true" && "$PCBEX_POLICY_SUSPENSION_STATUS" != "policy_suspended" ]]; then
+          echo "::error::pcbex repeated-failure policy digest lacks a valid suspension quorum"
           exit 1
         fi
