@@ -358,6 +358,11 @@ jobs:
             build/action-rollout/approval-b.json
           canary-rollout-evaluated-at-unix: "2"
           fail-on-canary-rollout-authorization: "true"
+          canary-monitoring-project-id: action-controller
+          canary-monitoring-baseline-analysis: build/action-rollout/analysis-a
+          canary-monitoring-observed-analysis: build/action-rollout/candidate
+          canary-monitoring-observed-at-unix: "3"
+          fail-on-canary-monitoring: "true"
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -378,6 +383,8 @@ jobs:
           POLICY_ROLLOUT: ${{ steps.pcbex.outputs.policy-rollout }}
           CANARY_ROLLOUT_AUTHORIZATION: ${{ steps.pcbex.outputs.canary-rollout-authorization }}
           CANARY_ROLLOUT_AUTHORIZED: ${{ steps.pcbex.outputs.canary-rollout-authorized }}
+          CANARY_MONITORING: ${{ steps.pcbex.outputs.canary-monitoring }}
+          CANARY_MONITORING_PASSED: ${{ steps.pcbex.outputs.canary-monitoring-passed }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
           SCHEMATIC_REVIEWER_ROUTING: ${{ steps.pcbex.outputs.schematic-reviewer-routing }}
@@ -404,6 +411,10 @@ jobs:
           test "$(jq -r '.canary_authorized' "$CANARY_ROLLOUT_AUTHORIZATION")" = "true"
           test "$(jq -r '.rollback_policy.automatic_promotion' "$CANARY_ROLLOUT_AUTHORIZATION")" = "false"
           test "$(jq -r '.rollback_policy.automatic_rollback' "$CANARY_ROLLOUT_AUTHORIZATION")" = "true"
+          test "$CANARY_MONITORING_PASSED" = "true"
+          test "$(jq -r '.promotion_eligible' "$CANARY_MONITORING")" = "true"
+          test "$(jq -r '.automatic_promotion' "$CANARY_MONITORING")" = "false"
+          test "$(jq -r '.requires_human_decision' "$CANARY_MONITORING")" = "true"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"

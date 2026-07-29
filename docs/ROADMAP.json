@@ -214,6 +214,11 @@
     {
       "id": "dual-control-canary-rollout-authorization",
       "release": "v1.339.0",
+      "status": "released"
+    },
+    {
+      "id": "bound-canary-monitoring-evidence",
+      "release": "v1.340.0",
       "status": "current"
     }
   ]

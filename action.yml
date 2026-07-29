@@ -118,6 +118,26 @@ inputs:
     description: Fail unless the supplied canary rollout approvals authorize the bounded rollout.
     required: false
     default: "false"
+  canary-monitoring-project-id:
+    description: Optional authorized canary project ID whose observed analysis is compared with its exact baseline.
+    required: false
+    default: ""
+  canary-monitoring-baseline-analysis:
+    description: Exact baseline analysis directory retained by the authorized rollout.
+    required: false
+    default: ""
+  canary-monitoring-observed-analysis:
+    description: Observed canary analysis directory produced with the authorized candidate profile.
+    required: false
+    default: ""
+  canary-monitoring-observed-at-unix:
+    description: Explicit Unix timestamp for the bound canary observation.
+    required: false
+    default: ""
+  fail-on-canary-monitoring:
+    description: Fail unless complete bound canary monitoring is eligible for human promotion review.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -336,6 +356,12 @@ outputs:
   canary-rollout-authorized:
     description: Whether the bounded canary rollout is authorized.
     value: ${{ steps.analyze.outputs.canary-rollout-authorized }}
+  canary-monitoring:
+    description: Bound canary monitoring report with rollback and promotion-review outcome.
+    value: ${{ steps.analyze.outputs.canary-monitoring }}
+  canary-monitoring-passed:
+    description: Whether monitoring passed without permitting automatic promotion.
+    value: ${{ steps.analyze.outputs.canary-monitoring-passed }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -436,6 +462,10 @@ runs:
         PCBEX_CANARY_ROLLOUT_APPROVAL_FILES: ${{ inputs.canary-rollout-approval-files }}
         PCBEX_CANARY_ROLLOUT_EVALUATED_AT_UNIX: ${{ inputs.canary-rollout-evaluated-at-unix }}
         PCBEX_CANARY_ROLLOUT_MINIMUM_APPROVALS: ${{ inputs.canary-rollout-minimum-approvals }}
+        PCBEX_CANARY_MONITORING_PROJECT_ID: ${{ inputs.canary-monitoring-project-id }}
+        PCBEX_CANARY_MONITORING_BASELINE_ANALYSIS: ${{ inputs.canary-monitoring-baseline-analysis }}
+        PCBEX_CANARY_MONITORING_OBSERVED_ANALYSIS: ${{ inputs.canary-monitoring-observed-analysis }}
+        PCBEX_CANARY_MONITORING_OBSERVED_AT_UNIX: ${{ inputs.canary-monitoring-observed-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -507,6 +537,7 @@ runs:
         PCBEX_APPROVAL_LOG_ANCHORED: ${{ steps.analyze.outputs.approval-log-anchored }}
         PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.approval-log-witness-quorum-met }}
         PCBEX_CANARY_ROLLOUT_AUTHORIZED: ${{ steps.analyze.outputs.canary-rollout-authorized }}
+        PCBEX_CANARY_MONITORING_PASSED: ${{ steps.analyze.outputs.canary-monitoring-passed }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -518,6 +549,7 @@ runs:
         PCBEX_FAIL_ON_APPROVAL_LOG_ANCHOR: ${{ inputs.fail-on-approval-log-anchor }}
         PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES: ${{ inputs.fail-on-approval-log-witnesses }}
         PCBEX_FAIL_ON_CANARY_ROLLOUT_AUTHORIZATION: ${{ inputs.fail-on-canary-rollout-authorization }}
+        PCBEX_FAIL_ON_CANARY_MONITORING: ${{ inputs.fail-on-canary-monitoring }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -566,5 +598,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_CANARY_ROLLOUT_AUTHORIZATION" == "true" && "$PCBEX_CANARY_ROLLOUT_AUTHORIZED" != "true" ]]; then
           echo "::error::pcbex canary policy rollout lacks a valid dual-control authorization"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_CANARY_MONITORING" == "true" && "$PCBEX_CANARY_MONITORING_PASSED" != "true" ]]; then
+          echo "::error::pcbex canary monitoring is absent, incomplete, or requires rollback"
           exit 1
         fi

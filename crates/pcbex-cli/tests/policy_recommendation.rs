@@ -447,6 +447,7 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
     for schema_command in [
         "signed-rollout-approval-schema",
         "canary-rollout-authorization-schema",
+        "canary-monitoring-schema",
     ] {
         let schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
             .arg(schema_command)
@@ -456,6 +457,69 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
         let schema: serde_json::Value = serde_json::from_slice(&schema.stdout).unwrap();
         assert_eq!(schema["additionalProperties"], false);
     }
+    let monitoring = temporary.join("canary-monitoring.json");
+    let monitoring_summary = temporary.join("canary-monitoring.md");
+    let monitored = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("record-canary-monitoring")
+        .arg(&rollout)
+        .arg(&authorization)
+        .arg("--project-id")
+        .arg("controller")
+        .arg("--board")
+        .arg(&board)
+        .arg("--baseline-analysis")
+        .arg(&baseline)
+        .arg("--observed-analysis")
+        .arg(&candidate)
+        .arg("--observed-at-unix")
+        .arg("1600")
+        .arg("--output")
+        .arg(&monitoring)
+        .arg("--summary-output")
+        .arg(&monitoring_summary)
+        .arg("--require-passed")
+        .output()
+        .unwrap();
+    assert!(
+        monitored.status.success(),
+        "{}",
+        String::from_utf8_lossy(&monitored.stderr)
+    );
+    let monitoring_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&monitoring).unwrap()).unwrap();
+    assert_eq!(monitoring_document["status"], "monitoring_passed");
+    assert_eq!(monitoring_document["promotion_eligible"], true);
+    assert_eq!(monitoring_document["rollback_required"], false);
+    assert_eq!(monitoring_document["automatic_promotion"], false);
+    assert_eq!(monitoring_document["requires_human_decision"], true);
+    assert_eq!(
+        monitoring_document["projects"][0]["project_id"],
+        "controller"
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-canary-monitoring")
+            .arg(&monitoring)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut monitoring_tamper = monitoring_document.clone();
+    monitoring_tamper["automatic_promotion"] = serde_json::json!(true);
+    let monitoring_tamper_path = temporary.join("tampered-canary-monitoring.json");
+    fs::write(
+        &monitoring_tamper_path,
+        serde_json::to_string_pretty(&monitoring_tamper).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-canary-monitoring")
+            .arg(&monitoring_tamper_path)
+            .status()
+            .unwrap()
+            .success()
+    );
     let expired_authorization = temporary.join("expired-canary.json");
     let expired = Command::new(env!("CARGO_BIN_EXE_pcbex"))
         .arg("verify-rollout-approvals")

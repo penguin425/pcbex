@@ -101,9 +101,10 @@ use policy_recommendation::{
     policy_recommendation_json_schema, render_policy_recommendation_summary,
 };
 use policy_rollout::{
-    RolloutAnalysisInput, RolloutProjectInput, parse_policy_rollout_report,
-    policy_rollout_json_schema, render_policy_rollout_summary, rollout_candidate_profile,
-    simulate_policy_rollout,
+    CanaryMonitoringInput, RolloutAnalysisInput, RolloutProjectInput,
+    canary_monitoring_json_schema, parse_canary_monitoring_report, parse_policy_rollout_report,
+    policy_rollout_json_schema, record_canary_monitoring, render_canary_monitoring_summary,
+    render_policy_rollout_summary, rollout_candidate_profile, simulate_policy_rollout,
 };
 use policy_rollout_approval::{
     RolloutApprovalDecision, canary_authorization_json_schema, parse_canary_authorization,
@@ -535,6 +536,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed canary monitoring-evidence JSON Schema.
+    CanaryMonitoringSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize retained canary monitoring evidence.
+    ValidateCanaryMonitoring {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -661,6 +673,27 @@ enum Command {
         summary_output: Option<PathBuf>,
         #[arg(long)]
         require_authorized: bool,
+    },
+    /// Compare authorized canary observations with the exact simulated baselines.
+    RecordCanaryMonitoring {
+        rollout: PathBuf,
+        authorization: PathBuf,
+        #[arg(long = "project-id", required = true)]
+        project_ids: Vec<String>,
+        #[arg(long = "board", required = true)]
+        boards: Vec<PathBuf>,
+        #[arg(long = "baseline-analysis", required = true)]
+        baseline_analyses: Vec<PathBuf>,
+        #[arg(long = "observed-analysis", required = true)]
+        observed_analyses: Vec<PathBuf>,
+        #[arg(long)]
+        observed_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        require_passed: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2124,6 +2157,15 @@ fn main() -> Result<()> {
             let authorization = parse_canary_authorization(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(authorization)?, output.as_ref())?;
         }
+        Command::CanaryMonitoringSchema { output } => {
+            write_or_print_json(&canary_monitoring_json_schema(), output.as_ref())?;
+        }
+        Command::ValidateCanaryMonitoring { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report = parse_canary_monitoring_report(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -2534,6 +2576,123 @@ fn main() -> Result<()> {
             );
             if require_authorized && !authorization.canary_authorized {
                 bail!("canary rollout did not receive bounded dual-control authorization");
+            }
+        }
+        Command::RecordCanaryMonitoring {
+            rollout,
+            authorization,
+            project_ids,
+            boards,
+            baseline_analyses,
+            observed_analyses,
+            observed_at_unix,
+            output,
+            summary_output,
+            require_passed,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "canary monitoring",
+            )?;
+            if project_ids.len() != boards.len()
+                || project_ids.len() != baseline_analyses.len()
+                || project_ids.len() != observed_analyses.len()
+            {
+                bail!(
+                    "canary monitoring requires one board, baseline, and observed analysis per project ID"
+                );
+            }
+            if project_ids.len() > 100 {
+                bail!("canary monitoring accepts at most 100 projects");
+            }
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let authorization_source = fs::read_to_string(&authorization)
+                .with_context(|| format!("reading {}", authorization.display()))?;
+            let authorization =
+                parse_canary_authorization(&authorization_source).map_err(anyhow::Error::msg)?;
+            struct OwnedAnalysis {
+                run_path: String,
+                run: Vec<u8>,
+                checks_path: String,
+                checks: Vec<u8>,
+                quality_path: String,
+                quality: Vec<u8>,
+            }
+            fn read_analysis(directory: &Path) -> Result<OwnedAnalysis> {
+                let run_path = directory.join("run.json");
+                let checks_path = directory.join("checks.json");
+                let quality_path = directory.join("quality.json");
+                Ok(OwnedAnalysis {
+                    run: fs::read(&run_path)
+                        .with_context(|| format!("reading {}", run_path.display()))?,
+                    checks: fs::read(&checks_path)
+                        .with_context(|| format!("reading {}", checks_path.display()))?,
+                    quality: fs::read(&quality_path)
+                        .with_context(|| format!("reading {}", quality_path.display()))?,
+                    run_path: run_path.display().to_string(),
+                    checks_path: checks_path.display().to_string(),
+                    quality_path: quality_path.display().to_string(),
+                })
+            }
+            let analyses = boards
+                .iter()
+                .zip(&baseline_analyses)
+                .zip(&observed_analyses)
+                .map(|((board, baseline), observed)| {
+                    Ok((
+                        board.display().to_string(),
+                        fs::read(board).with_context(|| format!("reading {}", board.display()))?,
+                        read_analysis(baseline)?,
+                        read_analysis(observed)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let inputs = project_ids
+                .iter()
+                .zip(&analyses)
+                .map(|(project_id, (board_path, board, baseline, observed))| {
+                    CanaryMonitoringInput {
+                        project_id,
+                        board_path,
+                        board,
+                        baseline: RolloutAnalysisInput {
+                            run_path: &baseline.run_path,
+                            run: &baseline.run,
+                            checks_path: &baseline.checks_path,
+                            checks: &baseline.checks,
+                            quality_path: &baseline.quality_path,
+                            quality: &baseline.quality,
+                        },
+                        observed: RolloutAnalysisInput {
+                            run_path: &observed.run_path,
+                            run: &observed.run,
+                            checks_path: &observed.checks_path,
+                            checks: &observed.checks,
+                            quality_path: &observed.quality_path,
+                            quality: &observed.quality,
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
+            let report =
+                record_canary_monitoring(&rollout, &authorization, observed_at_unix, &inputs)
+                    .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&report)? + "\n";
+            let summary = render_canary_monitoring_summary(&report);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "canary monitoring: {} passed, {} failed: {}",
+                report.passed_projects, report.failed_projects, report.status
+            );
+            if require_passed && !report.promotion_eligible {
+                bail!("canary monitoring requires rollback");
             }
         }
         Command::RecordSimulationEvidence {

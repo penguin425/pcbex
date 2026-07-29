@@ -2,6 +2,7 @@ use crate::policy_pack::{OrganizationPolicyPack, validate_policy_pack};
 use crate::policy_recommendation::{
     PolicyRecommendationReport, RecommendedRule, validate_policy_recommendation_report,
 };
+use crate::policy_rollout_approval::{CanaryRolloutAuthorization, validate_canary_authorization};
 use pcbex_core::{
     DfmProfile, analysis::AnalysisDelta, checking::CheckReport, quality::RoutingQuality,
     validate_dfm_profile,
@@ -12,6 +13,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 pub const POLICY_ROLLOUT_SCHEMA_VERSION: u32 = 1;
+pub const CANARY_MONITORING_SCHEMA_VERSION: u32 = 1;
 const MAXIMUM_PROJECTS: usize = 1_000;
 const MAXIMUM_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 
@@ -84,6 +86,47 @@ pub struct RolloutProjectInput<'a> {
     pub board: &'a [u8],
     pub baseline: RolloutAnalysisInput<'a>,
     pub candidate: RolloutAnalysisInput<'a>,
+}
+
+pub struct CanaryMonitoringInput<'a> {
+    pub project_id: &'a str,
+    pub board_path: &'a str,
+    pub board: &'a [u8],
+    pub baseline: RolloutAnalysisInput<'a>,
+    pub observed: RolloutAnalysisInput<'a>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanaryMonitoringProject {
+    pub project_id: String,
+    pub board: RolloutArtifact,
+    pub baseline: RolloutAnalysisEvidence,
+    pub observed: RolloutAnalysisEvidence,
+    pub delta: AnalysisDelta,
+    pub passed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CanaryMonitoringReport {
+    pub schema_version: u32,
+    pub status: String,
+    pub rollout_sha256: String,
+    pub authorization_sha256: String,
+    pub policy_pack_id: String,
+    pub policy_pack_revision: u32,
+    pub candidate_profile_sha256: String,
+    pub observed_at_unix: u64,
+    pub total_projects: u32,
+    pub passed_projects: u32,
+    pub failed_projects: u32,
+    pub total_new_violations: u32,
+    pub rollback_required: bool,
+    pub promotion_eligible: bool,
+    pub automatic_promotion: bool,
+    pub requires_human_decision: bool,
+    pub projects: Vec<CanaryMonitoringProject>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -242,6 +285,172 @@ pub fn simulate_policy_rollout(
     };
     validate_policy_rollout_report(&report)?;
     Ok(report)
+}
+
+pub fn record_canary_monitoring(
+    rollout: &PolicyRolloutReport,
+    authorization: &CanaryRolloutAuthorization,
+    observed_at_unix: u64,
+    inputs: &[CanaryMonitoringInput<'_>],
+) -> Result<CanaryMonitoringReport, String> {
+    validate_policy_rollout_report(rollout)?;
+    validate_canary_authorization(authorization)?;
+    let rollout_sha256 = normalized_sha256(rollout)?;
+    if !authorization.canary_authorized
+        || authorization.rollout_sha256 != rollout_sha256
+        || authorization.policy_pack_id != rollout.policy_pack_id
+        || authorization.policy_pack_revision != rollout.policy_pack_revision
+        || authorization.candidate_profile_sha256 != normalized_sha256(&rollout.candidate_profile)?
+    {
+        return Err("canary monitoring is not bound to an authorized rollout".into());
+    }
+    if observed_at_unix < authorization.valid_from_unix
+        || observed_at_unix > authorization.expires_at_unix
+    {
+        return Err("canary monitoring time is outside the authorization window".into());
+    }
+    if inputs.len() != authorization.canary_projects.len() {
+        return Err("canary monitoring must cover the exact authorized project scope".into());
+    }
+    let mut ids = HashSet::new();
+    let mut projects = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        if !ids.insert(input.project_id) {
+            return Err(format!(
+                "duplicate canary monitoring project {:?}",
+                input.project_id
+            ));
+        }
+        if authorization
+            .canary_projects
+            .binary_search_by(|project| project.as_str().cmp(input.project_id))
+            .is_err()
+        {
+            return Err(format!(
+                "project {:?} is outside the authorized canary scope",
+                input.project_id
+            ));
+        }
+        let simulated = rollout
+            .projects
+            .iter()
+            .find(|project| project.project_id == input.project_id)
+            .ok_or_else(|| format!("unknown rollout project {:?}", input.project_id))?;
+        projects.push(observe_canary_project(
+            input,
+            simulated,
+            &rollout.candidate_profile,
+        )?);
+    }
+    projects.sort_by(|left, right| left.project_id.cmp(&right.project_id));
+    let passed_projects = projects.iter().filter(|project| project.passed).count() as u32;
+    let failed_projects = projects.len() as u32 - passed_projects;
+    let total_new_violations = projects.iter().try_fold(0_u32, |total, project| {
+        total
+            .checked_add(
+                u32::try_from(project.delta.new_violations.len())
+                    .map_err(|_| "canary new violation count exceeds u32".to_string())?,
+            )
+            .ok_or_else(|| "canary new violation count overflowed".to_string())
+    })?;
+    let rollback_required = failed_projects != 0 || total_new_violations != 0;
+    let report = CanaryMonitoringReport {
+        schema_version: CANARY_MONITORING_SCHEMA_VERSION,
+        status: if rollback_required {
+            "rollback_required".into()
+        } else {
+            "monitoring_passed".into()
+        },
+        rollout_sha256,
+        authorization_sha256: normalized_sha256(authorization)?,
+        policy_pack_id: rollout.policy_pack_id.clone(),
+        policy_pack_revision: rollout.policy_pack_revision,
+        candidate_profile_sha256: normalized_sha256(&rollout.candidate_profile)?,
+        observed_at_unix,
+        total_projects: projects.len() as u32,
+        passed_projects,
+        failed_projects,
+        total_new_violations,
+        rollback_required,
+        promotion_eligible: !rollback_required,
+        automatic_promotion: false,
+        requires_human_decision: true,
+        projects,
+    };
+    validate_canary_monitoring_report(&report)?;
+    Ok(report)
+}
+
+fn observe_canary_project(
+    input: &CanaryMonitoringInput<'_>,
+    simulated: &RolloutProjectResult,
+    candidate_profile: &DfmProfile,
+) -> Result<CanaryMonitoringProject, String> {
+    let baseline = parse_analysis(&input.baseline)?;
+    let observed = parse_analysis(&input.observed)?;
+    let board = artifact(input.board_path, input.board)?;
+    validate_manifest(&baseline.manifest, &baseline.checks, &baseline.quality)?;
+    validate_manifest(&observed.manifest, &observed.checks, &observed.quality)?;
+    if board.bytes != simulated.board.bytes
+        || board.sha256 != simulated.board.sha256
+        || baseline.evidence.run.bytes != simulated.baseline.run.bytes
+        || baseline.evidence.run.sha256 != simulated.baseline.run.sha256
+        || baseline.evidence.checks.bytes != simulated.baseline.checks.bytes
+        || baseline.evidence.checks.sha256 != simulated.baseline.checks.sha256
+        || baseline.evidence.quality.bytes != simulated.baseline.quality.bytes
+        || baseline.evidence.quality.sha256 != simulated.baseline.quality.sha256
+    {
+        return Err(format!(
+            "project {:?} does not retain the simulated baseline evidence",
+            input.project_id
+        ));
+    }
+    if baseline.manifest.input.sha256 != board.sha256
+        || observed.manifest.input.sha256 != board.sha256
+        || baseline.manifest.input.bytes != board.bytes
+        || observed.manifest.input.bytes != board.bytes
+        || baseline.manifest.engine_version != observed.manifest.engine_version
+        || !same_optional_input(&baseline.manifest.project, &observed.manifest.project)
+        || !same_optional_input(&baseline.manifest.rules_file, &observed.manifest.rules_file)
+        || baseline.manifest.configuration.project_settings_loaded
+            != observed.manifest.configuration.project_settings_loaded
+        || baseline.manifest.configuration.applied_custom_rules
+            != observed.manifest.configuration.applied_custom_rules
+    {
+        return Err(format!(
+            "project {:?} observed analysis changed the board or settings",
+            input.project_id
+        ));
+    }
+    if observed.manifest.configuration.dfm_profile.as_ref() != Some(candidate_profile)
+        || observed
+            .manifest
+            .configuration
+            .organization_policy_pack
+            .is_some()
+        || observed.manifest.dfm_profile_file.is_none()
+        || observed.manifest.policy_pack_file.is_some()
+    {
+        return Err(format!(
+            "project {:?} observation did not use only the authorized candidate profile",
+            input.project_id
+        ));
+    }
+    let delta = AnalysisDelta::between(
+        &baseline.quality,
+        &baseline.checks,
+        &observed.quality,
+        &observed.checks,
+    );
+    let passed = !delta.is_regression();
+    Ok(CanaryMonitoringProject {
+        project_id: input.project_id.into(),
+        board,
+        baseline: baseline.evidence,
+        observed: observed.evidence,
+        delta,
+        passed,
+    })
 }
 
 fn simulate_project(
@@ -491,6 +700,88 @@ pub fn validate_policy_rollout_report(report: &PolicyRolloutReport) -> Result<()
     Ok(())
 }
 
+pub fn parse_canary_monitoring_report(source: &str) -> Result<CanaryMonitoringReport, String> {
+    let report: CanaryMonitoringReport = serde_json::from_str(source)
+        .map_err(|error| format!("invalid canary monitoring report JSON: {error}"))?;
+    validate_canary_monitoring_report(&report)?;
+    Ok(report)
+}
+
+pub fn validate_canary_monitoring_report(report: &CanaryMonitoringReport) -> Result<(), String> {
+    if report.schema_version != CANARY_MONITORING_SCHEMA_VERSION
+        || !matches!(
+            report.status.as_str(),
+            "monitoring_passed" | "rollback_required"
+        )
+        || report.automatic_promotion
+        || !report.requires_human_decision
+    {
+        return Err("canary monitoring governance boundary is invalid".into());
+    }
+    validate_digest(&report.rollout_sha256)?;
+    validate_digest(&report.authorization_sha256)?;
+    validate_digest(&report.candidate_profile_sha256)?;
+    validate_slug("policy pack id", &report.policy_pack_id)?;
+    if report.policy_pack_revision == 0
+        || report.projects.is_empty()
+        || report.projects.len() > MAXIMUM_PROJECTS
+        || report.total_projects != report.projects.len() as u32
+    {
+        return Err("canary monitoring identity or project count is invalid".into());
+    }
+    let mut ids = HashSet::new();
+    let mut boards = HashSet::new();
+    let mut previous = None;
+    let mut passed = 0_u32;
+    let mut failed = 0_u32;
+    let mut new_violations = 0_u32;
+    for project in &report.projects {
+        validate_slug("canary monitoring project", &project.project_id)?;
+        validate_evidence_artifact(&project.board)?;
+        validate_evidence(&project.baseline)?;
+        validate_evidence(&project.observed)?;
+        validate_delta(&project.delta)?;
+        if !ids.insert(project.project_id.as_str())
+            || !boards.insert(project.board.sha256.as_str())
+            || previous.is_some_and(|value| value >= project.project_id.as_str())
+        {
+            return Err("canary monitoring projects are duplicate or unordered".into());
+        }
+        previous = Some(project.project_id.as_str());
+        let expected_passed = !project.delta.is_regression();
+        if project.passed != expected_passed {
+            return Err("canary monitoring project outcome is inconsistent".into());
+        }
+        if expected_passed {
+            passed += 1;
+        } else {
+            failed += 1;
+        }
+        new_violations = new_violations
+            .checked_add(
+                u32::try_from(project.delta.new_violations.len())
+                    .map_err(|_| "canary new violation count exceeds u32".to_string())?,
+            )
+            .ok_or_else(|| "canary new violation count overflowed".to_string())?;
+    }
+    let rollback_required = failed != 0 || new_violations != 0;
+    if report.passed_projects != passed
+        || report.failed_projects != failed
+        || report.total_new_violations != new_violations
+        || report.rollback_required != rollback_required
+        || report.promotion_eligible == rollback_required
+        || report.status
+            != if rollback_required {
+                "rollback_required"
+            } else {
+                "monitoring_passed"
+            }
+    {
+        return Err("canary monitoring aggregate outcome is inconsistent".into());
+    }
+    Ok(())
+}
+
 fn validate_delta(delta: &AnalysisDelta) -> Result<(), String> {
     if delta.schema_version != 1 {
         return Err("policy rollout contains an unsupported analysis delta".into());
@@ -707,6 +998,95 @@ pub fn policy_rollout_json_schema() -> Value {
             }
         }
     })
+}
+
+pub fn canary_monitoring_json_schema() -> Value {
+    let rollout = policy_rollout_json_schema();
+    let rollout_project = &rollout["properties"]["projects"]["items"]["properties"];
+    let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/canary-monitoring-v1.json",
+        "title": "pcbex bound canary monitoring evidence",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "schema_version", "status", "rollout_sha256", "authorization_sha256",
+            "policy_pack_id", "policy_pack_revision", "candidate_profile_sha256",
+            "observed_at_unix", "total_projects", "passed_projects",
+            "failed_projects", "total_new_violations", "rollback_required",
+            "promotion_eligible", "automatic_promotion",
+            "requires_human_decision", "projects"
+        ],
+        "properties": {
+            "schema_version": {"const": CANARY_MONITORING_SCHEMA_VERSION},
+            "status": {"enum": ["monitoring_passed", "rollback_required"]},
+            "rollout_sha256": digest,
+            "authorization_sha256": digest,
+            "policy_pack_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+            "policy_pack_revision": {"type": "integer", "minimum": 1},
+            "candidate_profile_sha256": digest,
+            "observed_at_unix": {"type": "integer", "minimum": 0},
+            "total_projects": {"type": "integer", "minimum": 1, "maximum": MAXIMUM_PROJECTS},
+            "passed_projects": {"type": "integer", "minimum": 0, "maximum": MAXIMUM_PROJECTS},
+            "failed_projects": {"type": "integer", "minimum": 0, "maximum": MAXIMUM_PROJECTS},
+            "total_new_violations": {"type": "integer", "minimum": 0},
+            "rollback_required": {"type": "boolean"},
+            "promotion_eligible": {"type": "boolean"},
+            "automatic_promotion": {"const": false},
+            "requires_human_decision": {"const": true},
+            "projects": {
+                "type": "array", "minItems": 1, "maxItems": MAXIMUM_PROJECTS,
+                "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": [
+                        "project_id", "board", "baseline", "observed", "delta", "passed"
+                    ],
+                    "properties": {
+                        "project_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                        "board": rollout_project["board"],
+                        "baseline": rollout_project["baseline"],
+                        "observed": rollout_project["candidate"],
+                        "delta": rollout_project["delta"],
+                        "passed": {"type": "boolean"}
+                    }
+                }
+            }
+        }
+    })
+}
+
+pub fn render_canary_monitoring_summary(report: &CanaryMonitoringReport) -> String {
+    let mut summary = format!(
+        "# Canary monitoring evidence\n\n\
+         **Result:** {}\n\n\
+         - Projects: `{}`\n\
+         - Passed: `{}`\n\
+         - Failed: `{}`\n\
+         - New violations: `{}`\n\
+         - Automatic promotion: `false`\n\
+         - Human completion decision required: `true`\n\n\
+         | Project | Passed | New violations |\n\
+         |---|---:|---:|\n",
+        if report.rollback_required {
+            "rollback required"
+        } else {
+            "monitoring passed; eligible for human promotion review"
+        },
+        report.total_projects,
+        report.passed_projects,
+        report.failed_projects,
+        report.total_new_violations,
+    );
+    for project in &report.projects {
+        summary.push_str(&format!(
+            "| `{}` | `{}` | {} |\n",
+            project.project_id,
+            project.passed,
+            project.delta.new_violations.len()
+        ));
+    }
+    summary
 }
 
 pub fn render_policy_rollout_summary(report: &PolicyRolloutReport) -> String {

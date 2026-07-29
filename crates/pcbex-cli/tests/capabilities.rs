@@ -34,6 +34,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "verify-rollout-approvals",
         "validate-rollout-approval",
         "validate-canary-rollout-authorization",
+        "record-canary-monitoring",
+        "validate-canary-monitoring",
         "compare-schematics",
         "route-schematic-review",
         "check-schematic",
