@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 
 const CHECKPOINT_DOMAIN: &str = "pcbex-approval-transparency-checkpoint-v1";
 const WITNESS_DOMAIN: &str = "pcbex-approval-transparency-witness-v1";
+const WITNESS_KEY_ROTATION_DOMAIN: &str = "pcbex-approval-transparency-witness-key-rotation-v1";
 const MAX_LOG_ENTRIES: usize = 100_000;
 const MAX_TEXT_BYTES: usize = 256;
 
@@ -107,6 +108,33 @@ pub struct ApprovalLogWitnessQuorumReport {
     pub quorum_met: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLogWitnessTrustState {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub generation: u64,
+    pub current_public_key: String,
+    pub last_rotation_sha256: Option<String>,
+    pub last_rotated_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedApprovalLogWitnessKeyRotation {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_rotation_sha256: Option<String>,
+    pub old_public_key: String,
+    pub new_public_key: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_signature: String,
+    pub new_signature: String,
+}
+
 #[derive(Serialize)]
 struct CheckpointPayload<'a> {
     domain: &'static str,
@@ -126,6 +154,18 @@ struct WitnessPayload<'a> {
     head_sha256: Option<&'a str>,
     witness_id: &'a str,
     observed_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct WitnessKeyRotationPayload<'a> {
+    domain: &'static str,
+    witness_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&'a str>,
+    old_public_key: &'a str,
+    new_public_key: &'a str,
+    rotated_at_unix: u64,
 }
 
 pub fn new_approval_transparency_log(log_id: &str) -> Result<ApprovalTransparencyLog, String> {
@@ -421,6 +461,155 @@ pub fn verify_approval_log_witness_quorum(
     })
 }
 
+pub fn new_approval_log_witness_trust_state(
+    witness_id: &str,
+    public_key: &[u8; 32],
+) -> Result<ApprovalLogWitnessTrustState, String> {
+    validate_slug(witness_id, "approval-log witness id")?;
+    VerifyingKey::from_bytes(public_key)
+        .map_err(|error| format!("invalid approval-log witness public key: {error}"))?;
+    Ok(ApprovalLogWitnessTrustState {
+        schema_version: 1,
+        witness_id: witness_id.into(),
+        generation: 0,
+        current_public_key: hex_encode(public_key),
+        last_rotation_sha256: None,
+        last_rotated_at_unix: None,
+    })
+}
+
+pub fn approval_log_witness_trusted_public_key(
+    state: &ApprovalLogWitnessTrustState,
+) -> Result<[u8; 32], String> {
+    validate_witness_trust_state(state)?;
+    hex_decode_array::<32>(&state.current_public_key, "current witness public key")
+}
+
+pub fn sign_approval_log_witness_key_rotation(
+    state: &ApprovalLogWitnessTrustState,
+    old_secret_key: &[u8; 32],
+    new_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<SignedApprovalLogWitnessKeyRotation, String> {
+    validate_witness_trust_state(state)?;
+    let old_signing_key = SigningKey::from_bytes(old_secret_key);
+    let new_signing_key = SigningKey::from_bytes(new_secret_key);
+    let old_public_key = hex_encode(&old_signing_key.verifying_key().to_bytes());
+    let new_public_key = hex_encode(&new_signing_key.verifying_key().to_bytes());
+    if old_public_key != state.current_public_key {
+        return Err("old witness key does not match the current trust state".into());
+    }
+    if new_public_key == old_public_key {
+        return Err("new witness key must differ from the current key".into());
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err("witness key rotation timestamps must be monotonic".into());
+    }
+    let to_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "witness key generation overflow".to_string())?;
+    let payload = witness_key_rotation_payload(
+        &state.witness_id,
+        state.generation,
+        to_generation,
+        state.last_rotation_sha256.as_deref(),
+        &old_public_key,
+        &new_public_key,
+        rotated_at_unix,
+    )?;
+    Ok(SignedApprovalLogWitnessKeyRotation {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        from_generation: state.generation,
+        to_generation,
+        previous_rotation_sha256: state.last_rotation_sha256.clone(),
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+        algorithm: "ed25519".into(),
+        old_signature: hex_encode(&old_signing_key.sign(&payload).to_bytes()),
+        new_signature: hex_encode(&new_signing_key.sign(&payload).to_bytes()),
+    })
+}
+
+pub fn apply_approval_log_witness_key_rotation(
+    state: &ApprovalLogWitnessTrustState,
+    rotation: &SignedApprovalLogWitnessKeyRotation,
+) -> Result<ApprovalLogWitnessTrustState, String> {
+    validate_witness_trust_state(state)?;
+    validate_witness_key_rotation(rotation)?;
+    if rotation.witness_id != state.witness_id
+        || rotation.from_generation != state.generation
+        || rotation.previous_rotation_sha256 != state.last_rotation_sha256
+        || rotation.old_public_key != state.current_public_key
+    {
+        return Err("witness key rotation does not extend the current trust state".into());
+    }
+    let expected_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "witness key generation overflow".to_string())?;
+    if rotation.to_generation != expected_generation {
+        return Err("witness key rotation must advance exactly one generation".into());
+    }
+    if rotation.new_public_key == rotation.old_public_key {
+        return Err("new witness key must differ from the current key".into());
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err("witness key rotation timestamps must be monotonic".into());
+    }
+    let old_public_key =
+        hex_decode_array::<32>(&rotation.old_public_key, "old witness public key")?;
+    let new_public_key =
+        hex_decode_array::<32>(&rotation.new_public_key, "new witness public key")?;
+    let old_signature =
+        hex_decode_array::<64>(&rotation.old_signature, "old witness rotation signature")?;
+    let new_signature =
+        hex_decode_array::<64>(&rotation.new_signature, "new witness rotation signature")?;
+    let payload = witness_key_rotation_payload(
+        &rotation.witness_id,
+        rotation.from_generation,
+        rotation.to_generation,
+        rotation.previous_rotation_sha256.as_deref(),
+        &rotation.old_public_key,
+        &rotation.new_public_key,
+        rotation.rotated_at_unix,
+    )?;
+    VerifyingKey::from_bytes(&old_public_key)
+        .map_err(|error| format!("invalid old witness public key: {error}"))?
+        .verify_strict(&payload, &Signature::from_bytes(&old_signature))
+        .map_err(|error| format!("invalid old witness rotation signature: {error}"))?;
+    VerifyingKey::from_bytes(&new_public_key)
+        .map_err(|error| format!("invalid new witness public key: {error}"))?
+        .verify_strict(&payload, &Signature::from_bytes(&new_signature))
+        .map_err(|error| format!("invalid new witness rotation signature: {error}"))?;
+    let rotation_sha256 = signed_approval_log_witness_key_rotation_sha256(rotation)?;
+    Ok(ApprovalLogWitnessTrustState {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        generation: rotation.to_generation,
+        current_public_key: rotation.new_public_key.clone(),
+        last_rotation_sha256: Some(rotation_sha256),
+        last_rotated_at_unix: Some(rotation.rotated_at_unix),
+    })
+}
+
+pub fn signed_approval_log_witness_key_rotation_sha256(
+    rotation: &SignedApprovalLogWitnessKeyRotation,
+) -> Result<String, String> {
+    validate_witness_key_rotation(rotation)?;
+    let bytes = serde_json::to_vec(rotation)
+        .map_err(|error| format!("serializing witness key rotation: {error}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
 fn validate_checkpoint(checkpoint: &SignedApprovalLogCheckpoint) -> Result<(), String> {
     if checkpoint.schema_version != 1 || checkpoint.algorithm != "ed25519" {
         return Err("unsupported approval checkpoint contract".into());
@@ -433,6 +622,51 @@ fn validate_checkpoint(checkpoint: &SignedApprovalLogCheckpoint) -> Result<(), S
     }
     hex_decode_array::<32>(&checkpoint.public_key, "approval checkpoint public key")?;
     hex_decode_array::<64>(&checkpoint.signature, "approval checkpoint signature")?;
+    Ok(())
+}
+
+fn validate_witness_trust_state(state: &ApprovalLogWitnessTrustState) -> Result<(), String> {
+    if state.schema_version != 1 {
+        return Err("unsupported approval-log witness trust state".into());
+    }
+    validate_slug(&state.witness_id, "approval-log witness id")?;
+    let public_key =
+        hex_decode_array::<32>(&state.current_public_key, "current witness public key")?;
+    VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| format!("invalid current witness public key: {error}"))?;
+    match (
+        state.generation,
+        &state.last_rotation_sha256,
+        state.last_rotated_at_unix,
+    ) {
+        (0, None, None) => {}
+        (0, _, _) => {
+            return Err("initial witness trust state cannot reference a rotation".into());
+        }
+        (_, None, _) | (_, _, None) => {
+            return Err(
+                "rotated witness trust state must reference its last rotation and time".into(),
+            );
+        }
+        (_, Some(digest), Some(_)) => validate_sha256(digest, "last witness rotation SHA-256")?,
+    }
+    Ok(())
+}
+
+fn validate_witness_key_rotation(
+    rotation: &SignedApprovalLogWitnessKeyRotation,
+) -> Result<(), String> {
+    if rotation.schema_version != 1 || rotation.algorithm != "ed25519" {
+        return Err("unsupported approval-log witness key rotation".into());
+    }
+    validate_slug(&rotation.witness_id, "approval-log witness id")?;
+    if let Some(digest) = &rotation.previous_rotation_sha256 {
+        validate_sha256(digest, "previous witness rotation SHA-256")?;
+    }
+    hex_decode_array::<32>(&rotation.old_public_key, "old witness public key")?;
+    hex_decode_array::<32>(&rotation.new_public_key, "new witness public key")?;
+    hex_decode_array::<64>(&rotation.old_signature, "old witness rotation signature")?;
+    hex_decode_array::<64>(&rotation.new_signature, "new witness rotation signature")?;
     Ok(())
 }
 
@@ -499,6 +733,28 @@ fn witness_payload(
         observed_at_unix,
     })
     .map_err(|error| format!("serializing approval-log witness payload: {error}"))
+}
+
+fn witness_key_rotation_payload(
+    witness_id: &str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&str>,
+    old_public_key: &str,
+    new_public_key: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&WitnessKeyRotationPayload {
+        domain: WITNESS_KEY_ROTATION_DOMAIN,
+        witness_id,
+        from_generation,
+        to_generation,
+        previous_rotation_sha256,
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+    })
+    .map_err(|error| format!("serializing witness key rotation payload: {error}"))
 }
 
 fn validate_sha256(value: &str, label: &str) -> Result<(), String> {
@@ -686,6 +942,58 @@ pub fn signed_approval_log_witness_json_schema() -> Value {
     })
 }
 
+pub fn approval_log_witness_trust_state_json_schema() -> Value {
+    let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/approval-log-witness-trust-state-v1.json",
+        "title": "pcbex approval-log witness trust state",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "generation", "current_public_key",
+            "last_rotation_sha256", "last_rotated_at_unix"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+            "generation": {"type": "integer", "minimum": 0},
+            "current_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "last_rotation_sha256": {"anyOf": [digest, {"type": "null"}]},
+            "last_rotated_at_unix": {
+                "anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+            }
+        }
+    })
+}
+
+pub fn signed_approval_log_witness_key_rotation_json_schema() -> Value {
+    let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/signed-approval-log-witness-key-rotation-v1.json",
+        "title": "pcbex signed approval-log witness key rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "from_generation", "to_generation",
+            "previous_rotation_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+            "from_generation": {"type": "integer", "minimum": 0},
+            "to_generation": {"type": "integer", "minimum": 1},
+            "previous_rotation_sha256": {"anyOf": [digest, {"type": "null"}]},
+            "old_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "new_public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "rotated_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "old_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"},
+            "new_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
 pub fn approval_log_witness_quorum_report_json_schema() -> Value {
     let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
     json!({
@@ -797,6 +1105,14 @@ mod tests {
             approval_log_witness_quorum_report_json_schema()["additionalProperties"],
             false
         );
+        assert_eq!(
+            approval_log_witness_trust_state_json_schema()["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            signed_approval_log_witness_key_rotation_json_schema()["additionalProperties"],
+            false
+        );
     }
 
     #[test]
@@ -835,5 +1151,36 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn rotates_witness_keys_with_dual_control_and_rejects_replay() {
+        let first_key = SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes();
+        let initial = new_approval_log_witness_trust_state("witness-a", &first_key).unwrap();
+        let first =
+            sign_approval_log_witness_key_rotation(&initial, &[8; 32], &[9; 32], 100).unwrap();
+        let rotated = apply_approval_log_witness_key_rotation(&initial, &first).unwrap();
+        assert_eq!(rotated.generation, 1);
+        let first_digest = signed_approval_log_witness_key_rotation_sha256(&first).unwrap();
+        assert_eq!(
+            rotated.last_rotation_sha256.as_deref(),
+            Some(first_digest.as_str())
+        );
+        assert!(apply_approval_log_witness_key_rotation(&rotated, &first).is_err());
+
+        let second =
+            sign_approval_log_witness_key_rotation(&rotated, &[9; 32], &[10; 32], 101).unwrap();
+        let twice_rotated = apply_approval_log_witness_key_rotation(&rotated, &second).unwrap();
+        assert_eq!(twice_rotated.generation, 2);
+
+        let mut tampered = second.clone();
+        tampered.new_public_key =
+            hex_encode(&SigningKey::from_bytes(&[11; 32]).verifying_key().to_bytes());
+        assert!(apply_approval_log_witness_key_rotation(&rotated, &tampered).is_err());
+        assert!(
+            sign_approval_log_witness_key_rotation(&rotated, &[8; 32], &[10; 32], 102).is_err()
+        );
+        assert!(sign_approval_log_witness_key_rotation(&rotated, &[9; 32], &[9; 32], 102).is_err());
+        assert!(sign_approval_log_witness_key_rotation(&rotated, &[9; 32], &[12; 32], 99).is_err());
     }
 }

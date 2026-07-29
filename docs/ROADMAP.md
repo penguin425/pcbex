@@ -42,6 +42,7 @@ auditable release.
 | v1.330.0 | Signed approval transparency log | Detect deletion, reordering, mutation, truncation, and stale checkpoints across approval evidence |
 | v1.331.0 | Approval transparency witness quorum | Require independent trusted observers to attest the exact signed log checkpoint |
 | v1.332.0 | Remote approval transparency witness | Acquire and immediately verify checkpoint attestations from bounded HTTPS services |
+| v1.333.0 | Approval transparency witness key rotation | Advance witness trust through dual-signed, generation- and digest-chained key transitions |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -51,7 +52,7 @@ that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
 The next roadmap should focus on production adoption: managed
-provider-specific adapters, centralized policy-pack retrieval, witness-key
-rotation, public-log anchoring, and governed feedback-to-policy
+provider-specific adapters, centralized policy-pack retrieval, public-log
+anchoring, and governed feedback-to-policy
 recommendations. Those are intentionally not marked complete until each has an
 executable acceptance contract and its own release.

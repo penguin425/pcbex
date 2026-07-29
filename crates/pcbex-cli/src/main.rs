@@ -17,25 +17,27 @@ use pcbex_core::{
 use pcbex_kicad::{
     AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiApprovalQuorumReport, AiRequirement,
     AiReviewRequest, AiReviewResponse, AiReviewSession, ApprovalArtifactKind,
-    ApprovalEventDescriptor, ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview,
-    ElectricalWaiverSet, HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
-    HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
-    SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
-    SignedApprovalLogCheckpoint, SignedApprovalLogWitness, SignedHumanEscalation,
+    ApprovalEventDescriptor, ApprovalLogWitnessTrustState, ApprovalTransparencyLog,
+    ElectricalPolicy, ElectricalReview, ElectricalWaiverSet, HumanEscalationCandidate,
+    HumanEscalationDecision, HumanEscalationPolicy, HumanEscalationReport,
+    RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport, SessionAiQuorumEvidence,
+    SessionRoutedAiApprovalQuorumReport, SignedAiApproval, SignedApprovalLogCheckpoint,
+    SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation,
     SimulationArtifact, SimulationEvidence, ai_approval_quorum_report_json_schema,
     ai_review_request_json_schema, ai_review_response_json_schema,
-    append_approval_transparency_event, apply_custom_design_rules, apply_electrical_waivers,
-    apply_project_net_settings, approval_log_verification_report_json_schema,
-    approval_log_witness_quorum_report_json_schema, approval_public_key,
-    approval_transparency_log_json_schema, build_ai_review_request, build_ai_review_session,
-    check_schematic, compare_electrical_reviews, compare_schematics,
+    append_approval_transparency_event, apply_approval_log_witness_key_rotation,
+    apply_custom_design_rules, apply_electrical_waivers, apply_project_net_settings,
+    approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
+    approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
+    approval_public_key, approval_transparency_log_json_schema, build_ai_review_request,
+    build_ai_review_session, check_schematic, compare_electrical_reviews, compare_schematics,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review,
     human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    new_approval_transparency_log, parse_ai_review_response, parse_electrical_policy,
-    parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
+    new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
+    parse_electrical_policy, parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
     record_simulation_evidence, render_ai_approval_quorum_summary, render_human_escalation_summary,
     render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
     render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
@@ -43,8 +45,9 @@ use pcbex_kicad::{
     schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
     schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
     sign_ai_review, sign_ai_review_for_session, sign_approval_log_checkpoint,
-    sign_approval_log_witness, sign_human_escalation, signed_ai_approval_json_schema,
-    signed_approval_log_checkpoint_json_schema, signed_approval_log_witness_json_schema,
+    sign_approval_log_witness, sign_approval_log_witness_key_rotation, sign_human_escalation,
+    signed_ai_approval_json_schema, signed_approval_log_checkpoint_json_schema,
+    signed_approval_log_witness_json_schema, signed_approval_log_witness_key_rotation_json_schema,
     signed_human_escalation_json_schema, simulation_declaration_json_schema,
     simulation_evidence_json_schema, verify_ai_approval_quorum, verify_approval_log_checkpoint,
     verify_approval_log_witness_quorum, verify_human_escalation, verify_routed_ai_approval_quorum,
@@ -557,6 +560,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed approval-log witness trust-state JSON Schema.
+    ApprovalLogWitnessTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed signed witness-key-rotation JSON Schema.
+    SignedApprovalLogWitnessKeyRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed approval-log witness quorum report JSON Schema.
     ApprovalLogWitnessQuorumReportSchema {
         #[arg(short, long)]
@@ -765,6 +778,44 @@ enum Command {
         /// Explicit observation time; defaults to the current clock.
         #[arg(long)]
         observed_at_unix: Option<u64>,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Initialize generation-zero trust for an approval-log witness key.
+    InitApprovalLogWitnessTrust {
+        #[arg(long)]
+        witness_id: String,
+        #[arg(long)]
+        public_key: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Dual-sign a one-generation witness-key transition with old and new keys.
+    SignApprovalLogWitnessKeyRotation {
+        trust_state: CompactPath,
+        #[arg(long)]
+        old_private_key: CompactPath,
+        #[arg(long)]
+        new_private_key: CompactPath,
+        /// Explicit auditable rotation time; defaults to the current clock.
+        #[arg(long)]
+        rotated_at_unix: Option<u64>,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify and apply one witness-key transition without overwriting prior evidence.
+    ApplyApprovalLogWitnessKeyRotation {
+        trust_state: CompactPath,
+        rotation: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Export the newly trusted key for existing witness-verification interfaces.
+        #[arg(long)]
+        public_key_output: CompactPath,
+    },
+    /// Validate trust state and export its current witness public key.
+    ExportApprovalLogWitnessPublicKey {
+        trust_state: CompactPath,
         #[arg(short, long)]
         output: CompactPath,
     },
@@ -2022,6 +2073,18 @@ fn main() -> Result<()> {
         Command::SignedApprovalLogWitnessSchema { output } => {
             write_or_print_json(&signed_approval_log_witness_json_schema(), output.as_ref())?;
         }
+        Command::ApprovalLogWitnessTrustStateSchema { output } => {
+            write_or_print_json(
+                &approval_log_witness_trust_state_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::SignedApprovalLogWitnessKeyRotationSchema { output } => {
+            write_or_print_json(
+                &signed_approval_log_witness_key_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ApprovalLogWitnessQuorumReportSchema { output } => {
             write_or_print_json(
                 &approval_log_witness_quorum_report_json_schema(),
@@ -2684,6 +2747,100 @@ fn main() -> Result<()> {
             eprintln!(
                 "witnessed approval log {} as {}",
                 witness.log_id, witness.witness_id
+            );
+        }
+        Command::InitApprovalLogWitnessTrust {
+            witness_id,
+            public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(public_key.0.as_ref()), Some(output.0.as_ref())],
+                "witness trust initialization",
+            )?;
+            let key = read_hex_key(&public_key, "initial approval-log witness public key")?;
+            let state = new_approval_log_witness_trust_state(&witness_id, &key)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&state)?, false)?;
+            eprintln!("initialized witness trust {witness_id} at generation 0");
+        }
+        Command::SignApprovalLogWitnessKeyRotation {
+            trust_state,
+            old_private_key,
+            new_private_key,
+            rotated_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(trust_state.0.as_ref()), Some(output.0.as_ref())],
+                "witness key rotation",
+            )?;
+            let (state, _) = read_described_json::<ApprovalLogWitnessTrustState>(&trust_state)?;
+            let old_secret =
+                read_hex_key(&old_private_key, "current approval-log witness private key")?;
+            let new_secret =
+                read_hex_key(&new_private_key, "new approval-log witness private key")?;
+            let rotation = sign_approval_log_witness_key_rotation(
+                &state,
+                &old_secret,
+                &new_secret,
+                rotated_at_unix.unwrap_or(current_unix_seconds()?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&rotation)?, false)?;
+            eprintln!(
+                "signed witness key rotation {} generation {} -> {}",
+                rotation.witness_id, rotation.from_generation, rotation.to_generation
+            );
+        }
+        Command::ApplyApprovalLogWitnessKeyRotation {
+            trust_state,
+            rotation,
+            output,
+            public_key_output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(trust_state.0.as_ref()),
+                    Some(rotation.0.as_ref()),
+                    Some(output.0.as_ref()),
+                    Some(public_key_output.0.as_ref()),
+                ],
+                "witness key rotation",
+            )?;
+            let (state, _) = read_described_json::<ApprovalLogWitnessTrustState>(&trust_state)?;
+            let (rotation, _) =
+                read_described_json::<SignedApprovalLogWitnessKeyRotation>(&rotation)?;
+            let next = apply_approval_log_witness_key_rotation(&state, &rotation)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&next)?, false)?;
+            if let Err(error) = write_new_file(
+                &public_key_output,
+                &format!("{}\n", next.current_public_key),
+                false,
+            ) {
+                fs::remove_file(output.0.as_ref()).ok();
+                return Err(error);
+            }
+            eprintln!(
+                "trusted witness key {} at generation {}",
+                next.witness_id, next.generation
+            );
+        }
+        Command::ExportApprovalLogWitnessPublicKey {
+            trust_state,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(trust_state.0.as_ref()), Some(output.0.as_ref())],
+                "witness trust export",
+            )?;
+            let (state, _) = read_described_json::<ApprovalLogWitnessTrustState>(&trust_state)?;
+            approval_log_witness_trusted_public_key(&state).map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &format!("{}\n", state.current_public_key), false)?;
+            eprintln!(
+                "exported witness key {} at generation {}",
+                state.witness_id, state.generation
             );
         }
         Command::VerifyApprovalLogWitnesses {

@@ -192,6 +192,10 @@ jobs:
           target/release/pcbex approval-keygen \
             --private-key build/action-quorum/remote-witness.key \
             --public-key build/action-quorum/remote-witness.pub
+          target/release/pcbex init-approval-log-witness-trust \
+            --witness-id action-remote-witness \
+            --public-key build/action-quorum/remote-witness.pub \
+            --output build/action-quorum/remote-witness.trust.json
           RUNNER_TRACKING_ID="" nohup python3 scripts/tests/remote_witness_server.py \
             --pcbex target/release/pcbex \
             --checkpoint build/action-quorum/approval-log.checkpoint.json \
@@ -244,7 +248,7 @@ jobs:
             build/action-quorum/witness-a.pub
             build/action-quorum/witness-b.pub
           remote-witness-endpoint: ${{ steps.approval-fixture.outputs.remote-witness-endpoint }}
-          remote-witness-public-key: build/action-quorum/remote-witness.pub
+          remote-witness-trust-state: build/action-quorum/remote-witness.trust.json
           fail-on-approval-log-witnesses: "true"
           manufacturing-feedback-declaration: build/action-feedback/declaration.json
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
