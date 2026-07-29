@@ -85,6 +85,8 @@ write_output policy-lifecycle-remote-witnesses ""
 write_output policy-lifecycle-remote-witness-receipts ""
 write_output policy-lifecycle-log-anchor-verification ""
 write_output policy-lifecycle-log-anchored ""
+write_output policy-lifecycle-log-consistency-verification ""
+write_output policy-lifecycle-log-consistent ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -976,6 +978,41 @@ if ((lifecycle_anchor_inputs == 3)); then
   policy_lifecycle_log_anchored=true
 fi
 
+policy_lifecycle_log_consistency_verification=""
+policy_lifecycle_log_consistent=""
+lifecycle_consistency_inputs=0
+for value in \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_PREVIOUS_ANCHOR_PROOF:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENCY_PROOF:-}"; do
+  if [[ -n "$value" ]]; then ((lifecycle_consistency_inputs += 1)); fi
+done
+if ((lifecycle_consistency_inputs != 0 && lifecycle_consistency_inputs != 2)); then
+  echo "previous lifecycle anchor and consistency proof must be supplied together" >&2
+  exit 2
+fi
+if ((lifecycle_consistency_inputs == 2)); then
+  if ((lifecycle_anchor_inputs != 3)); then
+    echo "policy lifecycle public-log consistency requires a configured current anchor" >&2
+    exit 2
+  fi
+  policy_lifecycle_log_consistency_verification="${artifact_dir}/policy-lifecycle-log-consistency-verification.json"
+  "$PCBEX_BINARY" verify-policy-lifecycle-log-consistency \
+    --previous-anchor "$PCBEX_POLICY_LIFECYCLE_LOG_PREVIOUS_ANCHOR_PROOF" \
+    --current-anchor "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PROOF" \
+    --proof "$PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENCY_PROOF" \
+    --log-id "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_ID" \
+    --public-key "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY" \
+    --output "$policy_lifecycle_log_consistency_verification"
+  policy_lifecycle_log_consistent=true
+  {
+    printf '\n# Lifecycle public-log consistency\n\n'
+    printf -- '- Consistent: `true`\n'
+    printf -- '- Tree growth: `%s -> %s`\n' \
+      "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["old_tree_size"])' "$policy_lifecycle_log_consistency_verification")" \
+      "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["new_tree_size"])' "$policy_lifecycle_log_consistency_verification")"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 policy_lifecycle_witness_quorum=""
 policy_lifecycle_witness_quorum_met=""
 policy_lifecycle_remote_witnesses=""
@@ -1568,6 +1605,8 @@ write_output policy-lifecycle-remote-witnesses "$policy_lifecycle_remote_witness
 write_output policy-lifecycle-remote-witness-receipts "$policy_lifecycle_remote_witness_receipts"
 write_output policy-lifecycle-log-anchor-verification "$policy_lifecycle_log_anchor_verification"
 write_output policy-lifecycle-log-anchored "$policy_lifecycle_log_anchored"
+write_output policy-lifecycle-log-consistency-verification "$policy_lifecycle_log_consistency_verification"
+write_output policy-lifecycle-log-consistent "$policy_lifecycle_log_consistent"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

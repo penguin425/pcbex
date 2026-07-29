@@ -1743,6 +1743,55 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "create_policy_lifecycle_public_log_consistency",
+            "Create policy lifecycle public-log consistency proof",
+            "Build an RFC 6962-style logarithmic proof that a retained signed lifecycle-log tree is an exact prefix of the current tree.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "previous_anchor", "current_anchor", "log_checkpoints", "output"
+                ],
+                "properties": {
+                    "previous_anchor": {"type": "string"},
+                    "current_anchor": {"type": "string"},
+                    "log_checkpoints": {
+                        "type": "array", "minItems": 1, "maxItems": 100000,
+                        "items": {"type": "string"}
+                    },
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "verify_policy_lifecycle_public_log_consistency",
+            "Verify policy lifecycle public-log consistency",
+            "Bind retained and current anchors to trusted signed tree heads and reject rollback, equivocation, or a non-prefix split view.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "previous_anchor", "current_anchor", "proof",
+                    "log_id", "public_key", "output"
+                ],
+                "properties": {
+                    "previous_anchor": {"type": "string"},
+                    "current_anchor": {"type": "string"},
+                    "proof": {"type": "string"},
+                    "log_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+                    },
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -2406,6 +2455,12 @@ fn call_tool(
         }
         "verify_policy_lifecycle_public_anchor" => {
             verify_policy_lifecycle_public_anchor(arguments, cancellation)?
+        }
+        "create_policy_lifecycle_public_log_consistency" => {
+            create_policy_lifecycle_public_log_consistency(arguments, cancellation)?
+        }
+        "verify_policy_lifecycle_public_log_consistency" => {
+            verify_policy_lifecycle_public_log_consistency(arguments, cancellation)?
         }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
@@ -4745,6 +4800,84 @@ fn verify_policy_lifecycle_public_anchor(
     ))
 }
 
+fn create_policy_lifecycle_public_log_consistency(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "previous_anchor",
+            "current_anchor",
+            "log_checkpoints",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "create-policy-lifecycle-log-consistency".into(),
+        "--previous-anchor".into(),
+        required_string(&arguments, "previous_anchor")?,
+        "--current-anchor".into(),
+        required_string(&arguments, "current_anchor")?,
+    ];
+    let log_checkpoints = required_string_array(&arguments, "log_checkpoints", false)?;
+    if log_checkpoints.len() > 100_000 {
+        return Err(json!({
+            "detail": "log_checkpoints cannot exceed 100000 entries"
+        }));
+    }
+    for checkpoint in log_checkpoints {
+        command.extend(["--log-checkpoint".into(), checkpoint]);
+    }
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let proof = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "proof": proof}),
+    ))
+}
+
+fn verify_policy_lifecycle_public_log_consistency(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "previous_anchor",
+            "current_anchor",
+            "proof",
+            "log_id",
+            "public_key",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "verify-policy-lifecycle-log-consistency".into(),
+        "--previous-anchor".into(),
+        required_string(&arguments, "previous_anchor")?,
+        "--current-anchor".into(),
+        required_string(&arguments, "current_anchor")?,
+        "--proof".into(),
+        required_string(&arguments, "proof")?,
+        "--log-id".into(),
+        required_string(&arguments, "log_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 fn compare_schematics(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -5954,7 +6087,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 63);
+        assert_eq!(tools.len(), 65);
         let named = |name: &str| {
             tools
                 .iter()
@@ -6202,6 +6335,19 @@ mod tests {
         );
         assert_eq!(
             named("verify_policy_lifecycle_public_anchor")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("create_policy_lifecycle_public_log_consistency")["inputSchema"]["properties"]["log_checkpoints"]
+                ["maxItems"],
+            100000
+        );
+        assert_eq!(
+            named("create_policy_lifecycle_public_log_consistency")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("verify_policy_lifecycle_public_log_consistency")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(

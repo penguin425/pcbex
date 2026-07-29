@@ -490,6 +490,18 @@ inputs:
     description: Fail unless the configured lifecycle checkpoint has a valid public-log anchor.
     required: false
     default: "false"
+  policy-lifecycle-log-previous-anchor-proof:
+    description: Previously accepted lifecycle public-log anchor used as the consistency baseline.
+    required: false
+    default: ""
+  policy-lifecycle-log-consistency-proof:
+    description: RFC 6962-style proof that the current signed tree extends the previous anchor.
+    required: false
+    default: ""
+  fail-on-policy-lifecycle-log-consistency:
+    description: Fail unless the current lifecycle public log consistently extends the retained anchor.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -813,6 +825,12 @@ outputs:
   policy-lifecycle-log-anchored:
     description: Whether the lifecycle checkpoint is included under the trusted signed tree head.
     value: ${{ steps.analyze.outputs.policy-lifecycle-log-anchored }}
+  policy-lifecycle-log-consistency-verification:
+    description: Verified lifecycle public-log consistency report path, when configured.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-consistency-verification }}
+  policy-lifecycle-log-consistent:
+    description: Whether the current signed tree is an append-only extension of the retained anchor.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-consistent }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -992,6 +1010,8 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PROOF: ${{ inputs.policy-lifecycle-log-anchor-proof }}
         PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_ID: ${{ inputs.policy-lifecycle-log-anchor-id }}
         PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY: ${{ inputs.policy-lifecycle-log-anchor-public-key }}
+        PCBEX_POLICY_LIFECYCLE_LOG_PREVIOUS_ANCHOR_PROOF: ${{ inputs.policy-lifecycle-log-previous-anchor-proof }}
+        PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENCY_PROOF: ${{ inputs.policy-lifecycle-log-consistency-proof }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -1077,6 +1097,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_ACCEPTED: ${{ steps.analyze.outputs.policy-lifecycle-checkpoint-accepted }}
         PCBEX_POLICY_LIFECYCLE_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.policy-lifecycle-witness-quorum-met }}
         PCBEX_POLICY_LIFECYCLE_LOG_ANCHORED: ${{ steps.analyze.outputs.policy-lifecycle-log-anchored }}
+        PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENT: ${{ steps.analyze.outputs.policy-lifecycle-log-consistent }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -1102,6 +1123,7 @@ runs:
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_CHECKPOINT: ${{ inputs.fail-on-policy-lifecycle-checkpoint }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_WITNESS_QUORUM: ${{ inputs.fail-on-policy-lifecycle-witness-quorum }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_ANCHOR: ${{ inputs.fail-on-policy-lifecycle-log-anchor }}
+        PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_CONSISTENCY: ${{ inputs.fail-on-policy-lifecycle-log-consistency }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -1206,5 +1228,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_ANCHOR" == "true" && "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHORED" != "true" ]]; then
           echo "::error::pcbex policy lifecycle checkpoint lacks a valid trusted public-log anchor"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_CONSISTENCY" == "true" && "$PCBEX_POLICY_LIFECYCLE_LOG_CONSISTENT" != "true" ]]; then
+          echo "::error::pcbex lifecycle public log rolled back, equivocated, split views, or lacks a verified consistency proof"
           exit 1
         fi
