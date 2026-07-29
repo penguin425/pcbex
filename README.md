@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.333.0
+    uses: penguin425/pcbex@v1.334.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1841,6 +1841,36 @@ contracts are available from `approval-log-witness-trust-state-schema` and
 `signed-approval-log-witness-key-rotation-schema`. MCP exposes initialize,
 sign, apply, and validated-export operations with destructive-action
 annotations.
+
+For public, append-only retention, an operator can publish checkpoint digests
+as leaves of an RFC 6962-style Merkle tree and sign its exact tree head:
+
+```sh
+pcbex create-approval-log-anchor approvals.checkpoint.json \
+  --log-checkpoint earlier.checkpoint.json \
+  --log-checkpoint approvals.checkpoint.json \
+  --leaf-index 1 \
+  --log-id organization-public-approvals \
+  --private-key .secrets/public-log.key \
+  --output approvals.anchor.json
+
+pcbex verify-approval-log-anchor approvals.checkpoint.json \
+  --proof approvals.anchor.json \
+  --public-key public-log.pub \
+  --output approvals.anchor-verification.json
+```
+
+The inclusion verifier recomputes the domain-separated checkpoint leaf, walks
+the bounded audit path with RFC 6962 tree splitting, requires the exact leaf
+index and tree size, and verifies the reconstructed root against a separately
+trusted Ed25519-signed tree head. A proof for another checkpoint, index, tree,
+log key, or mutated sibling fails before output. The Action accepts
+`approval-log-anchor-proof` with `approval-log-anchor-public-key`, publishes
+the verification report, and can enforce it with
+`fail-on-approval-log-anchor`. MCP exposes both operator-side proof creation
+and verifier-side inclusion checking. Closed proof and report contracts are
+available from `approval-log-anchor-proof-schema` and
+`approval-log-anchor-verification-report-schema`.
 
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit

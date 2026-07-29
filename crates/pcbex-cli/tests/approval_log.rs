@@ -453,6 +453,63 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     assert!(!replayed_trust.exists());
     assert!(!replayed_public.exists());
 
+    let anchor_private = directory.join("public-log.key");
+    let anchor_public = directory.join("public-log.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&anchor_private),
+            "--public-key",
+            path(&anchor_public),
+        ])
+        .status
+        .success()
+    );
+    let anchor = directory.join("checkpoint.anchor.json");
+    assert!(
+        run(&[
+            "create-approval-log-anchor",
+            path(&checkpoint),
+            "--log-checkpoint",
+            path(&checkpoint),
+            "--log-checkpoint",
+            path(&checkpoint),
+            "--log-checkpoint",
+            path(&checkpoint),
+            "--leaf-index",
+            "1",
+            "--log-id",
+            "public-approvals",
+            "--private-key",
+            path(&anchor_private),
+            "--observed-at-unix",
+            "106",
+            "--output",
+            path(&anchor),
+        ])
+        .status
+        .success()
+    );
+    let anchor_report = directory.join("checkpoint.anchor-verification.json");
+    assert!(
+        run(&[
+            "verify-approval-log-anchor",
+            path(&checkpoint),
+            "--proof",
+            path(&anchor),
+            "--public-key",
+            path(&anchor_public),
+            "--output",
+            path(&anchor_report),
+        ])
+        .status
+        .success()
+    );
+    let anchor_report: Value = serde_json::from_slice(&fs::read(&anchor_report).unwrap()).unwrap();
+    assert_eq!(anchor_report["anchored"], true);
+    assert_eq!(anchor_report["tree_size"], 3);
+
     let checkpoint_value: SignedApprovalLogCheckpoint =
         serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
     let remote_secret = [42_u8; 32];

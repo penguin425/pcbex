@@ -178,6 +178,17 @@ jobs:
             --private-key build/action-quorum/transparency.key \
             --signer-id action-security-log \
             --output build/action-quorum/approval-log.checkpoint.json
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/public-log.key \
+            --public-key build/action-quorum/public-log.pub
+          target/release/pcbex create-approval-log-anchor \
+            build/action-quorum/approval-log.checkpoint.json \
+            --log-checkpoint build/action-quorum/approval-log.checkpoint.json \
+            --leaf-index 0 \
+            --log-id action-public-log \
+            --private-key build/action-quorum/public-log.key \
+            --observed-at-unix 2 \
+            --output build/action-quorum/approval-log.anchor.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -241,6 +252,9 @@ jobs:
           approval-log-checkpoint: build/action-quorum/approval-log.checkpoint.json
           approval-log-public-key: build/action-quorum/transparency.pub
           fail-on-approval-log: "true"
+          approval-log-anchor-proof: build/action-quorum/approval-log.anchor.json
+          approval-log-anchor-public-key: build/action-quorum/public-log.pub
+          fail-on-approval-log-anchor: "true"
           approval-log-witness-files: |
             build/action-quorum/witness-a.json
             build/action-quorum/witness-b.json
@@ -279,6 +293,8 @@ jobs:
           SCHEMATIC_APPROVAL_MET: ${{ steps.pcbex.outputs.schematic-approval-met }}
           APPROVAL_LOG_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-verification }}
           APPROVAL_LOG_VERIFIED: ${{ steps.pcbex.outputs.approval-log-verified }}
+          APPROVAL_LOG_ANCHOR_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-anchor-verification }}
+          APPROVAL_LOG_ANCHORED: ${{ steps.pcbex.outputs.approval-log-anchored }}
           REMOTE_WITNESS: ${{ steps.pcbex.outputs.remote-witness }}
           REMOTE_WITNESS_RECEIPT: ${{ steps.pcbex.outputs.remote-witness-receipt }}
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
@@ -316,6 +332,9 @@ jobs:
           test -s "$APPROVAL_LOG_VERIFICATION"
           test "$APPROVAL_LOG_VERIFIED" = "true"
           test "$(jq -r '.entry_count' "$APPROVAL_LOG_VERIFICATION")" = "1"
+          test -s "$APPROVAL_LOG_ANCHOR_VERIFICATION"
+          test "$APPROVAL_LOG_ANCHORED" = "true"
+          test "$(jq -r '.tree_size' "$APPROVAL_LOG_ANCHOR_VERIFICATION")" = "1"
           test -s "$REMOTE_WITNESS"
           test -s "$REMOTE_WITNESS_RECEIPT"
           test "$(jq -r '.witness_id' "$REMOTE_WITNESS")" = "action-remote-witness"

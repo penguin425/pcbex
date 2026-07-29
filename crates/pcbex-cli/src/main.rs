@@ -17,42 +17,46 @@ use pcbex_core::{
 use pcbex_kicad::{
     AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiApprovalQuorumReport, AiRequirement,
     AiReviewRequest, AiReviewResponse, AiReviewSession, ApprovalArtifactKind,
-    ApprovalEventDescriptor, ApprovalLogWitnessTrustState, ApprovalTransparencyLog,
-    ElectricalPolicy, ElectricalReview, ElectricalWaiverSet, HumanEscalationCandidate,
-    HumanEscalationDecision, HumanEscalationPolicy, HumanEscalationReport,
-    RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport, SessionAiQuorumEvidence,
-    SessionRoutedAiApprovalQuorumReport, SignedAiApproval, SignedApprovalLogCheckpoint,
-    SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation,
-    SimulationArtifact, SimulationEvidence, ai_approval_quorum_report_json_schema,
-    ai_review_request_json_schema, ai_review_response_json_schema,
-    append_approval_transparency_event, apply_approval_log_witness_key_rotation,
-    apply_custom_design_rules, apply_electrical_waivers, apply_project_net_settings,
+    ApprovalEventDescriptor, ApprovalLogAnchorProof, ApprovalLogWitnessTrustState,
+    ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet,
+    HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
+    HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
+    SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
+    SignedApprovalLogCheckpoint, SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation,
+    SignedHumanEscalation, SimulationArtifact, SimulationEvidence,
+    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
+    ai_review_response_json_schema, append_approval_transparency_event,
+    apply_approval_log_witness_key_rotation, apply_custom_design_rules, apply_electrical_waivers,
+    apply_project_net_settings, approval_log_anchor_proof_json_schema,
+    approval_log_anchor_verification_report_json_schema,
     approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
     approval_public_key, approval_transparency_log_json_schema, build_ai_review_request,
     build_ai_review_session, check_schematic, compare_electrical_reviews, compare_schematics,
-    electrical_explanation_json_schema, electrical_policy_json_schema,
-    electrical_review_comparison_json_schema, electrical_review_json_schema,
-    electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
-    electrical_waiver_set_json_schema, explain_electrical_review,
-    human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
-    parse_electrical_policy, parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
-    record_simulation_evidence, render_ai_approval_quorum_summary, render_human_escalation_summary,
-    render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
-    render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
-    route_schematic_review, routed_ai_approval_quorum_report_json_schema,
-    schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
-    schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
-    sign_ai_review, sign_ai_review_for_session, sign_approval_log_checkpoint,
-    sign_approval_log_witness, sign_approval_log_witness_key_rotation, sign_human_escalation,
-    signed_ai_approval_json_schema, signed_approval_log_checkpoint_json_schema,
+    create_approval_log_anchor_proof, electrical_explanation_json_schema,
+    electrical_policy_json_schema, electrical_review_comparison_json_schema,
+    electrical_review_json_schema, electrical_review_to_junit, electrical_review_to_sarif,
+    electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
+    explain_electrical_review, human_escalation_report_json_schema, import as import_kicad,
+    import_schematic, new_approval_log_witness_trust_state, new_approval_transparency_log,
+    parse_ai_review_response, parse_electrical_policy, parse_schematic_reviewer_routing_policy,
+    parse_simulation_declaration, record_simulation_evidence, render_ai_approval_quorum_summary,
+    render_human_escalation_summary, render_routed_ai_approval_quorum_summary,
+    render_schematic_diff_summary, render_schematic_reviewer_routing_summary,
+    render_session_routed_ai_approval_quorum_summary, route_schematic_review,
+    routed_ai_approval_quorum_report_json_schema, schematic_diff_json_schema,
+    schematic_diff_to_sarif, schematic_json_schema, schematic_reviewer_routing_plan_json_schema,
+    schematic_reviewer_routing_policy_json_schema, sign_ai_review, sign_ai_review_for_session,
+    sign_approval_log_checkpoint, sign_approval_log_witness,
+    sign_approval_log_witness_key_rotation, sign_human_escalation, signed_ai_approval_json_schema,
+    signed_approval_log_checkpoint_json_schema, signed_approval_log_checkpoint_sha256,
     signed_approval_log_witness_json_schema, signed_approval_log_witness_key_rotation_json_schema,
     signed_human_escalation_json_schema, simulation_declaration_json_schema,
-    simulation_evidence_json_schema, verify_ai_approval_quorum, verify_approval_log_checkpoint,
-    verify_approval_log_witness_quorum, verify_human_escalation, verify_routed_ai_approval_quorum,
-    verify_session_ai_approval_quorum, verify_session_routed_ai_approval_quorum,
-    verify_session_signed_ai_approval, verify_signed_ai_approval,
+    simulation_evidence_json_schema, verify_ai_approval_quorum, verify_approval_log_anchor_proof,
+    verify_approval_log_checkpoint, verify_approval_log_witness_quorum, verify_human_escalation,
+    verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
+    verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
+    verify_signed_ai_approval,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -570,6 +574,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed approval-log public anchor proof JSON Schema.
+    ApprovalLogAnchorProofSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed public anchor verification report JSON Schema.
+    ApprovalLogAnchorVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed approval-log witness quorum report JSON Schema.
     ApprovalLogWitnessQuorumReportSchema {
         #[arg(short, long)]
@@ -816,6 +830,34 @@ enum Command {
     /// Validate trust state and export its current witness public key.
     ExportApprovalLogWitnessPublicKey {
         trust_state: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Build and sign a Merkle inclusion proof as a public-log operator.
+    CreateApprovalLogAnchor {
+        checkpoint: CompactPath,
+        /// Ordered checkpoint snapshot; repeat in exact public-log leaf order.
+        #[arg(long = "log-checkpoint", required = true)]
+        log_checkpoints: Vec<PathBuf>,
+        #[arg(long)]
+        leaf_index: u64,
+        #[arg(long)]
+        log_id: String,
+        #[arg(long)]
+        private_key: CompactPath,
+        /// Explicit tree-head observation time; defaults to the current clock.
+        #[arg(long)]
+        observed_at_unix: Option<u64>,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify checkpoint inclusion under a trusted signed public-log tree head.
+    VerifyApprovalLogAnchor {
+        checkpoint: CompactPath,
+        #[arg(long)]
+        proof: CompactPath,
+        #[arg(long)]
+        public_key: CompactPath,
         #[arg(short, long)]
         output: CompactPath,
     },
@@ -2085,6 +2127,15 @@ fn main() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::ApprovalLogAnchorProofSchema { output } => {
+            write_or_print_json(&approval_log_anchor_proof_json_schema(), output.as_ref())?;
+        }
+        Command::ApprovalLogAnchorVerificationReportSchema { output } => {
+            write_or_print_json(
+                &approval_log_anchor_verification_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ApprovalLogWitnessQuorumReportSchema { output } => {
             write_or_print_json(
                 &approval_log_witness_quorum_report_json_schema(),
@@ -2841,6 +2892,73 @@ fn main() -> Result<()> {
             eprintln!(
                 "exported witness key {} at generation {}",
                 state.witness_id, state.generation
+            );
+        }
+        Command::CreateApprovalLogAnchor {
+            checkpoint,
+            log_checkpoints,
+            leaf_index,
+            log_id,
+            private_key,
+            observed_at_unix,
+            output,
+        } => {
+            if output.0.as_ref() == checkpoint.0.as_ref()
+                || output.0.as_ref() == private_key.0.as_ref()
+                || log_checkpoints
+                    .iter()
+                    .any(|path| path.as_path() == output.0.as_ref())
+            {
+                bail!("approval-log anchor output must use a separate path");
+            }
+            let (checkpoint, _) = read_described_json::<SignedApprovalLogCheckpoint>(&checkpoint)?;
+            let checkpoint_digests = log_checkpoints
+                .iter()
+                .map(|path| {
+                    let (checkpoint, _) = read_described_json::<SignedApprovalLogCheckpoint>(path)?;
+                    signed_approval_log_checkpoint_sha256(&checkpoint).map_err(anyhow::Error::msg)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let secret = read_hex_key(&private_key, "approval public-log private key")?;
+            let proof = create_approval_log_anchor_proof(
+                &checkpoint,
+                &checkpoint_digests,
+                leaf_index,
+                &log_id,
+                observed_at_unix.unwrap_or(current_unix_seconds()?),
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&proof)?, false)?;
+            eprintln!(
+                "anchored approval checkpoint at {}/{} in {}",
+                proof.leaf_index, proof.tree_head.tree_size, proof.tree_head.log_id
+            );
+        }
+        Command::VerifyApprovalLogAnchor {
+            checkpoint,
+            proof,
+            public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(checkpoint.0.as_ref()),
+                    Some(proof.0.as_ref()),
+                    Some(public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval-log anchor verification",
+            )?;
+            let (checkpoint, _) = read_described_json::<SignedApprovalLogCheckpoint>(&checkpoint)?;
+            let (proof, _) = read_described_json::<ApprovalLogAnchorProof>(&proof)?;
+            let trusted = read_hex_key(&public_key, "trusted approval public-log key")?;
+            let report = verify_approval_log_anchor_proof(&checkpoint, &proof, &trusted)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "verified approval checkpoint anchor {}/{} in {}",
+                report.leaf_index, report.tree_size, report.log_id
             );
         }
         Command::VerifyApprovalLogWitnesses {

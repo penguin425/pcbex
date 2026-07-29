@@ -1132,6 +1132,51 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "create_approval_transparency_public_anchor",
+            "Create approval public-log anchor",
+            "Build and sign an RFC 6962-style Merkle inclusion proof over an ordered checkpoint snapshot.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "checkpoint", "log_checkpoints", "leaf_index", "log_id",
+                    "private_key", "output"
+                ],
+                "properties": {
+                    "checkpoint": {"type": "string"},
+                    "log_checkpoints": {
+                        "type": "array", "minItems": 1, "maxItems": 100000,
+                        "items": {"type": "string"}
+                    },
+                    "leaf_index": {"type": "integer", "minimum": 0},
+                    "log_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                    "private_key": {"type": "string"},
+                    "observed_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_approval_transparency_public_anchor",
+            "Verify approval public-log anchor",
+            "Verify checkpoint inclusion, the exact Merkle root, and a separately trusted signed tree head.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["checkpoint", "proof", "public_key", "output"],
+                "properties": {
+                    "checkpoint": {"type": "string"},
+                    "proof": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -1282,6 +1327,12 @@ fn call_tool(
         }
         "export_approval_transparency_witness_public_key" => {
             export_approval_transparency_witness_public_key(arguments, cancellation)?
+        }
+        "create_approval_transparency_public_anchor" => {
+            create_approval_transparency_public_anchor(arguments, cancellation)?
+        }
+        "verify_approval_transparency_public_anchor" => {
+            verify_approval_transparency_public_anchor(arguments, cancellation)?
         }
         "verify_approval_transparency_witnesses" => {
             verify_approval_transparency_witnesses(arguments, cancellation)?
@@ -2296,6 +2347,81 @@ fn export_approval_transparency_witness_public_key(
     Ok(execution_result(execution, json!({"output": output})))
 }
 
+fn create_approval_transparency_public_anchor(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "checkpoint",
+            "log_checkpoints",
+            "leaf_index",
+            "log_id",
+            "private_key",
+            "observed_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let leaf_index = arguments
+        .get("leaf_index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "leaf_index must be a non-negative integer"}))?;
+    let mut command = vec![
+        "create-approval-log-anchor".into(),
+        required_string(&arguments, "checkpoint")?,
+    ];
+    for checkpoint in required_string_array(&arguments, "log_checkpoints", false)? {
+        command.extend(["--log-checkpoint".into(), checkpoint]);
+    }
+    command.extend([
+        "--leaf-index".into(),
+        leaf_index.to_string(),
+        "--log-id".into(),
+        required_string(&arguments, "log_id")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+    ]);
+    optional_nonnegative_integer(
+        &arguments,
+        "observed_at_unix",
+        "--observed-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let proof = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "proof": proof}),
+    ))
+}
+
+fn verify_approval_transparency_public_anchor(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["checkpoint", "proof", "public_key", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "verify-approval-log-anchor".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--proof".into(),
+        required_string(&arguments, "proof")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -2647,7 +2773,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 26);
+        assert_eq!(tools.len(), 28);
         let named = |name: &str| {
             tools
                 .iter()
@@ -2755,6 +2881,11 @@ mod tests {
         assert_eq!(
             named("apply_approval_transparency_witness_key_rotation")["inputSchema"]["required"][3],
             "public_key_output"
+        );
+        assert_eq!(
+            named("create_approval_transparency_public_anchor")["inputSchema"]["properties"]["log_checkpoints"]
+                ["maxItems"],
+            100000
         );
         let verify_policy = tools
             .iter()
