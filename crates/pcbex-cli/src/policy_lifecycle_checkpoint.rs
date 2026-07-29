@@ -3,12 +3,15 @@ use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 
 pub const SIGNED_POLICY_LIFECYCLE_CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 pub const POLICY_LIFECYCLE_TRUST_STATE_SCHEMA_VERSION: u32 = 1;
 const SIGNATURE_DOMAIN: &str = "pcbex-policy-lifecycle-checkpoint-v1";
 const KEY_ROTATION_DOMAIN: &str = "pcbex-policy-lifecycle-checkpoint-key-rotation-v1";
+const WITNESS_DOMAIN: &str = "pcbex-policy-lifecycle-checkpoint-witness-v1";
 const MAXIMUM_ACCEPTANCE_DELAY_SECONDS: u64 = 86_400;
+const MAXIMUM_WITNESS_AGE_SECONDS: u64 = 86_400;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -68,6 +71,38 @@ pub struct SignedPolicyLifecycleKeyRotation {
     pub new_signature: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedPolicyLifecycleCheckpointWitness {
+    pub schema_version: u32,
+    pub checkpoint_sha256: String,
+    pub policy_pack_id: String,
+    pub generation: u64,
+    pub head_sha256: String,
+    pub witness_id: String,
+    pub observed_at_unix: u64,
+    pub algorithm: String,
+    pub public_key: String,
+    pub signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyLifecycleWitnessQuorumReport {
+    pub schema_version: u32,
+    pub status: String,
+    pub checkpoint_sha256: String,
+    pub policy_pack_id: String,
+    pub generation: u64,
+    pub head_sha256: String,
+    pub evaluated_at_unix: u64,
+    pub minimum_witnesses: u32,
+    pub valid_witnesses: u32,
+    pub witness_ids: Vec<String>,
+    pub witness_public_keys: Vec<String>,
+    pub quorum_met: bool,
+}
+
 #[derive(Serialize)]
 struct SignaturePayload<'a> {
     domain: &'static str,
@@ -92,6 +127,139 @@ struct KeyRotationPayload<'a> {
     old_public_key: &'a str,
     new_public_key: &'a str,
     rotated_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct WitnessPayload<'a> {
+    domain: &'static str,
+    checkpoint_sha256: &'a str,
+    policy_pack_id: &'a str,
+    generation: u64,
+    head_sha256: &'a str,
+    witness_id: &'a str,
+    observed_at_unix: u64,
+}
+
+pub fn sign_policy_lifecycle_checkpoint_witness(
+    state: &PolicyLifecycleTrustState,
+    witness_id: &str,
+    observed_at_unix: u64,
+    secret_key: &[u8; 32],
+) -> Result<SignedPolicyLifecycleCheckpointWitness, String> {
+    validate_policy_lifecycle_trust_state(state)?;
+    validate_slug(witness_id)?;
+    if observed_at_unix < state.issued_at_unix {
+        return Err("policy lifecycle witness predates the signed checkpoint".into());
+    }
+    let signing_key = SigningKey::from_bytes(secret_key);
+    let payload = witness_payload(
+        &state.checkpoint_sha256,
+        &state.policy_pack_id,
+        state.accepted_generation,
+        &state.head_sha256,
+        witness_id,
+        observed_at_unix,
+    )?;
+    let witness = SignedPolicyLifecycleCheckpointWitness {
+        schema_version: 1,
+        checkpoint_sha256: state.checkpoint_sha256.clone(),
+        policy_pack_id: state.policy_pack_id.clone(),
+        generation: state.accepted_generation,
+        head_sha256: state.head_sha256.clone(),
+        witness_id: witness_id.into(),
+        observed_at_unix,
+        algorithm: "ed25519".into(),
+        public_key: hex_encode(&signing_key.verifying_key().to_bytes()),
+        signature: hex_encode(&signing_key.sign(&payload).to_bytes()),
+    };
+    validate_signed_policy_lifecycle_checkpoint_witness(&witness)?;
+    Ok(witness)
+}
+
+pub fn verify_policy_lifecycle_checkpoint_witnesses(
+    state: &PolicyLifecycleTrustState,
+    witnesses: &[SignedPolicyLifecycleCheckpointWitness],
+    trusted_public_keys: &[[u8; 32]],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<PolicyLifecycleWitnessQuorumReport, String> {
+    validate_policy_lifecycle_trust_state(state)?;
+    if !(2..=100).contains(&minimum_witnesses) {
+        return Err("policy lifecycle witness quorum must require 2 to 100 witnesses".into());
+    }
+    if witnesses.len() != trusted_public_keys.len() || witnesses.len() > 100 {
+        return Err(
+            "policy lifecycle witnesses and trusted keys must be paired and bounded".into(),
+        );
+    }
+    if evaluated_at_unix < state.issued_at_unix {
+        return Err("policy lifecycle witness evaluation predates the checkpoint".into());
+    }
+    let mut witness_ids = BTreeSet::new();
+    let mut witness_public_keys = BTreeSet::new();
+    for (witness, trusted_key) in witnesses.iter().zip(trusted_public_keys) {
+        validate_signed_policy_lifecycle_checkpoint_witness(witness)?;
+        if witness.checkpoint_sha256 != state.checkpoint_sha256
+            || witness.policy_pack_id != state.policy_pack_id
+            || witness.generation != state.accepted_generation
+            || witness.head_sha256 != state.head_sha256
+        {
+            return Err("policy lifecycle witness is bound to a different checkpoint".into());
+        }
+        let trusted_key_hex = hex_encode(trusted_key);
+        if witness.public_key != trusted_key_hex {
+            return Err("policy lifecycle witness public key is not trusted".into());
+        }
+        if witness.observed_at_unix < state.issued_at_unix
+            || evaluated_at_unix < witness.observed_at_unix
+            || evaluated_at_unix - witness.observed_at_unix > MAXIMUM_WITNESS_AGE_SECONDS
+        {
+            return Err("policy lifecycle witness is outside the 24-hour evaluation window".into());
+        }
+        if !witness_ids.insert(witness.witness_id.clone())
+            || !witness_public_keys.insert(trusted_key_hex)
+        {
+            return Err("policy lifecycle witnesses must use distinct identities and keys".into());
+        }
+        let payload = witness_payload(
+            &witness.checkpoint_sha256,
+            &witness.policy_pack_id,
+            witness.generation,
+            &witness.head_sha256,
+            &witness.witness_id,
+            witness.observed_at_unix,
+        )?;
+        let signature = Signature::from_bytes(&decode_hex_array::<64>(
+            &witness.signature,
+            "policy lifecycle witness signature",
+        )?);
+        VerifyingKey::from_bytes(trusted_key)
+            .map_err(|error| format!("invalid policy lifecycle witness key: {error}"))?
+            .verify_strict(&payload, &signature)
+            .map_err(|_| "policy lifecycle witness signature verification failed".to_string())?;
+    }
+    let valid_witnesses = u32::try_from(witnesses.len())
+        .map_err(|_| "policy lifecycle witness count overflow".to_string())?;
+    let quorum_met = valid_witnesses >= minimum_witnesses;
+    Ok(PolicyLifecycleWitnessQuorumReport {
+        schema_version: 1,
+        status: if quorum_met {
+            "witness_quorum_met"
+        } else {
+            "insufficient_witnesses"
+        }
+        .into(),
+        checkpoint_sha256: state.checkpoint_sha256.clone(),
+        policy_pack_id: state.policy_pack_id.clone(),
+        generation: state.accepted_generation,
+        head_sha256: state.head_sha256.clone(),
+        evaluated_at_unix,
+        minimum_witnesses,
+        valid_witnesses,
+        witness_ids: witness_ids.into_iter().collect(),
+        witness_public_keys: witness_public_keys.into_iter().collect(),
+        quorum_met,
+    })
 }
 
 pub fn sign_policy_lifecycle_key_rotation(
@@ -295,6 +463,24 @@ pub fn parse_signed_policy_lifecycle_key_rotation(
     Ok(rotation)
 }
 
+pub fn parse_signed_policy_lifecycle_checkpoint_witness(
+    source: &str,
+) -> Result<SignedPolicyLifecycleCheckpointWitness, String> {
+    let witness = serde_json::from_str(source)
+        .map_err(|error| format!("invalid signed policy lifecycle witness JSON: {error}"))?;
+    validate_signed_policy_lifecycle_checkpoint_witness(&witness)?;
+    Ok(witness)
+}
+
+pub fn parse_policy_lifecycle_witness_quorum_report(
+    source: &str,
+) -> Result<PolicyLifecycleWitnessQuorumReport, String> {
+    let report = serde_json::from_str(source)
+        .map_err(|error| format!("invalid policy lifecycle witness quorum JSON: {error}"))?;
+    validate_policy_lifecycle_witness_quorum_report(&report)?;
+    Ok(report)
+}
+
 fn verify_policy_lifecycle_key_rotation(
     baseline: &PolicyLifecycleTrustState,
     checkpoint: &SignedPolicyLifecycleCheckpoint,
@@ -377,6 +563,60 @@ pub fn validate_signed_policy_lifecycle_key_rotation(
     validate_hex(&rotation.new_public_key, 32)?;
     validate_hex(&rotation.old_signature, 64)?;
     validate_hex(&rotation.new_signature, 64)
+}
+
+pub fn validate_signed_policy_lifecycle_checkpoint_witness(
+    witness: &SignedPolicyLifecycleCheckpointWitness,
+) -> Result<(), String> {
+    if witness.schema_version != 1 || witness.algorithm != "ed25519" || witness.generation == 0 {
+        return Err("invalid signed policy lifecycle witness invariants".into());
+    }
+    validate_digest(&witness.checkpoint_sha256)?;
+    validate_slug(&witness.policy_pack_id)?;
+    validate_digest(&witness.head_sha256)?;
+    validate_slug(&witness.witness_id)?;
+    validate_hex(&witness.public_key, 32)?;
+    validate_hex(&witness.signature, 64)
+}
+
+pub fn validate_policy_lifecycle_witness_quorum_report(
+    report: &PolicyLifecycleWitnessQuorumReport,
+) -> Result<(), String> {
+    let count = usize::try_from(report.valid_witnesses)
+        .map_err(|_| "policy lifecycle witness count overflow".to_string())?;
+    if report.schema_version != 1
+        || report.generation == 0
+        || !(2..=100).contains(&report.minimum_witnesses)
+        || count != report.witness_ids.len()
+        || count != report.witness_public_keys.len()
+        || report.quorum_met != (report.valid_witnesses >= report.minimum_witnesses)
+        || report.status
+            != if report.quorum_met {
+                "witness_quorum_met"
+            } else {
+                "insufficient_witnesses"
+            }
+    {
+        return Err("invalid policy lifecycle witness quorum invariants".into());
+    }
+    validate_digest(&report.checkpoint_sha256)?;
+    validate_slug(&report.policy_pack_id)?;
+    validate_digest(&report.head_sha256)?;
+    let mut ids = BTreeSet::new();
+    let mut keys = BTreeSet::new();
+    for id in &report.witness_ids {
+        validate_slug(id)?;
+        if !ids.insert(id) {
+            return Err("duplicate policy lifecycle witness identity".into());
+        }
+    }
+    for key in &report.witness_public_keys {
+        validate_hex(key, 32)?;
+        if !keys.insert(key) {
+            return Err("duplicate policy lifecycle witness public key".into());
+        }
+    }
+    Ok(())
 }
 
 pub fn verify_checkpoint_for_ledger(
@@ -562,6 +802,26 @@ fn key_rotation_payload(
     .map_err(|error| format!("serializing policy lifecycle key rotation payload: {error}"))
 }
 
+fn witness_payload(
+    checkpoint_sha256: &str,
+    policy_pack_id: &str,
+    generation: u64,
+    head_sha256: &str,
+    witness_id: &str,
+    observed_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&WitnessPayload {
+        domain: WITNESS_DOMAIN,
+        checkpoint_sha256,
+        policy_pack_id,
+        generation,
+        head_sha256,
+        witness_id,
+        observed_at_unix,
+    })
+    .map_err(|error| format!("serializing policy lifecycle witness payload: {error}"))
+}
+
 fn validate_acceptance_time(issued_at_unix: u64, accepted_at_unix: u64) -> Result<(), String> {
     if accepted_at_unix < issued_at_unix
         || accepted_at_unix - issued_at_unix > MAXIMUM_ACCEPTANCE_DELAY_SECONDS
@@ -673,6 +933,67 @@ pub fn signed_policy_lifecycle_key_rotation_json_schema() -> Value {
             "algorithm": {"const": "ed25519"},
             "old_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"},
             "new_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
+pub fn signed_policy_lifecycle_checkpoint_witness_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-policy-lifecycle-checkpoint-witness-v1.json",
+        "title": "Signed pcbex policy lifecycle checkpoint witness",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "checkpoint_sha256", "policy_pack_id",
+            "generation", "head_sha256", "witness_id", "observed_at_unix",
+            "algorithm", "public_key", "signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "checkpoint_sha256": digest_schema(),
+            "policy_pack_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 1},
+            "head_sha256": digest_schema(),
+            "witness_id": slug_schema(),
+            "observed_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
+pub fn policy_lifecycle_witness_quorum_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/policy-lifecycle-witness-quorum-v1.json",
+        "title": "pcbex policy lifecycle checkpoint witness quorum",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "status", "checkpoint_sha256", "policy_pack_id",
+            "generation", "head_sha256", "evaluated_at_unix",
+            "minimum_witnesses", "valid_witnesses", "witness_ids",
+            "witness_public_keys", "quorum_met"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "status": {"enum": ["witness_quorum_met", "insufficient_witnesses"]},
+            "checkpoint_sha256": digest_schema(),
+            "policy_pack_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 1},
+            "head_sha256": digest_schema(),
+            "evaluated_at_unix": {"type": "integer", "minimum": 0},
+            "minimum_witnesses": {"type": "integer", "minimum": 2, "maximum": 100},
+            "valid_witnesses": {"type": "integer", "minimum": 0, "maximum": 100},
+            "witness_ids": {
+                "type": "array", "maxItems": 100, "uniqueItems": true,
+                "items": slug_schema()
+            },
+            "witness_public_keys": {
+                "type": "array", "maxItems": 100, "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            },
+            "quorum_met": {"type": "boolean"}
         }
     })
 }
@@ -936,6 +1257,8 @@ mod tests {
             signed_policy_lifecycle_checkpoint_json_schema(),
             policy_lifecycle_trust_state_json_schema(),
             signed_policy_lifecycle_key_rotation_json_schema(),
+            signed_policy_lifecycle_checkpoint_witness_json_schema(),
+            policy_lifecycle_witness_quorum_json_schema(),
         ] {
             assert_eq!(schema["additionalProperties"], false);
         }
@@ -1022,6 +1345,92 @@ mod tests {
             )
             .unwrap_err()
             .contains("signature verification failed")
+        );
+    }
+
+    #[test]
+    fn requires_distinct_fresh_trusted_checkpoint_witnesses() {
+        let (ledger, _) = ledgers();
+        let root_secret = [31_u8; 32];
+        let root_public = SigningKey::from_bytes(&root_secret)
+            .verifying_key()
+            .to_bytes();
+        let checkpoint =
+            sign_policy_lifecycle_checkpoint(&ledger, 1_000, "release-root", &root_secret).unwrap();
+        let state = verify_policy_lifecycle_checkpoint(
+            &ledger,
+            &checkpoint,
+            &root_public,
+            None,
+            None,
+            1_001,
+        )
+        .unwrap();
+        let secrets = [[32_u8; 32], [33_u8; 32]];
+        let keys = secrets.map(|secret| SigningKey::from_bytes(&secret).verifying_key().to_bytes());
+        let witnesses = [
+            sign_policy_lifecycle_checkpoint_witness(&state, "witness-a", 1_100, &secrets[0])
+                .unwrap(),
+            sign_policy_lifecycle_checkpoint_witness(&state, "witness-b", 1_101, &secrets[1])
+                .unwrap(),
+        ];
+        let quorum =
+            verify_policy_lifecycle_checkpoint_witnesses(&state, &witnesses, &keys, 2, 1_102)
+                .unwrap();
+        assert!(quorum.quorum_met);
+        assert_eq!(quorum.status, "witness_quorum_met");
+
+        let insufficient = verify_policy_lifecycle_checkpoint_witnesses(
+            &state,
+            &witnesses[..1],
+            &keys[..1],
+            2,
+            1_102,
+        )
+        .unwrap();
+        assert!(!insufficient.quorum_met);
+
+        let duplicates = [witnesses[0].clone(), witnesses[0].clone()];
+        let duplicate_keys = [keys[0], keys[0]];
+        assert!(
+            verify_policy_lifecycle_checkpoint_witnesses(
+                &state,
+                &duplicates,
+                &duplicate_keys,
+                2,
+                1_102,
+            )
+            .unwrap_err()
+            .contains("distinct")
+        );
+        assert!(
+            verify_policy_lifecycle_checkpoint_witnesses(
+                &state,
+                &witnesses,
+                &[keys[0], keys[0]],
+                2,
+                1_102,
+            )
+            .unwrap_err()
+            .contains("not trusted")
+        );
+        assert!(
+            verify_policy_lifecycle_checkpoint_witnesses(
+                &state,
+                &witnesses,
+                &keys,
+                2,
+                1_101 + MAXIMUM_WITNESS_AGE_SECONDS + 1,
+            )
+            .unwrap_err()
+            .contains("24-hour")
+        );
+        let mut tampered = witnesses;
+        tampered[1].signature = "00".repeat(64);
+        assert!(
+            verify_policy_lifecycle_checkpoint_witnesses(&state, &tampered, &keys, 2, 1_102)
+                .unwrap_err()
+                .contains("signature verification failed")
         );
     }
 }

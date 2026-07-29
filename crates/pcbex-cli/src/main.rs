@@ -130,11 +130,15 @@ use policy_lifecycle::{
     snapshot_policy_lifecycle,
 };
 use policy_lifecycle_checkpoint::{
-    parse_policy_lifecycle_trust_state, parse_signed_policy_lifecycle_checkpoint,
+    parse_policy_lifecycle_trust_state, parse_policy_lifecycle_witness_quorum_report,
+    parse_signed_policy_lifecycle_checkpoint, parse_signed_policy_lifecycle_checkpoint_witness,
     parse_signed_policy_lifecycle_key_rotation, policy_lifecycle_trust_state_json_schema,
-    sign_policy_lifecycle_checkpoint, sign_policy_lifecycle_key_rotation,
+    policy_lifecycle_witness_quorum_json_schema, sign_policy_lifecycle_checkpoint,
+    sign_policy_lifecycle_checkpoint_witness, sign_policy_lifecycle_key_rotation,
     signed_policy_lifecycle_checkpoint_json_schema,
+    signed_policy_lifecycle_checkpoint_witness_json_schema,
     signed_policy_lifecycle_key_rotation_json_schema, verify_policy_lifecycle_checkpoint,
+    verify_policy_lifecycle_checkpoint_witnesses,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -852,6 +856,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed lifecycle-checkpoint witness JSON Schema.
+    SignedPolicyLifecycleCheckpointWitnessSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed lifecycle-checkpoint witness.
+    ValidatePolicyLifecycleCheckpointWitness {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed lifecycle-checkpoint witness-quorum JSON Schema.
+    PolicyLifecycleWitnessQuorumSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a lifecycle-checkpoint witness-quorum report.
+    ValidatePolicyLifecycleWitnessQuorum {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1384,6 +1410,34 @@ enum Command {
         rotated_at_unix: u64,
         #[arg(short, long)]
         output: PathBuf,
+    },
+    /// Independently witness one exact accepted lifecycle checkpoint.
+    WitnessPolicyLifecycleCheckpoint {
+        trust_state: PathBuf,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        witness_id: String,
+        #[arg(long)]
+        observed_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify distinct trusted lifecycle witnesses and evaluate their quorum.
+    VerifyPolicyLifecycleCheckpointWitnesses {
+        trust_state: PathBuf,
+        #[arg(long = "witness", required = true)]
+        witnesses: Vec<PathBuf>,
+        #[arg(long = "public-key", required = true)]
+        public_keys: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_witnesses: u32,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        require_quorum: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -3058,6 +3112,32 @@ fn main() -> Result<()> {
             let rotation =
                 parse_signed_policy_lifecycle_key_rotation(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(rotation)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleCheckpointWitnessSchema { output } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_checkpoint_witness_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleCheckpointWitness { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let witness = parse_signed_policy_lifecycle_checkpoint_witness(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(witness)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleWitnessQuorumSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_witness_quorum_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleWitnessQuorum { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report = parse_policy_lifecycle_witness_quorum_report(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
         Command::RecordManufacturingFeedback {
             declaration,
@@ -4760,6 +4840,79 @@ fn main() -> Result<()> {
                 "signed policy lifecycle key rotation generation {} -> {}",
                 rotation.from_key_generation, rotation.to_key_generation
             );
+        }
+        Command::WitnessPolicyLifecycleCheckpoint {
+            trust_state,
+            private_key,
+            witness_id,
+            observed_at_unix,
+            output,
+        } => {
+            let source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state = parse_policy_lifecycle_trust_state(&source).map_err(anyhow::Error::msg)?;
+            let secret =
+                read_hex_key(&private_key, "policy lifecycle witness signing private key")?;
+            let witness = sign_policy_lifecycle_checkpoint_witness(
+                &state,
+                &witness_id,
+                observed_at_unix,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&witness)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "witnessed policy lifecycle checkpoint generation {} as {}",
+                witness.generation, witness.witness_id
+            );
+        }
+        Command::VerifyPolicyLifecycleCheckpointWitnesses {
+            trust_state,
+            witnesses,
+            public_keys,
+            minimum_witnesses,
+            evaluated_at_unix,
+            output,
+            require_quorum,
+        } => {
+            if witnesses.len() != public_keys.len() {
+                bail!("policy lifecycle witnesses and public keys must be paired");
+            }
+            let source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state = parse_policy_lifecycle_trust_state(&source).map_err(anyhow::Error::msg)?;
+            let witnesses = witnesses
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_policy_lifecycle_checkpoint_witness(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let public_keys = public_keys
+                .iter()
+                .map(|path| read_hex_key(path, "trusted policy lifecycle witness public key"))
+                .collect::<Result<Vec<_>>>()?;
+            let report = verify_policy_lifecycle_checkpoint_witnesses(
+                &state,
+                &witnesses,
+                &public_keys,
+                minimum_witnesses,
+                evaluated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&report)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "policy lifecycle checkpoint witness quorum: {}/{}",
+                report.valid_witnesses, report.minimum_witnesses
+            );
+            if require_quorum && !report.quorum_met {
+                bail!("policy lifecycle checkpoint witness quorum was not met");
+            }
         }
         Command::RecordSimulationEvidence {
             declaration,

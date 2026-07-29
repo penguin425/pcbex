@@ -313,6 +313,7 @@ impl McpServer {
                     | "append_policy_lifecycle_event"
                     | "snapshot_policy_lifecycle"
                     | "verify_policy_lifecycle_checkpoint"
+                    | "verify_policy_lifecycle_checkpoint_witnesses"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1516,6 +1517,63 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "witness_policy_lifecycle_checkpoint",
+            "Witness policy lifecycle checkpoint",
+            "Independently sign one exact accepted lifecycle checkpoint, generation, and hash-chain head.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "private_key", "witness_id",
+                    "observed_at_unix", "output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "private_key": {"type": "string"},
+                    "witness_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                    },
+                    "observed_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_policy_lifecycle_checkpoint_witnesses",
+            "Verify policy lifecycle witnesses",
+            "Require a bounded quorum of distinct independently trusted keys over one exact accepted lifecycle checkpoint.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "witnesses", "public_keys",
+                    "evaluated_at_unix", "output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "witnesses": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "public_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "minimum_witnesses": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "require_quorum": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -2152,6 +2210,12 @@ fn call_tool(
         }
         "sign_policy_lifecycle_key_rotation" => {
             sign_policy_lifecycle_key_rotation(arguments, cancellation)?
+        }
+        "witness_policy_lifecycle_checkpoint" => {
+            witness_policy_lifecycle_checkpoint(arguments, cancellation)?
+        }
+        "verify_policy_lifecycle_checkpoint_witnesses" => {
+            verify_policy_lifecycle_checkpoint_witnesses(arguments, cancellation)?
         }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
@@ -4088,6 +4152,110 @@ fn sign_policy_lifecycle_key_rotation(
     ))
 }
 
+fn witness_policy_lifecycle_checkpoint(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "private_key",
+            "witness_id",
+            "observed_at_unix",
+            "output",
+        ],
+    )?;
+    let observed_at_unix = arguments
+        .get("observed_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "observed_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "witness-policy-lifecycle-checkpoint".into(),
+        required_string(&arguments, "trust_state")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+        "--observed-at-unix".into(),
+        observed_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let witness = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "witness": witness}),
+    ))
+}
+
+fn verify_policy_lifecycle_checkpoint_witnesses(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "witnesses",
+            "public_keys",
+            "minimum_witnesses",
+            "evaluated_at_unix",
+            "output",
+            "require_quorum",
+        ],
+    )?;
+    let witnesses = required_string_array(&arguments, "witnesses", false)?;
+    let public_keys = required_string_array(&arguments, "public_keys", false)?;
+    if witnesses.len() != public_keys.len() || witnesses.len() > 100 {
+        return Err(json!({
+            "detail": "witnesses and public_keys must be paired and cannot exceed 100"
+        }));
+    }
+    let minimum_witnesses = arguments
+        .get("minimum_witnesses")
+        .map_or(Some(2), Value::as_u64)
+        .filter(|value| (2..=100).contains(value))
+        .ok_or_else(|| json!({"detail": "minimum_witnesses must be 2 to 100"}))?;
+    let evaluated_at_unix = arguments
+        .get("evaluated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "evaluated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-policy-lifecycle-checkpoint-witnesses".into(),
+        required_string(&arguments, "trust_state")?,
+    ];
+    for witness in witnesses {
+        command.extend(["--witness".into(), witness]);
+    }
+    for public_key in public_keys {
+        command.extend(["--public-key".into(), public_key]);
+    }
+    command.extend([
+        "--minimum-witnesses".into(),
+        minimum_witnesses.to_string(),
+        "--evaluated-at-unix".into(),
+        evaluated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_flag(
+        &arguments,
+        "require_quorum",
+        "--require-quorum",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "quorum": report}),
+    ))
+}
+
 fn compare_schematics(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -5297,7 +5465,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 54);
+        assert_eq!(tools.len(), 56);
         let named = |name: &str| {
             tools
                 .iter()
@@ -5490,6 +5658,19 @@ mod tests {
         assert_eq!(
             named("sign_policy_lifecycle_key_rotation")["execution"]["taskSupport"],
             "forbidden"
+        );
+        assert_eq!(
+            named("witness_policy_lifecycle_checkpoint")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("verify_policy_lifecycle_checkpoint_witnesses")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("verify_policy_lifecycle_checkpoint_witnesses")["inputSchema"]["properties"]["minimum_witnesses"]
+                ["default"],
+            2
         );
         assert_eq!(
             named("verify_policy_lifecycle_checkpoint")["inputSchema"]["properties"]["accepted_at_unix"]

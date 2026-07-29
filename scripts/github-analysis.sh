@@ -79,6 +79,8 @@ write_output policy-lifecycle-generation ""
 write_output policy-lifecycle-awaiting-remediation ""
 write_output policy-lifecycle-trust-state ""
 write_output policy-lifecycle-checkpoint-accepted ""
+write_output policy-lifecycle-witness-quorum ""
+write_output policy-lifecycle-witness-quorum-met ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -942,6 +944,54 @@ if ((lifecycle_checkpoint_inputs == 3)); then
   policy_lifecycle_checkpoint_accepted=true
 fi
 
+policy_lifecycle_witness_quorum=""
+policy_lifecycle_witness_quorum_met=""
+lifecycle_witness_inputs=0
+for value in \
+  "${PCBEX_POLICY_LIFECYCLE_WITNESS_FILES:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((lifecycle_witness_inputs += 1)); fi
+done
+if ((lifecycle_witness_inputs != 0 && lifecycle_witness_inputs != 3)); then
+  echo "lifecycle witness files, public keys, and evaluated-at timestamp must be supplied together" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_WITNESS_TRUST_STATE:-}" ]] \
+  && ((lifecycle_witness_inputs != 3)); then
+  echo "policy lifecycle witness trust state requires complete witness inputs" >&2
+  exit 2
+fi
+if ((lifecycle_witness_inputs == 3)); then
+  lifecycle_witness_state="${PCBEX_POLICY_LIFECYCLE_WITNESS_TRUST_STATE:-$policy_lifecycle_trust_state}"
+  if [[ -z "$lifecycle_witness_state" ]]; then
+    echo "policy lifecycle witness verification requires an explicit or newly verified trust state" >&2
+    exit 2
+  fi
+  policy_lifecycle_witness_quorum="${artifact_dir}/policy-lifecycle-witness-quorum.json"
+  lifecycle_witness_arguments=(verify-policy-lifecycle-checkpoint-witnesses \
+    "$lifecycle_witness_state" \
+    --minimum-witnesses "${PCBEX_POLICY_LIFECYCLE_WITNESS_MINIMUM:-2}" \
+    --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX" \
+    --output "$policy_lifecycle_witness_quorum")
+  while IFS= read -r witness; do
+    if [[ -n "$witness" ]]; then
+      lifecycle_witness_arguments+=(--witness "$witness")
+    fi
+  done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_FILES"
+  while IFS= read -r public_key; do
+    if [[ -n "$public_key" ]]; then
+      lifecycle_witness_arguments+=(--public-key "$public_key")
+    fi
+  done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES"
+  "$PCBEX_BINARY" "${lifecycle_witness_arguments[@]}"
+  policy_lifecycle_witness_quorum_met="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["quorum_met"]).lower())' \
+      "$policy_lifecycle_witness_quorum"
+  )"
+fi
+
 has_schematic=false
 has_baseline_schematic=false
 if [[ -n "${PCBEX_SCHEMATIC:-}" ]]; then has_schematic=true; fi
@@ -1367,6 +1417,8 @@ write_output policy-lifecycle-generation "$policy_lifecycle_generation"
 write_output policy-lifecycle-awaiting-remediation "$policy_lifecycle_awaiting_remediation"
 write_output policy-lifecycle-trust-state "$policy_lifecycle_trust_state"
 write_output policy-lifecycle-checkpoint-accepted "$policy_lifecycle_checkpoint_accepted"
+write_output policy-lifecycle-witness-quorum "$policy_lifecycle_witness_quorum"
+write_output policy-lifecycle-witness-quorum-met "$policy_lifecycle_witness_quorum_met"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"
