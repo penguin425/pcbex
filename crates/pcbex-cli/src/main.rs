@@ -180,14 +180,18 @@ use policy_lifecycle_gossip_quorum::{
 };
 use policy_lifecycle_gossip_registry::{
     PolicyLifecycleLogGossipOrganizationRegistryAction,
+    apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation,
     apply_policy_lifecycle_log_gossip_organization_registry_transition,
     new_policy_lifecycle_log_gossip_organization_registry,
     parse_policy_lifecycle_log_gossip_organization_registry,
     parse_policy_lifecycle_log_gossip_registry_bound_quorum_report,
+    parse_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_transition,
     policy_lifecycle_log_gossip_organization_registry_json_schema,
     policy_lifecycle_log_gossip_registry_bound_quorum_report_json_schema,
+    sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation,
     sign_policy_lifecycle_log_gossip_organization_registry_transition,
+    signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_json_schema,
     signed_policy_lifecycle_log_gossip_organization_registry_transition_json_schema,
     verify_policy_lifecycle_log_gossip_quorum_with_organization_registry,
 };
@@ -1107,6 +1111,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed dual-signed registry-authority key-rotation JSON Schema.
+    SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a dual-signed registry-authority key rotation.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed registry-bound gossip quorum JSON Schema.
     PolicyLifecycleLogGossipRegistryBoundQuorumSchema {
         #[arg(short, long)]
@@ -1927,6 +1942,27 @@ enum Command {
         transition: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
+    },
+    /// Dual-sign a one-generation registry-authority key transition.
+    SignPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation {
+        registry: PathBuf,
+        #[arg(long)]
+        old_private_key: PathBuf,
+        #[arg(long)]
+        new_private_key: PathBuf,
+        #[arg(long)]
+        rotated_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify and apply one registry-authority key transition.
+    ApplyPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation {
+        registry: PathBuf,
+        rotation: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        public_key_output: PathBuf,
     },
     /// Verify fresh observations from distinct organizations as one gossip quorum.
     VerifyPolicyLifecycleLogGossipQuorum {
@@ -3905,6 +3941,27 @@ fn main() -> Result<()> {
                 parse_signed_policy_lifecycle_log_gossip_organization_registry_transition(&source)
                     .map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(transition)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotationSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let rotation =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(rotation)?, output.as_ref())?;
         }
         Command::PolicyLifecycleLogGossipRegistryBoundQuorumSchema { output } => {
             write_or_print_json(
@@ -6449,6 +6506,92 @@ fn main() -> Result<()> {
             eprintln!(
                 "trusted lifecycle gossip organization registry {} at generation {}",
                 next.registry_id, next.generation
+            );
+        }
+        Command::SignPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation {
+            registry,
+            old_private_key,
+            new_private_key,
+            rotated_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.as_path()),
+                    Some(old_private_key.as_path()),
+                    Some(new_private_key.as_path()),
+                    Some(output.as_path()),
+                ],
+                "policy lifecycle gossip registry authority key rotation",
+            )?;
+            let source = fs::read_to_string(&registry)
+                .with_context(|| format!("reading {}", registry.display()))?;
+            let registry = parse_policy_lifecycle_log_gossip_organization_registry(&source)
+                .map_err(anyhow::Error::msg)?;
+            let old_key = read_hex_key(
+                &old_private_key,
+                "current policy lifecycle gossip registry authority private key",
+            )?;
+            let new_key = read_hex_key(
+                &new_private_key,
+                "new policy lifecycle gossip registry authority private key",
+            )?;
+            let rotation =
+                sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                    &registry,
+                    &old_key,
+                    &new_key,
+                    rotated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&rotation)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed lifecycle gossip registry authority rotation {} -> {}",
+                rotation.from_generation, rotation.to_generation
+            );
+        }
+        Command::ApplyPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation {
+            registry,
+            rotation,
+            output,
+            public_key_output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.as_path()),
+                    Some(rotation.as_path()),
+                    Some(output.as_path()),
+                    Some(public_key_output.as_path()),
+                ],
+                "policy lifecycle gossip registry authority key rotation",
+            )?;
+            let registry_source = fs::read_to_string(&registry)
+                .with_context(|| format!("reading {}", registry.display()))?;
+            let registry =
+                parse_policy_lifecycle_log_gossip_organization_registry(&registry_source)
+                    .map_err(anyhow::Error::msg)?;
+            let rotation_source = fs::read_to_string(&rotation)
+                .with_context(|| format!("reading {}", rotation.display()))?;
+            let rotation =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                    &rotation_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let next =
+                apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                    &registry, &rotation,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let registry_document = serde_json::to_string_pretty(&next)? + "\n";
+            let key_document = format!("{}\n", next.authority_public_key);
+            write_new_file_set(&[
+                (output.as_path(), registry_document.as_str()),
+                (public_key_output.as_path(), key_document.as_str()),
+            ])?;
+            eprintln!(
+                "trusted lifecycle gossip registry authority at generation {}",
+                next.generation
             );
         }
         Command::VerifyPolicyLifecycleLogGossipQuorum {

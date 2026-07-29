@@ -16,6 +16,8 @@ use sha2::{Digest, Sha256};
 
 const TRANSITION_DOMAIN: &str =
     "pcbex-policy-lifecycle-public-log-gossip-organization-registry-transition-v1";
+const AUTHORITY_ROTATION_DOMAIN: &str =
+    "pcbex-policy-lifecycle-public-log-gossip-organization-registry-authority-key-rotation-v1";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -84,6 +86,22 @@ pub struct SignedPolicyLifecycleLogGossipOrganizationRegistryTransition {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation {
+    pub schema_version: u32,
+    pub registry_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_transition_sha256: Option<String>,
+    pub old_public_key: String,
+    pub new_public_key: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_signature: String,
+    pub new_signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyLifecycleLogGossipRegistryBoundQuorumReport {
     pub schema_version: u32,
     pub trust_quorum: PolicyLifecycleLogGossipTrustBoundQuorumReport,
@@ -107,6 +125,18 @@ struct TransitionPayload<'a> {
     reason_sha256: &'a str,
     effective_at_unix: u64,
     authority_public_key: &'a str,
+}
+
+#[derive(Serialize)]
+struct AuthorityRotationPayload<'a> {
+    domain: &'static str,
+    registry_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_transition_sha256: Option<&'a str>,
+    old_public_key: &'a str,
+    new_public_key: &'a str,
+    rotated_at_unix: u64,
 }
 
 pub fn new_policy_lifecycle_log_gossip_organization_registry(
@@ -255,6 +285,136 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_transition(
     Ok(next)
 }
 
+pub fn sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+    registry: &PolicyLifecycleLogGossipOrganizationRegistry,
+    old_secret_key: &[u8; 32],
+    new_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation, String> {
+    validate_policy_lifecycle_log_gossip_organization_registry(registry)?;
+    let old_key = SigningKey::from_bytes(old_secret_key);
+    let new_key = SigningKey::from_bytes(new_secret_key);
+    let old_public_key = hex_encode(&old_key.verifying_key().to_bytes());
+    let new_public_key = hex_encode(&new_key.verifying_key().to_bytes());
+    if old_public_key != registry.authority_public_key {
+        return Err("old gossip registry authority key does not match retained trust".into());
+    }
+    if new_public_key == old_public_key {
+        return Err("new gossip registry authority key must differ from the current key".into());
+    }
+    if registry
+        .last_updated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err("gossip registry authority rotation timestamps must be monotonic".into());
+    }
+    let to_generation = registry
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "gossip organization registry generation overflow".to_string())?;
+    let payload = authority_rotation_payload(
+        &registry.registry_id,
+        registry.generation,
+        to_generation,
+        registry.last_transition_sha256.as_deref(),
+        &old_public_key,
+        &new_public_key,
+        rotated_at_unix,
+    )?;
+    let rotation = SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation {
+        schema_version: 1,
+        registry_id: registry.registry_id.clone(),
+        from_generation: registry.generation,
+        to_generation,
+        previous_transition_sha256: registry.last_transition_sha256.clone(),
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+        algorithm: "ed25519".into(),
+        old_signature: hex_encode(&old_key.sign(&payload).to_bytes()),
+        new_signature: hex_encode(&new_key.sign(&payload).to_bytes()),
+    };
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub fn apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+    registry: &PolicyLifecycleLogGossipOrganizationRegistry,
+    rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation,
+) -> Result<PolicyLifecycleLogGossipOrganizationRegistry, String> {
+    validate_policy_lifecycle_log_gossip_organization_registry(registry)?;
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+        rotation,
+    )?;
+    if rotation.registry_id != registry.registry_id
+        || rotation.from_generation != registry.generation
+        || rotation.previous_transition_sha256 != registry.last_transition_sha256
+        || rotation.old_public_key != registry.authority_public_key
+    {
+        return Err("gossip registry authority rotation does not extend retained state".into());
+    }
+    let expected_generation = registry
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "gossip organization registry generation overflow".to_string())?;
+    if rotation.to_generation != expected_generation {
+        return Err(
+            "gossip registry authority rotation must advance exactly one generation".into(),
+        );
+    }
+    if registry
+        .last_updated_at_unix
+        .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err("gossip registry authority rotation timestamps must be monotonic".into());
+    }
+    let payload = authority_rotation_payload(
+        &rotation.registry_id,
+        rotation.from_generation,
+        rotation.to_generation,
+        rotation.previous_transition_sha256.as_deref(),
+        &rotation.old_public_key,
+        &rotation.new_public_key,
+        rotation.rotated_at_unix,
+    )?;
+    for (key, signature, label) in [
+        (
+            &rotation.old_public_key,
+            &rotation.old_signature,
+            "old gossip registry authority rotation",
+        ),
+        (
+            &rotation.new_public_key,
+            &rotation.new_signature,
+            "new gossip registry authority rotation",
+        ),
+    ] {
+        let key = hex_decode::<32>(key, label)?;
+        let signature = Signature::from_bytes(&hex_decode::<64>(signature, label)?);
+        VerifyingKey::from_bytes(&key)
+            .map_err(|error| format!("invalid {label} public key: {error}"))?
+            .verify_strict(&payload, &signature)
+            .map_err(|_| format!("{label} signature verification failed"))?;
+    }
+    let next = PolicyLifecycleLogGossipOrganizationRegistry {
+        schema_version: 1,
+        registry_id: registry.registry_id.clone(),
+        generation: rotation.to_generation,
+        authority_public_key: rotation.new_public_key.clone(),
+        last_transition_sha256: Some(
+            signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_sha256(
+                rotation,
+            )?,
+        ),
+        last_updated_at_unix: Some(rotation.rotated_at_unix),
+        organizations: registry.organizations.clone(),
+    };
+    validate_policy_lifecycle_log_gossip_organization_registry(&next)?;
+    Ok(next)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn verify_policy_lifecycle_log_gossip_quorum_with_organization_registry(
     local_anchor: &PolicyLifecycleLogAnchorProof,
@@ -337,6 +497,18 @@ pub fn parse_signed_policy_lifecycle_log_gossip_organization_registry_transition
     Ok(transition)
 }
 
+pub fn parse_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+    source: &str,
+) -> Result<SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation, String> {
+    let rotation = serde_json::from_str(source).map_err(|error| {
+        format!("invalid signed gossip registry authority rotation JSON: {error}")
+    })?;
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
 pub fn parse_policy_lifecycle_log_gossip_registry_bound_quorum_report(
     source: &str,
 ) -> Result<PolicyLifecycleLogGossipRegistryBoundQuorumReport, String> {
@@ -360,6 +532,15 @@ pub fn signed_policy_lifecycle_log_gossip_organization_registry_transition_sha25
     normalized_sha256(transition, "signed gossip organization registry transition")
 }
 
+pub fn signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_sha256(
+    rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation,
+) -> Result<String, String> {
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+        rotation,
+    )?;
+    normalized_sha256(rotation, "signed gossip registry authority key rotation")
+}
+
 pub fn validate_policy_lifecycle_log_gossip_organization_registry(
     registry: &PolicyLifecycleLogGossipOrganizationRegistry,
 ) -> Result<(), String> {
@@ -378,7 +559,7 @@ pub fn validate_policy_lifecycle_log_gossip_organization_registry(
     ) {
         (0, None, None) if registry.organizations.is_empty() => {}
         (0, _, _) => return Err("initial gossip registry must be empty and unadvanced".into()),
-        (_, Some(digest), Some(_)) if !registry.organizations.is_empty() => {
+        (_, Some(digest), Some(_)) => {
             validate_sha256(digest, "last gossip registry transition SHA-256")?
         }
         _ => return Err("advanced gossip registry requires complete transition evidence".into()),
@@ -487,6 +668,51 @@ pub fn validate_signed_policy_lifecycle_log_gossip_organization_registry_transit
     Ok(())
 }
 
+pub fn validate_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+    rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryAuthorityKeyRotation,
+) -> Result<(), String> {
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.from_generation.checked_add(1) != Some(rotation.to_generation)
+        || rotation.old_public_key == rotation.new_public_key
+    {
+        return Err("invalid gossip registry authority rotation invariants".into());
+    }
+    validate_slug(&rotation.registry_id, "gossip organization registry id")?;
+    match (
+        rotation.from_generation,
+        &rotation.previous_transition_sha256,
+    ) {
+        (0, None) => {}
+        (0, Some(_)) => {
+            return Err("initial gossip registry rotation cannot reference a transition".into());
+        }
+        (_, Some(digest)) => {
+            validate_sha256(digest, "previous gossip registry transition SHA-256")?
+        }
+        (_, None) => {
+            return Err("advanced gossip registry rotation requires chain evidence".into());
+        }
+    }
+    validate_public_key(
+        &rotation.old_public_key,
+        "old gossip registry authority public key",
+    )?;
+    validate_public_key(
+        &rotation.new_public_key,
+        "new gossip registry authority public key",
+    )?;
+    hex_decode::<64>(
+        &rotation.old_signature,
+        "old gossip registry authority signature",
+    )?;
+    hex_decode::<64>(
+        &rotation.new_signature,
+        "new gossip registry authority signature",
+    )?;
+    Ok(())
+}
+
 pub fn validate_policy_lifecycle_log_gossip_registry_bound_quorum_report(
     report: &PolicyLifecycleLogGossipRegistryBoundQuorumReport,
 ) -> Result<(), String> {
@@ -584,6 +810,36 @@ pub fn signed_policy_lifecycle_log_gossip_organization_registry_transition_json_
             "authority_public_key": key_schema(),
             "algorithm": {"const": "ed25519"},
             "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
+pub fn signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-policy-lifecycle-log-gossip-organization-registry-authority-key-rotation-v1.json",
+        "title": "Dual-signed pcbex gossip organization registry authority key rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "registry_id", "from_generation", "to_generation",
+            "previous_transition_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "registry_id": slug_schema(),
+            "from_generation": {"type": "integer", "minimum": 0},
+            "to_generation": {"type": "integer", "minimum": 1},
+            "previous_transition_sha256": {"oneOf": [
+                {"type": "null"}, digest_schema()
+            ]},
+            "old_public_key": key_schema(),
+            "new_public_key": key_schema(),
+            "rotated_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "old_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"},
+            "new_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
         }
     })
 }
@@ -747,6 +1003,29 @@ fn transition_payload(
         authority_public_key: &registry.authority_public_key,
     })
     .map_err(|error| format!("serializing gossip registry transition: {error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn authority_rotation_payload(
+    registry_id: &str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_transition_sha256: Option<&str>,
+    old_public_key: &str,
+    new_public_key: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&AuthorityRotationPayload {
+        domain: AUTHORITY_ROTATION_DOMAIN,
+        registry_id,
+        from_generation,
+        to_generation,
+        previous_transition_sha256,
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+    })
+    .map_err(|error| format!("serializing gossip registry authority rotation: {error}"))
 }
 
 fn normalized_sha256<T: Serialize>(value: &T, label: &str) -> Result<String, String> {
@@ -954,6 +1233,11 @@ mod tests {
             false
         );
         assert_eq!(
+            signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_json_schema()
+                ["additionalProperties"],
+            false
+        );
+        assert_eq!(
             policy_lifecycle_log_gossip_registry_bound_quorum_report_json_schema()["additionalProperties"],
             false
         );
@@ -1019,6 +1303,123 @@ mod tests {
         assert_ne!(
             updated.organizations[0].observers[0].observer_trust_state_sha256,
             policy_lifecycle_log_gossip_observer_trust_state_sha256(&old_trust).unwrap()
+        );
+    }
+
+    #[test]
+    fn rotates_registry_authority_with_old_and_new_signatures_in_the_same_chain() {
+        let old_secret = [61; 32];
+        let next_secret = [62; 32];
+        let final_secret = [63; 32];
+        let initial = new_policy_lifecycle_log_gossip_organization_registry(
+            "production-gossip",
+            &SigningKey::from_bytes(&old_secret)
+                .verifying_key()
+                .to_bytes(),
+        )
+        .unwrap();
+        let first = sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+            &initial,
+            &old_secret,
+            &next_secret,
+            1_000,
+        )
+        .unwrap();
+        let rotated =
+            apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &initial, &first,
+            )
+            .unwrap();
+        assert_eq!(rotated.generation, 1);
+        assert_eq!(
+            rotated.authority_public_key,
+            hex_encode(
+                &SigningKey::from_bytes(&next_secret)
+                    .verifying_key()
+                    .to_bytes()
+            )
+        );
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &rotated, &first,
+            )
+            .is_err()
+        );
+
+        let second = sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+            &rotated,
+            &next_secret,
+            &final_secret,
+            2_000,
+        )
+        .unwrap();
+        let twice = apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+            &rotated, &second,
+        )
+        .unwrap();
+        assert_eq!(twice.generation, 2);
+        assert_eq!(
+            twice.last_transition_sha256,
+            Some(
+                signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_sha256(
+                    &second,
+                )
+                .unwrap()
+            )
+        );
+
+        let mut fork = second.clone();
+        fork.previous_transition_sha256 = Some("0".repeat(64));
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &rotated, &fork,
+            )
+            .is_err()
+        );
+        let mut identity_tampered = second.clone();
+        identity_tampered.registry_id = "other-registry".into();
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &rotated,
+                &identity_tampered,
+            )
+            .is_err()
+        );
+        let mut signature_tampered = second;
+        signature_tampered.new_signature = "0".repeat(128);
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &rotated,
+                &signature_tampered,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &rotated,
+                &old_secret,
+                &final_secret,
+                2_000,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &rotated,
+                &next_secret,
+                &next_secret,
+                2_000,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation(
+                &rotated,
+                &next_secret,
+                &final_secret,
+                999,
+            )
+            .is_err()
         );
     }
 }

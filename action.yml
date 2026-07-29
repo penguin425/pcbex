@@ -550,6 +550,10 @@ inputs:
     description: Signed-transition-derived registry that must actively admit every local and remote observer trust state.
     required: false
     default: ""
+  policy-lifecycle-log-gossip-organization-registry-authority-key-rotation:
+    description: Optional old-and-new dual-signed authority-key transition applied to the retained gossip organization registry before quorum verification.
+    required: false
+    default: ""
   policy-lifecycle-log-gossip-minimum-organizations:
     description: Minimum distinct organizations required by the public-log gossip quorum.
     required: false
@@ -1125,6 +1129,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-log-gossip-observer-public-key-files }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES: ${{ inputs.policy-lifecycle-log-gossip-observer-trust-state-files }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY: ${{ inputs.policy-lifecycle-log-gossip-organization-trust-registry }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-authority-key-rotation }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.policy-lifecycle-log-gossip-minimum-organizations }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.policy-lifecycle-log-remote-gossip-endpoints }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.policy-lifecycle-log-remote-gossip-organization-ids }}
