@@ -744,6 +744,55 @@ exact effective policy pack applied to analysis, includes the current bound
 feedback automatically, accepts paired historical feedback/manifests, and
 publishes `policy-recommendation` as a retained artifact.
 
+Before promoting a recommendation, derive its deterministic simulation-only
+profile and compare exact baseline/candidate analyses across projects:
+
+```sh
+pcbex policy-rollout-profile organization-policy-pack.json \
+  policy-recommendation.json \
+  --generated-on 2026-07-29 \
+  --output policy-rollout-profile.json
+
+pcbex analyze-kicad hardware/controller.kicad_pcb \
+  --policy-pack organization-policy-pack.json \
+  --output-dir build/controller-baseline
+pcbex analyze-kicad hardware/controller.kicad_pcb \
+  --fab-profile policy-rollout-profile.json \
+  --output-dir build/controller-candidate
+
+pcbex simulate-policy-rollout organization-policy-pack.json \
+  policy-recommendation.json \
+  --project-id controller \
+  --board hardware/controller.kicad_pcb \
+  --baseline-analysis build/controller-baseline \
+  --candidate-analysis build/controller-candidate \
+  --project-id sensor \
+  --board hardware/sensor.kicad_pcb \
+  --baseline-analysis build/sensor-baseline \
+  --candidate-analysis build/sensor-candidate \
+  --generated-on 2026-07-29 \
+  --output policy-rollout.json \
+  --summary-output policy-rollout.md
+
+pcbex policy-rollout-schema --output policy-rollout.schema.json
+pcbex validate-policy-rollout policy-rollout.json
+```
+
+Every pair must identify the same board, project file, custom rules, and
+effective design rules. The baseline must use the exact organization policy
+pack; the candidate must use only the recommendation-derived profile. Manifest
+result counts are checked against the bound `checks.json` and `quality.json`,
+duplicate project IDs or board digests are rejected, and all inputs are
+size-bounded. The closed report always states `status: simulation_only`,
+`deployable: false`, and `requires_human_approval: true`. It reports compatible
+and affected projects plus every new violation, but cannot promote a policy.
+
+The MCP tools `policy_rollout_profile` and `simulate_policy_rollout` expose the
+same boundary. A repository Action can set `policy-rollout-project-id` and
+`policy-rollout-generated-on`, together with either recommendation generation
+or `policy-rollout-recommendation`, to rerun the current board, retain the
+simulation profile and candidate analysis, and publish `policy-rollout`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -771,7 +820,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.337.0
+    uses: penguin425/pcbex@v1.338.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2008,7 +2057,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.337.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.338.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

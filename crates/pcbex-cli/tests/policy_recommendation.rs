@@ -173,5 +173,184 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
         false
     );
 
+    let candidate_profile = temporary.join("candidate-profile.json");
+    let profile = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("policy-rollout-profile")
+        .arg(&policy_path)
+        .arg(&output)
+        .arg("--generated-on")
+        .arg("2026-07-29")
+        .arg("--output")
+        .arg(&candidate_profile)
+        .output()
+        .unwrap();
+    assert!(
+        profile.status.success(),
+        "{}",
+        String::from_utf8_lossy(&profile.stderr)
+    );
+    let profile: serde_json::Value =
+        serde_json::from_slice(&fs::read(&candidate_profile).unwrap()).unwrap();
+    assert_eq!(profile["rules"]["minimum_clearance_nm"], 150_000);
+    assert!(
+        profile["id"]
+            .as_str()
+            .unwrap()
+            .starts_with("pcbex-rollout-")
+    );
+
+    let board = root.join("examples/simple.kicad_pcb");
+    let baseline = temporary.join("baseline");
+    let candidate = temporary.join("candidate");
+    let analyze = |output_dir: &Path, option: &str, configuration: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("analyze-kicad")
+            .arg(&board)
+            .arg(option)
+            .arg(configuration)
+            .arg("--output-dir")
+            .arg(output_dir)
+            .output()
+            .unwrap()
+    };
+    assert!(
+        analyze(&baseline, "--policy-pack", &policy_path)
+            .status
+            .success()
+    );
+    assert!(
+        analyze(&candidate, "--fab-profile", &candidate_profile)
+            .status
+            .success()
+    );
+    let rollout = temporary.join("rollout.json");
+    let rollout_summary = temporary.join("rollout.md");
+    let simulate = || {
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("simulate-policy-rollout")
+            .arg(&policy_path)
+            .arg(&output)
+            .arg("--project-id")
+            .arg("controller")
+            .arg("--board")
+            .arg(&board)
+            .arg("--baseline-analysis")
+            .arg(&baseline)
+            .arg("--candidate-analysis")
+            .arg(&candidate)
+            .arg("--generated-on")
+            .arg("2026-07-29")
+            .arg("--output")
+            .arg(&rollout)
+            .arg("--summary-output")
+            .arg(&rollout_summary)
+            .output()
+            .unwrap()
+    };
+    let simulated = simulate();
+    assert!(
+        simulated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&simulated.stderr)
+    );
+    let rollout_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&rollout).unwrap()).unwrap();
+    assert_eq!(rollout_document["status"], "simulation_only");
+    assert_eq!(rollout_document["deployable"], false);
+    assert_eq!(rollout_document["requires_human_approval"], true);
+    assert_eq!(rollout_document["total_projects"], 1);
+    assert_eq!(rollout_document["projects"][0]["project_id"], "controller");
+    assert!(!simulate().status.success());
+
+    let validated_rollout = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("validate-policy-rollout")
+        .arg(&rollout)
+        .output()
+        .unwrap();
+    assert!(validated_rollout.status.success());
+    let mut tampered_report = rollout_document.clone();
+    tampered_report["deployable"] = serde_json::json!(true);
+    let tampered_report_path = temporary.join("tampered-rollout.json");
+    fs::write(
+        &tampered_report_path,
+        serde_json::to_string_pretty(&tampered_report).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-policy-rollout")
+            .arg(&tampered_report_path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut nested_tamper = rollout_document.clone();
+    nested_tamper["projects"][0]["delta"]["unexpected"] = serde_json::json!(true);
+    let nested_tamper_path = temporary.join("nested-tampered-rollout.json");
+    fs::write(
+        &nested_tamper_path,
+        serde_json::to_string_pretty(&nested_tamper).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-policy-rollout")
+            .arg(&nested_tamper_path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let rollout_schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("policy-rollout-schema")
+        .output()
+        .unwrap();
+    assert!(rollout_schema.status.success());
+    let rollout_schema: serde_json::Value = serde_json::from_slice(&rollout_schema.stdout).unwrap();
+    assert_eq!(rollout_schema["additionalProperties"], false);
+    assert_eq!(
+        rollout_schema["properties"]["projects"]["items"]["additionalProperties"],
+        false
+    );
+    assert_eq!(
+        rollout_schema["properties"]["projects"]["items"]["properties"]["delta"]["additionalProperties"],
+        false
+    );
+    assert_eq!(
+        rollout_schema["properties"]["projects"]["items"]["properties"]["delta"]["properties"]["changes"]
+            ["additionalProperties"],
+        false
+    );
+
+    let candidate_run_path = candidate.join("run.json");
+    let mut candidate_run: serde_json::Value =
+        serde_json::from_slice(&fs::read(&candidate_run_path).unwrap()).unwrap();
+    candidate_run["input"]["sha256"] = serde_json::json!("f".repeat(64));
+    fs::write(
+        &candidate_run_path,
+        serde_json::to_string_pretty(&candidate_run).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("simulate-policy-rollout")
+            .arg(&policy_path)
+            .arg(&output)
+            .arg("--project-id")
+            .arg("controller")
+            .arg("--board")
+            .arg(&board)
+            .arg("--baseline-analysis")
+            .arg(&baseline)
+            .arg("--candidate-analysis")
+            .arg(&candidate)
+            .arg("--generated-on")
+            .arg("2026-07-29")
+            .arg("--output")
+            .arg(temporary.join("tampered-simulation.json"))
+            .status()
+            .unwrap()
+            .success()
+    );
+
     fs::remove_dir_all(temporary).unwrap();
 }

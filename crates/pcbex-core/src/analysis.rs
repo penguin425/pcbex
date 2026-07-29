@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnalysisMetrics {
     pub total_length_nm: i64,
     pub total_vias: usize,
@@ -29,6 +30,7 @@ impl AnalysisMetrics {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnalysisMetricChanges {
     pub total_length_nm: i64,
     pub total_length_percent: Option<f64>,
@@ -40,6 +42,7 @@ pub struct AnalysisMetricChanges {
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ViolationFingerprint {
     pub rule: String,
     pub message: String,
@@ -60,6 +63,7 @@ impl From<&Violation> for ViolationFingerprint {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnalysisDelta {
     pub schema_version: u32,
     pub baseline: AnalysisMetrics,

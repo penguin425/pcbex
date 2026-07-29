@@ -204,6 +204,11 @@
     {
       "id": "governed-feedback-policy-recommendations",
       "release": "v1.337.0",
+      "status": "released"
+    },
+    {
+      "id": "multi-project-policy-rollout-simulation",
+      "release": "v1.338.0",
       "status": "current"
     }
   ]
