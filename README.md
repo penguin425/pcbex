@@ -1304,6 +1304,48 @@ response and receipt, then includes all remote results in the existing quorum
 gate. An optional `policy-lifecycle-remote-witness-bearer-token` remains an
 environment-only secret.
 
+Rotate a lifecycle witness service key without silently replacing its identity:
+
+```sh
+pcbex init-policy-lifecycle-witness-trust \
+  --witness-id witness-a \
+  --public-key witness-a.pub \
+  --output witness-a.trust.0.json
+
+pcbex sign-policy-lifecycle-witness-key-rotation \
+  witness-a.trust.0.json \
+  --old-private-key witness-a.key \
+  --new-private-key witness-a.next.key \
+  --rotated-at-unix 1785301400 \
+  --output witness-a.rotation.1.json
+
+pcbex apply-policy-lifecycle-witness-key-rotation \
+  witness-a.trust.0.json witness-a.rotation.1.json \
+  --output witness-a.trust.1.json \
+  --public-key-output witness-a.trust.1.pub
+```
+
+The immutable trust state pins the witness identity, key generation, current
+Ed25519 key, previous rotation digest, and monotonic rotation time. Each
+domain-separated transition advances exactly one generation and requires both
+old-key authorization and new-key possession over the same payload. Replay,
+rollback, skipped generations, forked rotation history, same-key transitions,
+identity substitution, invalid signatures, and backward time are rejected
+before new files are created. The verifier and remote client accept
+`--witness-key-trust-state` as an identity-bound alternative to a raw
+`--public-key`.
+
+Closed contracts are emitted by
+`policy-lifecycle-witness-trust-state-schema` and
+`signed-policy-lifecycle-witness-key-rotation-schema`. MCP exposes
+initialize, sign, apply, and export tools; signing and trust mutation are
+task-forbidden. The Action accepts newline-separated
+`policy-lifecycle-witness-key-trust-state-files` and
+`policy-lifecycle-remote-witness-key-trust-state-files`, each mutually
+exclusive with its legacy public-key input. Remote receipts additionally bind
+the exact trust-state SHA-256 and key generation when this mode is used; both
+fields are `null` for the legacy raw-key path.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1331,7 +1373,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.353.0
+    uses: penguin425/pcbex@v1.354.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2568,7 +2610,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.353.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.354.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

@@ -438,6 +438,10 @@ inputs:
     description: Newline-separated trusted witness public-key files paired with witness files.
     required: false
     default: ""
+  policy-lifecycle-witness-key-trust-state-files:
+    description: Newline-separated rotatable identity-bound witness-key trust states; mutually exclusive with witness public keys.
+    required: false
+    default: ""
   policy-lifecycle-witness-minimum:
     description: Minimum distinct trusted lifecycle witnesses required.
     required: false
@@ -452,6 +456,10 @@ inputs:
     default: ""
   policy-lifecycle-remote-witness-public-key-files:
     description: Newline-separated trusted public-key files paired with remote lifecycle-witness endpoints.
+    required: false
+    default: ""
+  policy-lifecycle-remote-witness-key-trust-state-files:
+    description: Newline-separated rotatable identity-bound witness-key trust states paired with remote endpoints; mutually exclusive with remote public keys.
     required: false
     default: ""
   policy-lifecycle-remote-witness-bearer-token:
@@ -951,10 +959,12 @@ runs:
         PCBEX_POLICY_LIFECYCLE_WITNESS_TRUST_STATE: ${{ inputs.policy-lifecycle-witness-trust-state }}
         PCBEX_POLICY_LIFECYCLE_WITNESS_FILES: ${{ inputs.policy-lifecycle-witness-files }}
         PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-witness-public-key-files }}
+        PCBEX_POLICY_LIFECYCLE_WITNESS_KEY_TRUST_STATE_FILES: ${{ inputs.policy-lifecycle-witness-key-trust-state-files }}
         PCBEX_POLICY_LIFECYCLE_WITNESS_MINIMUM: ${{ inputs.policy-lifecycle-witness-minimum }}
         PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX: ${{ inputs.policy-lifecycle-witness-evaluated-at-unix }}
         PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_ENDPOINTS: ${{ inputs.policy-lifecycle-remote-witness-endpoints }}
         PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-remote-witness-public-key-files }}
+        PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_KEY_TRUST_STATE_FILES: ${{ inputs.policy-lifecycle-remote-witness-key-trust-state-files }}
         PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_BEARER_TOKEN: ${{ inputs.policy-lifecycle-remote-witness-bearer-token }}
         PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_TIMEOUT_SECONDS: ${{ inputs.policy-lifecycle-remote-witness-timeout-seconds }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}

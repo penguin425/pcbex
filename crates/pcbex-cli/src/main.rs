@@ -131,15 +131,22 @@ use policy_lifecycle::{
     snapshot_policy_lifecycle,
 };
 use policy_lifecycle_checkpoint::{
+    apply_policy_lifecycle_witness_key_rotation, new_policy_lifecycle_witness_trust_state,
     parse_policy_lifecycle_trust_state, parse_policy_lifecycle_witness_quorum_report,
-    parse_signed_policy_lifecycle_checkpoint, parse_signed_policy_lifecycle_checkpoint_witness,
-    parse_signed_policy_lifecycle_key_rotation, policy_lifecycle_trust_state_json_schema,
-    policy_lifecycle_witness_quorum_json_schema, sign_policy_lifecycle_checkpoint,
-    sign_policy_lifecycle_checkpoint_witness, sign_policy_lifecycle_key_rotation,
+    parse_policy_lifecycle_witness_trust_state, parse_signed_policy_lifecycle_checkpoint,
+    parse_signed_policy_lifecycle_checkpoint_witness, parse_signed_policy_lifecycle_key_rotation,
+    parse_signed_policy_lifecycle_witness_key_rotation, policy_lifecycle_trust_state_json_schema,
+    policy_lifecycle_witness_quorum_json_schema, policy_lifecycle_witness_trust_state_json_schema,
+    policy_lifecycle_witness_trust_state_sha256, policy_lifecycle_witness_trusted_public_key,
+    sign_policy_lifecycle_checkpoint, sign_policy_lifecycle_checkpoint_witness,
+    sign_policy_lifecycle_key_rotation, sign_policy_lifecycle_witness_key_rotation,
     signed_policy_lifecycle_checkpoint_json_schema,
     signed_policy_lifecycle_checkpoint_witness_json_schema,
-    signed_policy_lifecycle_key_rotation_json_schema, verify_policy_lifecycle_checkpoint,
+    signed_policy_lifecycle_key_rotation_json_schema,
+    signed_policy_lifecycle_witness_key_rotation_json_schema, verify_policy_lifecycle_checkpoint,
+    verify_policy_lifecycle_checkpoint_witness_with_trust_state,
     verify_policy_lifecycle_checkpoint_witnesses,
+    verify_policy_lifecycle_checkpoint_witnesses_with_trust_states,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -871,6 +878,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed lifecycle-witness key trust-state JSON Schema.
+    PolicyLifecycleWitnessTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a retained lifecycle-witness key trust state.
+    ValidatePolicyLifecycleWitnessTrustState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed dual-signed lifecycle-witness key-rotation JSON Schema.
+    SignedPolicyLifecycleWitnessKeyRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a lifecycle-witness key rotation.
+    ValidatePolicyLifecycleWitnessKeyRotation {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed lifecycle-checkpoint witness-quorum JSON Schema.
     PolicyLifecycleWitnessQuorumSchema {
         #[arg(short, long)]
@@ -1432,13 +1461,53 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Initialize generation-zero trust for one lifecycle-checkpoint witness.
+    InitPolicyLifecycleWitnessTrust {
+        #[arg(long)]
+        witness_id: String,
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Dual-sign a one-generation lifecycle-witness key transition.
+    SignPolicyLifecycleWitnessKeyRotation {
+        trust_state: PathBuf,
+        #[arg(long)]
+        old_private_key: PathBuf,
+        #[arg(long)]
+        new_private_key: PathBuf,
+        #[arg(long)]
+        rotated_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify and apply one lifecycle-witness key transition.
+    ApplyPolicyLifecycleWitnessKeyRotation {
+        trust_state: PathBuf,
+        rotation: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Export the newly trusted key for legacy public-key interfaces.
+        #[arg(long)]
+        public_key_output: PathBuf,
+    },
+    /// Validate lifecycle-witness trust and export its current public key.
+    ExportPolicyLifecycleWitnessPublicKey {
+        trust_state: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Verify distinct trusted lifecycle witnesses and evaluate their quorum.
     VerifyPolicyLifecycleCheckpointWitnesses {
         trust_state: PathBuf,
         #[arg(long = "witness", required = true)]
         witnesses: Vec<PathBuf>,
-        #[arg(long = "public-key", required = true)]
+        #[arg(long = "public-key", conflicts_with = "witness_trust_states")]
         public_keys: Vec<PathBuf>,
+        /// Retained witness-key trust states; paired with witnesses.
+        #[arg(long = "witness-key-trust-state", conflicts_with = "public_keys")]
+        witness_trust_states: Vec<PathBuf>,
         #[arg(long, default_value_t = 2)]
         minimum_witnesses: u32,
         #[arg(long)]
@@ -1453,8 +1522,19 @@ enum Command {
         trust_state: CompactPath,
         #[arg(long)]
         endpoint: String,
-        #[arg(long)]
-        public_key: CompactPath,
+        #[arg(
+            long,
+            required_unless_present = "witness_key_trust_state",
+            conflicts_with = "witness_key_trust_state"
+        )]
+        public_key: Option<CompactPath>,
+        /// Retained identity-bound witness-key trust state.
+        #[arg(
+            long,
+            required_unless_present = "public_key",
+            conflicts_with = "public_key"
+        )]
+        witness_key_trust_state: Option<CompactPath>,
         /// Environment-variable name containing an optional Bearer token.
         #[arg(long)]
         bearer_token_env: Option<String>,
@@ -3157,6 +3237,32 @@ fn main() -> Result<()> {
             let witness = parse_signed_policy_lifecycle_checkpoint_witness(&source)
                 .map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(witness)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleWitnessTrustStateSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_witness_trust_state_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleWitnessTrustState { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state =
+                parse_policy_lifecycle_witness_trust_state(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleWitnessKeyRotationSchema { output } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_witness_key_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleWitnessKeyRotation { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let rotation = parse_signed_policy_lifecycle_witness_key_rotation(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(rotation)?, output.as_ref())?;
         }
         Command::PolicyLifecycleWitnessQuorumSchema { output } => {
             write_or_print_json(
@@ -4905,17 +5011,136 @@ fn main() -> Result<()> {
                 witness.generation, witness.witness_id
             );
         }
+        Command::InitPolicyLifecycleWitnessTrust {
+            witness_id,
+            public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(public_key.as_path()), Some(output.as_path())],
+                "policy lifecycle witness trust initialization",
+            )?;
+            let key = read_hex_key(&public_key, "initial policy lifecycle witness public key")?;
+            let state = new_policy_lifecycle_witness_trust_state(&witness_id, &key)
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "initialized policy lifecycle witness trust {} at generation 0",
+                state.witness_id
+            );
+        }
+        Command::SignPolicyLifecycleWitnessKeyRotation {
+            trust_state,
+            old_private_key,
+            new_private_key,
+            rotated_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(trust_state.as_path()), Some(output.as_path())],
+                "policy lifecycle witness key rotation",
+            )?;
+            let source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state =
+                parse_policy_lifecycle_witness_trust_state(&source).map_err(anyhow::Error::msg)?;
+            let old_key = read_hex_key(
+                &old_private_key,
+                "current policy lifecycle witness private key",
+            )?;
+            let new_key =
+                read_hex_key(&new_private_key, "new policy lifecycle witness private key")?;
+            let rotation = sign_policy_lifecycle_witness_key_rotation(
+                &state,
+                &old_key,
+                &new_key,
+                rotated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&rotation)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed policy lifecycle witness key rotation {} generation {} -> {}",
+                rotation.witness_id, rotation.from_generation, rotation.to_generation
+            );
+        }
+        Command::ApplyPolicyLifecycleWitnessKeyRotation {
+            trust_state,
+            rotation,
+            output,
+            public_key_output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(trust_state.as_path()),
+                    Some(rotation.as_path()),
+                    Some(output.as_path()),
+                    Some(public_key_output.as_path()),
+                ],
+                "policy lifecycle witness key rotation",
+            )?;
+            let state_source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state = parse_policy_lifecycle_witness_trust_state(&state_source)
+                .map_err(anyhow::Error::msg)?;
+            let rotation_source = fs::read_to_string(&rotation)
+                .with_context(|| format!("reading {}", rotation.display()))?;
+            let rotation = parse_signed_policy_lifecycle_witness_key_rotation(&rotation_source)
+                .map_err(anyhow::Error::msg)?;
+            let next = apply_policy_lifecycle_witness_key_rotation(&state, &rotation)
+                .map_err(anyhow::Error::msg)?;
+            let state_document = serde_json::to_string_pretty(&next)? + "\n";
+            let key_document = format!("{}\n", next.current_public_key);
+            write_new_file_set(&[
+                (output.as_path(), state_document.as_str()),
+                (public_key_output.as_path(), key_document.as_str()),
+            ])?;
+            eprintln!(
+                "trusted policy lifecycle witness key {} at generation {}",
+                next.witness_id, next.generation
+            );
+        }
+        Command::ExportPolicyLifecycleWitnessPublicKey {
+            trust_state,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(trust_state.as_path()), Some(output.as_path())],
+                "policy lifecycle witness trust export",
+            )?;
+            let source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state =
+                parse_policy_lifecycle_witness_trust_state(&source).map_err(anyhow::Error::msg)?;
+            policy_lifecycle_witness_trusted_public_key(&state).map_err(anyhow::Error::msg)?;
+            let key_document = format!("{}\n", state.current_public_key);
+            write_new_file_set(&[(output.as_path(), key_document.as_str())])?;
+            eprintln!(
+                "exported policy lifecycle witness key {} at generation {}",
+                state.witness_id, state.generation
+            );
+        }
         Command::VerifyPolicyLifecycleCheckpointWitnesses {
             trust_state,
             witnesses,
             public_keys,
+            witness_trust_states,
             minimum_witnesses,
             evaluated_at_unix,
             output,
             require_quorum,
         } => {
-            if witnesses.len() != public_keys.len() {
-                bail!("policy lifecycle witnesses and public keys must be paired");
+            if public_keys.is_empty() == witness_trust_states.is_empty() {
+                bail!(
+                    "supply exactly one complete set of policy lifecycle witness public keys or key trust states"
+                );
+            }
+            if (!public_keys.is_empty() && witnesses.len() != public_keys.len())
+                || (!witness_trust_states.is_empty()
+                    && witnesses.len() != witness_trust_states.len())
+            {
+                bail!("policy lifecycle witnesses and trusted key evidence must be paired");
             }
             let source = fs::read_to_string(&trust_state)
                 .with_context(|| format!("reading {}", trust_state.display()))?;
@@ -4930,17 +5155,37 @@ fn main() -> Result<()> {
                         .with_context(|| format!("parsing {}", path.display()))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let public_keys = public_keys
-                .iter()
-                .map(|path| read_hex_key(path, "trusted policy lifecycle witness public key"))
-                .collect::<Result<Vec<_>>>()?;
-            let report = verify_policy_lifecycle_checkpoint_witnesses(
-                &state,
-                &witnesses,
-                &public_keys,
-                minimum_witnesses,
-                evaluated_at_unix,
-            )
+            let report = if witness_trust_states.is_empty() {
+                let public_keys = public_keys
+                    .iter()
+                    .map(|path| read_hex_key(path, "trusted policy lifecycle witness public key"))
+                    .collect::<Result<Vec<_>>>()?;
+                verify_policy_lifecycle_checkpoint_witnesses(
+                    &state,
+                    &witnesses,
+                    &public_keys,
+                    minimum_witnesses,
+                    evaluated_at_unix,
+                )
+            } else {
+                let witness_trust_states = witness_trust_states
+                    .iter()
+                    .map(|path| {
+                        let source = fs::read_to_string(path)
+                            .with_context(|| format!("reading {}", path.display()))?;
+                        parse_policy_lifecycle_witness_trust_state(&source)
+                            .map_err(anyhow::Error::msg)
+                            .with_context(|| format!("parsing {}", path.display()))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                verify_policy_lifecycle_checkpoint_witnesses_with_trust_states(
+                    &state,
+                    &witnesses,
+                    &witness_trust_states,
+                    minimum_witnesses,
+                    evaluated_at_unix,
+                )
+            }
             .map_err(anyhow::Error::msg)?;
             let document = serde_json::to_string_pretty(&report)? + "\n";
             write_new_file_set(&[(output.as_path(), document.as_str())])?;
@@ -4956,6 +5201,7 @@ fn main() -> Result<()> {
             trust_state,
             endpoint,
             public_key,
+            witness_key_trust_state,
             bearer_token_env,
             timeout_seconds,
             evaluated_at_unix,
@@ -4963,10 +5209,17 @@ fn main() -> Result<()> {
             receipt_output,
             allow_http_loopback,
         } => {
+            let key_evidence_path = public_key
+                .as_ref()
+                .map(|path| path.0.as_ref())
+                .or_else(|| witness_key_trust_state.as_ref().map(|path| path.0.as_ref()))
+                .ok_or_else(|| {
+                    anyhow::anyhow!("remote lifecycle witness key evidence is absent")
+                })?;
             require_distinct_outputs(
                 [
                     Some(trust_state.0.as_ref()),
-                    Some(public_key.0.as_ref()),
+                    Some(key_evidence_path),
                     Some(output.0.as_ref()),
                     Some(receipt_output.0.as_ref()),
                 ],
@@ -4975,11 +5228,25 @@ fn main() -> Result<()> {
             let source = fs::read_to_string(trust_state.0.as_ref())
                 .with_context(|| format!("reading {}", trust_state.0.display()))?;
             let state = parse_policy_lifecycle_trust_state(&source).map_err(anyhow::Error::msg)?;
-            let trusted = read_hex_key(
-                public_key.0.as_ref(),
-                "trusted remote policy lifecycle witness public key",
-            )?;
-            let (witness, receipt) = request_remote_policy_lifecycle_witness(
+            let witness_key_state = witness_key_trust_state
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path.0.as_ref())
+                        .with_context(|| format!("reading {}", path.0.display()))?;
+                    parse_policy_lifecycle_witness_trust_state(&source).map_err(anyhow::Error::msg)
+                })
+                .transpose()?;
+            let trusted = if let Some(state) = &witness_key_state {
+                policy_lifecycle_witness_trusted_public_key(state).map_err(anyhow::Error::msg)?
+            } else {
+                read_hex_key(
+                    public_key
+                        .as_ref()
+                        .expect("clap requires one remote witness key source"),
+                    "trusted remote policy lifecycle witness public key",
+                )?
+            };
+            let (witness, mut receipt) = request_remote_policy_lifecycle_witness(
                 &state,
                 &endpoint,
                 &trusted,
@@ -4989,6 +5256,20 @@ fn main() -> Result<()> {
                 allow_http_loopback,
             )
             .map_err(anyhow::Error::msg)?;
+            if let Some(trusted) = &witness_key_state {
+                verify_policy_lifecycle_checkpoint_witness_with_trust_state(
+                    &state,
+                    &witness,
+                    trusted,
+                    evaluated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+                receipt.witness_key_trust_state_sha256 = Some(
+                    policy_lifecycle_witness_trust_state_sha256(trusted)
+                        .map_err(anyhow::Error::msg)?,
+                );
+                receipt.witness_key_generation = Some(trusted.generation);
+            }
             let witness_json = serde_json::to_string_pretty(&witness)? + "\n";
             let receipt_json = serde_json::to_string_pretty(&receipt)? + "\n";
             write_new_file_set(&[

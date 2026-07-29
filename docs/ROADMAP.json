@@ -284,6 +284,11 @@
     {
       "id": "remote-lifecycle-checkpoint-witnesses",
       "release": "v1.353.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-witness-key-rotation",
+      "release": "v1.354.0",
       "status": "current"
     }
   ]
