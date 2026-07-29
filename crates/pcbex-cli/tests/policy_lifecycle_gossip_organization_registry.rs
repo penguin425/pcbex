@@ -35,6 +35,8 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     let authority_public = directory.join("authority.pub");
     let authority_next_private = directory.join("authority.next.key");
     let authority_next_public = directory.join("authority.next.pub");
+    let authority_final_private = directory.join("authority.final.key");
+    let authority_final_public = directory.join("authority.final.pub");
     let observer_private = directory.join("observer.key");
     let observer_public = directory.join("observer.pub");
     let governance_a_private = directory.join("governance-a.key");
@@ -50,6 +52,7 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     for (private, public) in [
         (&authority_private, &authority_public),
         (&authority_next_private, &authority_next_public),
+        (&authority_final_private, &authority_final_public),
         (&observer_private, &observer_public),
         (&governance_a_private, &governance_a_public),
         (&governance_b_private, &governance_b_public),
@@ -433,20 +436,114 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     );
     assert!(!stale_governance_transition.exists());
 
-    let revocation = directory.join("registry.revoke.5.json");
+    let final_governance = directory.join("registry.governance.final.json");
+    assert!(
+        run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-successor-governance",
+            path(&governance_rotated),
+            "--successor-registry-authority-private-key",
+            path(&authority_final_private),
+            "--minimum-approvals",
+            "2",
+            "--authority-id",
+            "governance-a",
+            "--authority-id",
+            "governance-b",
+            "--authority-public-key",
+            path(&governance_a_public),
+            "--authority-public-key",
+            path(&governance_b_public),
+            "--issued-at-unix",
+            "2800",
+            "--output",
+            path(&final_governance),
+        ])
+        .status
+        .success()
+    );
+    let governed_authority_rotation = directory.join("registry.governed-authority-rotation.5.json");
+    assert!(
+        run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation",
+            path(&governance_rotated),
+            path(&successor_governance),
+            path(&final_governance),
+            "--old-authority-id",
+            "successor-a",
+            "--old-authority-id",
+            "successor-b",
+            "--old-authority-private-key",
+            path(&successor_a_private),
+            "--old-authority-private-key",
+            path(&successor_b_private),
+            "--new-authority-id",
+            "governance-a",
+            "--new-authority-id",
+            "governance-b",
+            "--new-authority-private-key",
+            path(&governance_a_private),
+            "--new-authority-private-key",
+            path(&governance_b_private),
+            "--rotated-at-unix",
+            "2900",
+            "--output",
+            path(&governed_authority_rotation),
+        ])
+        .status
+        .success()
+    );
+    let authority_governed = directory.join("registry.5.json");
+    let authority_final_exported = directory.join("registry.authority.final.pub");
+    assert!(
+        run(&[
+            "apply-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation",
+            path(&governance_rotated),
+            path(&successor_governance),
+            path(&final_governance),
+            path(&governed_authority_rotation),
+            "--output",
+            path(&authority_governed),
+            "--public-key-output",
+            path(&authority_final_exported),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read_to_string(&authority_final_exported).unwrap(),
+        fs::read_to_string(&authority_final_public).unwrap()
+    );
+    let authority_governed_value: Value =
+        serde_json::from_slice(&fs::read(&authority_governed).unwrap()).unwrap();
+    let governed_authority_rotation_value: Value =
+        serde_json::from_slice(&fs::read(&governed_authority_rotation).unwrap()).unwrap();
+    assert_eq!(
+        authority_governed_value["active_governance_sha256"],
+        governed_authority_rotation_value["new_governance_sha256"]
+    );
+    assert!(
+        run(&[
+            "validate-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation",
+            path(&governed_authority_rotation),
+        ])
+        .status
+        .success()
+    );
+
+    let revocation = directory.join("registry.revoke.6.json");
     assert!(
         run(&[
             "sign-policy-lifecycle-log-gossip-organization-registry-threshold-transition",
-            path(&governance_rotated),
-            path(&successor_governance),
+            path(&authority_governed),
+            path(&final_governance),
             "--authority-id",
-            "successor-a",
+            "governance-a",
             "--authority-id",
-            "successor-b",
+            "governance-b",
             "--authority-private-key",
-            path(&successor_a_private),
+            path(&governance_a_private),
             "--authority-private-key",
-            path(&successor_b_private),
+            path(&governance_b_private),
             "--action",
             "revoke-organization",
             "--organization-id",
@@ -461,12 +558,12 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         .status
         .success()
     );
-    let revoked = directory.join("registry.5.json");
+    let revoked = directory.join("registry.6.json");
     assert!(
         run(&[
             "apply-policy-lifecycle-log-gossip-organization-registry-threshold-transition",
-            path(&governance_rotated),
-            path(&successor_governance),
+            path(&authority_governed),
+            path(&final_governance),
             path(&revocation),
             "--output",
             path(&revoked),
@@ -494,7 +591,7 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
         !run(&[
             "apply-policy-lifecycle-log-gossip-organization-registry-threshold-transition",
             path(&revoked),
-            path(&successor_governance),
+            path(&final_governance),
             path(&revocation),
             "--output",
             path(&replayed),
