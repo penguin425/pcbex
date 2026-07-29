@@ -1151,6 +1151,16 @@ if [[ "$local_gossip_configured" == "true" && "$remote_gossip_configured" == "tr
   echo "local and remote gossip observations must use the same trust mode" >&2
   exit 2
 fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}" ]]; then
+  if [[ "$local_gossip_trust_mode" == "direct" || "$remote_gossip_trust_mode" == "direct" ]]; then
+    echo "gossip organization trust registry requires observer trust-state mode" >&2
+    exit 2
+  fi
+  if [[ "$local_gossip_configured" != "true" && "$remote_gossip_configured" != "true" ]]; then
+    echo "gossip organization trust registry requires configured observations" >&2
+    exit 2
+  fi
+fi
 if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "true" ]]; then
   if ((lifecycle_anchor_inputs != 3)); then
     echo "policy lifecycle gossip quorum requires a configured current anchor" >&2
@@ -1168,6 +1178,11 @@ if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "tr
     --log-public-key "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY" \
     --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_EVALUATED_AT_UNIX" \
     --output "$policy_lifecycle_log_gossip_quorum")
+  if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}" ]]; then
+    gossip_quorum_arguments+=( \
+      --organization-trust-registry \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY")
+  fi
   if [[ "$local_gossip_configured" == "true" ]]; then
     while IFS= read -r observation; do
       if [[ -n "$observation" ]]; then
@@ -1278,14 +1293,14 @@ if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "tr
   "$PCBEX_BINARY" "${gossip_quorum_arguments[@]}"
   policy_lifecycle_log_gossip_quorum_met="$(
     python3 -c \
-      'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(str(data.get("quorum", data)["quorum_met"]).lower())' \
+      'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); data=data.get("trust_quorum", data); print(str(data.get("quorum", data)["quorum_met"]).lower())' \
       "$policy_lifecycle_log_gossip_quorum"
   )"
   {
     printf '\n# Lifecycle public-log gossip quorum\n\n'
     printf -- '- Quorum met: `%s`\n' "$policy_lifecycle_log_gossip_quorum_met"
     printf -- '- Organizations: `%s/%s`\n' \
-      "$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("quorum", data)["distinct_organizations"])' "$policy_lifecycle_log_gossip_quorum")" \
+      "$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); data=data.get("trust_quorum", data); print(data.get("quorum", data)["distinct_organizations"])' "$policy_lifecycle_log_gossip_quorum")" \
       "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_MINIMUM_ORGANIZATIONS:-2}"
     printf -- '- All observations consistent: `true`\n'
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"

@@ -1582,6 +1582,48 @@ quorum verification accepts trust-state arrays. The Action accepts local and
 remote `*-gossip-*-trust-state-files` as a mutually exclusive replacement for
 direct identity/key tuples.
 
+Govern organization membership separately from each observer's rotatable key:
+
+```sh
+pcbex init-policy-lifecycle-log-gossip-organization-registry \
+  --registry-id production-gossip \
+  --authority-public-key gossip-registry-authority.pub \
+  --output gossip-registry.0.json
+
+pcbex sign-policy-lifecycle-log-gossip-organization-registry-transition \
+  gossip-registry.0.json \
+  --authority-private-key gossip-registry-authority.key \
+  --action admit-observer \
+  --organization-id independent-lab \
+  --observer-trust-state independent-lab-gossip.trust.json \
+  --reason-sha256 "$ADMISSION_RECORD_SHA256" \
+  --effective-at-unix 1785301900 \
+  --output gossip-registry.admit.json
+
+pcbex apply-policy-lifecycle-log-gossip-organization-registry-transition \
+  gossip-registry.0.json gossip-registry.admit.json \
+  --output gossip-registry.1.json
+```
+
+The registry authority signs every exact one-generation transition under a
+separate domain. Transitions chain the previous digest and monotonic time.
+`admit-observer` binds the exact observer trust-state digest and can update
+that digest after an authorized observer-key rotation. `suspend-organization`
+immediately removes all of the organization's observers from quorum
+eligibility; `revoke-organization` is permanent. Replay, fork, skipped
+generation, wrong authority, signature mutation, duplicate admission,
+unknown-organization status changes, and attempts to admit into a non-active
+organization fail closed.
+
+Pass `--organization-trust-registry gossip-registry.json` together with
+`--observer-trust-state` values during quorum verification. The registry-bound
+report nests the complete trust-bound quorum and records the exact registry
+identity, generation, and SHA-256. Closed schemas cover the registry, signed
+transition, and registry-bound quorum. MCP exposes initialization, signing,
+and application as task-forbidden tools. The Action accepts
+`policy-lifecycle-log-gossip-organization-trust-registry` only with
+trust-state mode.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1609,7 +1651,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.359.0
+    uses: penguin425/pcbex@v1.360.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2846,7 +2888,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.359.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.360.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

@@ -84,6 +84,7 @@ mod policy_lifecycle_anchor;
 mod policy_lifecycle_checkpoint;
 mod policy_lifecycle_gossip;
 mod policy_lifecycle_gossip_quorum;
+mod policy_lifecycle_gossip_registry;
 mod policy_lifecycle_gossip_trust;
 mod policy_pack;
 mod policy_recommendation;
@@ -176,6 +177,19 @@ use policy_lifecycle_gossip_quorum::{
     policy_lifecycle_log_gossip_observation_json_schema,
     policy_lifecycle_log_gossip_quorum_report_json_schema,
     verify_policy_lifecycle_log_gossip_quorum,
+};
+use policy_lifecycle_gossip_registry::{
+    PolicyLifecycleLogGossipOrganizationRegistryAction,
+    apply_policy_lifecycle_log_gossip_organization_registry_transition,
+    new_policy_lifecycle_log_gossip_organization_registry,
+    parse_policy_lifecycle_log_gossip_organization_registry,
+    parse_policy_lifecycle_log_gossip_registry_bound_quorum_report,
+    parse_signed_policy_lifecycle_log_gossip_organization_registry_transition,
+    policy_lifecycle_log_gossip_organization_registry_json_schema,
+    policy_lifecycle_log_gossip_registry_bound_quorum_report_json_schema,
+    sign_policy_lifecycle_log_gossip_organization_registry_transition,
+    signed_policy_lifecycle_log_gossip_organization_registry_transition_json_schema,
+    verify_policy_lifecycle_log_gossip_quorum_with_organization_registry,
 };
 use policy_lifecycle_gossip_trust::{
     apply_policy_lifecycle_log_gossip_observer_key_rotation,
@@ -1071,6 +1085,39 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed gossip organization-registry JSON Schema.
+    PolicyLifecycleLogGossipOrganizationRegistrySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a gossip organization registry.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistry {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed signed organization-registry transition JSON Schema.
+    SignedPolicyLifecycleLogGossipOrganizationRegistryTransitionSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed organization-registry transition.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryTransition {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed registry-bound gossip quorum JSON Schema.
+    PolicyLifecycleLogGossipRegistryBoundQuorumSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a registry-bound gossip quorum report.
+    ValidatePolicyLifecycleLogGossipRegistryBoundQuorum {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1845,6 +1892,42 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Initialize an empty authority-controlled gossip organization registry.
+    InitPolicyLifecycleLogGossipOrganizationRegistry {
+        #[arg(long)]
+        registry_id: String,
+        #[arg(long)]
+        authority_public_key: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Sign one admission, suspension, or permanent revocation transition.
+    SignPolicyLifecycleLogGossipOrganizationRegistryTransition {
+        registry: PathBuf,
+        #[arg(long)]
+        authority_private_key: PathBuf,
+        #[arg(long, value_enum)]
+        action: PolicyLifecycleLogGossipOrganizationRegistryAction,
+        #[arg(long)]
+        organization_id: String,
+        /// Exact observer trust state required only for `admit-observer`.
+        #[arg(long)]
+        observer_trust_state: Option<PathBuf>,
+        /// SHA-256 of the retained admission or status-change rationale.
+        #[arg(long)]
+        reason_sha256: String,
+        #[arg(long)]
+        effective_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify and apply one signed organization-registry transition.
+    ApplyPolicyLifecycleLogGossipOrganizationRegistryTransition {
+        registry: PathBuf,
+        transition: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Verify fresh observations from distinct organizations as one gossip quorum.
     VerifyPolicyLifecycleLogGossipQuorum {
         #[arg(long)]
@@ -1866,6 +1949,9 @@ enum Command {
             conflicts_with_all = ["organization_ids", "observer_ids", "observer_public_keys"]
         )]
         observer_trust_states: Vec<PathBuf>,
+        /// Signed-transition-derived registry that must actively admit every trust state.
+        #[arg(long, requires = "observer_trust_states")]
+        organization_trust_registry: Option<PathBuf>,
         #[arg(long, default_value_t = 2)]
         minimum_organizations: u32,
         #[arg(long)]
@@ -3787,6 +3873,49 @@ fn main() -> Result<()> {
             let source = fs::read_to_string(&input)
                 .with_context(|| format!("reading {}", input.display()))?;
             let report = parse_policy_lifecycle_log_gossip_trust_bound_quorum_report(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipOrganizationRegistrySchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_organization_registry_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistry { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let registry = parse_policy_lifecycle_log_gossip_organization_registry(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(registry)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleLogGossipOrganizationRegistryTransitionSchema { output } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_organization_registry_transition_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryTransition {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let transition =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_transition(&source)
+                    .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(transition)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipRegistryBoundQuorumSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_registry_bound_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipRegistryBoundQuorum { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report = parse_policy_lifecycle_log_gossip_registry_bound_quorum_report(&source)
                 .map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
@@ -6208,6 +6337,120 @@ fn main() -> Result<()> {
                 state.organization_id, state.observer_id, state.generation
             );
         }
+        Command::InitPolicyLifecycleLogGossipOrganizationRegistry {
+            registry_id,
+            authority_public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(authority_public_key.as_path()), Some(output.as_path())],
+                "policy lifecycle gossip organization registry initialization",
+            )?;
+            let key = read_hex_key(
+                &authority_public_key,
+                "policy lifecycle gossip registry authority public key",
+            )?;
+            let registry =
+                new_policy_lifecycle_log_gossip_organization_registry(&registry_id, &key)
+                    .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&registry)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "initialized lifecycle gossip organization registry {} at generation 0",
+                registry.registry_id
+            );
+        }
+        Command::SignPolicyLifecycleLogGossipOrganizationRegistryTransition {
+            registry,
+            authority_private_key,
+            action,
+            organization_id,
+            observer_trust_state,
+            reason_sha256,
+            effective_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.as_path()),
+                    Some(authority_private_key.as_path()),
+                    observer_trust_state.as_deref(),
+                    Some(output.as_path()),
+                ],
+                "policy lifecycle gossip organization registry transition",
+            )?;
+            let registry_source = fs::read_to_string(&registry)
+                .with_context(|| format!("reading {}", registry.display()))?;
+            let registry =
+                parse_policy_lifecycle_log_gossip_organization_registry(&registry_source)
+                    .map_err(anyhow::Error::msg)?;
+            let observer_trust = observer_trust_state
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_lifecycle_log_gossip_observer_trust_state(&source)
+                        .map_err(anyhow::Error::msg)
+                })
+                .transpose()?;
+            let authority_secret = read_hex_key(
+                &authority_private_key,
+                "policy lifecycle gossip registry authority private key",
+            )?;
+            let transition = sign_policy_lifecycle_log_gossip_organization_registry_transition(
+                &registry,
+                &authority_secret,
+                action,
+                &organization_id,
+                observer_trust.as_ref(),
+                &reason_sha256,
+                effective_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&transition)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed lifecycle gossip registry transition {} -> {} for {}",
+                transition.from_generation, transition.to_generation, transition.organization_id
+            );
+        }
+        Command::ApplyPolicyLifecycleLogGossipOrganizationRegistryTransition {
+            registry,
+            transition,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.as_path()),
+                    Some(transition.as_path()),
+                    Some(output.as_path()),
+                ],
+                "policy lifecycle gossip organization registry transition",
+            )?;
+            let registry_source = fs::read_to_string(&registry)
+                .with_context(|| format!("reading {}", registry.display()))?;
+            let registry =
+                parse_policy_lifecycle_log_gossip_organization_registry(&registry_source)
+                    .map_err(anyhow::Error::msg)?;
+            let transition_source = fs::read_to_string(&transition)
+                .with_context(|| format!("reading {}", transition.display()))?;
+            let transition =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_transition(
+                    &transition_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let next = apply_policy_lifecycle_log_gossip_organization_registry_transition(
+                &registry,
+                &transition,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&next)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "trusted lifecycle gossip organization registry {} at generation {}",
+                next.registry_id, next.generation
+            );
+        }
         Command::VerifyPolicyLifecycleLogGossipQuorum {
             local_anchor,
             observations,
@@ -6215,6 +6458,7 @@ fn main() -> Result<()> {
             observer_ids,
             observer_public_keys,
             observer_trust_states,
+            organization_trust_registry,
             minimum_organizations,
             log_id,
             log_public_key,
@@ -6229,6 +6473,9 @@ fn main() -> Result<()> {
                 bail!(
                     "supply exactly one complete set of direct gossip observer trust or observer trust states"
                 );
+            }
+            if direct_trust && organization_trust_registry.is_some() {
+                bail!("gossip organization registry requires observer trust states");
             }
             if direct_trust
                 && (observations.len() != organization_ids.len()
@@ -6295,21 +6542,46 @@ fn main() -> Result<()> {
                             .with_context(|| format!("parsing {}", path.display()))
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let report = verify_policy_lifecycle_log_gossip_quorum_with_observer_trust_states(
-                    &local,
-                    &observations,
-                    &states,
-                    minimum_organizations,
-                    &log_id,
-                    &trusted_log_key,
-                    evaluated_at_unix,
-                )
-                .map_err(anyhow::Error::msg)?;
-                (
-                    serde_json::to_string_pretty(&report)? + "\n",
-                    report.quorum.distinct_organizations,
-                    report.quorum.quorum_met,
-                )
+                if let Some(registry_path) = organization_trust_registry {
+                    let source = fs::read_to_string(&registry_path)
+                        .with_context(|| format!("reading {}", registry_path.display()))?;
+                    let registry = parse_policy_lifecycle_log_gossip_organization_registry(&source)
+                        .map_err(anyhow::Error::msg)?;
+                    let report =
+                        verify_policy_lifecycle_log_gossip_quorum_with_organization_registry(
+                            &local,
+                            &observations,
+                            &states,
+                            &registry,
+                            minimum_organizations,
+                            &log_id,
+                            &trusted_log_key,
+                            evaluated_at_unix,
+                        )
+                        .map_err(anyhow::Error::msg)?;
+                    (
+                        serde_json::to_string_pretty(&report)? + "\n",
+                        report.trust_quorum.quorum.distinct_organizations,
+                        report.trust_quorum.quorum.quorum_met,
+                    )
+                } else {
+                    let report =
+                        verify_policy_lifecycle_log_gossip_quorum_with_observer_trust_states(
+                            &local,
+                            &observations,
+                            &states,
+                            minimum_organizations,
+                            &log_id,
+                            &trusted_log_key,
+                            evaluated_at_unix,
+                        )
+                        .map_err(anyhow::Error::msg)?;
+                    (
+                        serde_json::to_string_pretty(&report)? + "\n",
+                        report.quorum.distinct_organizations,
+                        report.quorum.quorum_met,
+                    )
+                }
             };
             write_new_file_set(&[(output.0.as_ref(), document.as_str())])?;
             eprintln!(

@@ -642,6 +642,184 @@ fn creates_and_verifies_policy_lifecycle_public_log_anchor() {
         .status
         .success()
     );
+    let registry_authority_private = directory.join("gossip-registry-authority.key");
+    let registry_authority_public = directory.join("gossip-registry-authority.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&registry_authority_private),
+            "--public-key",
+            path(&registry_authority_public),
+        ])
+        .status
+        .success()
+    );
+    let mut registry = directory.join("gossip-registry.0.json");
+    assert!(
+        run(&[
+            "init-policy-lifecycle-log-gossip-organization-registry",
+            "--registry-id",
+            "production-gossip",
+            "--authority-public-key",
+            path(&registry_authority_public),
+            "--output",
+            path(&registry),
+        ])
+        .status
+        .success()
+    );
+    for (generation, organization, trust_state) in [
+        (1, "independent-lab", &observer_a_trust),
+        (2, "security-partner", &observer_b_trust),
+    ] {
+        let transition = directory.join(format!("gossip-registry.admit.{generation}.json"));
+        let sign = run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-transition",
+            path(&registry),
+            "--authority-private-key",
+            path(&registry_authority_private),
+            "--action",
+            "admit-observer",
+            "--organization-id",
+            organization,
+            "--observer-trust-state",
+            path(trust_state),
+            "--reason-sha256",
+            &format!("{generation:x}").repeat(64),
+            "--effective-at-unix",
+            &format!("{}", 220 + generation),
+            "--output",
+            path(&transition),
+        ]);
+        assert!(
+            sign.status.success(),
+            "{}",
+            String::from_utf8_lossy(&sign.stderr)
+        );
+        let next = directory.join(format!("gossip-registry.{generation}.json"));
+        let apply = run(&[
+            "apply-policy-lifecycle-log-gossip-organization-registry-transition",
+            path(&registry),
+            path(&transition),
+            "--output",
+            path(&next),
+        ]);
+        assert!(
+            apply.status.success(),
+            "{}",
+            String::from_utf8_lossy(&apply.stderr)
+        );
+        registry = next;
+    }
+    let registry_bound_quorum = directory.join("gossip-quorum.registry-bound.json");
+    let verify_registry_bound = run(&[
+        "verify-policy-lifecycle-log-gossip-quorum",
+        "--local-anchor",
+        path(&proof),
+        "--observation",
+        path(&observation_a),
+        "--observation",
+        path(&observation_b),
+        "--observer-trust-state",
+        path(&observer_a_trust),
+        "--observer-trust-state",
+        path(&observer_b_trust),
+        "--organization-trust-registry",
+        path(&registry),
+        "--minimum-organizations",
+        "2",
+        "--log-id",
+        "lifecycle-public-log",
+        "--log-public-key",
+        path(&public_key),
+        "--evaluated-at-unix",
+        "225",
+        "--output",
+        path(&registry_bound_quorum),
+        "--require-quorum",
+    ]);
+    assert!(
+        verify_registry_bound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify_registry_bound.stderr)
+    );
+    let registry_bound: Value =
+        serde_json::from_slice(&fs::read(&registry_bound_quorum).unwrap()).unwrap();
+    assert_eq!(registry_bound["registry_bound"], true);
+    assert_eq!(registry_bound["registry_generation"], 2);
+    assert_eq!(registry_bound["trust_quorum"]["quorum"]["quorum_met"], true);
+    assert!(
+        run(&[
+            "validate-policy-lifecycle-log-gossip-registry-bound-quorum",
+            path(&registry_bound_quorum)
+        ])
+        .status
+        .success()
+    );
+
+    let suspension = directory.join("gossip-registry.suspend.3.json");
+    assert!(
+        run(&[
+            "sign-policy-lifecycle-log-gossip-organization-registry-transition",
+            path(&registry),
+            "--authority-private-key",
+            path(&registry_authority_private),
+            "--action",
+            "suspend-organization",
+            "--organization-id",
+            "security-partner",
+            "--reason-sha256",
+            &"3".repeat(64),
+            "--effective-at-unix",
+            "226",
+            "--output",
+            path(&suspension),
+        ])
+        .status
+        .success()
+    );
+    let suspended_registry = directory.join("gossip-registry.3.json");
+    assert!(
+        run(&[
+            "apply-policy-lifecycle-log-gossip-organization-registry-transition",
+            path(&registry),
+            path(&suspension),
+            "--output",
+            path(&suspended_registry),
+        ])
+        .status
+        .success()
+    );
+    let suspended_quorum = directory.join("gossip-quorum.suspended.json");
+    assert!(
+        !run(&[
+            "verify-policy-lifecycle-log-gossip-quorum",
+            "--local-anchor",
+            path(&proof),
+            "--observation",
+            path(&observation_a),
+            "--observation",
+            path(&observation_b),
+            "--observer-trust-state",
+            path(&observer_a_trust),
+            "--observer-trust-state",
+            path(&observer_b_trust),
+            "--organization-trust-registry",
+            path(&suspended_registry),
+            "--log-id",
+            "lifecycle-public-log",
+            "--log-public-key",
+            path(&public_key),
+            "--evaluated-at-unix",
+            "227",
+            "--output",
+            path(&suspended_quorum),
+        ])
+        .status
+        .success()
+    );
+    assert!(!suspended_quorum.exists());
     let duplicate_quorum = directory.join("gossip-quorum-duplicate.json");
     assert!(
         !run(&[
