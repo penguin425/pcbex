@@ -3159,8 +3159,12 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             json!({
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "local_anchor", "observations", "organization_ids", "observer_ids",
-                    "observer_public_keys", "log_public_key", "evaluated_at_unix", "output"
+                    "local_anchor", "observations", "log_public_key",
+                    "evaluated_at_unix", "output"
+                ],
+                "oneOf": [
+                    {"required": ["organization_ids", "observer_ids", "observer_public_keys"]},
+                    {"required": ["observer_trust_states"]}
                 ],
                 "properties": {
                     "local_anchor": {"type": "string"},
@@ -3177,6 +3181,10 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"}
                     },
                     "observer_public_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "observer_trust_states": {
                         "type": "array", "minItems": 1, "maxItems": 100,
                         "items": {"type": "string"}
                     },
@@ -3198,9 +3206,12 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             json!({
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "local_anchor", "endpoint", "log_public_key", "organization_id",
-                    "observer_id", "observer_public_key", "evaluated_at_unix",
+                    "local_anchor", "endpoint", "log_public_key", "evaluated_at_unix",
                     "output", "receipt_output"
+                ],
+                "oneOf": [
+                    {"required": ["organization_id", "observer_id", "observer_public_key"]},
+                    {"required": ["observer_trust_state"]}
                 ],
                 "properties": {
                     "local_anchor": {"type": "string"},
@@ -3209,11 +3220,86 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "organization_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
                     "observer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
                     "observer_public_key": {"type": "string"},
+                    "observer_trust_state": {"type": "string"},
                     "bearer_token_env": {"type": "string"},
                     "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600},
                     "evaluated_at_unix": {"type": "integer", "minimum": 0},
                     "output": {"type": "string"},
                     "receipt_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "init_approval_transparency_public_log_gossip_observer_trust",
+            "Initialize approval gossip observer trust",
+            "Create generation-zero trust binding one organization and observer identity to its current Ed25519 key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["organization_id", "observer_id", "public_key", "output"],
+                "properties": {
+                    "organization_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+                    "observer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_approval_transparency_public_log_gossip_observer_key_rotation",
+            "Sign approval gossip observer key rotation",
+            "Create old-key authorization and new-key possession proof for one exact observer generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "old_private_key", "new_private_key",
+                    "rotated_at_unix", "output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_approval_transparency_public_log_gossip_observer_key_rotation",
+            "Apply approval gossip observer key rotation",
+            "Verify both signatures and advance one digest-chained observer trust state by exactly one generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "rotation", "output", "public_key_output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "public_key_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "export_approval_transparency_public_log_gossip_observer_key",
+            "Export approval gossip observer key",
+            "Validate an observer trust state and export its current public key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "output": {"type": "string"}
                 }
             }),
             false,
@@ -3651,6 +3737,24 @@ fn call_tool(
         }
         "request_remote_approval_transparency_public_log_gossip" => {
             request_remote_approval_transparency_public_log_gossip(arguments, cancellation)?
+        }
+        "init_approval_transparency_public_log_gossip_observer_trust" => {
+            init_approval_transparency_public_log_gossip_observer_trust(arguments, cancellation)?
+        }
+        "sign_approval_transparency_public_log_gossip_observer_key_rotation" => {
+            sign_approval_transparency_public_log_gossip_observer_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "apply_approval_transparency_public_log_gossip_observer_key_rotation" => {
+            apply_approval_transparency_public_log_gossip_observer_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "export_approval_transparency_public_log_gossip_observer_key" => {
+            export_approval_transparency_public_log_gossip_observer_key(arguments, cancellation)?
         }
         "verify_approval_transparency_witnesses" => {
             verify_approval_transparency_witnesses(arguments, cancellation)?
@@ -7279,6 +7383,7 @@ fn verify_policy_lifecycle_public_log_gossip_quorum(
             "observer_ids",
             "observer_public_keys",
             "observer_trust_states",
+            "observer_trust_states",
             "organization_trust_registry",
             "minimum_organizations",
             "log_id",
@@ -8498,13 +8603,19 @@ fn verify_approval_transparency_public_log_gossip_quorum(
     let organization_ids = required_string_array(&arguments, "organization_ids", false)?;
     let observer_ids = required_string_array(&arguments, "observer_ids", false)?;
     let observer_keys = required_string_array(&arguments, "observer_public_keys", false)?;
+    let trust_states = required_string_array(&arguments, "observer_trust_states", true)?;
+    let direct =
+        !organization_ids.is_empty() || !observer_ids.is_empty() || !observer_keys.is_empty();
     if observations.len() > 100
-        || observations.len() != organization_ids.len()
-        || observations.len() != observer_ids.len()
-        || observations.len() != observer_keys.len()
+        || direct == !trust_states.is_empty()
+        || (direct
+            && (observations.len() != organization_ids.len()
+                || observations.len() != observer_ids.len()
+                || observations.len() != observer_keys.len()))
+        || (!trust_states.is_empty() && observations.len() != trust_states.len())
     {
         return Err(json!({
-            "detail": "observations require positionally paired organization, observer, and key arrays with at most 100 entries"
+            "detail": "observations require exactly one paired direct-trust or observer-trust-state mode with at most 100 entries"
         }));
     }
     let minimum = match arguments.get("minimum_organizations") {
@@ -8526,14 +8637,20 @@ fn verify_approval_transparency_public_log_gossip_quorum(
     for observation in observations {
         command.extend(["--observation".into(), observation]);
     }
-    for organization in organization_ids {
-        command.extend(["--organization-id".into(), organization]);
-    }
-    for observer in observer_ids {
-        command.extend(["--observer-id".into(), observer]);
-    }
-    for key in observer_keys {
-        command.extend(["--observer-public-key".into(), key]);
+    if direct {
+        for organization in organization_ids {
+            command.extend(["--organization-id".into(), organization]);
+        }
+        for observer in observer_ids {
+            command.extend(["--observer-id".into(), observer]);
+        }
+        for key in observer_keys {
+            command.extend(["--observer-public-key".into(), key]);
+        }
+    } else {
+        for state in trust_states {
+            command.extend(["--observer-trust-state".into(), state]);
+        }
     }
     command.extend([
         "--minimum-organizations".into(),
@@ -8572,6 +8689,7 @@ fn request_remote_approval_transparency_public_log_gossip(
             "organization_id",
             "observer_id",
             "observer_public_key",
+            "observer_trust_state",
             "bearer_token_env",
             "timeout_seconds",
             "evaluated_at_unix",
@@ -8591,6 +8709,19 @@ fn request_remote_approval_transparency_public_log_gossip(
     let evaluated_at_unix = required_nonnegative_integer(&arguments, "evaluated_at_unix")?;
     let output = required_string(&arguments, "output")?;
     let receipt_output = required_string(&arguments, "receipt_output")?;
+    let direct = [
+        arguments.contains_key("organization_id"),
+        arguments.contains_key("observer_id"),
+        arguments.contains_key("observer_public_key"),
+    ];
+    let trust_state = arguments.contains_key("observer_trust_state");
+    if trust_state == direct.iter().all(|value| *value)
+        || (direct.iter().any(|value| *value) && !direct.iter().all(|value| *value))
+    {
+        return Err(json!({
+            "detail": "supply exactly one complete direct observer trust tuple or observer_trust_state"
+        }));
+    }
     let mut command = vec![
         "request-approval-log-gossip-observation".into(),
         "--local-anchor".into(),
@@ -8599,13 +8730,22 @@ fn request_remote_approval_transparency_public_log_gossip(
         required_string(&arguments, "endpoint")?,
         "--log-public-key".into(),
         required_string(&arguments, "log_public_key")?,
-        "--organization-id".into(),
-        required_string(&arguments, "organization_id")?,
-        "--observer-id".into(),
-        required_string(&arguments, "observer_id")?,
-        "--observer-public-key".into(),
-        required_string(&arguments, "observer_public_key")?,
     ];
+    if trust_state {
+        command.extend([
+            "--observer-trust-state".into(),
+            required_string(&arguments, "observer_trust_state")?,
+        ]);
+    } else {
+        command.extend([
+            "--organization-id".into(),
+            required_string(&arguments, "organization_id")?,
+            "--observer-id".into(),
+            required_string(&arguments, "observer_id")?,
+            "--observer-public-key".into(),
+            required_string(&arguments, "observer_public_key")?,
+        ]);
+    }
     optional_option(
         &arguments,
         "bearer_token_env",
@@ -8634,6 +8774,116 @@ fn request_remote_approval_transparency_public_log_gossip(
             "receipt": receipt
         }),
     ))
+}
+
+fn init_approval_transparency_public_log_gossip_observer_trust(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["organization_id", "observer_id", "public_key", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "init-approval-log-gossip-observer-trust".into(),
+        "--organization-id".into(),
+        required_string(&arguments, "organization_id")?,
+        "--observer-id".into(),
+        required_string(&arguments, "observer_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": trust_state}),
+    ))
+}
+
+fn sign_approval_transparency_public_log_gossip_observer_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-approval-log-gossip-observer-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+        "--rotated-at-unix".into(),
+        required_nonnegative_integer(&arguments, "rotated_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_approval_transparency_public_log_gossip_observer_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["trust_state", "rotation", "output", "public_key_output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let public_key_output = required_string(&arguments, "public_key_output")?;
+    let command = vec![
+        "apply-approval-log-gossip-observer-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+        "--public-key-output".into(),
+        public_key_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "public_key_output": public_key_output,
+            "trust_state": trust_state
+        }),
+    ))
+}
+
+fn export_approval_transparency_public_log_gossip_observer_key(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["trust_state", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "export-approval-log-gossip-observer-public-key".into(),
+        required_string(&arguments, "trust_state")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    Ok(execution_result(execution, json!({"output": output})))
 }
 
 fn verify_approval_transparency_witnesses(
@@ -9013,7 +9263,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 102);
+        assert_eq!(tools.len(), 106);
         let named = |name: &str| {
             tools
                 .iter()
@@ -9581,6 +9831,16 @@ mod tests {
         assert_eq!(
             named("request_remote_approval_transparency_public_log_gossip")["annotations"]["openWorldHint"],
             true
+        );
+        assert_eq!(
+            named("verify_approval_transparency_public_log_gossip_quorum")["inputSchema"]["oneOf"]
+                [1]["required"][0],
+            "observer_trust_states"
+        );
+        assert_eq!(
+            named("apply_approval_transparency_public_log_gossip_observer_key_rotation")["inputSchema"]
+                ["required"][3],
+            "public_key_output"
         );
         assert_eq!(
             named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],

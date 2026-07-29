@@ -836,6 +836,155 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         "independent-lab"
     );
 
+    let gossip_next_private = directory.join("gossip-observer-next.key");
+    let gossip_next_public = directory.join("gossip-observer-next.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&gossip_next_private),
+            "--public-key",
+            path(&gossip_next_public),
+        ])
+        .status
+        .success()
+    );
+    let observer_trust_a = directory.join("gossip-observer-a.trust.json");
+    let observer_trust_b = directory.join("gossip-observer-b.trust.json");
+    for (organization, observer, public, output) in [
+        (
+            "independent-lab",
+            "independent-observer",
+            &gossip_public,
+            &observer_trust_a,
+        ),
+        (
+            "security-partner",
+            "independent-observer-b",
+            &gossip_public_b,
+            &observer_trust_b,
+        ),
+    ] {
+        assert!(
+            run(&[
+                "init-approval-log-gossip-observer-trust",
+                "--organization-id",
+                organization,
+                "--observer-id",
+                observer,
+                "--public-key",
+                path(public),
+                "--output",
+                path(output),
+            ])
+            .status
+            .success()
+        );
+    }
+    let observer_rotation = directory.join("gossip-observer-a.rotation.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-observer-key-rotation",
+            path(&observer_trust_a),
+            "--old-private-key",
+            path(&gossip_private),
+            "--new-private-key",
+            path(&gossip_next_private),
+            "--rotated-at-unix",
+            "109",
+            "--output",
+            path(&observer_rotation),
+        ])
+        .status
+        .success()
+    );
+    let observer_trust_a_rotated = directory.join("gossip-observer-a.rotated-trust.json");
+    let exported_observer_key = directory.join("gossip-observer-a.rotated.pub");
+    assert!(
+        run(&[
+            "apply-approval-log-gossip-observer-key-rotation",
+            path(&observer_trust_a),
+            path(&observer_rotation),
+            "--output",
+            path(&observer_trust_a_rotated),
+            "--public-key-output",
+            path(&exported_observer_key),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read_to_string(&exported_observer_key).unwrap().trim(),
+        fs::read_to_string(&gossip_next_public).unwrap().trim()
+    );
+    let rotated_gossip_receipt = directory.join("checkpoint.rotated-gossip.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-receipt",
+            "--anchor",
+            path(&anchor),
+            "--log-public-key",
+            path(&anchor_public),
+            "--observer-id",
+            "independent-observer",
+            "--observer-private-key",
+            path(&gossip_next_private),
+            "--received-at-unix",
+            "110",
+            "--expires-at-unix",
+            "200",
+            "--output",
+            path(&rotated_gossip_receipt),
+        ])
+        .status
+        .success()
+    );
+    let rotated_observation = directory.join("checkpoint.rotated-observation.json");
+    let rotated_receipt_value: Value =
+        serde_json::from_slice(&fs::read(&rotated_gossip_receipt).unwrap()).unwrap();
+    fs::write(
+        &rotated_observation,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "receipt": rotated_receipt_value,
+            "consistency_proof": consistency_value
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let trust_bound_quorum = directory.join("checkpoint.trust-bound-gossip-quorum.json");
+    assert!(
+        run(&[
+            "verify-approval-log-gossip-quorum",
+            "--local-anchor",
+            path(&old_anchor),
+            "--observation",
+            path(&rotated_observation),
+            "--observation",
+            path(&observation_b),
+            "--observer-trust-state",
+            path(&observer_trust_a_rotated),
+            "--observer-trust-state",
+            path(&observer_trust_b),
+            "--minimum-organizations",
+            "2",
+            "--log-public-key",
+            path(&anchor_public),
+            "--evaluated-at-unix",
+            "150",
+            "--output",
+            path(&trust_bound_quorum),
+            "--require-quorum",
+        ])
+        .status
+        .success()
+    );
+    let trust_bound_quorum: Value =
+        serde_json::from_slice(&fs::read(&trust_bound_quorum).unwrap()).unwrap();
+    assert_eq!(trust_bound_quorum["trust_bound"], true);
+    assert_eq!(trust_bound_quorum["quorum"]["quorum_met"], true);
+    assert_eq!(trust_bound_quorum["observer_trust"][0]["generation"], 1);
+
     let rejected_duplicate = directory.join("checkpoint.rejected-gossip-quorum.json");
     assert!(
         !run(&[
@@ -872,7 +1021,7 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     assert!(!rejected_duplicate.exists());
 
     let observation_value: Value =
-        serde_json::from_slice(&fs::read(&observation_a).unwrap()).unwrap();
+        serde_json::from_slice(&fs::read(&rotated_observation).unwrap()).unwrap();
     let (gossip_endpoint, gossip_server) = remote_gossip_server(observation_value);
     let remote_gossip = directory.join("remote-gossip-observation.json");
     let remote_gossip_receipt = directory.join("remote-gossip-receipt.json");
@@ -884,12 +1033,8 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         &gossip_endpoint,
         "--log-public-key",
         path(&anchor_public),
-        "--organization-id",
-        "independent-lab",
-        "--observer-id",
-        "independent-observer",
-        "--observer-public-key",
-        path(&gossip_public),
+        "--observer-trust-state",
+        path(&observer_trust_a_rotated),
         "--timeout-seconds",
         "5",
         "--evaluated-at-unix",
@@ -910,11 +1055,19 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         serde_json::from_slice(&fs::read(&remote_gossip_receipt).unwrap()).unwrap();
     assert_eq!(remote_gossip_receipt["verified"], true);
     assert_eq!(remote_gossip_receipt["organization_id"], "independent-lab");
+    assert_eq!(remote_gossip_receipt["observer_key_generation"], 1);
+    assert_eq!(
+        remote_gossip_receipt["observer_trust_state_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
     assert!(remote_gossip_receipt["response_bytes"].as_u64().unwrap() > 0);
     let remote_gossip_value: Value =
         serde_json::from_slice(&fs::read(&remote_gossip).unwrap()).unwrap();
     let local_gossip_value: Value =
-        serde_json::from_slice(&fs::read(&observation_a).unwrap()).unwrap();
+        serde_json::from_slice(&fs::read(&rotated_observation).unwrap()).unwrap();
     assert_eq!(remote_gossip_value, local_gossip_value);
 
     let checkpoint_value: SignedApprovalLogCheckpoint =

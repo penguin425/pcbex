@@ -35,6 +35,8 @@ pub struct RemoteApprovalLogGossipReceipt {
     pub organization_id: String,
     pub observer_id: String,
     pub observer_public_key: String,
+    pub observer_trust_state_sha256: Option<String>,
+    pub observer_key_generation: Option<u64>,
     pub gossip_receipt_sha256: String,
     pub received_at_unix: u64,
     pub expires_at_unix: u64,
@@ -49,6 +51,8 @@ pub fn request_remote_approval_log_gossip(
     organization_id: &str,
     trusted_observer_id: &str,
     trusted_observer_public_key: &[u8; 32],
+    observer_trust_state_sha256: Option<&str>,
+    observer_key_generation: Option<u64>,
     bearer_token_env: Option<&str>,
     timeout_seconds: u64,
     evaluated_at_unix: u64,
@@ -59,6 +63,15 @@ pub fn request_remote_approval_log_gossip(
     }
     validate_approval_log_anchor_proof(local_anchor)?;
     validate_slug(organization_id, "remote approval gossip organization id")?;
+    if observer_trust_state_sha256.is_some() != observer_key_generation.is_some() {
+        return Err("remote approval gossip observer trust binding must be complete".into());
+    }
+    if let Some(digest) = observer_trust_state_sha256 {
+        validate_digest(
+            digest,
+            "remote approval gossip observer trust-state SHA-256",
+        )?;
+    }
     validate_endpoint(endpoint, allow_http_loopback)?;
     let request = RemoteApprovalLogGossipRequest {
         schema_version: 1,
@@ -140,6 +153,8 @@ pub fn request_remote_approval_log_gossip(
             organization_id: organization_id.into(),
             observer_id: trusted_observer_id.into(),
             observer_public_key: hex_encode(trusted_observer_public_key),
+            observer_trust_state_sha256: observer_trust_state_sha256.map(str::to_string),
+            observer_key_generation,
             gossip_receipt_sha256: report.gossip_receipt_sha256,
             received_at_unix: report.received_at_unix,
             expires_at_unix: report.expires_at_unix,
@@ -163,7 +178,8 @@ pub fn remote_approval_log_gossip_receipt_json_schema() -> Value {
             "schema_version", "adapter", "endpoint", "log_id",
             "local_tree_head_sha256", "request_sha256", "response_sha256",
             "response_bytes", "evaluated_at_unix", "organization_id",
-            "observer_id", "observer_public_key", "gossip_receipt_sha256",
+            "observer_id", "observer_public_key", "observer_trust_state_sha256",
+            "observer_key_generation", "gossip_receipt_sha256",
             "received_at_unix", "expires_at_unix", "verified"
         ],
         "properties": {
@@ -184,6 +200,15 @@ pub fn remote_approval_log_gossip_receipt_json_schema() -> Value {
             "organization_id": slug.clone(),
             "observer_id": slug,
             "observer_public_key": digest.clone(),
+            "observer_trust_state_sha256": {
+                "oneOf": [{"type": "null"}, digest.clone()]
+            },
+            "observer_key_generation": {
+                "oneOf": [
+                    {"type": "null"},
+                    {"type": "integer", "minimum": 0}
+                ]
+            },
             "gossip_receipt_sha256": digest,
             "received_at_unix": {"type": "integer", "minimum": 0},
             "expires_at_unix": {"type": "integer", "minimum": 1},
@@ -246,6 +271,18 @@ fn validate_slug(value: &str, label: &str) -> Result<(), String> {
     valid
         .then_some(())
         .ok_or_else(|| format!("invalid {label}"))
+}
+
+fn validate_digest(value: &str, label: &str) -> Result<(), String> {
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(())
+    } else {
+        Err(format!("{label} must be 64 lowercase hexadecimal digits"))
+    }
 }
 
 fn sha256(bytes: &[u8]) -> String {

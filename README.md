@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.373.0
+    uses: penguin425/pcbex@v1.374.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3246,6 +3246,47 @@ task-forbidden. Closed contracts come from
 `approval-log-gossip-quorum-report-schema`, and
 `remote-approval-log-gossip-receipt-schema`.
 
+Rotate an organization-bound observer without replacing its long-lived
+identity:
+
+```sh
+pcbex init-approval-log-gossip-observer-trust \
+  --organization-id independent-lab \
+  --observer-id lab-observer \
+  --public-key lab-observer.pub \
+  --output lab-observer.trust.json
+
+pcbex sign-approval-log-gossip-observer-key-rotation \
+  lab-observer.trust.json \
+  --old-private-key .secrets/lab-observer.key \
+  --new-private-key .secrets/lab-observer.next.key \
+  --rotated-at-unix 1770000200 \
+  --output lab-observer.rotation.json
+
+pcbex apply-approval-log-gossip-observer-key-rotation \
+  lab-observer.trust.json lab-observer.rotation.json \
+  --output lab-observer.next.trust.json \
+  --public-key-output lab-observer.next.pub
+```
+
+Every transition advances exactly one generation, incorporates the previous
+rotation digest, and requires both old-key authorization and new-key possession
+over one domain-separated payload. Identity changes, same-key transitions,
+timestamp rollback, replay, forks, missing signatures, or overwrite of either
+output fail closed.
+
+Pass `--observer-trust-state` values instead of direct organization, observer,
+and key arrays to `verify-approval-log-gossip-quorum`. The resulting
+trust-bound report records the canonical digest and key generation of every
+observer. Remote acquisition accepts one trust state and binds its digest and
+generation into the transport receipt. The Action accepts local and remote
+`*-observer-trust-state-files` as a mutually exclusive replacement for direct
+trust. MCP exposes initialization, signing, application, key export, and
+trust-bound quorum verification. Closed contracts come from
+`approval-log-gossip-observer-trust-state-schema`,
+`signed-approval-log-gossip-observer-key-rotation-schema`, and
+`approval-log-gossip-trust-bound-quorum-report-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3313,7 +3354,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.373.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.374.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

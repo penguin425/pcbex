@@ -384,6 +384,11 @@
     {
       "id": "remote-approval-transparency-public-log-gossip-quorum",
       "release": "v1.373.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-gossip-observer-key-rotation",
+      "release": "v1.374.0",
       "status": "current"
     }
   ]
