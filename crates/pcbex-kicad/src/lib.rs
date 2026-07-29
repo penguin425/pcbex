@@ -14,9 +14,18 @@ pub use anchor::{
     ApprovalLogConsistencyVerificationReport, SignedApprovalPublicLogTreeHead,
     approval_log_anchor_proof_json_schema, approval_log_anchor_verification_report_json_schema,
     approval_log_consistency_proof_json_schema,
-    approval_log_consistency_verification_report_json_schema, create_approval_log_anchor_proof,
-    create_approval_log_consistency_proof, verify_approval_log_anchor_proof,
-    verify_approval_log_consistency_proof,
+    approval_log_consistency_verification_report_json_schema, approval_public_log_tree_head_sha256,
+    create_approval_log_anchor_proof, create_approval_log_consistency_proof,
+    validate_approval_log_anchor_proof, verify_approval_log_anchor_proof,
+    verify_approval_log_consistency_proof, verify_approval_log_tree_head_consistency,
+    verify_approval_public_log_tree_head,
+};
+mod approval_gossip;
+pub use approval_gossip::{
+    ApprovalLogGossipVerificationReport, SignedApprovalLogGossipReceipt,
+    approval_log_gossip_verification_report_json_schema, sign_approval_log_gossip_receipt,
+    signed_approval_log_gossip_receipt_json_schema, validate_approval_log_gossip_receipt,
+    verify_approval_log_gossip_receipt,
 };
 mod approval;
 pub use approval::{

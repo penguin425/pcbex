@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.371.0
+    uses: penguin425/pcbex@v1.372.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3159,6 +3159,44 @@ publishes `approval-log-consistent`, and can enforce
 contracts are emitted by `approval-log-consistency-proof-schema` and
 `approval-log-consistency-verification-report-schema`.
 
+Independent observers can gossip the exact trusted tree head without sharing
+their retained baseline:
+
+```sh
+pcbex sign-approval-log-gossip-receipt \
+  --anchor approvals.anchor.json \
+  --log-public-key public-log.pub \
+  --observer-id independent-observer \
+  --observer-private-key .secrets/observer.key \
+  --received-at-unix 1770000000 \
+  --expires-at-unix 1770086400 \
+  --output approvals.gossip.json
+
+pcbex verify-approval-log-gossip-receipt \
+  --local-anchor approvals.previous-anchor.json \
+  --receipt approvals.gossip.json \
+  --consistency-proof approvals.consistency.json \
+  --log-public-key public-log.pub \
+  --observer-id independent-observer \
+  --observer-public-key observer.pub \
+  --evaluated-at-unix 1770000100 \
+  --output approvals.gossip-verification.json
+```
+
+The observer first verifies the log-operator signature, then signs the exact
+tree-head digest under a separate Ed25519 key. Receipts bind the log identity,
+tree size, root, log key, observer identity, and a lifetime of at most seven
+days. Verification accepts identical trees without a proof and either prefix
+direction with the exact consistency proof. It rejects equal-size different
+roots as a split view, as well as stale/future receipts, redundant or missing
+proofs, and observer/log key substitution. The Action accepts
+`approval-log-gossip-receipt`, trusted observer identity/key, evaluation time,
+and an optional gossip consistency proof; it publishes
+`approval-log-gossip-verified` and supports `fail-on-approval-log-gossip`.
+MCP exposes task-forbidden signing and verification tools. Closed contracts
+come from `signed-approval-log-gossip-receipt-schema` and
+`approval-log-gossip-verification-report-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3226,7 +3264,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.371.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.372.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

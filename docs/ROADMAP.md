@@ -81,6 +81,7 @@ auditable release.
 | v1.369.0 | Remote registry history checkpoint witnesses | Acquire and immediately verify independent checkpoint witnesses from bounded HTTPS services with hash-bound receipts |
 | v1.370.0 | Registry witness receipt transparency | Append verified remote witness receipts to signed, anchored, independently witnessed hash-chain logs |
 | v1.371.0 | Approval transparency public-log consistency | Prove that newer receipt-log checkpoints extend retained signed Merkle trees without transferring the complete log |
+| v1.372.0 | Approval transparency public-log gossip | Compare fresh independently signed tree-head observations and reject split views across CI consumers |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -89,6 +90,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should add independent gossip of approval-transparency
-public-log tree heads, so CI consumers can compare signed views and detect a
-split-view operator without sharing one retained baseline.
+The next roadmap should add a bounded remote approval-gossip quorum, so CI can
+acquire fresh consistent observations from multiple independent organizations
+and retain hash-bound transport evidence.

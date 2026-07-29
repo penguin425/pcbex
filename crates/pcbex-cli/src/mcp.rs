@@ -3104,6 +3104,55 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "sign_approval_transparency_public_log_gossip_receipt",
+            "Sign approval public-log gossip receipt",
+            "Independently re-sign one trusted signed tree head with a bounded observation lifetime.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "anchor", "log_public_key", "observer_id", "observer_private_key",
+                    "received_at_unix", "expires_at_unix", "output"
+                ],
+                "properties": {
+                    "anchor": {"type": "string"},
+                    "log_public_key": {"type": "string"},
+                    "observer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                    "observer_private_key": {"type": "string"},
+                    "received_at_unix": {"type": "integer", "minimum": 0},
+                    "expires_at_unix": {"type": "integer", "minimum": 1},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_approval_transparency_public_log_gossip_receipt",
+            "Verify approval public-log gossip receipt",
+            "Compare an independently signed tree-head observation with a local anchor and require consistency for different sizes.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "local_anchor", "receipt", "log_public_key", "observer_id",
+                    "observer_public_key", "evaluated_at_unix", "output"
+                ],
+                "properties": {
+                    "local_anchor": {"type": "string"},
+                    "receipt": {"type": "string"},
+                    "consistency_proof": {"type": "string"},
+                    "log_public_key": {"type": "string"},
+                    "observer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                    "observer_public_key": {"type": "string"},
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -3522,6 +3571,12 @@ fn call_tool(
         }
         "verify_approval_transparency_public_log_consistency" => {
             verify_approval_transparency_public_log_consistency(arguments, cancellation)?
+        }
+        "sign_approval_transparency_public_log_gossip_receipt" => {
+            sign_approval_transparency_public_log_gossip_receipt(arguments, cancellation)?
+        }
+        "verify_approval_transparency_public_log_gossip_receipt" => {
+            verify_approval_transparency_public_log_gossip_receipt(arguments, cancellation)?
         }
         "verify_approval_transparency_witnesses" => {
             verify_approval_transparency_witnesses(arguments, cancellation)?
@@ -8253,6 +8308,99 @@ fn verify_approval_transparency_public_log_consistency(
     ))
 }
 
+fn sign_approval_transparency_public_log_gossip_receipt(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "anchor",
+            "log_public_key",
+            "observer_id",
+            "observer_private_key",
+            "received_at_unix",
+            "expires_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let received_at_unix = required_nonnegative_integer(&arguments, "received_at_unix")?;
+    let expires_at_unix = required_nonnegative_integer(&arguments, "expires_at_unix")?;
+    let command = vec![
+        "sign-approval-log-gossip-receipt".into(),
+        "--anchor".into(),
+        required_string(&arguments, "anchor")?,
+        "--log-public-key".into(),
+        required_string(&arguments, "log_public_key")?,
+        "--observer-id".into(),
+        required_string(&arguments, "observer_id")?,
+        "--observer-private-key".into(),
+        required_string(&arguments, "observer_private_key")?,
+        "--received-at-unix".into(),
+        received_at_unix.to_string(),
+        "--expires-at-unix".into(),
+        expires_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let receipt = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "receipt": receipt}),
+    ))
+}
+
+fn verify_approval_transparency_public_log_gossip_receipt(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "local_anchor",
+            "receipt",
+            "consistency_proof",
+            "log_public_key",
+            "observer_id",
+            "observer_public_key",
+            "evaluated_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let evaluated_at_unix = required_nonnegative_integer(&arguments, "evaluated_at_unix")?;
+    let mut command = vec![
+        "verify-approval-log-gossip-receipt".into(),
+        "--local-anchor".into(),
+        required_string(&arguments, "local_anchor")?,
+        "--receipt".into(),
+        required_string(&arguments, "receipt")?,
+    ];
+    if let Some(proof) = optional_string(&arguments, "consistency_proof")? {
+        command.extend(["--consistency-proof".into(), proof]);
+    }
+    command.extend([
+        "--log-public-key".into(),
+        required_string(&arguments, "log_public_key")?,
+        "--observer-id".into(),
+        required_string(&arguments, "observer_id")?,
+        "--observer-public-key".into(),
+        required_string(&arguments, "observer_public_key")?,
+        "--evaluated-at-unix".into(),
+        evaluated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -8526,6 +8674,16 @@ fn optional_nonnegative_integer(
     Ok(())
 }
 
+fn required_nonnegative_integer(
+    arguments: &Map<String, Value>,
+    name: &str,
+) -> std::result::Result<u64, Value> {
+    arguments
+        .get(name)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": format!("{name} must be a non-negative integer")}))
+}
+
 fn required_string_array(
     arguments: &Map<String, Value>,
     name: &str,
@@ -8620,7 +8778,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 98);
+        assert_eq!(tools.len(), 100);
         let named = |name: &str| {
             tools
                 .iter()
@@ -9164,6 +9322,16 @@ mod tests {
         assert_eq!(
             named("verify_approval_transparency_public_log_consistency")["execution"]["taskSupport"],
             "forbidden"
+        );
+        assert_eq!(
+            named("sign_approval_transparency_public_log_gossip_receipt")["inputSchema"]["properties"]
+                ["expires_at_unix"]["minimum"],
+            1
+        );
+        assert_eq!(
+            named("verify_approval_transparency_public_log_gossip_receipt")["inputSchema"]["properties"]
+                ["consistency_proof"]["type"],
+            "string"
         );
         assert_eq!(
             named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],

@@ -604,6 +604,94 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     );
     assert!(!rejected_consistency.exists());
 
+    let gossip_private = directory.join("gossip-observer.key");
+    let gossip_public = directory.join("gossip-observer.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&gossip_private),
+            "--public-key",
+            path(&gossip_public),
+        ])
+        .status
+        .success()
+    );
+    let gossip_receipt = directory.join("checkpoint.gossip.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-receipt",
+            "--anchor",
+            path(&anchor),
+            "--log-public-key",
+            path(&anchor_public),
+            "--observer-id",
+            "independent-observer",
+            "--observer-private-key",
+            path(&gossip_private),
+            "--received-at-unix",
+            "107",
+            "--expires-at-unix",
+            "200",
+            "--output",
+            path(&gossip_receipt),
+        ])
+        .status
+        .success()
+    );
+    let gossip_report = directory.join("checkpoint.gossip-verification.json");
+    assert!(
+        run(&[
+            "verify-approval-log-gossip-receipt",
+            "--local-anchor",
+            path(&old_anchor),
+            "--receipt",
+            path(&gossip_receipt),
+            "--consistency-proof",
+            path(&consistency),
+            "--log-public-key",
+            path(&anchor_public),
+            "--observer-id",
+            "independent-observer",
+            "--observer-public-key",
+            path(&gossip_public),
+            "--evaluated-at-unix",
+            "150",
+            "--output",
+            path(&gossip_report),
+        ])
+        .status
+        .success()
+    );
+    let gossip_report: Value = serde_json::from_slice(&fs::read(&gossip_report).unwrap()).unwrap();
+    assert_eq!(gossip_report["verified"], true);
+    assert_eq!(gossip_report["split_view_detected"], false);
+    assert_eq!(gossip_report["relationship"], "local_precedes_observed");
+
+    let rejected_gossip = directory.join("checkpoint.rejected-gossip.json");
+    assert!(
+        !run(&[
+            "verify-approval-log-gossip-receipt",
+            "--local-anchor",
+            path(&old_anchor),
+            "--receipt",
+            path(&gossip_receipt),
+            "--log-public-key",
+            path(&anchor_public),
+            "--observer-id",
+            "independent-observer",
+            "--observer-public-key",
+            path(&gossip_public),
+            "--evaluated-at-unix",
+            "150",
+            "--output",
+            path(&rejected_gossip),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_gossip.exists());
+
     let checkpoint_value: SignedApprovalLogCheckpoint =
         serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();
     let remote_secret = [42_u8; 32];

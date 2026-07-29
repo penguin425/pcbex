@@ -746,6 +746,26 @@ inputs:
     description: Proof that the current approval-log anchor extends the previous anchor.
     required: false
     default: ""
+  approval-log-gossip-receipt:
+    description: Independently signed observation of an approval public-log tree head.
+    required: false
+    default: ""
+  approval-log-gossip-consistency-proof:
+    description: Prefix proof when the local and observed gossip tree sizes differ.
+    required: false
+    default: ""
+  approval-log-gossip-observer-id:
+    description: Trusted identity expected in the approval public-log gossip receipt.
+    required: false
+    default: ""
+  approval-log-gossip-observer-public-key:
+    description: Trusted Ed25519 public key for the independent gossip observer.
+    required: false
+    default: ""
+  approval-log-gossip-evaluated-at-unix:
+    description: Explicit verification time for the bounded gossip receipt.
+    required: false
+    default: ""
   approval-log-witness-files:
     description: Newline-separated independent witness signatures over the checkpoint.
     required: false
@@ -820,6 +840,10 @@ inputs:
     default: "false"
   fail-on-approval-log-consistency:
     description: Fail unless the current public-log anchor is a proven prefix extension.
+    required: false
+    default: "false"
+  fail-on-approval-log-gossip:
+    description: Fail unless the independent public-log observation is fresh and consistent.
     required: false
     default: "false"
   fail-on-approval-log-witnesses:
@@ -1103,6 +1127,12 @@ outputs:
   approval-log-consistent:
     description: Whether the current approval public-log tree extends the accepted previous tree.
     value: ${{ steps.analyze.outputs.approval-log-consistent }}
+  approval-log-gossip-verification:
+    description: Verified independent public-log observation report path, when supplied.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-verification }}
+  approval-log-gossip-verified:
+    description: Whether the independent observation is fresh and consistent with the local anchor.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-verified }}
   approval-log-witness-quorum:
     description: Verified approval-log witness quorum report path, when supplied.
     value: ${{ steps.analyze.outputs.approval-log-witness-quorum }}
@@ -1304,6 +1334,11 @@ runs:
         PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY: ${{ inputs.approval-log-anchor-public-key }}
         PCBEX_APPROVAL_LOG_PREVIOUS_ANCHOR_PROOF: ${{ inputs.approval-log-previous-anchor-proof }}
         PCBEX_APPROVAL_LOG_CONSISTENCY_PROOF: ${{ inputs.approval-log-consistency-proof }}
+        PCBEX_APPROVAL_LOG_GOSSIP_RECEIPT: ${{ inputs.approval-log-gossip-receipt }}
+        PCBEX_APPROVAL_LOG_GOSSIP_CONSISTENCY_PROOF: ${{ inputs.approval-log-gossip-consistency-proof }}
+        PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_ID: ${{ inputs.approval-log-gossip-observer-id }}
+        PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY: ${{ inputs.approval-log-gossip-observer-public-key }}
+        PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX: ${{ inputs.approval-log-gossip-evaluated-at-unix }}
         PCBEX_APPROVAL_LOG_WITNESS_FILES: ${{ inputs.approval-log-witness-files }}
         PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS: ${{ inputs.approval-log-witness-public-keys }}
         PCBEX_APPROVAL_LOG_MINIMUM_WITNESSES: ${{ inputs.approval-log-minimum-witnesses }}
@@ -1359,6 +1394,7 @@ runs:
         PCBEX_APPROVAL_LOG_VERIFIED: ${{ steps.analyze.outputs.approval-log-verified }}
         PCBEX_APPROVAL_LOG_ANCHORED: ${{ steps.analyze.outputs.approval-log-anchored }}
         PCBEX_APPROVAL_LOG_CONSISTENT: ${{ steps.analyze.outputs.approval-log-consistent }}
+        PCBEX_APPROVAL_LOG_GOSSIP_VERIFIED: ${{ steps.analyze.outputs.approval-log-gossip-verified }}
         PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.approval-log-witness-quorum-met }}
         PCBEX_CANARY_ROLLOUT_AUTHORIZED: ${{ steps.analyze.outputs.canary-rollout-authorized }}
         PCBEX_CANARY_MONITORING_PASSED: ${{ steps.analyze.outputs.canary-monitoring-passed }}
@@ -1388,6 +1424,7 @@ runs:
         PCBEX_FAIL_ON_APPROVAL_LOG: ${{ inputs.fail-on-approval-log }}
         PCBEX_FAIL_ON_APPROVAL_LOG_ANCHOR: ${{ inputs.fail-on-approval-log-anchor }}
         PCBEX_FAIL_ON_APPROVAL_LOG_CONSISTENCY: ${{ inputs.fail-on-approval-log-consistency }}
+        PCBEX_FAIL_ON_APPROVAL_LOG_GOSSIP: ${{ inputs.fail-on-approval-log-gossip }}
         PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES: ${{ inputs.fail-on-approval-log-witnesses }}
         PCBEX_FAIL_ON_CANARY_ROLLOUT_AUTHORIZATION: ${{ inputs.fail-on-canary-rollout-authorization }}
         PCBEX_FAIL_ON_CANARY_MONITORING: ${{ inputs.fail-on-canary-monitoring }}
@@ -1451,6 +1488,10 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_CONSISTENCY" == "true" && "$PCBEX_APPROVAL_LOG_CONSISTENT" != "true" ]]; then
           echo "::error::pcbex approval public-log prefix consistency is absent or invalid"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_GOSSIP" == "true" && "$PCBEX_APPROVAL_LOG_GOSSIP_VERIFIED" != "true" ]]; then
+          echo "::error::pcbex approval public-log gossip observation is absent or inconsistent"
           exit 1
         fi
         if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES" == "true" && "$PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET" != "true" ]]; then
