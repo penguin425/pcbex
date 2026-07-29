@@ -93,11 +93,41 @@ fn record_feedback(
 #[test]
 fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let policy_path = root.join("examples/acme-policy-pack.json");
-    let policy: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&policy_path).unwrap()).unwrap();
     let temporary = temporary_directory("policy-recommendation");
     fs::create_dir_all(&temporary).unwrap();
+    let key_a = temporary.join("reviewer-a.key");
+    let public_a = temporary.join("reviewer-a.pub");
+    let key_b = temporary.join("reviewer-b.key");
+    let public_b = temporary.join("reviewer-b.pub");
+    for (private, public) in [(&key_a, &public_a), (&key_b, &public_b)] {
+        assert!(
+            Command::new(env!("CARGO_BIN_EXE_pcbex"))
+                .arg("approval-keygen")
+                .arg("--private-key")
+                .arg(private)
+                .arg("--public-key")
+                .arg(public)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let mut policy: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(root.join("examples/acme-policy-pack.json")).unwrap(),
+    )
+    .unwrap();
+    policy["trusted_human_escalation_keys"] = serde_json::json!([
+        {
+            "signer_id": "reviewer-a",
+            "public_key": fs::read_to_string(&public_a).unwrap().trim()
+        },
+        {
+            "signer_id": "reviewer-b",
+            "public_key": fs::read_to_string(&public_b).unwrap().trim()
+        }
+    ]);
+    let policy_path = temporary.join("policy-pack.json");
+    fs::write(&policy_path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
     let (first_feedback, first_manifest) = record_feedback(&temporary, &policy, "lot-one", 0.14);
     let (second_feedback, second_manifest) = record_feedback(&temporary, &policy, "lot-two", 0.15);
     let output = temporary.join("recommendation.json");
@@ -320,6 +350,174 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
             ["additionalProperties"],
         false
     );
+
+    let approval_a = temporary.join("rollout-approval-a.json");
+    let approval_b = temporary.join("rollout-approval-b.json");
+    for (private_key, signer_id, approval) in [
+        (&key_a, "reviewer-a", &approval_a),
+        (&key_b, "reviewer-b", &approval_b),
+    ] {
+        let signed = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-rollout-approval")
+            .arg(&rollout)
+            .arg("--canary-project")
+            .arg("controller")
+            .arg("--valid-from-unix")
+            .arg("1000")
+            .arg("--expires-at-unix")
+            .arg("2000")
+            .arg("--private-key")
+            .arg(private_key)
+            .arg("--signer-id")
+            .arg(signer_id)
+            .arg("--decision")
+            .arg("approve")
+            .arg("--reason")
+            .arg("Simulation is compatible with the bounded canary.")
+            .arg("--ticket")
+            .arg("HW-42")
+            .arg("--output")
+            .arg(approval)
+            .output()
+            .unwrap();
+        assert!(
+            signed.status.success(),
+            "{}",
+            String::from_utf8_lossy(&signed.stderr)
+        );
+    }
+    let authorization = temporary.join("canary-authorization.json");
+    let authorization_summary = temporary.join("canary-authorization.md");
+    let authorized = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-rollout-approvals")
+        .arg(&rollout)
+        .arg("--policy-pack")
+        .arg(&policy_path)
+        .arg("--approval")
+        .arg(&approval_a)
+        .arg("--approval")
+        .arg(&approval_b)
+        .arg("--evaluated-at-unix")
+        .arg("1500")
+        .arg("--minimum-approvals")
+        .arg("2")
+        .arg("--output")
+        .arg(&authorization)
+        .arg("--summary-output")
+        .arg(&authorization_summary)
+        .arg("--require-authorized")
+        .output()
+        .unwrap();
+    assert!(
+        authorized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&authorized.stderr)
+    );
+    let authorization_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&authorization).unwrap()).unwrap();
+    assert_eq!(
+        authorization_document["status"],
+        serde_json::json!("canary_authorized")
+    );
+    assert_eq!(authorization_document["canary_authorized"], true);
+    assert_eq!(
+        authorization_document["policy"]["maximum_canary_percent"],
+        10
+    );
+    assert_eq!(
+        authorization_document["rollback_policy"]["automatic_rollback"],
+        true
+    );
+    assert_eq!(
+        authorization_document["rollback_policy"]["automatic_promotion"],
+        false
+    );
+    assert_eq!(
+        authorization_document["rollback_policy"]["requires_post_canary_review"],
+        true
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-canary-rollout-authorization")
+            .arg(&authorization)
+            .status()
+            .unwrap()
+            .success()
+    );
+    for schema_command in [
+        "signed-rollout-approval-schema",
+        "canary-rollout-authorization-schema",
+    ] {
+        let schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg(schema_command)
+            .output()
+            .unwrap();
+        assert!(schema.status.success());
+        let schema: serde_json::Value = serde_json::from_slice(&schema.stdout).unwrap();
+        assert_eq!(schema["additionalProperties"], false);
+    }
+    let expired_authorization = temporary.join("expired-canary.json");
+    let expired = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-rollout-approvals")
+        .arg(&rollout)
+        .arg("--policy-pack")
+        .arg(&policy_path)
+        .arg("--approval")
+        .arg(&approval_a)
+        .arg("--approval")
+        .arg(&approval_b)
+        .arg("--evaluated-at-unix")
+        .arg("2001")
+        .arg("--output")
+        .arg(&expired_authorization)
+        .output()
+        .unwrap();
+    assert!(expired.status.success());
+    let expired: serde_json::Value =
+        serde_json::from_slice(&fs::read(&expired_authorization).unwrap()).unwrap();
+    assert_eq!(expired["canary_authorized"], false);
+    assert!(
+        expired["gate_failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure == "approval_window_inactive")
+    );
+    let mut tampered_approval: serde_json::Value =
+        serde_json::from_slice(&fs::read(&approval_a).unwrap()).unwrap();
+    let signature = tampered_approval["signature"].as_str().unwrap();
+    let replacement = if signature.starts_with('A') { "B" } else { "A" };
+    tampered_approval["signature"] = serde_json::json!(format!("{replacement}{}", &signature[1..]));
+    let tampered_approval_path = temporary.join("tampered-rollout-approval.json");
+    fs::write(
+        &tampered_approval_path,
+        serde_json::to_string_pretty(&tampered_approval).unwrap(),
+    )
+    .unwrap();
+    let tampered_authorization = temporary.join("tampered-canary.json");
+    let tampered = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-rollout-approvals")
+        .arg(&rollout)
+        .arg("--policy-pack")
+        .arg(&policy_path)
+        .arg("--approval")
+        .arg(&tampered_approval_path)
+        .arg("--approval")
+        .arg(&approval_b)
+        .arg("--evaluated-at-unix")
+        .arg("1500")
+        .arg("--output")
+        .arg(&tampered_authorization)
+        .arg("--require-authorized")
+        .output()
+        .unwrap();
+    assert!(!tampered.status.success());
+    assert!(
+        String::from_utf8_lossy(&tampered.stderr).contains("signature"),
+        "{}",
+        String::from_utf8_lossy(&tampered.stderr)
+    );
+    assert!(!tampered_authorization.exists());
 
     let candidate_run_path = candidate.join("run.json");
     let mut candidate_run: serde_json::Value =

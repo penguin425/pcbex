@@ -793,6 +793,47 @@ same boundary. A repository Action can set `policy-rollout-project-id` and
 or `policy-rollout-recommendation`, to rerun the current board, retain the
 simulation profile and candidate analysis, and publish `policy-rollout`.
 
+Two independent trusted humans can authorize only a bounded canary over the
+exact normalized rollout report:
+
+```sh
+pcbex sign-rollout-approval policy-rollout.json \
+  --canary-project controller \
+  --valid-from-unix 1785283200 \
+  --expires-at-unix 1785888000 \
+  --private-key engineer-a.key \
+  --signer-id engineer-a \
+  --decision approve \
+  --reason "Compatible simulation; bounded canary approved." \
+  --ticket HW-ROLLOUT-42 \
+  --output rollout-approval-a.json
+
+pcbex verify-rollout-approvals policy-rollout.json \
+  --policy-pack organization-policy-pack.json \
+  --approval rollout-approval-a.json \
+  --approval rollout-approval-b.json \
+  --evaluated-at-unix 1785286800 \
+  --output canary-rollout-authorization.json \
+  --summary-output canary-rollout-authorization.md \
+  --require-authorized
+```
+
+The signatures bind the rollout digest, policy identity and revision, sorted
+project scope, decision, signer, reason, ticket, and validity window. Signers
+must be distinct trusted human keys, approvals must agree exactly, the window
+cannot exceed seven days, and the canary cannot exceed 10% of projects. Any
+simulated regression or new violation prevents authorization. The closed
+authorization always requires automatic rollback on regression, analysis
+failure, new violations, or missing monitoring evidence; automatic promotion
+is forbidden and post-canary human review is mandatory.
+
+MCP exposes `sign_rollout_approval` and `verify_rollout_approvals`. The
+repository Action accepts `canary-rollout-report`,
+`canary-rollout-approval-files`, and
+`canary-rollout-evaluated-at-unix`, publishes the retained authorization and
+boolean result, and gates only when
+`fail-on-canary-rollout-authorization: "true"` is selected.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -820,7 +861,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.338.0
+    uses: penguin425/pcbex@v1.339.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2057,7 +2098,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.338.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.339.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

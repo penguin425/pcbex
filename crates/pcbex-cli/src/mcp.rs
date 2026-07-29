@@ -297,6 +297,8 @@ impl McpServer {
                     | "recommend_policy"
                     | "policy_rollout_profile"
                     | "simulate_policy_rollout"
+                    | "sign_rollout_approval"
+                    | "verify_rollout_approvals"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -835,6 +837,67 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "generated_on": {"type": "string", "format": "date"},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "sign_rollout_approval",
+            "Sign canary rollout decision",
+            "Sign one human approve/reject decision over an exact rollout, bounded canary scope, and maximum seven-day window.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollout", "canary_projects", "valid_from_unix",
+                    "expires_at_unix", "private_key", "signer_id",
+                    "decision", "reason", "ticket", "output"
+                ],
+                "properties": {
+                    "rollout": {"type": "string"},
+                    "canary_projects": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "valid_from_unix": {"type": "integer", "minimum": 0},
+                    "expires_at_unix": {"type": "integer", "minimum": 1},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "decision": {"enum": ["approve", "reject"]},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "ticket": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "verify_rollout_approvals",
+            "Authorize bounded canary rollout",
+            "Verify trusted dual-control human signatures and emit a canary-only authorization with mandatory rollback and no automatic promotion.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollout", "policy_pack", "approvals",
+                    "evaluated_at_unix", "output"
+                ],
+                "properties": {
+                    "rollout": {"type": "string"},
+                    "policy_pack": {"type": "string"},
+                    "approvals": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "minimum_approvals": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_authorized": {"type": "boolean", "default": false}
                 }
             }),
             false,
@@ -1437,6 +1500,8 @@ fn call_tool(
         "recommend_policy" => recommend_policy(arguments, cancellation)?,
         "policy_rollout_profile" => policy_rollout_profile(arguments, cancellation)?,
         "simulate_policy_rollout" => simulate_policy_rollout(arguments, cancellation)?,
+        "sign_rollout_approval" => sign_rollout_approval(arguments, cancellation)?,
+        "verify_rollout_approvals" => verify_rollout_approvals(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -1962,6 +2027,131 @@ fn simulate_policy_rollout(
     Ok(execution_result(
         execution,
         json!({"output": output, "rollout": rollout}),
+    ))
+}
+
+fn sign_rollout_approval(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollout",
+            "canary_projects",
+            "valid_from_unix",
+            "expires_at_unix",
+            "private_key",
+            "signer_id",
+            "decision",
+            "reason",
+            "ticket",
+            "output",
+        ],
+    )?;
+    let projects = required_string_array(&arguments, "canary_projects", false)?;
+    if projects.len() > 100 {
+        return Err(json!({"detail": "canary_projects cannot exceed 100 entries"}));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-rollout-approval".into(),
+        required_string(&arguments, "rollout")?,
+    ];
+    for project in projects {
+        command.extend(["--canary-project".into(), project]);
+    }
+    for (name, option) in [
+        ("valid_from_unix", "--valid-from-unix"),
+        ("expires_at_unix", "--expires-at-unix"),
+    ] {
+        let value = arguments
+            .get(name)
+            .and_then(Value::as_u64)
+            .ok_or_else(|| json!({"detail": format!("{name} must be an unsigned integer")}))?;
+        command.extend([option.into(), value.to_string()]);
+    }
+    for (name, option) in [
+        ("private_key", "--private-key"),
+        ("signer_id", "--signer-id"),
+        ("decision", "--decision"),
+        ("reason", "--reason"),
+        ("ticket", "--ticket"),
+    ] {
+        command.extend([option.into(), required_string(&arguments, name)?]);
+    }
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let approval = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "approval": approval}),
+    ))
+}
+
+fn verify_rollout_approvals(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollout",
+            "policy_pack",
+            "approvals",
+            "evaluated_at_unix",
+            "minimum_approvals",
+            "output",
+            "summary_output",
+            "require_authorized",
+        ],
+    )?;
+    let approvals = required_string_array(&arguments, "approvals", false)?;
+    if approvals.len() > 100 {
+        return Err(json!({"detail": "approvals cannot exceed 100 entries"}));
+    }
+    let evaluated = arguments
+        .get("evaluated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "evaluated_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-rollout-approvals".into(),
+        required_string(&arguments, "rollout")?,
+        "--policy-pack".into(),
+        required_string(&arguments, "policy_pack")?,
+    ];
+    for approval in approvals {
+        command.extend(["--approval".into(), approval]);
+    }
+    command.extend(["--evaluated-at-unix".into(), evaluated.to_string()]);
+    if let Some(value) = arguments.get("minimum_approvals") {
+        let value = value
+            .as_u64()
+            .filter(|value| (2..=100).contains(value))
+            .ok_or_else(
+                || json!({"detail": "minimum_approvals must be an integer from 2 to 100"}),
+            )?;
+        command.extend(["--minimum-approvals".into(), value.to_string()]);
+    }
+    command.extend(["--output".into(), output.clone()]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_authorized",
+        "--require-authorized",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let authorization = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "authorization": authorization}),
     ))
 }
 
@@ -3158,7 +3348,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 32);
+        assert_eq!(tools.len(), 34);
         let named = |name: &str| {
             tools
                 .iter()
@@ -3212,6 +3402,18 @@ mod tests {
         assert_eq!(
             named("simulate_policy_rollout")["inputSchema"]["properties"]["project_ids"]["maxItems"],
             1000
+        );
+        assert_eq!(
+            named("sign_rollout_approval")["inputSchema"]["properties"]["decision"]["enum"][0],
+            "approve"
+        );
+        assert_eq!(
+            named("verify_rollout_approvals")["inputSchema"]["properties"]["minimum_approvals"]["default"],
+            2
+        );
+        assert_eq!(
+            named("verify_rollout_approvals")["annotations"]["destructiveHint"],
+            true
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],

@@ -147,6 +147,36 @@ jobs:
             --analysis-manifest build/action-rollout/analysis-b/run.json \
             --generated-on 2026-07-29 \
             --output build/action-rollout/recommendation.json
+          target/release/pcbex policy-rollout-profile \
+            build/action-quorum/policy-pack.json \
+            build/action-rollout/recommendation.json \
+            --generated-on 2026-07-29 \
+            --output build/action-rollout/profile.json
+          target/release/pcbex analyze-kicad examples/simple.kicad_pcb \
+            --fab-profile build/action-rollout/profile.json \
+            --output-dir build/action-rollout/candidate
+          target/release/pcbex simulate-policy-rollout \
+            build/action-quorum/policy-pack.json \
+            build/action-rollout/recommendation.json \
+            --project-id action-controller \
+            --board examples/simple.kicad_pcb \
+            --baseline-analysis build/action-rollout/analysis-a \
+            --candidate-analysis build/action-rollout/candidate \
+            --generated-on 2026-07-29 \
+            --output build/action-rollout/rollout.json
+          for engineer in a b; do
+            target/release/pcbex sign-rollout-approval \
+              build/action-rollout/rollout.json \
+              --canary-project action-controller \
+              --valid-from-unix 1 \
+              --expires-at-unix 604801 \
+              --private-key "build/action-quorum/engineer-$engineer.key" \
+              --signer-id "engineer-$engineer" \
+              --decision approve \
+              --reason "CI dual-control canary authorization" \
+              --ticket PCBEX-CI-ROLL-1 \
+              --output "build/action-rollout/approval-$engineer.json"
+          done
           target/release/pcbex check-schematic examples/simple.kicad_sch \
             --policy-pack build/action-quorum/policy-pack.json \
             --output build/action-quorum/electrical-review.json \
@@ -322,6 +352,12 @@ jobs:
           policy-rollout-project-id: action-controller
           policy-rollout-recommendation: build/action-rollout/recommendation.json
           policy-rollout-generated-on: "2026-07-29"
+          canary-rollout-report: build/action-rollout/rollout.json
+          canary-rollout-approval-files: |
+            build/action-rollout/approval-a.json
+            build/action-rollout/approval-b.json
+          canary-rollout-evaluated-at-unix: "2"
+          fail-on-canary-rollout-authorization: "true"
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -340,6 +376,8 @@ jobs:
           POLICY_RECOMMENDATION: ${{ steps.pcbex.outputs.policy-recommendation }}
           POLICY_ROLLOUT_PROFILE: ${{ steps.pcbex.outputs.policy-rollout-profile }}
           POLICY_ROLLOUT: ${{ steps.pcbex.outputs.policy-rollout }}
+          CANARY_ROLLOUT_AUTHORIZATION: ${{ steps.pcbex.outputs.canary-rollout-authorization }}
+          CANARY_ROLLOUT_AUTHORIZED: ${{ steps.pcbex.outputs.canary-rollout-authorized }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
           SCHEMATIC_REVIEWER_ROUTING: ${{ steps.pcbex.outputs.schematic-reviewer-routing }}
@@ -362,6 +400,10 @@ jobs:
           test -s "$ARTIFACT_DIR/pr-comment.md"
           grep -F '# pcbex hardware analysis' "$ARTIFACT_DIR/pr-comment.md"
           grep -F '# pcbex baseline comparison' "$ARTIFACT_DIR/pr-comment.md"
+          test "$CANARY_ROLLOUT_AUTHORIZED" = "true"
+          test "$(jq -r '.canary_authorized' "$CANARY_ROLLOUT_AUTHORIZATION")" = "true"
+          test "$(jq -r '.rollback_policy.automatic_promotion' "$CANARY_ROLLOUT_AUTHORIZATION")" = "false"
+          test "$(jq -r '.rollback_policy.automatic_rollback' "$CANARY_ROLLOUT_AUTHORIZATION")" = "true"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"

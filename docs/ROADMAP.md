@@ -48,6 +48,7 @@ auditable release.
 | v1.336.0 | Managed AI provider adapters | Normalize OpenAI, Anthropic, and Gemini structured reviews through one bounded secret-safe contract |
 | v1.337.0 | Governed feedback-to-policy recommendations | Propose evidence-bound DFM tightening without automatic mutation or constraint relaxation |
 | v1.338.0 | Multi-project policy rollout simulation | Re-analyze exact boards under a proposal-derived simulation profile before any policy deployment |
+| v1.339.0 | Dual-control canary rollout authorization | Require two trusted human signatures for a time-bound, 10%-bounded canary with mandatory rollback |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -56,5 +57,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should focus on cryptographically approved canary rollout,
-promotion, and bounded rollback after simulation evidence is accepted.
+The next roadmap should focus on binding live canary monitoring evidence to an
+explicit human promotion or rollback decision. Automatic promotion remains
+forbidden.
