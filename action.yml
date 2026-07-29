@@ -174,6 +174,10 @@ inputs:
     description: Newline-separated retained signed suspension states that deny exact candidate digests.
     required: false
     default: ""
+  policy-remediation-state-files:
+    description: Newline-separated independently verified remediation states for suspended policies.
+    required: false
+    default: ""
   policy-deployment-recorded-at-unix:
     description: Opt-in Unix timestamp for advancing the monotonic deployment state.
     required: false
@@ -332,6 +336,42 @@ inputs:
     default: ""
   fail-on-policy-suspension:
     description: Fail unless the reviewed failed policy digest is explicitly suspended.
+    required: false
+    default: "false"
+  policy-remediation-suspension-state:
+    description: Suspended policy state to remediate.
+    required: false
+    default: ""
+  policy-remediation-candidate-policy-pack:
+    description: Accepted successor policy pack proposed as remediation.
+    required: false
+    default: ""
+  policy-remediation-candidate-trust-state:
+    description: Accepted trust state for the exact remediation candidate.
+    required: false
+    default: ""
+  policy-remediation-rollout:
+    description: Simulation rollout for the remediation candidate.
+    required: false
+    default: ""
+  policy-remediation-monitoring:
+    description: Complete clean canary monitoring for the remediation candidate.
+    required: false
+    default: ""
+  policy-remediation-approval-files:
+    description: Newline-separated independent signed remediation approvals.
+    required: false
+    default: ""
+  policy-remediation-minimum-approvals:
+    description: Minimum independent remediation approvals required.
+    required: false
+    default: "2"
+  policy-remediation-recorded-at-unix:
+    description: Opt-in Unix timestamp for retaining verified remediation.
+    required: false
+    default: ""
+  fail-on-policy-remediation:
+    description: Fail unless an exact successor remediation is independently verified.
     required: false
     default: "false"
   ai-review-request:
@@ -618,6 +658,12 @@ outputs:
   policy-suspension-status:
     description: Whether the reviewed policy digest was suspended or continued under review.
     value: ${{ steps.analyze.outputs.policy-suspension-status }}
+  policy-remediation-state:
+    description: Independently approved exact-successor remediation state.
+    value: ${{ steps.analyze.outputs.policy-remediation-state }}
+  policy-remediation-status:
+    description: Whether remediation evidence lifted one suspension for one exact digest.
+    value: ${{ steps.analyze.outputs.policy-remediation-status }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -730,6 +776,7 @@ runs:
         PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK: ${{ inputs.policy-deployment-candidate-policy-pack }}
         PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE: ${{ inputs.policy-deployment-baseline-state }}
         PCBEX_POLICY_SUSPENSION_STATE_FILES: ${{ inputs.policy-suspension-state-files }}
+        PCBEX_POLICY_REMEDIATION_STATE_FILES: ${{ inputs.policy-remediation-state-files }}
         PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX: ${{ inputs.policy-deployment-recorded-at-unix }}
         PCBEX_POLICY_DEPLOYMENT_VERIFICATION_STATE: ${{ inputs.policy-deployment-verification-state }}
         PCBEX_POLICY_DEPLOYMENT_VERIFICATION_PROJECT_ID: ${{ inputs.policy-deployment-verification-project-id }}
@@ -763,6 +810,14 @@ runs:
         PCBEX_POLICY_SUSPENSION_DECISION_FILES: ${{ inputs.policy-suspension-decision-files }}
         PCBEX_POLICY_SUSPENSION_MINIMUM_DECISIONS: ${{ inputs.policy-suspension-minimum-decisions }}
         PCBEX_POLICY_SUSPENSION_RECORDED_AT_UNIX: ${{ inputs.policy-suspension-recorded-at-unix }}
+        PCBEX_POLICY_REMEDIATION_SUSPENSION_STATE: ${{ inputs.policy-remediation-suspension-state }}
+        PCBEX_POLICY_REMEDIATION_CANDIDATE_POLICY_PACK: ${{ inputs.policy-remediation-candidate-policy-pack }}
+        PCBEX_POLICY_REMEDIATION_CANDIDATE_TRUST_STATE: ${{ inputs.policy-remediation-candidate-trust-state }}
+        PCBEX_POLICY_REMEDIATION_ROLLOUT: ${{ inputs.policy-remediation-rollout }}
+        PCBEX_POLICY_REMEDIATION_MONITORING: ${{ inputs.policy-remediation-monitoring }}
+        PCBEX_POLICY_REMEDIATION_APPROVAL_FILES: ${{ inputs.policy-remediation-approval-files }}
+        PCBEX_POLICY_REMEDIATION_MINIMUM_APPROVALS: ${{ inputs.policy-remediation-minimum-approvals }}
+        PCBEX_POLICY_REMEDIATION_RECORDED_AT_UNIX: ${{ inputs.policy-remediation-recorded-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -843,6 +898,7 @@ runs:
         PCBEX_ROLLBACK_INCIDENT_STATUS: ${{ steps.analyze.outputs.rollback-incident-status }}
         PCBEX_POLICY_INCIDENT_SUSPENSION_REVIEW_REQUIRED: ${{ steps.analyze.outputs.policy-incident-suspension-review-required }}
         PCBEX_POLICY_SUSPENSION_STATUS: ${{ steps.analyze.outputs.policy-suspension-status }}
+        PCBEX_POLICY_REMEDIATION_STATUS: ${{ steps.analyze.outputs.policy-remediation-status }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -863,6 +919,7 @@ runs:
         PCBEX_FAIL_ON_ROLLBACK_INCIDENT_CLOSURE: ${{ inputs.fail-on-rollback-incident-closure }}
         PCBEX_FAIL_ON_POLICY_INCIDENT_SUSPENSION_REVIEW: ${{ inputs.fail-on-policy-incident-suspension-review }}
         PCBEX_FAIL_ON_POLICY_SUSPENSION: ${{ inputs.fail-on-policy-suspension }}
+        PCBEX_FAIL_ON_POLICY_REMEDIATION: ${{ inputs.fail-on-policy-remediation }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -947,5 +1004,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_SUSPENSION" == "true" && "$PCBEX_POLICY_SUSPENSION_STATUS" != "policy_suspended" ]]; then
           echo "::error::pcbex repeated-failure policy digest lacks a valid suspension quorum"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_REMEDIATION" == "true" && "$PCBEX_POLICY_REMEDIATION_STATUS" != "remediation_verified" ]]; then
+          echo "::error::pcbex policy remediation lacks clean evidence and an independent approval quorum"
           exit 1
         fi

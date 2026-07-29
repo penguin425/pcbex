@@ -309,6 +309,7 @@ impl McpServer {
                     | "close_rollback_incident"
                     | "append_policy_incident_ledger"
                     | "apply_policy_suspension_decision"
+                    | "apply_policy_remediation"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1045,6 +1046,10 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "type": "array", "maxItems": 100,
                         "items": {"type": "string"}
                     },
+                    "remediation_states": {
+                        "type": "array", "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
                     "recorded_at_unix": {"type": "integer", "minimum": 0},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
@@ -1319,6 +1324,71 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
                     "require_suspended": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "sign_policy_remediation_approval",
+            "Sign policy remediation approval",
+            "Sign an independent human approval bound to a suspended policy, accepted successor digest, and complete clean canary evidence.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "suspension", "candidate_policy_pack",
+                    "candidate_policy_trust_state", "rollout", "monitoring",
+                    "approved_at_unix", "private_key", "signer_id",
+                    "reason", "ticket", "output"
+                ],
+                "properties": {
+                    "suspension": {"type": "string"},
+                    "candidate_policy_pack": {"type": "string"},
+                    "candidate_policy_trust_state": {"type": "string"},
+                    "rollout": {"type": "string"},
+                    "monitoring": {"type": "string"},
+                    "approved_at_unix": {"type": "integer", "minimum": 0},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "ticket": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            Some("forbidden"),
+        ),
+        tool(
+            "apply_policy_remediation",
+            "Apply policy remediation",
+            "Verify an independent dual-control quorum over a clean accepted successor and lift one suspension only for that exact remediation digest.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "suspension", "policy_pack", "candidate_policy_pack",
+                    "candidate_policy_trust_state", "rollout", "monitoring",
+                    "approvals", "recorded_at_unix", "output"
+                ],
+                "properties": {
+                    "suspension": {"type": "string"},
+                    "policy_pack": {"type": "string"},
+                    "candidate_policy_pack": {"type": "string"},
+                    "candidate_policy_trust_state": {"type": "string"},
+                    "rollout": {"type": "string"},
+                    "monitoring": {"type": "string"},
+                    "approvals": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "minimum_approvals": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_verified": {"type": "boolean", "default": false}
                 }
             }),
             false,
@@ -1948,6 +2018,10 @@ fn call_tool(
         "apply_policy_suspension_decision" => {
             apply_policy_suspension_decision(arguments, cancellation)?
         }
+        "sign_policy_remediation_approval" => {
+            sign_policy_remediation_approval(arguments, cancellation)?
+        }
+        "apply_policy_remediation" => apply_policy_remediation(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2815,6 +2889,7 @@ fn advance_policy_deployment(
             "minimum_decisions",
             "baseline_state",
             "suspension_states",
+            "remediation_states",
             "recorded_at_unix",
             "output",
             "summary_output",
@@ -2873,6 +2948,21 @@ fn advance_policy_deployment(
                 .filter(|state| !state.is_empty())
                 .ok_or_else(|| json!({"detail": "suspension_states entries must be strings"}))?;
             command.extend(["--suspension-state".into(), state.into()]);
+        }
+    }
+    if let Some(states) = arguments.get("remediation_states") {
+        let states = states
+            .as_array()
+            .ok_or_else(|| json!({"detail": "remediation_states must be an array"}))?;
+        if states.len() > 100 {
+            return Err(json!({"detail": "remediation_states cannot exceed 100 entries"}));
+        }
+        for state in states {
+            let state = state
+                .as_str()
+                .filter(|state| !state.is_empty())
+                .ok_or_else(|| json!({"detail": "remediation_states entries must be strings"}))?;
+            command.extend(["--remediation-state".into(), state.into()]);
         }
     }
     command.extend([
@@ -3497,6 +3587,139 @@ fn apply_policy_suspension_decision(
     Ok(execution_result(
         execution,
         json!({"output": output, "suspension": state}),
+    ))
+}
+
+fn sign_policy_remediation_approval(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "suspension",
+            "candidate_policy_pack",
+            "candidate_policy_trust_state",
+            "rollout",
+            "monitoring",
+            "approved_at_unix",
+            "private_key",
+            "signer_id",
+            "reason",
+            "ticket",
+            "output",
+        ],
+    )?;
+    let approved_at = arguments
+        .get("approved_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "approved_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-policy-remediation-approval".into(),
+        required_string(&arguments, "suspension")?,
+        required_string(&arguments, "candidate_policy_pack")?,
+        required_string(&arguments, "candidate_policy_trust_state")?,
+        required_string(&arguments, "rollout")?,
+        required_string(&arguments, "monitoring")?,
+        "--approved-at-unix".into(),
+        approved_at.to_string(),
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--reason".into(),
+        required_string(&arguments, "reason")?,
+        "--ticket".into(),
+        required_string(&arguments, "ticket")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let approval = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "approval": approval}),
+    ))
+}
+
+fn apply_policy_remediation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "suspension",
+            "policy_pack",
+            "candidate_policy_pack",
+            "candidate_policy_trust_state",
+            "rollout",
+            "monitoring",
+            "approvals",
+            "minimum_approvals",
+            "recorded_at_unix",
+            "output",
+            "summary_output",
+            "require_verified",
+        ],
+    )?;
+    let approvals = required_string_array(&arguments, "approvals", false)?;
+    if approvals.len() > 100 {
+        return Err(json!({"detail": "approvals cannot exceed 100 entries"}));
+    }
+    let recorded_at = arguments
+        .get("recorded_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "recorded_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "apply-policy-remediation".into(),
+        required_string(&arguments, "suspension")?,
+        "--policy-pack".into(),
+        required_string(&arguments, "policy_pack")?,
+        "--candidate-policy-pack".into(),
+        required_string(&arguments, "candidate_policy_pack")?,
+        "--candidate-policy-trust-state".into(),
+        required_string(&arguments, "candidate_policy_trust_state")?,
+        "--rollout".into(),
+        required_string(&arguments, "rollout")?,
+        "--monitoring".into(),
+        required_string(&arguments, "monitoring")?,
+    ];
+    for approval in approvals {
+        command.extend(["--approval".into(), approval]);
+    }
+    if let Some(value) = arguments.get("minimum_approvals") {
+        let value = value
+            .as_u64()
+            .filter(|value| (2..=100).contains(value))
+            .ok_or_else(|| json!({"detail": "minimum_approvals must be 2 to 100"}))?;
+        command.extend(["--minimum-approvals".into(), value.to_string()]);
+    }
+    command.extend([
+        "--recorded-at-unix".into(),
+        recorded_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_verified",
+        "--require-verified",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "remediation": state}),
     ))
 }
 
@@ -4693,7 +4916,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 47);
+        assert_eq!(tools.len(), 49);
         let named = |name: &str| {
             tools
                 .iter()
@@ -4845,6 +5068,18 @@ mod tests {
         );
         assert_eq!(
             named("apply_policy_suspension_decision")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("sign_policy_remediation_approval")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("apply_policy_remediation")["inputSchema"]["properties"]["minimum_approvals"]["default"],
+            2
+        );
+        assert_eq!(
+            named("apply_policy_remediation")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(
