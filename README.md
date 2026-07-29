@@ -1172,6 +1172,38 @@ MCP exposes append and snapshot tools; the Action can append one selected
 event, publish its generation and pending count, and consume retained lifecycle
 ledgers at the deployment gate.
 
+Authenticate the latest lifecycle generation before CI adopts it:
+
+```sh
+pcbex sign-policy-lifecycle-checkpoint policy-lifecycle.next.json \
+  --issued-at-unix 1785301100 \
+  --private-key lifecycle-root.key \
+  --signer-id lifecycle-root \
+  --output policy-lifecycle.checkpoint.json
+
+pcbex verify-policy-lifecycle-checkpoint \
+  policy-lifecycle.next.json policy-lifecycle.checkpoint.json \
+  --public-key lifecycle-root.pub \
+  --baseline-state policy-lifecycle.previous.trust.json \
+  --accepted-at-unix 1785301101 \
+  --output policy-lifecycle.trust.json \
+  --require-accepted
+```
+
+The Ed25519 signature binds the policy identity, generation, entry count,
+normalized ledger digest, hash-chain head, signer, and issue time. Verification
+requires a separately trusted public key and a checkpoint no older than 24
+hours. A retained trust state makes exact replay idempotent while rejecting
+generation rollback, same-generation equivocation, signer or key substitution,
+backward time, and higher-generation ledgers that do not retain the previously
+trusted head. Closed checkpoint and trust-state schemas are available from
+`signed-policy-lifecycle-checkpoint-schema` and
+`policy-lifecycle-trust-state-schema`. MCP exposes signing as a
+task-forbidden destructive tool and verification as an optional task. The
+Action accepts `policy-lifecycle-checkpoint-*`, publishes the newly accepted
+trust state, and can fail closed with
+`fail-on-policy-lifecycle-checkpoint: "true"`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1199,7 +1231,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.349.0
+    uses: penguin425/pcbex@v1.350.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2436,7 +2468,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.349.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.350.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

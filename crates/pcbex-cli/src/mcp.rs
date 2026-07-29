@@ -312,6 +312,7 @@ impl McpServer {
                     | "apply_policy_remediation"
                     | "append_policy_lifecycle_event"
                     | "snapshot_policy_lifecycle"
+                    | "verify_policy_lifecycle_checkpoint"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1445,6 +1446,53 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "sign_policy_lifecycle_checkpoint",
+            "Sign policy lifecycle checkpoint",
+            "Bind an Ed25519 signature to the exact generation, hash-chain head, and normalized digest of an append-only policy lifecycle ledger.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "ledger", "issued_at_unix", "private_key", "signer_id", "output"
+                ],
+                "properties": {
+                    "ledger": {"type": "string"},
+                    "issued_at_unix": {"type": "integer", "minimum": 0},
+                    "private_key": {"type": "string"},
+                    "signer_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                    },
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_policy_lifecycle_checkpoint",
+            "Verify policy lifecycle checkpoint",
+            "Authenticate one lifecycle ledger and monotonically advance retained trust while rejecting rollback, same-generation equivocation, and history forks.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "ledger", "checkpoint", "public_key", "accepted_at_unix", "output"
+                ],
+                "properties": {
+                    "ledger": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "baseline_state": {"type": "string"},
+                    "accepted_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "require_accepted": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -2073,6 +2121,12 @@ fn call_tool(
         "apply_policy_remediation" => apply_policy_remediation(arguments, cancellation)?,
         "append_policy_lifecycle_event" => append_policy_lifecycle_event(arguments, cancellation)?,
         "snapshot_policy_lifecycle" => snapshot_policy_lifecycle(arguments, cancellation)?,
+        "sign_policy_lifecycle_checkpoint" => {
+            sign_policy_lifecycle_checkpoint(arguments, cancellation)?
+        }
+        "verify_policy_lifecycle_checkpoint" => {
+            verify_policy_lifecycle_checkpoint(arguments, cancellation)?
+        }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -3876,6 +3930,97 @@ fn snapshot_policy_lifecycle(
     ))
 }
 
+fn sign_policy_lifecycle_checkpoint(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "ledger",
+            "issued_at_unix",
+            "private_key",
+            "signer_id",
+            "output",
+        ],
+    )?;
+    let issued_at_unix = arguments
+        .get("issued_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "issued_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-policy-lifecycle-checkpoint".into(),
+        required_string(&arguments, "ledger")?,
+        "--issued-at-unix".into(),
+        issued_at_unix.to_string(),
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let checkpoint = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "checkpoint": checkpoint}),
+    ))
+}
+
+fn verify_policy_lifecycle_checkpoint(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "ledger",
+            "checkpoint",
+            "public_key",
+            "baseline_state",
+            "accepted_at_unix",
+            "output",
+            "require_accepted",
+        ],
+    )?;
+    let accepted_at_unix = arguments
+        .get("accepted_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "accepted_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-policy-lifecycle-checkpoint".into(),
+        required_string(&arguments, "ledger")?,
+        required_string(&arguments, "checkpoint")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--accepted-at-unix".into(),
+        accepted_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_option(
+        &arguments,
+        "baseline_state",
+        "--baseline-state",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_accepted",
+        "--require-accepted",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": state}),
+    ))
+}
+
 fn compare_schematics(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -5085,7 +5230,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 51);
+        assert_eq!(tools.len(), 53);
         let named = |name: &str| {
             tools
                 .iter()
@@ -5266,6 +5411,19 @@ mod tests {
         assert_eq!(
             named("snapshot_policy_lifecycle")["execution"]["taskSupport"],
             "optional"
+        );
+        assert_eq!(
+            named("sign_policy_lifecycle_checkpoint")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("verify_policy_lifecycle_checkpoint")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("verify_policy_lifecycle_checkpoint")["inputSchema"]["properties"]["accepted_at_unix"]
+                ["minimum"],
+            0
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],
