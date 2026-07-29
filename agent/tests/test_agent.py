@@ -1,5 +1,7 @@
 import json
+import http.server
 import sys
+import threading
 import time
 import unittest
 import tempfile
@@ -13,6 +15,10 @@ from pcbex_agent.circuit import skidl_to_placement_problem
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
 from pcbex_agent.models import DrcViolation, PlanLimits
+from pcbex_agent.managed_provider import (
+    managed_provider_receipt_json_schema,
+    review_schematic_with_managed_provider,
+)
 from pcbex_agent.planner import build_plan
 from pcbex_agent.provider import (
     ProviderError,
@@ -136,6 +142,71 @@ class RepairTests(unittest.TestCase):
 
 
 class AdapterTests(unittest.TestCase):
+    @staticmethod
+    def _managed_review_fixture():
+        request = {
+            "schema_version": 1,
+            "request_sha256": "a" * 64,
+            "requirements": [{"id": "power", "text": "Power is valid"}],
+            "evidence_ids": ["electrical-review"],
+        }
+        response = {
+            "schema_version": 1,
+            "request_sha256": "a" * 64,
+            "model": {"provider": "untrusted", "model": "claim", "version": "x"},
+            "decision": "approve",
+            "summary": "Evidence is complete.",
+            "requirements": [{
+                "id": "power",
+                "status": "pass",
+                "rationale": "The deterministic review passed.",
+                "evidence_refs": ["electrical-review"],
+            }],
+            "risks": [],
+        }
+        return request, response
+
+    @staticmethod
+    def _serve_provider(
+        envelope,
+        *,
+        content_type="application/json",
+        delay=0,
+        status=200,
+        location=None,
+    ):
+        state = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers["Content-Length"])
+                state["path"] = self.path
+                state["headers"] = {
+                    name.lower(): value for name, value in self.headers.items()
+                }
+                state["body"] = self.rfile.read(length)
+                time.sleep(delay)
+                encoded = json.dumps(envelope).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(encoded)))
+                if location is not None:
+                    self.send_header("Location", location)
+                self.end_headers()
+                try:
+                    self.wfile.write(encoded)
+                except BrokenPipeError:
+                    pass
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return server, thread, state
+
     def test_llm_adapter_rejects_coordinates(self):
         response = (
             '{"constraints":[{"type":"near","parameters":'
@@ -345,6 +416,290 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(
             review.call_args.args[3], ["adapter", "--model", "reviewer"]
         )
+
+    def test_managed_providers_normalize_three_official_response_envelopes(self):
+        request, response = self._managed_review_fixture()
+        structured = json.dumps(response)
+        envelopes = {
+            "openai": {
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": structured}],
+                }],
+            },
+            "anthropic": {
+                "stop_reason": "end_turn",
+                "content": [{"type": "text", "text": structured}],
+            },
+            "gemini": {
+                "candidates": [{
+                    "finishReason": "STOP",
+                    "content": {"parts": [{"text": structured}]},
+                }],
+            },
+        }
+        for provider, envelope in envelopes.items():
+            with self.subTest(provider=provider), tempfile.TemporaryDirectory() as directory:
+                server, thread, state = self._serve_provider(envelope)
+                try:
+                    root = Path(directory)
+                    request_path = root / "request.json"
+                    output_path = root / "response.json"
+                    receipt_path = root / "receipt.json"
+                    request_path.write_text(json.dumps(request), encoding="utf-8")
+                    with patch.dict("os.environ", {"PCBEX_TEST_KEY": "top-secret"}):
+                        receipt = review_schematic_with_managed_provider(
+                            request_path,
+                            output_path,
+                            receipt_path,
+                            provider=provider,
+                            model="review-model",
+                            model_version="2026-07-29",
+                            api_key_environment="PCBEX_TEST_KEY",
+                            endpoint=(
+                                f"http://127.0.0.1:{server.server_port}/review"
+                            ),
+                            allow_insecure_loopback=True,
+                        )
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join()
+                normalized = json.loads(output_path.read_text())
+                self.assertEqual(normalized["model"], {
+                    "provider": provider,
+                    "model": "review-model",
+                    "version": "2026-07-29",
+                })
+                self.assertEqual(receipt["adapter"], "managed-provider-http-v1")
+                self.assertNotIn("top-secret", receipt_path.read_text())
+                sent = json.loads(state["body"])
+                if provider == "openai":
+                    self.assertEqual(
+                        state["headers"]["authorization"], "Bearer top-secret"
+                    )
+                    self.assertFalse(sent["store"])
+                    self.assertTrue(sent["text"]["format"]["strict"])
+                elif provider == "anthropic":
+                    self.assertEqual(state["headers"]["x-api-key"], "top-secret")
+                    self.assertEqual(
+                        sent["output_config"]["format"]["type"], "json_schema"
+                    )
+                else:
+                    self.assertEqual(
+                        state["headers"]["x-goog-api-key"], "top-secret"
+                    )
+                    self.assertEqual(
+                        sent["generationConfig"]["responseFormat"]["text"]["mimeType"],
+                        "application/json",
+                    )
+
+    def test_managed_provider_rejects_unsafe_endpoint_before_network_access(self):
+        request, _response = self._managed_review_fixture()
+        unsafe = (
+            "http://api.example/review",
+            "https://user:password@api.example/review",
+            "https://api.example/review?key=secret",
+            "https://api.example/review#fragment",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request_path = root / "request.json"
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+            for index, endpoint in enumerate(unsafe):
+                with (
+                    self.subTest(endpoint=endpoint),
+                    patch.dict("os.environ", {"PCBEX_TEST_KEY": "secret"}),
+                    self.assertRaises(ProviderError),
+                ):
+                    review_schematic_with_managed_provider(
+                        request_path,
+                        root / f"response-{index}.json",
+                        root / f"receipt-{index}.json",
+                        provider="openai",
+                        model="review-model",
+                        api_key_environment="PCBEX_TEST_KEY",
+                        endpoint=endpoint,
+                    )
+
+    def test_managed_provider_failure_writes_no_artifacts(self):
+        request, _response = self._managed_review_fixture()
+        envelope = {"status": "incomplete", "output": []}
+        server, thread, _state = self._serve_provider(envelope)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                request_path = root / "request.json"
+                output_path = root / "response.json"
+                receipt_path = root / "receipt.json"
+                request_path.write_text(json.dumps(request), encoding="utf-8")
+                with (
+                    patch.dict("os.environ", {"PCBEX_TEST_KEY": "secret"}),
+                    self.assertRaisesRegex(ProviderError, "did not complete"),
+                ):
+                    review_schematic_with_managed_provider(
+                        request_path,
+                        output_path,
+                        receipt_path,
+                        provider="openai",
+                        model="review-model",
+                        api_key_environment="PCBEX_TEST_KEY",
+                        endpoint=f"http://127.0.0.1:{server.server_port}/review",
+                        allow_insecure_loopback=True,
+                    )
+                self.assertFalse(output_path.exists())
+                self.assertFalse(receipt_path.exists())
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_managed_provider_does_not_follow_redirects(self):
+        request, _response = self._managed_review_fixture()
+        server, thread, state = self._serve_provider(
+            {},
+            status=307,
+            location="https://redirected.example/review",
+        )
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                request_path = root / "request.json"
+                request_path.write_text(json.dumps(request), encoding="utf-8")
+                with (
+                    patch.dict("os.environ", {"PCBEX_TEST_KEY": "secret"}),
+                    self.assertRaisesRegex(ProviderError, "HTTP 307"),
+                ):
+                    review_schematic_with_managed_provider(
+                        request_path,
+                        root / "response.json",
+                        root / "receipt.json",
+                        provider="openai",
+                        model="review-model",
+                        api_key_environment="PCBEX_TEST_KEY",
+                        endpoint=f"http://127.0.0.1:{server.server_port}/review",
+                        allow_insecure_loopback=True,
+                    )
+                self.assertEqual(state["path"], "/review")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_managed_provider_enforces_response_limit(self):
+        request, _response = self._managed_review_fixture()
+        server, thread, _state = self._serve_provider({
+            "status": "completed",
+            "output": [{"type": "message", "content": [{
+                "type": "output_text", "text": "x" * 1000,
+            }]}],
+        })
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                request_path = root / "request.json"
+                request_path.write_text(json.dumps(request), encoding="utf-8")
+                with (
+                    patch.dict("os.environ", {"PCBEX_TEST_KEY": "secret"}),
+                    self.assertRaisesRegex(ProviderError, "exceeds 100 bytes"),
+                ):
+                    review_schematic_with_managed_provider(
+                        request_path,
+                        root / "response.json",
+                        root / "receipt.json",
+                        provider="openai",
+                        model="review-model",
+                        api_key_environment="PCBEX_TEST_KEY",
+                        endpoint=f"http://127.0.0.1:{server.server_port}/review",
+                        max_response_bytes=100,
+                        allow_insecure_loopback=True,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+    def test_managed_provider_enforces_end_to_end_timeout(self):
+        request, response = self._managed_review_fixture()
+        envelope = {
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": json.dumps(response),
+                }],
+            }],
+        }
+        server, thread, _state = self._serve_provider(envelope, delay=3)
+        started = time.monotonic()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                request_path = root / "request.json"
+                request_path.write_text(json.dumps(request), encoding="utf-8")
+                with (
+                    patch.dict("os.environ", {"PCBEX_TEST_KEY": "secret"}),
+                    self.assertRaisesRegex(ProviderError, "exceeded 1 second"),
+                ):
+                    review_schematic_with_managed_provider(
+                        request_path,
+                        root / "response.json",
+                        root / "receipt.json",
+                        provider="openai",
+                        model="review-model",
+                        api_key_environment="PCBEX_TEST_KEY",
+                        endpoint=f"http://127.0.0.1:{server.server_port}/review",
+                        timeout_seconds=1,
+                        allow_insecure_loopback=True,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+        self.assertLess(time.monotonic() - started, 2.5)
+
+    def test_managed_provider_requires_environment_secret(self):
+        request, _response = self._managed_review_fixture()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request_path = root / "request.json"
+            request_path.write_text(json.dumps(request), encoding="utf-8")
+            with (
+                patch.dict("os.environ", {}, clear=True),
+                self.assertRaisesRegex(ProviderError, "OPENAI_API_KEY is not set"),
+            ):
+                review_schematic_with_managed_provider(
+                    request_path,
+                    root / "response.json",
+                    root / "receipt.json",
+                    provider="openai",
+                    model="review-model",
+                )
+
+    def test_managed_provider_receipt_schema_is_closed_and_secret_free(self):
+        schema = managed_provider_receipt_json_schema()
+        self.assertFalse(schema["additionalProperties"])
+        self.assertEqual(
+            schema["properties"]["adapter"]["const"],
+            "managed-provider-http-v1",
+        )
+        self.assertNotIn("api_key", json.dumps(schema))
+
+    def test_managed_provider_action_keeps_secret_out_of_process_arguments(self):
+        action = (
+            Path(__file__).parents[2]
+            / ".github/actions/managed-ai-review/action.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "PCBEX_MANAGED_PROVIDER_API_KEY: ${{ inputs.api-key }}", action
+        )
+        self.assertIn(
+            "--api-key-environment PCBEX_MANAGED_PROVIDER_API_KEY", action
+        )
+        self.assertNotIn("--api-key \"$PCBEX_MANAGED_PROVIDER_API_KEY\"", action)
+        self.assertIn("value: ${{ steps.review.outputs.receipt }}", action)
 
     def test_catalog_search_is_ranked_and_filtered(self):
         parts = [

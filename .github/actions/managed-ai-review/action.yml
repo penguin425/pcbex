@@ -1,0 +1,90 @@
+name: pcbex managed AI schematic review
+description: Call a supported AI API, normalize its review, and retain a secret-free receipt.
+
+inputs:
+  request:
+    description: Path to an exact pcbex AI review request in the caller workspace.
+    required: true
+  provider:
+    description: Managed provider identifier (openai, anthropic, or gemini).
+    required: true
+  model:
+    description: Exact provider model identifier recorded in the normalized response.
+    required: true
+  model-version:
+    description: Optional immutable provider model version or deployment revision.
+    required: false
+    default: ""
+  api-key:
+    description: Provider API key; pass a GitHub Actions secret.
+    required: true
+  output-dir:
+    description: Directory for the normalized response and receipt.
+    required: false
+    default: pcbex-managed-review
+  timeout-seconds:
+    description: End-to-end provider timeout from 1 to 600 seconds.
+    required: false
+    default: "120"
+  maximum-response-bytes:
+    description: Maximum accepted provider HTTP response size.
+    required: false
+    default: "1048576"
+  maximum-output-tokens:
+    description: Maximum provider output-token budget.
+    required: false
+    default: "4096"
+
+outputs:
+  response:
+    description: Normalized closed pcbex AI review response.
+    value: ${{ steps.review.outputs.response }}
+  receipt:
+    description: Secret-free managed-provider audit receipt.
+    value: ${{ steps.review.outputs.receipt }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.11"
+
+    - name: Review schematic with managed provider
+      id: review
+      shell: bash
+      env:
+        PCBEX_MANAGED_PROVIDER_API_KEY: ${{ inputs.api-key }}
+        PCBEX_MANAGED_REQUEST: ${{ inputs.request }}
+        PCBEX_MANAGED_PROVIDER: ${{ inputs.provider }}
+        PCBEX_MANAGED_MODEL: ${{ inputs.model }}
+        PCBEX_MANAGED_MODEL_VERSION: ${{ inputs.model-version }}
+        PCBEX_MANAGED_OUTPUT_DIR: ${{ inputs.output-dir }}
+        PCBEX_MANAGED_TIMEOUT_SECONDS: ${{ inputs.timeout-seconds }}
+        PCBEX_MANAGED_MAXIMUM_RESPONSE_BYTES: ${{ inputs.maximum-response-bytes }}
+        PCBEX_MANAGED_MAXIMUM_OUTPUT_TOKENS: ${{ inputs.maximum-output-tokens }}
+      run: |
+        set -euo pipefail
+        output_dir="$GITHUB_WORKSPACE/$PCBEX_MANAGED_OUTPUT_DIR"
+        response="$output_dir/response.json"
+        receipt="$output_dir/receipt.json"
+        mkdir -p "$output_dir"
+        arguments=(
+          review-managed "$GITHUB_WORKSPACE/$PCBEX_MANAGED_REQUEST"
+          --output "$response"
+          --receipt "$receipt"
+          --provider "$PCBEX_MANAGED_PROVIDER"
+          --model "$PCBEX_MANAGED_MODEL"
+          --api-key-environment PCBEX_MANAGED_PROVIDER_API_KEY
+          --timeout-seconds "$PCBEX_MANAGED_TIMEOUT_SECONDS"
+          --maximum-response-bytes "$PCBEX_MANAGED_MAXIMUM_RESPONSE_BYTES"
+          --maximum-output-tokens "$PCBEX_MANAGED_MAXIMUM_OUTPUT_TOKENS"
+        )
+        if [[ -n "$PCBEX_MANAGED_MODEL_VERSION" ]]; then
+          arguments+=(--model-version "$PCBEX_MANAGED_MODEL_VERSION")
+        fi
+        PYTHONPATH="$GITHUB_ACTION_PATH/../../../agent/src" \
+          python3 -m pcbex_agent.cli "${arguments[@]}"
+        echo "response=$response" >> "$GITHUB_OUTPUT"
+        echo "receipt=$receipt" >> "$GITHUB_OUTPUT"
