@@ -349,6 +349,11 @@
     {
       "id": "lifecycle-gossip-registry-history-audit",
       "release": "v1.366.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-gossip-registry-history-witness-checkpoint",
+      "release": "v1.367.0",
       "status": "current"
     }
   ]
