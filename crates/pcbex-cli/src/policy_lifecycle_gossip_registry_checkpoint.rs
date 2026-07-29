@@ -15,6 +15,7 @@ const CHECKPOINT_DOMAIN: &str =
     "pcbex-policy-lifecycle-public-log-gossip-organization-registry-history-checkpoint-v1";
 const WITNESS_DOMAIN: &str =
     "pcbex-policy-lifecycle-public-log-gossip-organization-registry-history-checkpoint-witness-v1";
+const WITNESS_KEY_ROTATION_DOMAIN: &str = "pcbex-policy-lifecycle-public-log-gossip-organization-registry-history-checkpoint-witness-key-rotation-v1";
 const MAXIMUM_WITNESSES: usize = 100;
 const MAXIMUM_ACCEPTANCE_DELAY_SECONDS: u64 = 86_400;
 const MAXIMUM_WITNESS_AGE_SECONDS: u64 = 86_400;
@@ -68,6 +69,33 @@ pub struct SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWi
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub generation: u64,
+    pub current_public_key: String,
+    pub last_rotation_sha256: Option<String>,
+    pub last_rotated_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_rotation_sha256: Option<String>,
+    pub old_public_key: String,
+    pub new_public_key: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_signature: String,
+    pub new_signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessMember {
     pub witness_id: String,
     pub public_key: String,
@@ -110,6 +138,18 @@ struct WitnessPayload<'a> {
     checkpoint_sha256: &'a str,
     witness_id: &'a str,
     witnessed_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct WitnessKeyRotationPayload<'a> {
+    domain: &'static str,
+    witness_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&'a str>,
+    old_public_key: &'a str,
+    new_public_key: &'a str,
+    rotated_at_unix: u64,
 }
 
 pub fn sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
@@ -216,6 +256,164 @@ pub fn accept_policy_lifecycle_log_gossip_organization_registry_history_checkpoi
         &state,
     )?;
     Ok(state)
+}
+
+pub fn new_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    witness_id: &str,
+    public_key: &[u8; 32],
+) -> Result<PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState, String>
+{
+    validate_slug(witness_id, "registry history checkpoint witness id")?;
+    VerifyingKey::from_bytes(public_key)
+        .map_err(|error| format!("invalid registry history witness public key: {error}"))?;
+    Ok(
+        PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+            schema_version: 1,
+            witness_id: witness_id.into(),
+            generation: 0,
+            current_public_key: hex_encode(public_key),
+            last_rotation_sha256: None,
+            last_rotated_at_unix: None,
+        },
+    )
+}
+
+pub fn policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+    state: &PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+) -> Result<[u8; 32], String> {
+    validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    hex_decode::<32>(
+        &state.current_public_key,
+        "current registry history witness public key",
+    )
+}
+
+pub fn sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    state: &PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    old_secret_key: &[u8; 32],
+    new_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<
+    SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+    String,
+> {
+    validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    let old_key = SigningKey::from_bytes(old_secret_key);
+    let new_key = SigningKey::from_bytes(new_secret_key);
+    let old_public_key = hex_encode(&old_key.verifying_key().to_bytes());
+    let new_public_key = hex_encode(&new_key.verifying_key().to_bytes());
+    if old_public_key != state.current_public_key {
+        return Err("old registry history witness key does not match trust state".into());
+    }
+    if new_public_key == old_public_key {
+        return Err("new registry history witness key must differ".into());
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err("registry history witness rotation time moved backwards".into());
+    }
+    let to_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "registry history witness key generation overflow".to_string())?;
+    let payload = witness_key_rotation_payload(
+        &state.witness_id,
+        state.generation,
+        to_generation,
+        state.last_rotation_sha256.as_deref(),
+        &old_public_key,
+        &new_public_key,
+        rotated_at_unix,
+    )?;
+    let rotation =
+        SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+            schema_version: 1,
+            witness_id: state.witness_id.clone(),
+            from_generation: state.generation,
+            to_generation,
+            previous_rotation_sha256: state.last_rotation_sha256.clone(),
+            old_public_key,
+            new_public_key,
+            rotated_at_unix,
+            algorithm: "ed25519".into(),
+            old_signature: hex_encode(&old_key.sign(&payload).to_bytes()),
+            new_signature: hex_encode(&new_key.sign(&payload).to_bytes()),
+        };
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub fn apply_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    state: &PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+) -> Result<PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState, String>
+{
+    validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    if rotation.witness_id != state.witness_id
+        || rotation.from_generation != state.generation
+        || rotation.previous_rotation_sha256 != state.last_rotation_sha256
+        || rotation.old_public_key != state.current_public_key
+        || rotation.to_generation != state.generation.saturating_add(1)
+        || state
+            .last_rotated_at_unix
+            .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err("registry history witness rotation does not extend trust state".into());
+    }
+    let payload = witness_key_rotation_payload(
+        &rotation.witness_id,
+        rotation.from_generation,
+        rotation.to_generation,
+        rotation.previous_rotation_sha256.as_deref(),
+        &rotation.old_public_key,
+        &rotation.new_public_key,
+        rotation.rotated_at_unix,
+    )?;
+    for (key, signature, label) in [
+        (
+            &rotation.old_public_key,
+            &rotation.old_signature,
+            "old registry history witness rotation",
+        ),
+        (
+            &rotation.new_public_key,
+            &rotation.new_signature,
+            "new registry history witness rotation",
+        ),
+    ] {
+        let key = hex_decode::<32>(key, label)?;
+        let signature = Signature::from_bytes(&hex_decode::<64>(signature, label)?);
+        VerifyingKey::from_bytes(&key)
+            .map_err(|error| format!("invalid {label} public key: {error}"))?
+            .verify_strict(&payload, &signature)
+            .map_err(|_| format!("{label} signature verification failed"))?;
+    }
+    let rotation_sha256 = normalized_sha256(rotation, "registry history witness key rotation")?;
+    let next = PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        generation: rotation.to_generation,
+        current_public_key: rotation.new_public_key.clone(),
+        last_rotation_sha256: Some(rotation_sha256),
+        last_rotated_at_unix: Some(rotation.rotated_at_unix),
+    };
+    validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        &next,
+    )?;
+    Ok(next)
 }
 
 pub fn sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness(
@@ -371,6 +569,37 @@ pub fn verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoi
     Ok(report)
 }
 
+pub fn verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states(
+    history: &PolicyLifecycleLogGossipOrganizationRegistryHistory,
+    checkpoint: &SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint,
+    witnesses: &[SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness],
+    trust_states:
+        &[PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport, String>
+{
+    let trusted = trust_states
+        .iter()
+        .map(|state| {
+            Ok((
+                state.witness_id.clone(),
+                policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+                    state,
+                )?,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses(
+        history,
+        checkpoint,
+        witnesses,
+        &trusted,
+        minimum_witnesses,
+        evaluated_at_unix,
+    )
+}
+
 pub fn parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
     source: &str,
 ) -> Result<SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint, String> {
@@ -404,6 +633,32 @@ pub fn parse_signed_policy_lifecycle_log_gossip_organization_registry_history_ch
         &witness,
     )?;
     Ok(witness)
+}
+
+pub fn parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    source: &str,
+) -> Result<PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState, String>
+{
+    let state = serde_json::from_str(source)
+        .map_err(|error| format!("invalid registry history witness trust-state JSON: {error}"))?;
+    validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        &state,
+    )?;
+    Ok(state)
+}
+
+pub fn parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    source: &str,
+) -> Result<
+    SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+    String,
+> {
+    let rotation = serde_json::from_str(source)
+        .map_err(|error| format!("invalid registry history witness key-rotation JSON: {error}"))?;
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
 }
 
 pub fn parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report(
@@ -524,6 +779,66 @@ pub fn validate_signed_policy_lifecycle_log_gossip_organization_registry_history
     Ok(())
 }
 
+pub fn validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    state: &PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+) -> Result<(), String> {
+    if state.schema_version != 1 {
+        return Err("unsupported registry history witness trust state".into());
+    }
+    validate_slug(&state.witness_id, "registry history witness id")?;
+    let key = hex_decode::<32>(
+        &state.current_public_key,
+        "current registry history witness public key",
+    )?;
+    VerifyingKey::from_bytes(&key)
+        .map_err(|error| format!("invalid current registry history witness key: {error}"))?;
+    match (
+        state.generation,
+        &state.last_rotation_sha256,
+        state.last_rotated_at_unix,
+    ) {
+        (0, None, None) => Ok(()),
+        (0, _, _) => Err("initial registry history witness trust state references rotation".into()),
+        (_, Some(digest), Some(_)) => {
+            validate_digest(digest, "registry history witness rotation digest")
+        }
+        _ => Err("rotated registry history witness trust state is incomplete".into()),
+    }
+}
+
+pub fn validate_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+) -> Result<(), String> {
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.to_generation != rotation.from_generation.saturating_add(1)
+        || rotation.old_public_key == rotation.new_public_key
+    {
+        return Err("invalid registry history witness key rotation invariants".into());
+    }
+    validate_slug(&rotation.witness_id, "registry history witness id")?;
+    if let Some(digest) = &rotation.previous_rotation_sha256 {
+        validate_digest(digest, "previous registry history witness rotation digest")?;
+    }
+    validate_key(
+        &rotation.old_public_key,
+        "old registry history witness public key",
+    )?;
+    validate_key(
+        &rotation.new_public_key,
+        "new registry history witness public key",
+    )?;
+    hex_decode::<64>(
+        &rotation.old_signature,
+        "old registry history witness rotation signature",
+    )?;
+    hex_decode::<64>(
+        &rotation.new_signature,
+        "new registry history witness rotation signature",
+    )?;
+    Ok(())
+}
+
 pub fn validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report(
     report: &PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport,
 ) -> Result<(), String> {
@@ -637,6 +952,58 @@ pub fn signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoi
             "algorithm": {"const": "ed25519"},
             "public_key": key_schema(),
             "signature": signature_schema()
+        }
+    })
+}
+
+pub fn policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-trust-state-v1.json",
+        "title": "Rotatable registry history checkpoint witness trust state",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "generation", "current_public_key",
+            "last_rotation_sha256", "last_rotated_at_unix"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 0},
+            "current_public_key": key_schema(),
+            "last_rotation_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "last_rotated_at_unix": {
+                "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]
+            }
+        }
+    })
+}
+
+pub fn signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-key-rotation-v1.json",
+        "title": "Dual-signed registry history checkpoint witness key rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "from_generation", "to_generation",
+            "previous_rotation_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "from_generation": {"type": "integer", "minimum": 0},
+            "to_generation": {"type": "integer", "minimum": 1},
+            "previous_rotation_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "old_public_key": key_schema(),
+            "new_public_key": key_schema(),
+            "rotated_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "old_signature": signature_schema(),
+            "new_signature": signature_schema()
         }
     })
 }
@@ -785,6 +1152,29 @@ fn witness_payload(
         witnessed_at_unix,
     })
     .map_err(|error| format!("serializing gossip registry history witness: {error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn witness_key_rotation_payload(
+    witness_id: &str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&str>,
+    old_public_key: &str,
+    new_public_key: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&WitnessKeyRotationPayload {
+        domain: WITNESS_KEY_ROTATION_DOMAIN,
+        witness_id,
+        from_generation,
+        to_generation,
+        previous_rotation_sha256,
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+    })
+    .map_err(|error| format!("serializing registry history witness key rotation: {error}"))
 }
 
 fn trusted_witness_map(
@@ -1011,9 +1401,54 @@ mod tests {
             signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_json_schema(),
             policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state_json_schema(),
             signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_json_schema(),
+            policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state_json_schema(),
+            signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation_json_schema(),
             policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema(),
         ] {
             assert_eq!(schema["additionalProperties"], false);
         }
+    }
+
+    #[test]
+    fn rotates_registry_history_witness_trust_with_dual_signatures() {
+        let old = [131; 32];
+        let next = [132; 32];
+        let final_key = [133; 32];
+        let initial =
+            new_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                "witness-a",
+                &SigningKey::from_bytes(&old).verifying_key().to_bytes(),
+            )
+            .unwrap();
+        let first =
+            sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &initial, &old, &next, 1_000,
+            )
+            .unwrap();
+        let rotated =
+            apply_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &initial, &first,
+            )
+            .unwrap();
+        assert_eq!(rotated.generation, 1);
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &rotated, &first,
+            )
+            .is_err()
+        );
+        let second =
+            sign_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &rotated, &next, &final_key, 1_100,
+            )
+            .unwrap();
+        assert_eq!(
+            apply_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &rotated, &second,
+            )
+            .unwrap()
+            .generation,
+            2
+        );
     }
 }

@@ -1207,20 +1207,40 @@ elif [[ -n "$registry_checkpoint_baseline" ]] \
   exit 2
 fi
 
-registry_checkpoint_witness_inputs=0
-for value in \
-  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES:-}" \
-  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS:-}" \
-  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES:-}"; do
-  if [[ -n "$value" ]]; then
-    registry_checkpoint_witness_inputs=$((registry_checkpoint_witness_inputs + 1))
-  fi
-done
-if ((registry_checkpoint_witness_inputs != 0 && registry_checkpoint_witness_inputs != 3)); then
-  echo "registry-history checkpoint witnesses, trusted IDs, and trusted keys must be supplied together" >&2
+registry_checkpoint_witness_configured=false
+registry_checkpoint_witness_key_mode=""
+registry_checkpoint_direct_inputs=0
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS:-}" ]]; then
+  registry_checkpoint_direct_inputs=$((registry_checkpoint_direct_inputs + 1))
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES:-}" ]]; then
+  registry_checkpoint_direct_inputs=$((registry_checkpoint_direct_inputs + 1))
+fi
+if ((registry_checkpoint_direct_inputs != 0 && registry_checkpoint_direct_inputs != 2)); then
+  echo "registry-history checkpoint trusted witness IDs and keys must be supplied together" >&2
   exit 2
 fi
-if ((registry_checkpoint_witness_inputs == 3)); then
+if ((registry_checkpoint_direct_inputs == 2)) \
+  && [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES:-}" ]]; then
+  echo "registry-history checkpoint direct trust and witness trust states are mutually exclusive" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES:-}" ]]; then
+  registry_checkpoint_witness_configured=true
+  if ((registry_checkpoint_direct_inputs == 2)); then
+    registry_checkpoint_witness_key_mode="direct"
+  elif [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES:-}" ]]; then
+    registry_checkpoint_witness_key_mode="trust-state"
+  else
+    echo "registry-history checkpoint witnesses require direct trust or witness trust states" >&2
+    exit 2
+  fi
+elif ((registry_checkpoint_direct_inputs != 0)) \
+  || [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES:-}" ]]; then
+  echo "registry-history checkpoint witness trust requires witness artifacts" >&2
+  exit 2
+fi
+if [[ "$registry_checkpoint_witness_configured" == "true" ]]; then
   if [[ -z "$registry_checkpoint" ]]; then
     echo "registry-history checkpoint witness verification requires a checkpoint" >&2
     exit 2
@@ -1247,16 +1267,24 @@ if ((registry_checkpoint_witness_inputs == 3)); then
       registry_checkpoint_witness_arguments+=(--witness "$witness")
     fi
   done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES"
-  while IFS= read -r witness_id; do
-    if [[ -n "$witness_id" ]]; then
-      registry_checkpoint_witness_arguments+=(--trusted-witness-id "$witness_id")
-    fi
-  done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS"
-  while IFS= read -r witness_key; do
-    if [[ -n "$witness_key" ]]; then
-      registry_checkpoint_witness_arguments+=(--trusted-witness-public-key "$witness_key")
-    fi
-  done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES"
+  if [[ "$registry_checkpoint_witness_key_mode" == "direct" ]]; then
+    while IFS= read -r witness_id; do
+      if [[ -n "$witness_id" ]]; then
+        registry_checkpoint_witness_arguments+=(--trusted-witness-id "$witness_id")
+      fi
+    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS"
+    while IFS= read -r witness_key; do
+      if [[ -n "$witness_key" ]]; then
+        registry_checkpoint_witness_arguments+=(--trusted-witness-public-key "$witness_key")
+      fi
+    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES"
+  else
+    while IFS= read -r trust_state; do
+      if [[ -n "$trust_state" ]]; then
+        registry_checkpoint_witness_arguments+=(--witness-trust-state "$trust_state")
+      fi
+    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES"
+  fi
   "$PCBEX_BINARY" "${registry_checkpoint_witness_arguments[@]}"
   policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_met="$(
     python3 -c \
