@@ -122,6 +122,22 @@ inputs:
     description: Minimum distinct trusted witnesses required; cannot be less than two.
     required: false
     default: "2"
+  remote-witness-endpoint:
+    description: Optional HTTPS endpoint that signs the exact approval-log checkpoint.
+    required: false
+    default: ""
+  remote-witness-public-key:
+    description: Trusted Ed25519 public-key file for the remote witness.
+    required: false
+    default: ""
+  remote-witness-bearer-token:
+    description: Optional secret Bearer token sent only to the configured remote witness.
+    required: false
+    default: ""
+  remote-witness-timeout-seconds:
+    description: End-to-end remote witness HTTP timeout, from 1 to 600 seconds.
+    required: false
+    default: "30"
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -262,6 +278,12 @@ outputs:
   approval-log-witness-quorum-met:
     description: Whether the independent approval-log witness threshold passed.
     value: ${{ steps.analyze.outputs.approval-log-witness-quorum-met }}
+  remote-witness:
+    description: Cryptographically verified remote approval-log witness path, when requested.
+    value: ${{ steps.analyze.outputs.remote-witness }}
+  remote-witness-receipt:
+    description: Hash-bound remote witness HTTP transport receipt path, when requested.
+    value: ${{ steps.analyze.outputs.remote-witness-receipt }}
 
 runs:
   using: composite
@@ -313,6 +335,10 @@ runs:
         PCBEX_APPROVAL_LOG_WITNESS_FILES: ${{ inputs.approval-log-witness-files }}
         PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS: ${{ inputs.approval-log-witness-public-keys }}
         PCBEX_APPROVAL_LOG_MINIMUM_WITNESSES: ${{ inputs.approval-log-minimum-witnesses }}
+        PCBEX_REMOTE_WITNESS_ENDPOINT: ${{ inputs.remote-witness-endpoint }}
+        PCBEX_REMOTE_WITNESS_PUBLIC_KEY: ${{ inputs.remote-witness-public-key }}
+        PCBEX_REMOTE_WITNESS_BEARER_TOKEN: ${{ inputs.remote-witness-bearer-token }}
+        PCBEX_REMOTE_WITNESS_TIMEOUT_SECONDS: ${{ inputs.remote-witness-timeout-seconds }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 

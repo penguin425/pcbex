@@ -1081,6 +1081,27 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("forbidden"),
         ),
+        tool(
+            "request_remote_approval_transparency_witness",
+            "Request remote approval-log witness",
+            "POST one checkpoint to a bounded HTTPS witness service and verify its response against a trusted key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["checkpoint", "endpoint", "public_key", "output", "receipt_output"],
+                "properties": {
+                    "checkpoint": {"type": "string"},
+                    "endpoint": {"type": "string", "pattern": "^https://"},
+                    "public_key": {"type": "string"},
+                    "bearer_token_env": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600, "default": 30},
+                    "output": {"type": "string"},
+                    "receipt_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
     ]
 }
 
@@ -1182,6 +1203,9 @@ fn call_tool(
         }
         "verify_approval_transparency_witnesses" => {
             verify_approval_transparency_witnesses(arguments, cancellation)?
+        }
+        "request_remote_approval_transparency_witness" => {
+            request_remote_approval_transparency_witness(arguments, cancellation)?
         }
         _ => return Err(json!({"detail": format!("unknown tool {name:?}")})),
     };
@@ -2129,6 +2153,64 @@ fn verify_approval_transparency_witnesses(
     ))
 }
 
+fn request_remote_approval_transparency_witness(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "checkpoint",
+            "endpoint",
+            "public_key",
+            "bearer_token_env",
+            "timeout_seconds",
+            "output",
+            "receipt_output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let receipt_output = required_string(&arguments, "receipt_output")?;
+    let mut command = vec![
+        "request-approval-log-witness".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--endpoint".into(),
+        required_string(&arguments, "endpoint")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+    ];
+    optional_option(
+        &arguments,
+        "bearer_token_env",
+        "--bearer-token-env",
+        &mut command,
+    )?;
+    optional_positive_integer(
+        &arguments,
+        "timeout_seconds",
+        "--timeout-seconds",
+        &mut command,
+    )?;
+    command.extend([
+        "--output".into(),
+        output.clone(),
+        "--receipt-output".into(),
+        receipt_output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let witness = read_json_if_present(Path::new(&output));
+    let receipt = read_json_if_present(Path::new(&receipt_output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "receipt_output": receipt_output,
+            "witness": witness,
+            "receipt": receipt
+        }),
+    ))
+}
+
 struct Execution {
     success: bool,
     exit_code: Option<i32>,
@@ -2375,7 +2457,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 21);
+        assert_eq!(tools.len(), 22);
         let named = |name: &str| {
             tools
                 .iter()
@@ -2474,6 +2556,11 @@ mod tests {
             named("verify_approval_transparency_witnesses")["inputSchema"]["properties"]["minimum_witnesses"]
                 ["minimum"],
             2
+        );
+        assert_eq!(
+            named("request_remote_approval_transparency_witness")["inputSchema"]["properties"]["endpoint"]
+                ["pattern"],
+            "^https://"
         );
         let verify_policy = tools
             .iter()
