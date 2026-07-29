@@ -45,6 +45,7 @@ write_output fetched-signed-policy-pack ""
 write_output policy-pack-fetch-receipt ""
 write_output manufacturing-feedback ""
 write_output manufacturing-feedback-passed ""
+write_output policy-recommendation ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -188,6 +189,59 @@ if [[ -n "${PCBEX_MANUFACTURING_FEEDBACK_DECLARATION:-}" ]]; then
   {
     printf '\n'
     cat "$manufacturing_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+policy_recommendation=""
+if [[ -z "${PCBEX_POLICY_RECOMMENDATION_GENERATED_ON:-}" && \
+  ( -n "${PCBEX_POLICY_RECOMMENDATION_FEEDBACK_FILES:-}" || \
+    -n "${PCBEX_POLICY_RECOMMENDATION_ANALYSIS_MANIFESTS:-}" ) ]]; then
+  echo "historical policy recommendation inputs require PCBEX_POLICY_RECOMMENDATION_GENERATED_ON" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_RECOMMENDATION_GENERATED_ON:-}" ]]; then
+  if [[ -z "$effective_policy_pack" ]]; then
+    echo "policy recommendation generation requires an organization policy pack" >&2
+    exit 2
+  fi
+  recommendation_feedback=()
+  recommendation_manifests=()
+  while IFS= read -r path; do
+    if [[ -n "$path" ]]; then recommendation_feedback+=("$path"); fi
+  done <<< "${PCBEX_POLICY_RECOMMENDATION_FEEDBACK_FILES:-}"
+  while IFS= read -r path; do
+    if [[ -n "$path" ]]; then recommendation_manifests+=("$path"); fi
+  done <<< "${PCBEX_POLICY_RECOMMENDATION_ANALYSIS_MANIFESTS:-}"
+  if ((${#recommendation_feedback[@]} != ${#recommendation_manifests[@]})); then
+    echo "policy recommendation feedback and manifest inputs must be paired" >&2
+    exit 2
+  fi
+  if [[ -n "$manufacturing_feedback" ]]; then
+    recommendation_feedback+=("$manufacturing_feedback")
+    recommendation_manifests+=("$current_dir/run.json")
+  fi
+  if ((${#recommendation_feedback[@]} == 0)); then
+    echo "policy recommendation generation requires bound manufacturing feedback" >&2
+    exit 2
+  fi
+  policy_recommendation="${artifact_dir}/policy-recommendation.json"
+  policy_recommendation_summary="${artifact_dir}/policy-recommendation.md"
+  recommendation_arguments=(recommend-policy \
+    "$effective_policy_pack" \
+    --generated-on "$PCBEX_POLICY_RECOMMENDATION_GENERATED_ON" \
+    --minimum-occurrences "${PCBEX_POLICY_RECOMMENDATION_MINIMUM_OCCURRENCES:-2}" \
+    --output "$policy_recommendation" \
+    --summary-output "$policy_recommendation_summary")
+  for path in "${recommendation_feedback[@]}"; do
+    recommendation_arguments+=(--feedback "$path")
+  done
+  for path in "${recommendation_manifests[@]}"; do
+    recommendation_arguments+=(--analysis-manifest "$path")
+  done
+  "$PCBEX_BINARY" "${recommendation_arguments[@]}"
+  {
+    printf '\n'
+    cat "$policy_recommendation_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -582,6 +636,7 @@ write_output fetched-signed-policy-pack "$fetched_signed_policy_pack"
 write_output policy-pack-fetch-receipt "$policy_pack_fetch_receipt"
 write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
+write_output policy-recommendation "$policy_recommendation"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

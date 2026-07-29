@@ -199,6 +199,11 @@
     {
       "id": "managed-ai-provider-adapters",
       "release": "v1.336.0",
+      "status": "released"
+    },
+    {
+      "id": "governed-feedback-policy-recommendations",
+      "release": "v1.337.0",
       "status": "current"
     }
   ]

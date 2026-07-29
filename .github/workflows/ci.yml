@@ -267,6 +267,7 @@ jobs:
           manufacturing-feedback-declaration: build/action-feedback/declaration.json
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
           fail-on-manufacturing-feedback: "true"
+          policy-recommendation-generated-on: "2026-07-29"
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -282,6 +283,7 @@ jobs:
           REGRESSION: ${{ steps.pcbex.outputs.regression }}
           MANUFACTURING_FEEDBACK: ${{ steps.pcbex.outputs.manufacturing-feedback }}
           MANUFACTURING_FEEDBACK_PASSED: ${{ steps.pcbex.outputs.manufacturing-feedback-passed }}
+          POLICY_RECOMMENDATION: ${{ steps.pcbex.outputs.policy-recommendation }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
           SCHEMATIC_REVIEWER_ROUTING: ${{ steps.pcbex.outputs.schematic-reviewer-routing }}
@@ -313,6 +315,11 @@ jobs:
           test -s "$MANUFACTURING_FEEDBACK"
           test "$MANUFACTURING_FEEDBACK_PASSED" = "true"
           test "$(jq -r '.declaration.id' "$MANUFACTURING_FEEDBACK")" = "action-smoke-lot"
+          test -s "$POLICY_RECOMMENDATION"
+          test "$(jq -r '.status' "$POLICY_RECOMMENDATION")" = "proposal_only"
+          test "$(jq -r '.requires_human_approval' "$POLICY_RECOMMENDATION")" = "true"
+          test "$(jq -r '.may_relax_constraints' "$POLICY_RECOMMENDATION")" = "false"
+          test "$(jq -r '.recommendations | length' "$POLICY_RECOMMENDATION")" = "0"
           test -s "$SCHEMATIC_DIFF"
           test "$SCHEMATIC_REVIEW_REQUIRED" = "false"
           test "$(jq -r '.changed' "$SCHEMATIC_DIFF")" = "false"

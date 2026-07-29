@@ -702,6 +702,48 @@ contracts are emitted by `manufacturing-feedback-declaration-schema`,
 `manufacturing-feedback-schema`, and
 `manufacturing-feedback-comparison-schema`.
 
+Generate a governed proposal from recurring feedback without allowing
+manufacturing data to mutate policy directly:
+
+```sh
+pcbex recommend-policy organization-policy-pack.json \
+  --feedback accepted-lot-41.json \
+  --feedback accepted-lot-42.json \
+  --analysis-manifest lot-41/run.json \
+  --analysis-manifest lot-42/run.json \
+  --generated-on 2026-07-29 \
+  --minimum-occurrences 2 \
+  --output policy-recommendation.json \
+  --summary-output policy-recommendation.md
+
+pcbex policy-recommendation-schema \
+  --output policy-recommendation.schema.json
+pcbex validate-policy-recommendation policy-recommendation.json
+```
+
+Each exact `run.json` must match the SHA-256 descriptor in its paired feedback,
+the feedback board identity, and the complete DFM profile in the target policy
+pack. Duplicate feedback IDs or content, future-dated evidence, mismatched
+profiles, more than 10,000 findings, and unpaired inputs fail before output.
+The default threshold requires the same rule to recur in two independently
+bound feedback records.
+
+Only warning/error measurements for track width, clearance, drill, and annular
+ring can produce a machine suggestion. The measurement must state a supported
+`nm`, `um`/`µm`, or `mm` minimum, show an actual shortfall, and yield a value
+strictly greater than the current policy minimum. Every other finding is
+retained with an explicit skip reason. The closed report always states
+`status: proposal_only`, `requires_human_approval: true`, and
+`may_relax_constraints: false`; it contains no patched or automatically
+applicable policy pack. Outputs refuse overwrite and must enter the normal
+protected review, signing, and monotonic policy-distribution flow.
+
+The MCP server exposes the same `recommend_policy` boundary. In the composite
+Action, set `policy-recommendation-generated-on` to opt in; the Action uses the
+exact effective policy pack applied to analysis, includes the current bound
+feedback automatically, accepts paired historical feedback/manifests, and
+publishes `policy-recommendation` as a retained artifact.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -729,7 +771,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.336.0
+    uses: penguin425/pcbex@v1.337.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1966,7 +2008,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.336.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.337.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

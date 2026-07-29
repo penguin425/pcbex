@@ -619,7 +619,7 @@ fn validate_declaration(declaration: &ManufacturingFeedbackDeclaration) -> Resul
     Ok(())
 }
 
-fn validate_feedback(feedback: &ManufacturingFeedback) -> Result<(), String> {
+pub(crate) fn validate_feedback(feedback: &ManufacturingFeedback) -> Result<(), String> {
     if feedback.schema_version != MANUFACTURING_FEEDBACK_SCHEMA_VERSION {
         return Err(format!(
             "unsupported bound manufacturing feedback schema_version {}; expected {}",

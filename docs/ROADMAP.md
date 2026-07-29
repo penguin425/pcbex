@@ -46,6 +46,7 @@ auditable release.
 | v1.334.0 | Approval transparency public-log anchoring | Verify checkpoint inclusion under a trusted signed Merkle tree head |
 | v1.335.0 | Central policy-pack retrieval | Fetch signed organization policy over bounded HTTPS and retain verified monotonic trust evidence |
 | v1.336.0 | Managed AI provider adapters | Normalize OpenAI, Anthropic, and Gemini structured reviews through one bounded secret-safe contract |
+| v1.337.0 | Governed feedback-to-policy recommendations | Propose evidence-bound DFM tightening without automatic mutation or constraint relaxation |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -54,7 +55,5 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should focus on production adoption through governed
-feedback-to-policy recommendations. That capability is intentionally not
-marked complete until it has an executable acceptance contract and its own
-release.
+The next roadmap should focus on multi-project policy rollout simulation and
+approval before a proposed tightening is promoted.
