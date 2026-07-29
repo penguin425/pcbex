@@ -76,6 +76,7 @@ mod canary_completion;
 mod manufacturing_feedback;
 mod mcp;
 mod policy_deployment;
+mod policy_deployment_verification;
 mod policy_pack;
 mod policy_recommendation;
 mod policy_rollout;
@@ -100,6 +101,10 @@ use manufacturing_feedback::{
 use policy_deployment::{
     advance_policy_deployment, parse_policy_deployment_state, policy_deployment_state_json_schema,
     render_policy_deployment_summary,
+};
+use policy_deployment_verification::{
+    parse_policy_deployment_verification, policy_deployment_verification_json_schema,
+    render_policy_deployment_verification_summary, verify_policy_deployment,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -606,6 +611,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed digest-bound post-deployment verification JSON Schema.
+    PolicyDeploymentVerificationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize retained post-deployment verification evidence.
+    ValidatePolicyDeploymentVerification {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -821,6 +837,30 @@ enum Command {
         /// Fail after retaining state unless the candidate became active.
         #[arg(long)]
         require_promotion: bool,
+    },
+    /// Verify the complete deployed fleet against exact pre-deployment evidence.
+    VerifyPolicyDeployment {
+        deployment: PathBuf,
+        rollout: PathBuf,
+        #[arg(long)]
+        candidate_policy_pack: PathBuf,
+        #[arg(long = "project-id", required = true)]
+        project_ids: Vec<String>,
+        #[arg(long = "board", required = true)]
+        boards: Vec<PathBuf>,
+        #[arg(long = "expected-analysis", required = true)]
+        expected_analyses: Vec<PathBuf>,
+        #[arg(long = "observed-analysis", required = true)]
+        observed_analyses: Vec<PathBuf>,
+        #[arg(long)]
+        verified_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        /// Fail after retaining evidence unless the deployment is verified.
+        #[arg(long)]
+        require_passed: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2320,6 +2360,19 @@ fn main() -> Result<()> {
             let state = parse_policy_deployment_state(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
         }
+        Command::PolicyDeploymentVerificationSchema { output } => {
+            write_or_print_json(
+                &policy_deployment_verification_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyDeploymentVerification { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report =
+                parse_policy_deployment_verification(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -3044,6 +3097,141 @@ fn main() -> Result<()> {
             );
             if require_promotion && !state.deployment_applied {
                 bail!("policy deployment retained rollback without promoting the candidate");
+            }
+        }
+        Command::VerifyPolicyDeployment {
+            deployment,
+            rollout,
+            candidate_policy_pack,
+            project_ids,
+            boards,
+            expected_analyses,
+            observed_analyses,
+            verified_at_unix,
+            output,
+            summary_output,
+            require_passed,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "post-deployment verification",
+            )?;
+            if project_ids.len() != boards.len()
+                || project_ids.len() != expected_analyses.len()
+                || project_ids.len() != observed_analyses.len()
+            {
+                bail!(
+                    "post-deployment verification requires one board, expected, and observed analysis per project ID"
+                );
+            }
+            if project_ids.len() > 1_000 {
+                bail!("post-deployment verification accepts at most 1000 projects");
+            }
+            let deployment_source = fs::read_to_string(&deployment)
+                .with_context(|| format!("reading {}", deployment.display()))?;
+            let deployment =
+                parse_policy_deployment_state(&deployment_source).map_err(anyhow::Error::msg)?;
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let candidate_policy_pack_bytes = fs::read(&candidate_policy_pack)
+                .with_context(|| format!("reading {}", candidate_policy_pack.display()))?;
+            let candidate_policy_source = std::str::from_utf8(&candidate_policy_pack_bytes)
+                .with_context(|| {
+                    format!(
+                        "{} is not UTF-8 policy JSON",
+                        candidate_policy_pack.display()
+                    )
+                })?;
+            let candidate_policy =
+                parse_policy_pack(candidate_policy_source).map_err(anyhow::Error::msg)?;
+            struct OwnedAnalysis {
+                run_path: String,
+                run: Vec<u8>,
+                checks_path: String,
+                checks: Vec<u8>,
+                quality_path: String,
+                quality: Vec<u8>,
+            }
+            fn read_analysis(directory: &Path) -> Result<OwnedAnalysis> {
+                let run_path = directory.join("run.json");
+                let checks_path = directory.join("checks.json");
+                let quality_path = directory.join("quality.json");
+                Ok(OwnedAnalysis {
+                    run: fs::read(&run_path)
+                        .with_context(|| format!("reading {}", run_path.display()))?,
+                    checks: fs::read(&checks_path)
+                        .with_context(|| format!("reading {}", checks_path.display()))?,
+                    quality: fs::read(&quality_path)
+                        .with_context(|| format!("reading {}", quality_path.display()))?,
+                    run_path: run_path.display().to_string(),
+                    checks_path: checks_path.display().to_string(),
+                    quality_path: quality_path.display().to_string(),
+                })
+            }
+            let analyses = boards
+                .iter()
+                .zip(&expected_analyses)
+                .zip(&observed_analyses)
+                .map(|((board, expected), observed)| {
+                    Ok((
+                        board.display().to_string(),
+                        fs::read(board).with_context(|| format!("reading {}", board.display()))?,
+                        read_analysis(expected)?,
+                        read_analysis(observed)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let inputs = project_ids
+                .iter()
+                .zip(&analyses)
+                .map(|(project_id, (board_path, board, expected, observed))| {
+                    CanaryMonitoringInput {
+                        project_id,
+                        board_path,
+                        board,
+                        baseline: RolloutAnalysisInput {
+                            run_path: &expected.run_path,
+                            run: &expected.run,
+                            checks_path: &expected.checks_path,
+                            checks: &expected.checks,
+                            quality_path: &expected.quality_path,
+                            quality: &expected.quality,
+                        },
+                        observed: RolloutAnalysisInput {
+                            run_path: &observed.run_path,
+                            run: &observed.run,
+                            checks_path: &observed.checks_path,
+                            checks: &observed.checks,
+                            quality_path: &observed.quality_path,
+                            quality: &observed.quality,
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
+            let report = verify_policy_deployment(
+                &deployment,
+                &rollout,
+                &candidate_policy,
+                &candidate_policy_pack_bytes,
+                verified_at_unix,
+                &inputs,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&report)? + "\n";
+            let summary = render_policy_deployment_verification_summary(&report);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "post-deployment verification: {} passed, {} failed: {}",
+                report.passed_projects, report.failed_projects, report.status
+            );
+            if require_passed && !report.deployment_verified {
+                bail!("post-deployment verification requires dual-control rollback");
             }
         }
         Command::RecordSimulationEvidence {

@@ -58,6 +58,9 @@ write_output canary-completion-decision ""
 write_output policy-deployment ""
 write_output policy-deployment-status ""
 write_output policy-deployment-active-revision ""
+write_output policy-deployment-verification ""
+write_output policy-deployment-verified ""
+write_output policy-deployment-rollback-required ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -490,6 +493,58 @@ print(data["active_revision"])
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+policy_deployment_verification=""
+policy_deployment_verified=""
+policy_deployment_rollback_required=""
+verification_inputs=0
+for value in \
+  "${PCBEX_POLICY_DEPLOYMENT_VERIFICATION_PROJECT_ID:-}" \
+  "${PCBEX_POLICY_DEPLOYMENT_VERIFICATION_EXPECTED_ANALYSIS:-}" \
+  "${PCBEX_POLICY_DEPLOYMENT_VERIFICATION_OBSERVED_ANALYSIS:-}" \
+  "${PCBEX_POLICY_DEPLOYMENT_VERIFICATION_VERIFIED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((verification_inputs += 1)); fi
+done
+if ((verification_inputs != 0 && verification_inputs != 4)); then
+  echo "post-deployment verification project, expected analysis, observation, and time must be supplied together" >&2
+  exit 2
+fi
+if ((verification_inputs == 4)); then
+  verification_state="${PCBEX_POLICY_DEPLOYMENT_VERIFICATION_STATE:-$policy_deployment}"
+  verification_rollout="${PCBEX_CANARY_ROLLOUT_REPORT:-$policy_rollout}"
+  verification_candidate="${PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK:-}"
+  if [[ -z "$verification_state" || -z "$verification_rollout" || -z "$verification_candidate" ]]; then
+    echo "post-deployment verification requires a pending state, exact rollout, and active candidate policy pack" >&2
+    exit 2
+  fi
+  policy_deployment_verification="${artifact_dir}/policy-deployment-verification.json"
+  policy_deployment_verification_summary="${artifact_dir}/policy-deployment-verification.md"
+  "$PCBEX_BINARY" verify-policy-deployment \
+    "$verification_state" \
+    "$verification_rollout" \
+    --candidate-policy-pack "$verification_candidate" \
+    --project-id "$PCBEX_POLICY_DEPLOYMENT_VERIFICATION_PROJECT_ID" \
+    --board "$PCBEX_BOARD" \
+    --expected-analysis "$PCBEX_POLICY_DEPLOYMENT_VERIFICATION_EXPECTED_ANALYSIS" \
+    --observed-analysis "$PCBEX_POLICY_DEPLOYMENT_VERIFICATION_OBSERVED_ANALYSIS" \
+    --verified-at-unix "$PCBEX_POLICY_DEPLOYMENT_VERIFICATION_VERIFIED_AT_UNIX" \
+    --output "$policy_deployment_verification" \
+    --summary-output "$policy_deployment_verification_summary"
+  readarray -t verification_values < <(
+    python3 -c '
+import json,sys
+data=json.load(open(sys.argv[1], encoding="utf-8"))
+print(str(data["deployment_verified"]).lower())
+print(str(data["rollback_required"]).lower())
+' "$policy_deployment_verification"
+  )
+  policy_deployment_verified="${verification_values[0]}"
+  policy_deployment_rollback_required="${verification_values[1]}"
+  {
+    printf '\n'
+    cat "$policy_deployment_verification_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 has_schematic=false
 has_baseline_schematic=false
 if [[ -n "${PCBEX_SCHEMATIC:-}" ]]; then has_schematic=true; fi
@@ -894,6 +949,9 @@ write_output canary-completion-decision "$canary_completion_decision"
 write_output policy-deployment "$policy_deployment"
 write_output policy-deployment-status "$policy_deployment_status"
 write_output policy-deployment-active-revision "$policy_deployment_active_revision"
+write_output policy-deployment-verification "$policy_deployment_verification"
+write_output policy-deployment-verified "$policy_deployment_verified"
+write_output policy-deployment-rollback-required "$policy_deployment_rollback_required"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

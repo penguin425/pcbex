@@ -229,6 +229,11 @@
     {
       "id": "monotonic-policy-deployment-state",
       "release": "v1.342.0",
+      "status": "released"
+    },
+    {
+      "id": "fleet-wide-post-deployment-verification",
+      "release": "v1.343.0",
       "status": "current"
     }
   ]

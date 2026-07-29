@@ -178,6 +178,30 @@ inputs:
     description: Fail unless the finalized candidate is recorded as the active policy revision.
     required: false
     default: "false"
+  policy-deployment-verification-state:
+    description: Optional pending promoted deployment state; defaults to the state produced in this run.
+    required: false
+    default: ""
+  policy-deployment-verification-project-id:
+    description: Rollout project ID whose complete deployed evidence is being verified.
+    required: false
+    default: ""
+  policy-deployment-verification-expected-analysis:
+    description: Exact pre-deployment candidate analysis directory retained by the rollout.
+    required: false
+    default: ""
+  policy-deployment-verification-observed-analysis:
+    description: Production analysis directory generated with the exact active organization policy pack.
+    required: false
+    default: ""
+  policy-deployment-verification-verified-at-unix:
+    description: Explicit Unix timestamp for the post-deployment observation.
+    required: false
+    default: ""
+  fail-on-policy-deployment-verification:
+    description: Fail unless complete post-deployment evidence matches the approved candidate without regressions.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -420,6 +444,15 @@ outputs:
   policy-deployment-active-revision:
     description: Active organization-policy revision after the retained decision.
     value: ${{ steps.analyze.outputs.policy-deployment-active-revision }}
+  policy-deployment-verification:
+    description: Fleet-wide digest-bound post-deployment verification report.
+    value: ${{ steps.analyze.outputs.policy-deployment-verification }}
+  policy-deployment-verified:
+    description: Whether complete production evidence matches the approved candidate.
+    value: ${{ steps.analyze.outputs.policy-deployment-verified }}
+  policy-deployment-rollback-required:
+    description: Whether regressions require a separately approved rollback.
+    value: ${{ steps.analyze.outputs.policy-deployment-rollback-required }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -532,6 +565,11 @@ runs:
         PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK: ${{ inputs.policy-deployment-candidate-policy-pack }}
         PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE: ${{ inputs.policy-deployment-baseline-state }}
         PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX: ${{ inputs.policy-deployment-recorded-at-unix }}
+        PCBEX_POLICY_DEPLOYMENT_VERIFICATION_STATE: ${{ inputs.policy-deployment-verification-state }}
+        PCBEX_POLICY_DEPLOYMENT_VERIFICATION_PROJECT_ID: ${{ inputs.policy-deployment-verification-project-id }}
+        PCBEX_POLICY_DEPLOYMENT_VERIFICATION_EXPECTED_ANALYSIS: ${{ inputs.policy-deployment-verification-expected-analysis }}
+        PCBEX_POLICY_DEPLOYMENT_VERIFICATION_OBSERVED_ANALYSIS: ${{ inputs.policy-deployment-verification-observed-analysis }}
+        PCBEX_POLICY_DEPLOYMENT_VERIFICATION_VERIFIED_AT_UNIX: ${{ inputs.policy-deployment-verification-verified-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -606,6 +644,7 @@ runs:
         PCBEX_CANARY_MONITORING_PASSED: ${{ steps.analyze.outputs.canary-monitoring-passed }}
         PCBEX_CANARY_COMPLETION_FINALIZED: ${{ steps.analyze.outputs.canary-completion-finalized }}
         PCBEX_POLICY_DEPLOYMENT_STATUS: ${{ steps.analyze.outputs.policy-deployment-status }}
+        PCBEX_POLICY_DEPLOYMENT_VERIFIED: ${{ steps.analyze.outputs.policy-deployment-verified }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -620,6 +659,7 @@ runs:
         PCBEX_FAIL_ON_CANARY_MONITORING: ${{ inputs.fail-on-canary-monitoring }}
         PCBEX_FAIL_ON_CANARY_COMPLETION: ${{ inputs.fail-on-canary-completion }}
         PCBEX_FAIL_ON_POLICY_DEPLOYMENT_PROMOTION: ${{ inputs.fail-on-policy-deployment-promotion }}
+        PCBEX_FAIL_ON_POLICY_DEPLOYMENT_VERIFICATION: ${{ inputs.fail-on-policy-deployment-verification }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -680,5 +720,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_DEPLOYMENT_PROMOTION" == "true" && "$PCBEX_POLICY_DEPLOYMENT_STATUS" != "promotion_applied" ]]; then
           echo "::error::pcbex policy deployment was absent or retained rollback instead of promotion"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_DEPLOYMENT_VERIFICATION" == "true" && "$PCBEX_POLICY_DEPLOYMENT_VERIFIED" != "true" ]]; then
+          echo "::error::pcbex post-deployment evidence is absent, incomplete, or requires dual-control rollback"
           exit 1
         fi

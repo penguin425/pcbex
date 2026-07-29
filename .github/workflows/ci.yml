@@ -183,6 +183,9 @@ jobs:
           target/release/pcbex analyze-kicad examples/simple.kicad_pcb \
             --fab-profile build/action-rollout/profile.json \
             --output-dir build/action-rollout/candidate
+          target/release/pcbex analyze-kicad examples/simple.kicad_pcb \
+            --policy-pack build/action-rollout/candidate-policy-pack.verified.json \
+            --output-dir build/action-rollout/deployed
           target/release/pcbex simulate-policy-rollout \
             build/action-quorum/policy-pack.json \
             build/action-rollout/recommendation.json \
@@ -432,6 +435,11 @@ jobs:
           policy-deployment-candidate-trust-state: build/action-rollout/candidate-policy-trust-state.json
           policy-deployment-recorded-at-unix: "5"
           fail-on-policy-deployment-promotion: "true"
+          policy-deployment-verification-project-id: action-controller
+          policy-deployment-verification-expected-analysis: build/action-rollout/candidate
+          policy-deployment-verification-observed-analysis: build/action-rollout/deployed
+          policy-deployment-verification-verified-at-unix: "6"
+          fail-on-policy-deployment-verification: "true"
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -460,6 +468,9 @@ jobs:
           POLICY_DEPLOYMENT: ${{ steps.pcbex.outputs.policy-deployment }}
           POLICY_DEPLOYMENT_STATUS: ${{ steps.pcbex.outputs.policy-deployment-status }}
           POLICY_DEPLOYMENT_ACTIVE_REVISION: ${{ steps.pcbex.outputs.policy-deployment-active-revision }}
+          POLICY_DEPLOYMENT_VERIFICATION: ${{ steps.pcbex.outputs.policy-deployment-verification }}
+          POLICY_DEPLOYMENT_VERIFIED: ${{ steps.pcbex.outputs.policy-deployment-verified }}
+          POLICY_DEPLOYMENT_ROLLBACK_REQUIRED: ${{ steps.pcbex.outputs.policy-deployment-rollback-required }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
           SCHEMATIC_REVIEWER_ROUTING: ${{ steps.pcbex.outputs.schematic-reviewer-routing }}
@@ -500,6 +511,12 @@ jobs:
           test "$(jq -r '.automatic_application' "$POLICY_DEPLOYMENT")" = "false"
           test "$(jq -r '.post_deployment_verification_required' "$POLICY_DEPLOYMENT")" = "true"
           test "$(jq -r '.verification_status' "$POLICY_DEPLOYMENT")" = "pending"
+          test "$POLICY_DEPLOYMENT_VERIFIED" = "true"
+          test "$POLICY_DEPLOYMENT_ROLLBACK_REQUIRED" = "false"
+          test "$(jq -r '.status' "$POLICY_DEPLOYMENT_VERIFICATION")" = "verification_passed"
+          test "$(jq -r '.coverage_complete' "$POLICY_DEPLOYMENT_VERIFICATION")" = "true"
+          test "$(jq -r '.automatic_rollback' "$POLICY_DEPLOYMENT_VERIFICATION")" = "false"
+          test "$(jq -r '.requires_dual_control_rollback' "$POLICY_DEPLOYMENT_VERIFICATION")" = "false"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"

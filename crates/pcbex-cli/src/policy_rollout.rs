@@ -453,6 +453,107 @@ fn observe_canary_project(
     })
 }
 
+pub fn observe_deployed_project(
+    input: &CanaryMonitoringInput<'_>,
+    simulated: &RolloutProjectResult,
+    candidate_policy_pack: &OrganizationPolicyPack,
+    candidate_policy_pack_bytes: &[u8],
+) -> Result<CanaryMonitoringProject, String> {
+    validate_policy_pack(candidate_policy_pack)?;
+    if candidate_policy_pack_bytes.is_empty()
+        || candidate_policy_pack_bytes.len() > MAXIMUM_ARTIFACT_BYTES
+    {
+        return Err("candidate policy-pack artifact size is invalid".into());
+    }
+    let expected = parse_analysis(&input.baseline)?;
+    let observed = parse_analysis(&input.observed)?;
+    let board = artifact(input.board_path, input.board)?;
+    validate_manifest(&expected.manifest, &expected.checks, &expected.quality)?;
+    validate_manifest(&observed.manifest, &observed.checks, &observed.quality)?;
+    if board.bytes != simulated.board.bytes
+        || board.sha256 != simulated.board.sha256
+        || expected.evidence.run.bytes != simulated.candidate.run.bytes
+        || expected.evidence.run.sha256 != simulated.candidate.run.sha256
+        || expected.evidence.checks.bytes != simulated.candidate.checks.bytes
+        || expected.evidence.checks.sha256 != simulated.candidate.checks.sha256
+        || expected.evidence.quality.bytes != simulated.candidate.quality.bytes
+        || expected.evidence.quality.sha256 != simulated.candidate.quality.sha256
+    {
+        return Err(format!(
+            "project {:?} does not retain the simulated candidate evidence",
+            input.project_id
+        ));
+    }
+    if expected.manifest.input.sha256 != board.sha256
+        || observed.manifest.input.sha256 != board.sha256
+        || expected.manifest.input.bytes != board.bytes
+        || observed.manifest.input.bytes != board.bytes
+        || expected.manifest.engine_version != observed.manifest.engine_version
+        || !same_optional_input(&expected.manifest.project, &observed.manifest.project)
+        || !same_optional_input(&expected.manifest.rules_file, &observed.manifest.rules_file)
+        || expected.manifest.configuration.project_settings_loaded
+            != observed.manifest.configuration.project_settings_loaded
+        || expected.manifest.configuration.applied_custom_rules
+            != observed.manifest.configuration.applied_custom_rules
+    {
+        return Err(format!(
+            "project {:?} deployed analysis changed the board or settings",
+            input.project_id
+        ));
+    }
+    if expected.manifest.configuration.dfm_profile.as_ref()
+        != Some(&candidate_policy_pack.dfm_profile)
+        || expected
+            .manifest
+            .configuration
+            .organization_policy_pack
+            .is_some()
+        || expected.manifest.dfm_profile_file.is_none()
+        || expected.manifest.policy_pack_file.is_some()
+    {
+        return Err(format!(
+            "project {:?} expected analysis is not the approved simulation candidate",
+            input.project_id
+        ));
+    }
+    let policy_descriptor = observed.manifest.policy_pack_file.as_ref();
+    let policy_sha256 = format!("{:x}", Sha256::digest(candidate_policy_pack_bytes));
+    if observed.manifest.configuration.dfm_profile.as_ref()
+        != Some(&candidate_policy_pack.dfm_profile)
+        || observed
+            .manifest
+            .configuration
+            .organization_policy_pack
+            .as_deref()
+            != Some(candidate_policy_pack.id.as_str())
+        || observed.manifest.dfm_profile_file.is_some()
+        || policy_descriptor.is_none_or(|descriptor| {
+            descriptor.bytes != candidate_policy_pack_bytes.len()
+                || descriptor.sha256 != policy_sha256
+        })
+    {
+        return Err(format!(
+            "project {:?} observed analysis did not use the exact active policy pack",
+            input.project_id
+        ));
+    }
+    let delta = AnalysisDelta::between(
+        &expected.quality,
+        &expected.checks,
+        &observed.quality,
+        &observed.checks,
+    );
+    let passed = !delta.is_regression();
+    Ok(CanaryMonitoringProject {
+        project_id: input.project_id.into(),
+        board,
+        baseline: expected.evidence,
+        observed: observed.evidence,
+        delta,
+        passed,
+    })
+}
+
 fn simulate_project(
     input: &RolloutProjectInput<'_>,
     policy_pack: &OrganizationPolicyPack,
