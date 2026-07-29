@@ -1157,6 +1157,18 @@ if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KE
   echo "gossip organization registry authority rotation requires a retained registry" >&2
   exit 2
 fi
+if { [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]] \
+    && [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]]; } \
+  || { [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]] \
+    && [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]]; }; then
+  echo "gossip registry governance and threshold transition must be supplied together" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]] \
+  && [[ -z "$policy_lifecycle_log_gossip_organization_registry" ]]; then
+  echo "gossip registry threshold transition requires a retained registry" >&2
+  exit 2
+fi
 if [[ -n "$policy_lifecycle_log_gossip_organization_registry" ]]; then
   if [[ "$local_gossip_trust_mode" == "direct" || "$remote_gossip_trust_mode" == "direct" ]]; then
     echo "gossip organization trust registry requires observer trust-state mode" >&2
@@ -1186,6 +1198,16 @@ if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "tr
       --output "$rotated_gossip_registry" \
       --public-key-output "$rotated_gossip_registry_key"
     policy_lifecycle_log_gossip_organization_registry="$rotated_gossip_registry"
+  fi
+  if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]]; then
+    governed_gossip_registry="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-governed.json"
+    "$PCBEX_BINARY" \
+      apply-policy-lifecycle-log-gossip-organization-registry-threshold-transition \
+      "$policy_lifecycle_log_gossip_organization_registry" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION" \
+      --output "$governed_gossip_registry"
+    policy_lifecycle_log_gossip_organization_registry="$governed_gossip_registry"
   fi
   policy_lifecycle_log_gossip_quorum="${artifact_dir}/policy-lifecycle-log-gossip-quorum.json"
   gossip_quorum_arguments=(verify-policy-lifecycle-log-gossip-quorum \

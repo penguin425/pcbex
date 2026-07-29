@@ -180,18 +180,26 @@ use policy_lifecycle_gossip_quorum::{
 };
 use policy_lifecycle_gossip_registry::{
     PolicyLifecycleLogGossipOrganizationRegistryAction,
+    PolicyLifecycleLogGossipRegistryGovernanceAuthority,
     apply_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation,
+    apply_policy_lifecycle_log_gossip_organization_registry_threshold_transition,
     apply_policy_lifecycle_log_gossip_organization_registry_transition,
     new_policy_lifecycle_log_gossip_organization_registry,
     parse_policy_lifecycle_log_gossip_organization_registry,
     parse_policy_lifecycle_log_gossip_registry_bound_quorum_report,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation,
+    parse_signed_policy_lifecycle_log_gossip_organization_registry_governance,
+    parse_signed_policy_lifecycle_log_gossip_organization_registry_threshold_transition,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_transition,
     policy_lifecycle_log_gossip_organization_registry_json_schema,
     policy_lifecycle_log_gossip_registry_bound_quorum_report_json_schema,
     sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation,
+    sign_policy_lifecycle_log_gossip_organization_registry_governance,
+    sign_policy_lifecycle_log_gossip_organization_registry_threshold_transition,
     sign_policy_lifecycle_log_gossip_organization_registry_transition,
     signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation_json_schema,
+    signed_policy_lifecycle_log_gossip_organization_registry_governance_json_schema,
+    signed_policy_lifecycle_log_gossip_organization_registry_threshold_transition_json_schema,
     signed_policy_lifecycle_log_gossip_organization_registry_transition_json_schema,
     verify_policy_lifecycle_log_gossip_quorum_with_organization_registry,
 };
@@ -1122,6 +1130,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed root-signed registry threshold-governance JSON Schema.
+    SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize root-signed registry threshold governance.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryGovernance {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed threshold-approved registry-transition JSON Schema.
+    SignedPolicyLifecycleLogGossipOrganizationRegistryThresholdTransitionSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a threshold-approved registry transition.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryThresholdTransition {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed registry-bound gossip quorum JSON Schema.
     PolicyLifecycleLogGossipRegistryBoundQuorumSchema {
         #[arg(short, long)]
@@ -1963,6 +1993,51 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         public_key_output: PathBuf,
+    },
+    /// Root-sign a registry governance policy with distinct authority identities.
+    SignPolicyLifecycleLogGossipOrganizationRegistryGovernance {
+        registry: PathBuf,
+        #[arg(long)]
+        registry_authority_private_key: PathBuf,
+        #[arg(long)]
+        minimum_approvals: u32,
+        #[arg(long = "authority-id", required = true)]
+        authority_ids: Vec<String>,
+        #[arg(long = "authority-public-key", required = true)]
+        authority_public_keys: Vec<PathBuf>,
+        #[arg(long)]
+        issued_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Produce a threshold-approved admission, suspension, or revocation.
+    SignPolicyLifecycleLogGossipOrganizationRegistryThresholdTransition {
+        registry: PathBuf,
+        governance: PathBuf,
+        #[arg(long = "authority-id", required = true)]
+        authority_ids: Vec<String>,
+        #[arg(long = "authority-private-key", required = true)]
+        authority_private_keys: Vec<PathBuf>,
+        #[arg(long, value_enum)]
+        action: PolicyLifecycleLogGossipOrganizationRegistryAction,
+        #[arg(long)]
+        organization_id: String,
+        #[arg(long)]
+        observer_trust_state: Option<PathBuf>,
+        #[arg(long)]
+        reason_sha256: String,
+        #[arg(long)]
+        effective_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify the root policy and threshold, then atomically advance the registry.
+    ApplyPolicyLifecycleLogGossipOrganizationRegistryThresholdTransition {
+        registry: PathBuf,
+        governance: PathBuf,
+        transition: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Verify fresh observations from distinct organizations as one gossip quorum.
     VerifyPolicyLifecycleLogGossipQuorum {
@@ -3962,6 +4037,44 @@ fn main() -> Result<()> {
                 )
                 .map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(rotation)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceSchema { output } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_organization_registry_governance_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryGovernance {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let governance =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_governance(&source)
+                    .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(governance)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleLogGossipOrganizationRegistryThresholdTransitionSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_organization_registry_threshold_transition_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryThresholdTransition {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let transition =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(transition)?, output.as_ref())?;
         }
         Command::PolicyLifecycleLogGossipRegistryBoundQuorumSchema { output } => {
             write_or_print_json(
@@ -6592,6 +6705,185 @@ fn main() -> Result<()> {
             eprintln!(
                 "trusted lifecycle gossip registry authority at generation {}",
                 next.generation
+            );
+        }
+        Command::SignPolicyLifecycleLogGossipOrganizationRegistryGovernance {
+            registry,
+            registry_authority_private_key,
+            minimum_approvals,
+            authority_ids,
+            authority_public_keys,
+            issued_at_unix,
+            output,
+        } => {
+            if authority_ids.len() != authority_public_keys.len() {
+                bail!("authority-id and authority-public-key counts must match");
+            }
+            let mut paths = vec![
+                Some(registry.as_path()),
+                Some(registry_authority_private_key.as_path()),
+                Some(output.as_path()),
+            ];
+            paths.extend(
+                authority_public_keys
+                    .iter()
+                    .map(|path| Some(path.as_path())),
+            );
+            require_distinct_outputs(
+                paths,
+                "policy lifecycle gossip registry threshold governance",
+            )?;
+            let registry_source = fs::read_to_string(&registry)
+                .with_context(|| format!("reading {}", registry.display()))?;
+            let registry =
+                parse_policy_lifecycle_log_gossip_organization_registry(&registry_source)
+                    .map_err(anyhow::Error::msg)?;
+            let root_key = read_hex_key(
+                &registry_authority_private_key,
+                "policy lifecycle gossip registry authority private key",
+            )?;
+            let authorities = authority_ids
+                .into_iter()
+                .zip(&authority_public_keys)
+                .map(|(authority_id, path)| {
+                    Ok(PolicyLifecycleLogGossipRegistryGovernanceAuthority {
+                        authority_id,
+                        public_key: hex_encode(&read_hex_key(
+                            path,
+                            "gossip registry governance authority public key",
+                        )?),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let governance = sign_policy_lifecycle_log_gossip_organization_registry_governance(
+                &registry,
+                &root_key,
+                minimum_approvals,
+                authorities,
+                issued_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&governance)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed {}-of-{} lifecycle gossip registry governance",
+                governance.minimum_approvals,
+                governance.authorities.len()
+            );
+        }
+        Command::SignPolicyLifecycleLogGossipOrganizationRegistryThresholdTransition {
+            registry,
+            governance,
+            authority_ids,
+            authority_private_keys,
+            action,
+            organization_id,
+            observer_trust_state,
+            reason_sha256,
+            effective_at_unix,
+            output,
+        } => {
+            if authority_ids.len() != authority_private_keys.len() {
+                bail!("authority-id and authority-private-key counts must match");
+            }
+            let registry_source = fs::read_to_string(&registry)
+                .with_context(|| format!("reading {}", registry.display()))?;
+            let registry =
+                parse_policy_lifecycle_log_gossip_organization_registry(&registry_source)
+                    .map_err(anyhow::Error::msg)?;
+            let governance_source = fs::read_to_string(&governance)
+                .with_context(|| format!("reading {}", governance.display()))?;
+            let governance =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_governance(
+                    &governance_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let signers = authority_ids
+                .into_iter()
+                .zip(&authority_private_keys)
+                .map(|(authority_id, path)| {
+                    Ok((
+                        authority_id,
+                        read_hex_key(path, "gossip registry governance authority private key")?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let observer_trust = observer_trust_state
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_lifecycle_log_gossip_observer_trust_state(&source)
+                        .map_err(anyhow::Error::msg)
+                })
+                .transpose()?;
+            let transition =
+                sign_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                    &registry,
+                    &governance,
+                    &signers,
+                    action,
+                    &organization_id,
+                    observer_trust.as_ref(),
+                    &reason_sha256,
+                    effective_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&transition)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "threshold-approved lifecycle gossip registry transition {} -> {} with {} authorities",
+                transition.from_generation,
+                transition.to_generation,
+                transition.approvals.len()
+            );
+        }
+        Command::ApplyPolicyLifecycleLogGossipOrganizationRegistryThresholdTransition {
+            registry,
+            governance,
+            transition,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.as_path()),
+                    Some(governance.as_path()),
+                    Some(transition.as_path()),
+                    Some(output.as_path()),
+                ],
+                "policy lifecycle gossip registry threshold transition",
+            )?;
+            let registry_source = fs::read_to_string(&registry)
+                .with_context(|| format!("reading {}", registry.display()))?;
+            let registry =
+                parse_policy_lifecycle_log_gossip_organization_registry(&registry_source)
+                    .map_err(anyhow::Error::msg)?;
+            let governance_source = fs::read_to_string(&governance)
+                .with_context(|| format!("reading {}", governance.display()))?;
+            let governance =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_governance(
+                    &governance_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let transition_source = fs::read_to_string(&transition)
+                .with_context(|| format!("reading {}", transition.display()))?;
+            let transition =
+                parse_signed_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                    &transition_source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let next =
+                apply_policy_lifecycle_log_gossip_organization_registry_threshold_transition(
+                    &registry,
+                    &governance,
+                    &transition,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&next)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "trusted threshold-governed lifecycle gossip registry {} at generation {}",
+                next.registry_id, next.generation
             );
         }
         Command::VerifyPolicyLifecycleLogGossipQuorum {

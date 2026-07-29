@@ -324,6 +324,11 @@
     {
       "id": "lifecycle-gossip-registry-authority-key-rotation",
       "release": "v1.361.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-gossip-registry-threshold-governance",
+      "release": "v1.362.0",
       "status": "current"
     }
   ]
