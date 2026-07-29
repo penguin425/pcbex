@@ -1234,6 +1234,38 @@ state. The closed contract is emitted by
 task-forbidden, and the Action accepts
 `policy-lifecycle-checkpoint-key-rotation`.
 
+Require independent observers before adopting an accepted checkpoint:
+
+```sh
+pcbex witness-policy-lifecycle-checkpoint policy-lifecycle.trust.json \
+  --private-key witness-a.key \
+  --witness-id witness-a \
+  --observed-at-unix 1785301300 \
+  --output witness-a.json
+
+pcbex verify-policy-lifecycle-checkpoint-witnesses \
+  policy-lifecycle.trust.json \
+  --witness witness-a.json --public-key witness-a.pub \
+  --witness witness-b.json --public-key witness-b.pub \
+  --minimum-witnesses 2 \
+  --evaluated-at-unix 1785301301 \
+  --output policy-lifecycle.witness-quorum.json \
+  --require-quorum
+```
+
+Each witness signature binds the exact accepted checkpoint digest, policy,
+generation, hash-chain head, witness identity, and observation time.
+Verification pairs every witness with a separately trusted public-key file,
+requires distinct identities and keys, and rejects stale observations after 24
+hours. Insufficient but otherwise valid evidence is retained as a structured
+non-passing report; malformed, untrusted, duplicate, cross-checkpoint, or
+tampered evidence fails before output. Closed contracts are available from
+`signed-policy-lifecycle-checkpoint-witness-schema` and
+`policy-lifecycle-witness-quorum-schema`. MCP exposes signing as
+task-forbidden and quorum verification as an optional task. The Action accepts
+`policy-lifecycle-witness-*`, publishes the report and quorum result, and can
+fail closed with `fail-on-policy-lifecycle-witness-quorum: "true"`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1261,7 +1293,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.351.0
+    uses: penguin425/pcbex@v1.352.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2498,7 +2530,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.351.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.352.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

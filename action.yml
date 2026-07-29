@@ -426,6 +426,30 @@ inputs:
     description: Fail unless a signed lifecycle checkpoint is accepted monotonically.
     required: false
     default: "false"
+  policy-lifecycle-witness-trust-state:
+    description: Accepted lifecycle trust state to witness; defaults to the state verified in this run.
+    required: false
+    default: ""
+  policy-lifecycle-witness-files:
+    description: Newline-separated independent signed lifecycle checkpoint witnesses.
+    required: false
+    default: ""
+  policy-lifecycle-witness-public-key-files:
+    description: Newline-separated trusted witness public-key files paired with witness files.
+    required: false
+    default: ""
+  policy-lifecycle-witness-minimum:
+    description: Minimum distinct trusted lifecycle witnesses required.
+    required: false
+    default: "2"
+  policy-lifecycle-witness-evaluated-at-unix:
+    description: Explicit Unix timestamp used to enforce witness freshness.
+    required: false
+    default: ""
+  fail-on-policy-lifecycle-witness-quorum:
+    description: Fail unless the independent lifecycle checkpoint witness quorum is met.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -731,6 +755,12 @@ outputs:
   policy-lifecycle-checkpoint-accepted:
     description: Whether the signed lifecycle checkpoint was accepted monotonically.
     value: ${{ steps.analyze.outputs.policy-lifecycle-checkpoint-accepted }}
+  policy-lifecycle-witness-quorum:
+    description: Verified independent lifecycle checkpoint witness-quorum report path.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-witness-quorum }}
+  policy-lifecycle-witness-quorum-met:
+    description: Whether the configured independent lifecycle witness threshold was met.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-witness-quorum-met }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -896,6 +926,11 @@ runs:
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE: ${{ inputs.policy-lifecycle-checkpoint-baseline-state }}
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_KEY_ROTATION: ${{ inputs.policy-lifecycle-checkpoint-key-rotation }}
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_ACCEPTED_AT_UNIX: ${{ inputs.policy-lifecycle-checkpoint-accepted-at-unix }}
+        PCBEX_POLICY_LIFECYCLE_WITNESS_TRUST_STATE: ${{ inputs.policy-lifecycle-witness-trust-state }}
+        PCBEX_POLICY_LIFECYCLE_WITNESS_FILES: ${{ inputs.policy-lifecycle-witness-files }}
+        PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-witness-public-key-files }}
+        PCBEX_POLICY_LIFECYCLE_WITNESS_MINIMUM: ${{ inputs.policy-lifecycle-witness-minimum }}
+        PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX: ${{ inputs.policy-lifecycle-witness-evaluated-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -979,6 +1014,7 @@ runs:
         PCBEX_POLICY_REMEDIATION_STATUS: ${{ steps.analyze.outputs.policy-remediation-status }}
         PCBEX_POLICY_LIFECYCLE_AWAITING_REMEDIATION: ${{ steps.analyze.outputs.policy-lifecycle-awaiting-remediation }}
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_ACCEPTED: ${{ steps.analyze.outputs.policy-lifecycle-checkpoint-accepted }}
+        PCBEX_POLICY_LIFECYCLE_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.policy-lifecycle-witness-quorum-met }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -1002,6 +1038,7 @@ runs:
         PCBEX_FAIL_ON_POLICY_REMEDIATION: ${{ inputs.fail-on-policy-remediation }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_PENDING: ${{ inputs.fail-on-policy-lifecycle-pending }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_CHECKPOINT: ${{ inputs.fail-on-policy-lifecycle-checkpoint }}
+        PCBEX_FAIL_ON_POLICY_LIFECYCLE_WITNESS_QUORUM: ${{ inputs.fail-on-policy-lifecycle-witness-quorum }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -1098,5 +1135,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_CHECKPOINT" == "true" && "$PCBEX_POLICY_LIFECYCLE_CHECKPOINT_ACCEPTED" != "true" ]]; then
           echo "::error::pcbex policy lifecycle checkpoint is absent, stale, equivocated, forked, or invalid"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_WITNESS_QUORUM" == "true" && "$PCBEX_POLICY_LIFECYCLE_WITNESS_QUORUM_MET" != "true" ]]; then
+          echo "::error::pcbex policy lifecycle checkpoint lacks a fresh independent witness quorum"
           exit 1
         fi
