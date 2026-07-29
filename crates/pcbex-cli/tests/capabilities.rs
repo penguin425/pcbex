@@ -39,6 +39,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "sign-canary-completion",
         "verify-canary-completion",
         "validate-canary-completion",
+        "advance-policy-deployment",
+        "validate-policy-deployment-state",
         "compare-schematics",
         "route-schematic-review",
         "check-schematic",

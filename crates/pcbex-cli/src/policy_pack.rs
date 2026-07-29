@@ -461,7 +461,7 @@ fn validate_public_key(value: &str) -> Result<(), String> {
     validate_hex(value, 64, "trusted approval public key")
 }
 
-fn validate_policy_trust_state(state: &PolicyTrustState) -> Result<(), String> {
+pub fn validate_policy_trust_state(state: &PolicyTrustState) -> Result<(), String> {
     if state.schema_version != POLICY_TRUST_STATE_SCHEMA_VERSION {
         return Err(format!(
             "unsupported policy trust state schema_version {}; expected {}",

@@ -224,6 +224,11 @@
     {
       "id": "dual-control-canary-completion",
       "release": "v1.341.0",
+      "status": "released"
+    },
+    {
+      "id": "monotonic-policy-deployment-state",
+      "release": "v1.342.0",
       "status": "current"
     }
   ]

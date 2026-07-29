@@ -75,6 +75,7 @@ use std::{
 mod canary_completion;
 mod manufacturing_feedback;
 mod mcp;
+mod policy_deployment;
 mod policy_pack;
 mod policy_recommendation;
 mod policy_rollout;
@@ -95,6 +96,10 @@ use manufacturing_feedback::{
     parse_manufacturing_feedback, parse_manufacturing_feedback_declaration,
     render_manufacturing_feedback_comparison_summary, render_manufacturing_feedback_summary,
     verify_analysis_manifest_board,
+};
+use policy_deployment::{
+    advance_policy_deployment, parse_policy_deployment_state, policy_deployment_state_json_schema,
+    render_policy_deployment_summary,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -590,6 +595,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed monotonic policy-deployment state JSON Schema.
+    PolicyDeploymentStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a monotonic policy-deployment state.
+    ValidatePolicyDeploymentState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -775,6 +791,36 @@ enum Command {
         summary_output: Option<PathBuf>,
         #[arg(long)]
         require_finalized: bool,
+    },
+    /// Apply a finalized decision to a hash-chained monotonic deployment state.
+    AdvancePolicyDeployment {
+        rollout: PathBuf,
+        monitoring: PathBuf,
+        authorization: PathBuf,
+        #[arg(long)]
+        policy_pack: PathBuf,
+        #[arg(long)]
+        candidate_policy_pack: PathBuf,
+        #[arg(long)]
+        source_policy_trust_state: PathBuf,
+        #[arg(long)]
+        candidate_policy_trust_state: PathBuf,
+        #[arg(long = "decision", required = true)]
+        decisions: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_decisions: u32,
+        /// Previously retained deployment state; required for rollback.
+        #[arg(long)]
+        baseline_state: Option<PathBuf>,
+        #[arg(long)]
+        recorded_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        /// Fail after retaining state unless the candidate became active.
+        #[arg(long)]
+        require_promotion: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2265,6 +2311,15 @@ fn main() -> Result<()> {
             let report = parse_canary_completion_report(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
+        Command::PolicyDeploymentStateSchema { output } => {
+            write_or_print_json(&policy_deployment_state_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyDeploymentState { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state = parse_policy_deployment_state(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -2901,6 +2956,94 @@ fn main() -> Result<()> {
             );
             if require_finalized && !report.finalized {
                 bail!("canary completion did not receive a valid unanimous quorum");
+            }
+        }
+        Command::AdvancePolicyDeployment {
+            rollout,
+            monitoring,
+            authorization,
+            policy_pack,
+            candidate_policy_pack,
+            source_policy_trust_state,
+            candidate_policy_trust_state,
+            decisions,
+            minimum_decisions,
+            baseline_state,
+            recorded_at_unix,
+            output,
+            summary_output,
+            require_promotion,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy deployment",
+            )?;
+            if decisions.len() > 100 {
+                bail!("policy deployment accepts at most 100 completion decisions");
+            }
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let monitoring_source = fs::read_to_string(&monitoring)
+                .with_context(|| format!("reading {}", monitoring.display()))?;
+            let monitoring =
+                parse_canary_monitoring_report(&monitoring_source).map_err(anyhow::Error::msg)?;
+            let authorization_source = fs::read_to_string(&authorization)
+                .with_context(|| format!("reading {}", authorization.display()))?;
+            let authorization =
+                parse_canary_authorization(&authorization_source).map_err(anyhow::Error::msg)?;
+            let policy = load_policy_pack(&policy_pack)?.0;
+            let candidate_policy = load_policy_pack(&candidate_policy_pack)?.0;
+            let source_trust_state = load_policy_trust_state(&source_policy_trust_state)?;
+            let candidate_trust_state = load_policy_trust_state(&candidate_policy_trust_state)?;
+            let decisions = decisions
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_canary_decision(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let baseline = baseline_state
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_deployment_state(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .transpose()?;
+            let state = advance_policy_deployment(
+                &rollout,
+                &monitoring,
+                &authorization,
+                &policy,
+                &candidate_policy,
+                &source_trust_state,
+                &candidate_trust_state,
+                &decisions,
+                minimum_decisions,
+                baseline.as_ref(),
+                recorded_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            let summary = render_policy_deployment_summary(&state);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "policy deployment generation {}: {:?}, active revision {}",
+                state.generation, state.status, state.active_revision
+            );
+            if require_promotion && !state.deployment_applied {
+                bail!("policy deployment retained rollback without promoting the candidate");
             }
         }
         Command::RecordSimulationEvidence {

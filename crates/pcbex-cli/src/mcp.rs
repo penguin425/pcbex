@@ -302,6 +302,7 @@ impl McpServer {
                     | "record_canary_monitoring"
                     | "sign_canary_completion"
                     | "verify_canary_completion"
+                    | "advance_policy_deployment"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1007,6 +1008,44 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "advance_policy_deployment",
+            "Advance monotonic policy deployment",
+            "Re-verify the exact human completion quorum and append a hash-chained deployment state that prevents revision replay while retaining the rollback target.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollout", "monitoring", "authorization", "policy_pack",
+                    "candidate_policy_pack", "source_policy_trust_state",
+                    "candidate_policy_trust_state", "decisions", "recorded_at_unix",
+                    "output"
+                ],
+                "properties": {
+                    "rollout": {"type": "string"},
+                    "monitoring": {"type": "string"},
+                    "authorization": {"type": "string"},
+                    "policy_pack": {"type": "string"},
+                    "candidate_policy_pack": {"type": "string"},
+                    "source_policy_trust_state": {"type": "string"},
+                    "candidate_policy_trust_state": {"type": "string"},
+                    "decisions": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "minimum_decisions": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "baseline_state": {"type": "string"},
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_promotion": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -1607,6 +1646,7 @@ fn call_tool(
         "record_canary_monitoring" => record_canary_monitoring(arguments, cancellation)?,
         "sign_canary_completion" => sign_canary_completion(arguments, cancellation)?,
         "verify_canary_completion" => verify_canary_completion(arguments, cancellation)?,
+        "advance_policy_deployment" => advance_policy_deployment(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2453,6 +2493,94 @@ fn verify_canary_completion(
     Ok(execution_result(
         execution,
         json!({"output": output, "completion": completion}),
+    ))
+}
+
+fn advance_policy_deployment(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollout",
+            "monitoring",
+            "authorization",
+            "policy_pack",
+            "candidate_policy_pack",
+            "source_policy_trust_state",
+            "candidate_policy_trust_state",
+            "decisions",
+            "minimum_decisions",
+            "baseline_state",
+            "recorded_at_unix",
+            "output",
+            "summary_output",
+            "require_promotion",
+        ],
+    )?;
+    let decisions = required_string_array(&arguments, "decisions", false)?;
+    if decisions.len() > 100 {
+        return Err(json!({"detail": "decisions cannot exceed 100 entries"}));
+    }
+    let recorded_at = arguments
+        .get("recorded_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "recorded_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "advance-policy-deployment".into(),
+        required_string(&arguments, "rollout")?,
+        required_string(&arguments, "monitoring")?,
+        required_string(&arguments, "authorization")?,
+        "--policy-pack".into(),
+        required_string(&arguments, "policy_pack")?,
+        "--candidate-policy-pack".into(),
+        required_string(&arguments, "candidate_policy_pack")?,
+        "--source-policy-trust-state".into(),
+        required_string(&arguments, "source_policy_trust_state")?,
+        "--candidate-policy-trust-state".into(),
+        required_string(&arguments, "candidate_policy_trust_state")?,
+    ];
+    for decision in decisions {
+        command.extend(["--decision".into(), decision]);
+    }
+    if let Some(value) = arguments.get("minimum_decisions") {
+        let value = value
+            .as_u64()
+            .filter(|value| (2..=100).contains(value))
+            .ok_or_else(|| json!({"detail": "minimum_decisions must be 2 to 100"}))?;
+        command.extend(["--minimum-decisions".into(), value.to_string()]);
+    }
+    optional_option(
+        &arguments,
+        "baseline_state",
+        "--baseline-state",
+        &mut command,
+    )?;
+    command.extend([
+        "--recorded-at-unix".into(),
+        recorded_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_promotion",
+        "--require-promotion",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let deployment = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "deployment": deployment}),
     ))
 }
 
@@ -3649,7 +3777,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 37);
+        assert_eq!(tools.len(), 38);
         let named = |name: &str| {
             tools
                 .iter()
@@ -3731,6 +3859,14 @@ mod tests {
         assert_eq!(
             named("verify_canary_completion")["inputSchema"]["properties"]["minimum_decisions"]["default"],
             2
+        );
+        assert_eq!(
+            named("advance_policy_deployment")["inputSchema"]["properties"]["require_promotion"]["default"],
+            false
+        );
+        assert_eq!(
+            named("advance_policy_deployment")["execution"]["taskSupport"],
+            "optional"
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],

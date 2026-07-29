@@ -128,6 +128,50 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
     ]);
     let policy_path = temporary.join("policy-pack.json");
     fs::write(&policy_path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+    let policy_private_key = temporary.join("policy-signing.key");
+    let policy_public_key = temporary.join("policy-signing.pub");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("policy-keygen")
+            .arg("--private-key")
+            .arg(&policy_private_key)
+            .arg("--public-key")
+            .arg(&policy_public_key)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let signed_policy = temporary.join("signed-policy-pack.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-policy-pack")
+            .arg(&policy_path)
+            .arg("--private-key")
+            .arg(&policy_private_key)
+            .arg("--signer-id")
+            .arg("policy-authority")
+            .arg("--output")
+            .arg(&signed_policy)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let verified_policy = temporary.join("verified-policy-pack.json");
+    let policy_trust_state = temporary.join("policy-trust-state.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("verify-policy-pack")
+            .arg(&signed_policy)
+            .arg("--public-key")
+            .arg(&policy_public_key)
+            .arg("--state-output")
+            .arg(&policy_trust_state)
+            .arg("--output")
+            .arg(&verified_policy)
+            .status()
+            .unwrap()
+            .success()
+    );
     let (first_feedback, first_manifest) = record_feedback(&temporary, &policy, "lot-one", 0.14);
     let (second_feedback, second_manifest) = record_feedback(&temporary, &policy, "lot-two", 0.15);
     let output = temporary.join("recommendation.json");
@@ -227,6 +271,48 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
             .as_str()
             .unwrap()
             .starts_with("pcbex-rollout-")
+    );
+    let mut candidate_policy = policy.clone();
+    candidate_policy["revision"] = serde_json::json!(2);
+    candidate_policy["dfm_profile"] = profile.clone();
+    let candidate_policy_path = temporary.join("candidate-policy-pack.json");
+    fs::write(
+        &candidate_policy_path,
+        serde_json::to_string_pretty(&candidate_policy).unwrap(),
+    )
+    .unwrap();
+    let signed_candidate_policy = temporary.join("candidate-policy-pack.signed.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-policy-pack")
+            .arg(&candidate_policy_path)
+            .arg("--private-key")
+            .arg(&policy_private_key)
+            .arg("--signer-id")
+            .arg("policy-authority")
+            .arg("--output")
+            .arg(&signed_candidate_policy)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let verified_candidate_policy = temporary.join("candidate-policy-pack.verified.json");
+    let candidate_policy_trust_state = temporary.join("candidate-policy-trust-state.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("verify-policy-pack")
+            .arg(&signed_candidate_policy)
+            .arg("--public-key")
+            .arg(&policy_public_key)
+            .arg("--baseline-state")
+            .arg(&policy_trust_state)
+            .arg("--state-output")
+            .arg(&candidate_policy_trust_state)
+            .arg("--output")
+            .arg(&verified_candidate_policy)
+            .status()
+            .unwrap()
+            .success()
     );
 
     let board = root.join("examples/simple.kicad_pcb");
@@ -592,6 +678,328 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
             .status()
             .unwrap()
             .success()
+    );
+    let deployment = temporary.join("policy-deployment.json");
+    let deployment_summary = temporary.join("policy-deployment.md");
+    let advanced = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("advance-policy-deployment")
+        .arg(&rollout)
+        .arg(&monitoring)
+        .arg(&authorization)
+        .arg("--policy-pack")
+        .arg(&verified_policy)
+        .arg("--candidate-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--source-policy-trust-state")
+        .arg(&policy_trust_state)
+        .arg("--candidate-policy-trust-state")
+        .arg(&candidate_policy_trust_state)
+        .arg("--decision")
+        .arg(&completion_a)
+        .arg("--decision")
+        .arg(&completion_b)
+        .arg("--recorded-at-unix")
+        .arg("1800")
+        .arg("--output")
+        .arg(&deployment)
+        .arg("--summary-output")
+        .arg(&deployment_summary)
+        .arg("--require-promotion")
+        .output()
+        .unwrap();
+    assert!(
+        advanced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&advanced.stderr)
+    );
+    let deployment_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&deployment).unwrap()).unwrap();
+    assert_eq!(deployment_document["status"], "promotion_applied");
+    assert_eq!(deployment_document["generation"], 1);
+    assert_eq!(deployment_document["active_revision"], 2);
+    assert_eq!(deployment_document["deployment_applied"], true);
+    assert_eq!(deployment_document["automatic_application"], false);
+    assert_eq!(
+        deployment_document["post_deployment_verification_required"],
+        true
+    );
+    assert_eq!(deployment_document["verification_status"], "pending");
+    assert!(deployment_document["rollback_revision"].is_null());
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-policy-deployment-state")
+            .arg(&deployment)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let replay = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("advance-policy-deployment")
+        .arg(&rollout)
+        .arg(&monitoring)
+        .arg(&authorization)
+        .arg("--policy-pack")
+        .arg(&verified_policy)
+        .arg("--candidate-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--source-policy-trust-state")
+        .arg(&policy_trust_state)
+        .arg("--candidate-policy-trust-state")
+        .arg(&candidate_policy_trust_state)
+        .arg("--decision")
+        .arg(&completion_a)
+        .arg("--decision")
+        .arg(&completion_b)
+        .arg("--baseline-state")
+        .arg(&deployment)
+        .arg("--recorded-at-unix")
+        .arg("1801")
+        .arg("--output")
+        .arg(temporary.join("replayed-deployment.json"))
+        .output()
+        .unwrap();
+    assert!(!replay.status.success());
+    assert!(
+        String::from_utf8_lossy(&replay.stderr).contains("does not advance"),
+        "{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    let mut substituted_trust: serde_json::Value =
+        serde_json::from_slice(&fs::read(&candidate_policy_trust_state).unwrap()).unwrap();
+    substituted_trust["signer_id"] = serde_json::json!("substituted-authority");
+    substituted_trust["public_key"] =
+        serde_json::json!(fs::read_to_string(&public_a).unwrap().trim());
+    let substituted_trust_path = temporary.join("substituted-policy-trust-state.json");
+    fs::write(
+        &substituted_trust_path,
+        serde_json::to_string_pretty(&substituted_trust).unwrap(),
+    )
+    .unwrap();
+    let substitution = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("advance-policy-deployment")
+        .arg(&rollout)
+        .arg(&monitoring)
+        .arg(&authorization)
+        .arg("--policy-pack")
+        .arg(&verified_policy)
+        .arg("--candidate-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--source-policy-trust-state")
+        .arg(&policy_trust_state)
+        .arg("--candidate-policy-trust-state")
+        .arg(&substituted_trust_path)
+        .arg("--decision")
+        .arg(&completion_a)
+        .arg("--decision")
+        .arg(&completion_b)
+        .arg("--recorded-at-unix")
+        .arg("1800")
+        .arg("--output")
+        .arg(temporary.join("substituted-deployment.json"))
+        .output()
+        .unwrap();
+    assert!(!substitution.status.success());
+    assert!(
+        String::from_utf8_lossy(&substitution.stderr).contains("trusted signing root"),
+        "{}",
+        String::from_utf8_lossy(&substitution.stderr)
+    );
+    let deployment_schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("policy-deployment-state-schema")
+        .output()
+        .unwrap();
+    assert!(deployment_schema.status.success());
+    let deployment_schema: serde_json::Value =
+        serde_json::from_slice(&deployment_schema.stdout).unwrap();
+    assert_eq!(deployment_schema["additionalProperties"], false);
+    let mut unreviewed_candidate = candidate_policy.clone();
+    unreviewed_candidate["require_simulation_evidence"] = serde_json::json!(
+        !unreviewed_candidate["require_simulation_evidence"]
+            .as_bool()
+            .unwrap()
+    );
+    let unreviewed_candidate_path = temporary.join("unreviewed-candidate-policy.json");
+    fs::write(
+        &unreviewed_candidate_path,
+        serde_json::to_string_pretty(&unreviewed_candidate).unwrap(),
+    )
+    .unwrap();
+    let unreviewed_signed = temporary.join("unreviewed-candidate-policy.signed.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-policy-pack")
+            .arg(&unreviewed_candidate_path)
+            .arg("--private-key")
+            .arg(&policy_private_key)
+            .arg("--signer-id")
+            .arg("policy-authority")
+            .arg("--output")
+            .arg(&unreviewed_signed)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let unreviewed_verified = temporary.join("unreviewed-candidate-policy.verified.json");
+    let unreviewed_trust = temporary.join("unreviewed-candidate-policy.trust.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("verify-policy-pack")
+            .arg(&unreviewed_signed)
+            .arg("--public-key")
+            .arg(&policy_public_key)
+            .arg("--baseline-state")
+            .arg(&policy_trust_state)
+            .arg("--state-output")
+            .arg(&unreviewed_trust)
+            .arg("--output")
+            .arg(&unreviewed_verified)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let unreviewed = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("advance-policy-deployment")
+        .arg(&rollout)
+        .arg(&monitoring)
+        .arg(&authorization)
+        .arg("--policy-pack")
+        .arg(&verified_policy)
+        .arg("--candidate-policy-pack")
+        .arg(&unreviewed_verified)
+        .arg("--source-policy-trust-state")
+        .arg(&policy_trust_state)
+        .arg("--candidate-policy-trust-state")
+        .arg(&unreviewed_trust)
+        .arg("--decision")
+        .arg(&completion_a)
+        .arg("--decision")
+        .arg(&completion_b)
+        .arg("--recorded-at-unix")
+        .arg("1800")
+        .arg("--output")
+        .arg(temporary.join("unreviewed-deployment.json"))
+        .output()
+        .unwrap();
+    assert!(!unreviewed.status.success());
+    assert!(
+        String::from_utf8_lossy(&unreviewed.stderr).contains("governance changes"),
+        "{}",
+        String::from_utf8_lossy(&unreviewed.stderr)
+    );
+    let mut rollback_candidate = candidate_policy.clone();
+    rollback_candidate["revision"] = serde_json::json!(3);
+    let rollback_candidate_path = temporary.join("rollback-candidate-policy.json");
+    fs::write(
+        &rollback_candidate_path,
+        serde_json::to_string_pretty(&rollback_candidate).unwrap(),
+    )
+    .unwrap();
+    let rollback_candidate_signed = temporary.join("rollback-candidate-policy.signed.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-policy-pack")
+            .arg(&rollback_candidate_path)
+            .arg("--private-key")
+            .arg(&policy_private_key)
+            .arg("--signer-id")
+            .arg("policy-authority")
+            .arg("--output")
+            .arg(&rollback_candidate_signed)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let rollback_candidate_verified = temporary.join("rollback-candidate-policy.verified.json");
+    let rollback_candidate_trust = temporary.join("rollback-candidate-policy.trust.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("verify-policy-pack")
+            .arg(&rollback_candidate_signed)
+            .arg("--public-key")
+            .arg(&policy_public_key)
+            .arg("--baseline-state")
+            .arg(&candidate_policy_trust_state)
+            .arg("--state-output")
+            .arg(&rollback_candidate_trust)
+            .arg("--output")
+            .arg(&rollback_candidate_verified)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let deployment_rollback_a = temporary.join("deployment-rollback-a.json");
+    let deployment_rollback_b = temporary.join("deployment-rollback-b.json");
+    for (private_key, signer_id, signed) in [
+        (&key_a, "reviewer-a", &deployment_rollback_a),
+        (&key_b, "reviewer-b", &deployment_rollback_b),
+    ] {
+        assert!(
+            Command::new(env!("CARGO_BIN_EXE_pcbex"))
+                .arg("sign-canary-completion")
+                .arg(&rollout)
+                .arg(&monitoring)
+                .arg(&authorization)
+                .arg("--decision")
+                .arg("rollback")
+                .arg("--decided-at-unix")
+                .arg("1701")
+                .arg("--private-key")
+                .arg(private_key)
+                .arg("--signer-id")
+                .arg(signer_id)
+                .arg("--reason")
+                .arg("Production promotion is withheld.")
+                .arg("--ticket")
+                .arg("HW-45")
+                .arg("--output")
+                .arg(signed)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let rolled_back_deployment = temporary.join("rolled-back-deployment.json");
+    let rollback_result = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("advance-policy-deployment")
+        .arg(&rollout)
+        .arg(&monitoring)
+        .arg(&authorization)
+        .arg("--policy-pack")
+        .arg(&verified_policy)
+        .arg("--candidate-policy-pack")
+        .arg(&rollback_candidate_verified)
+        .arg("--source-policy-trust-state")
+        .arg(&policy_trust_state)
+        .arg("--candidate-policy-trust-state")
+        .arg(&rollback_candidate_trust)
+        .arg("--decision")
+        .arg(&deployment_rollback_a)
+        .arg("--decision")
+        .arg(&deployment_rollback_b)
+        .arg("--baseline-state")
+        .arg(&deployment)
+        .arg("--recorded-at-unix")
+        .arg("1801")
+        .arg("--output")
+        .arg(&rolled_back_deployment)
+        .output()
+        .unwrap();
+    assert!(
+        rollback_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rollback_result.stderr)
+    );
+    let rolled_back: serde_json::Value =
+        serde_json::from_slice(&fs::read(&rolled_back_deployment).unwrap()).unwrap();
+    assert_eq!(rolled_back["status"], "rollback_confirmed");
+    assert_eq!(rolled_back["generation"], 2);
+    assert_eq!(rolled_back["active_revision"], 2);
+    assert_eq!(rolled_back["candidate_revision"], 3);
+    assert_eq!(rolled_back["rollback_revision"], 2);
+    assert_eq!(rolled_back["deployment_applied"], false);
+    assert_eq!(
+        rolled_back["previous_state_sha256"].as_str().unwrap().len(),
+        64
     );
     let rollback_b = temporary.join("completion-rollback-b.json");
     assert!(

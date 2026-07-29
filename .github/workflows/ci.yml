@@ -96,6 +96,19 @@ jobs:
                   {signer_id: "engineer-b", public_key: $human_key_b}
                 ]
             ' examples/acme-policy-pack.json > build/action-quorum/policy-pack.json
+          target/release/pcbex policy-keygen \
+            --private-key build/action-quorum/policy-signing.key \
+            --public-key build/action-quorum/policy-signing.pub
+          target/release/pcbex sign-policy-pack \
+            build/action-quorum/policy-pack.json \
+            --private-key build/action-quorum/policy-signing.key \
+            --signer-id policy-authority \
+            --output build/action-quorum/signed-policy-pack.json
+          target/release/pcbex verify-policy-pack \
+            build/action-quorum/signed-policy-pack.json \
+            --public-key build/action-quorum/policy-signing.pub \
+            --state-output build/action-quorum/policy-trust-state.json \
+            --output build/action-quorum/verified-policy-pack.json
           mkdir -p build/action-rollout
           board_sha256="$(sha256sum examples/simple.kicad_pcb | cut -d' ' -f1)"
           for lot in a b; do
@@ -152,6 +165,21 @@ jobs:
             build/action-rollout/recommendation.json \
             --generated-on 2026-07-29 \
             --output build/action-rollout/profile.json
+          jq --slurpfile profile build/action-rollout/profile.json \
+            '.revision = 2 | .dfm_profile = $profile[0]' \
+            build/action-quorum/policy-pack.json \
+            > build/action-rollout/candidate-policy-pack.json
+          target/release/pcbex sign-policy-pack \
+            build/action-rollout/candidate-policy-pack.json \
+            --private-key build/action-quorum/policy-signing.key \
+            --signer-id policy-authority \
+            --output build/action-rollout/candidate-policy-pack.signed.json
+          target/release/pcbex verify-policy-pack \
+            build/action-rollout/candidate-policy-pack.signed.json \
+            --public-key build/action-quorum/policy-signing.pub \
+            --baseline-state build/action-quorum/policy-trust-state.json \
+            --state-output build/action-rollout/candidate-policy-trust-state.json \
+            --output build/action-rollout/candidate-policy-pack.verified.json
           target/release/pcbex analyze-kicad examples/simple.kicad_pcb \
             --fab-profile build/action-rollout/profile.json \
             --output-dir build/action-rollout/candidate
@@ -399,6 +427,11 @@ jobs:
             build/action-rollout/completion-a.json
             build/action-rollout/completion-b.json
           fail-on-canary-completion: "true"
+          policy-deployment-candidate-policy-pack: build/action-rollout/candidate-policy-pack.verified.json
+          policy-deployment-source-trust-state: build/action-quorum/policy-trust-state.json
+          policy-deployment-candidate-trust-state: build/action-rollout/candidate-policy-trust-state.json
+          policy-deployment-recorded-at-unix: "5"
+          fail-on-policy-deployment-promotion: "true"
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -424,6 +457,9 @@ jobs:
           CANARY_COMPLETION: ${{ steps.pcbex.outputs.canary-completion }}
           CANARY_COMPLETION_FINALIZED: ${{ steps.pcbex.outputs.canary-completion-finalized }}
           CANARY_COMPLETION_DECISION: ${{ steps.pcbex.outputs.canary-completion-decision }}
+          POLICY_DEPLOYMENT: ${{ steps.pcbex.outputs.policy-deployment }}
+          POLICY_DEPLOYMENT_STATUS: ${{ steps.pcbex.outputs.policy-deployment-status }}
+          POLICY_DEPLOYMENT_ACTIVE_REVISION: ${{ steps.pcbex.outputs.policy-deployment-active-revision }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
           SCHEMATIC_REVIEWER_ROUTING: ${{ steps.pcbex.outputs.schematic-reviewer-routing }}
@@ -458,6 +494,12 @@ jobs:
           test "$CANARY_COMPLETION_DECISION" = "promote"
           test "$(jq -r '.status' "$CANARY_COMPLETION")" = "promotion_authorized"
           test "$(jq -r '.policy.automatic_promotion' "$CANARY_COMPLETION")" = "false"
+          test "$POLICY_DEPLOYMENT_STATUS" = "promotion_applied"
+          test "$POLICY_DEPLOYMENT_ACTIVE_REVISION" = "2"
+          test "$(jq -r '.generation' "$POLICY_DEPLOYMENT")" = "1"
+          test "$(jq -r '.automatic_application' "$POLICY_DEPLOYMENT")" = "false"
+          test "$(jq -r '.post_deployment_verification_required' "$POLICY_DEPLOYMENT")" = "true"
+          test "$(jq -r '.verification_status' "$POLICY_DEPLOYMENT")" = "pending"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"

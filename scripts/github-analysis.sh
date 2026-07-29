@@ -55,6 +55,9 @@ write_output canary-monitoring-passed ""
 write_output canary-completion ""
 write_output canary-completion-finalized ""
 write_output canary-completion-decision ""
+write_output policy-deployment ""
+write_output policy-deployment-status ""
+write_output policy-deployment-active-revision ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -419,6 +422,71 @@ print(data["final_decision"] or "")
   {
     printf '\n'
     cat "$canary_completion_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+policy_deployment=""
+policy_deployment_status=""
+policy_deployment_active_revision=""
+deployment_inputs=0
+for value in \
+  "${PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK:-}" \
+  "${PCBEX_POLICY_DEPLOYMENT_SOURCE_TRUST_STATE:-}" \
+  "${PCBEX_POLICY_DEPLOYMENT_CANDIDATE_TRUST_STATE:-}" \
+  "${PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE:-}" \
+  "${PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((deployment_inputs += 1)); fi
+done
+if ((deployment_inputs != 0)) && [[ -z "${PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX:-}" ]]; then
+  echo "policy deployment candidate inputs require policy-deployment-recorded-at-unix" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX:-}" ]]; then
+  deployment_rollout="${PCBEX_CANARY_ROLLOUT_REPORT:-$policy_rollout}"
+  deployment_monitoring="${PCBEX_CANARY_COMPLETION_MONITORING_REPORT:-$canary_monitoring}"
+  deployment_source_trust_state="${PCBEX_POLICY_DEPLOYMENT_SOURCE_TRUST_STATE:-$verified_policy_trust_state}"
+  deployment_candidate_trust_state="${PCBEX_POLICY_DEPLOYMENT_CANDIDATE_TRUST_STATE:-}"
+  deployment_candidate_policy="${PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK:-}"
+  if [[ -z "$deployment_rollout" || -z "$deployment_monitoring" || -z "$canary_rollout_authorization" || -z "$effective_policy_pack" || -z "$deployment_candidate_policy" || -z "$deployment_source_trust_state" || -z "$deployment_candidate_trust_state" || -z "${PCBEX_CANARY_COMPLETION_DECISION_FILES:-}" ]]; then
+    echo "policy deployment requires rollout, monitoring, authorization, source and candidate policy packs, both accepted trust states, and completion decisions" >&2
+    exit 2
+  fi
+  policy_deployment="${artifact_dir}/policy-deployment.json"
+  policy_deployment_summary="${artifact_dir}/policy-deployment.md"
+  deployment_arguments=(advance-policy-deployment \
+    "$deployment_rollout" \
+    "$deployment_monitoring" \
+    "$canary_rollout_authorization" \
+    --policy-pack "$effective_policy_pack" \
+    --candidate-policy-pack "$deployment_candidate_policy" \
+    --source-policy-trust-state "$deployment_source_trust_state" \
+    --candidate-policy-trust-state "$deployment_candidate_trust_state" \
+    --minimum-decisions "${PCBEX_CANARY_COMPLETION_MINIMUM_DECISIONS:-2}" \
+    --recorded-at-unix "$PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX" \
+    --output "$policy_deployment" \
+    --summary-output "$policy_deployment_summary")
+  if [[ -n "${PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE:-}" ]]; then
+    deployment_arguments+=(--baseline-state "$PCBEX_POLICY_DEPLOYMENT_BASELINE_STATE")
+  fi
+  while IFS= read -r decision; do
+    if [[ -n "$decision" ]]; then
+      deployment_arguments+=(--decision "$decision")
+    fi
+  done <<< "${PCBEX_CANARY_COMPLETION_DECISION_FILES:-}"
+  "$PCBEX_BINARY" "${deployment_arguments[@]}"
+  readarray -t deployment_values < <(
+    python3 -c '
+import json,sys
+data=json.load(open(sys.argv[1], encoding="utf-8"))
+print(data["status"])
+print(data["active_revision"])
+' "$policy_deployment"
+  )
+  policy_deployment_status="${deployment_values[0]}"
+  policy_deployment_active_revision="${deployment_values[1]}"
+  {
+    printf '\n'
+    cat "$policy_deployment_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -823,6 +891,9 @@ write_output canary-monitoring-passed "$canary_monitoring_passed"
 write_output canary-completion "$canary_completion"
 write_output canary-completion-finalized "$canary_completion_finalized"
 write_output canary-completion-decision "$canary_completion_decision"
+write_output policy-deployment "$policy_deployment"
+write_output policy-deployment-status "$policy_deployment_status"
+write_output policy-deployment-active-revision "$policy_deployment_active_revision"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"
