@@ -514,6 +514,134 @@ fn creates_and_verifies_policy_lifecycle_public_log_anchor() {
         .status
         .success()
     );
+    let observer_a_trust = directory.join("observer-a.trust.json");
+    let observer_b_trust = directory.join("observer-b.trust.json");
+    for (organization, observer, public_key, trust_state) in [
+        (
+            "independent-lab",
+            "independent-ci",
+            &observer_public,
+            &observer_a_trust,
+        ),
+        (
+            "security-partner",
+            "independent-security",
+            &observer_b_public,
+            &observer_b_trust,
+        ),
+    ] {
+        assert!(
+            run(&[
+                "init-policy-lifecycle-log-gossip-observer-trust",
+                "--organization-id",
+                organization,
+                "--observer-id",
+                observer,
+                "--public-key",
+                path(public_key),
+                "--output",
+                path(trust_state),
+            ])
+            .status
+            .success()
+        );
+    }
+    let (trust_endpoint, trust_server) = json_server_once(fs::read(&observation_b).unwrap());
+    let trust_remote_observation = directory.join("gossip-observation-trust-remote.json");
+    let trust_remote_receipt = directory.join("gossip-transport-trust-receipt.json");
+    let trust_remote = run(&[
+        "request-policy-lifecycle-log-gossip-observation",
+        "--local-anchor",
+        path(&proof),
+        "--endpoint",
+        &trust_endpoint,
+        "--log-id",
+        "lifecycle-public-log",
+        "--log-public-key",
+        path(&public_key),
+        "--observer-trust-state",
+        path(&observer_b_trust),
+        "--timeout-seconds",
+        "5",
+        "--evaluated-at-unix",
+        "220",
+        "--output",
+        path(&trust_remote_observation),
+        "--receipt-output",
+        path(&trust_remote_receipt),
+        "--allow-http-loopback",
+    ]);
+    trust_server.join().unwrap();
+    assert!(
+        trust_remote.status.success(),
+        "{}",
+        String::from_utf8_lossy(&trust_remote.stderr)
+    );
+    let trust_transport: Value =
+        serde_json::from_slice(&fs::read(&trust_remote_receipt).unwrap()).unwrap();
+    assert_eq!(trust_transport["observer_key_generation"], 0);
+    assert_eq!(
+        trust_transport["observer_trust_state_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+
+    let trust_bound_quorum = directory.join("gossip-quorum.trust-bound.json");
+    let verify_trust_bound = run(&[
+        "verify-policy-lifecycle-log-gossip-quorum",
+        "--local-anchor",
+        path(&proof),
+        "--observation",
+        path(&observation_a),
+        "--observation",
+        path(&observation_b),
+        "--observer-trust-state",
+        path(&observer_a_trust),
+        "--observer-trust-state",
+        path(&observer_b_trust),
+        "--minimum-organizations",
+        "2",
+        "--log-id",
+        "lifecycle-public-log",
+        "--log-public-key",
+        path(&public_key),
+        "--evaluated-at-unix",
+        "220",
+        "--output",
+        path(&trust_bound_quorum),
+        "--require-quorum",
+    ]);
+    assert!(
+        verify_trust_bound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify_trust_bound.stderr)
+    );
+    let trust_bound: Value =
+        serde_json::from_slice(&fs::read(&trust_bound_quorum).unwrap()).unwrap();
+    assert_eq!(trust_bound["trust_bound"], true);
+    assert_eq!(trust_bound["quorum"]["quorum_met"], true);
+    assert_eq!(
+        trust_bound["observer_trust"][0]["organization_id"],
+        "independent-lab"
+    );
+    assert_eq!(trust_bound["observer_trust"][0]["generation"], 0);
+    assert_eq!(
+        trust_bound["observer_trust"][0]["trust_state_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+    assert!(
+        run(&[
+            "validate-policy-lifecycle-log-gossip-trust-bound-quorum",
+            path(&trust_bound_quorum)
+        ])
+        .status
+        .success()
+    );
     let duplicate_quorum = directory.join("gossip-quorum-duplicate.json");
     assert!(
         !run(&[

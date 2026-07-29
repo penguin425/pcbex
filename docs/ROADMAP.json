@@ -309,6 +309,11 @@
     {
       "id": "remote-lifecycle-public-log-gossip-quorum",
       "release": "v1.358.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-gossip-observer-key-rotation",
+      "release": "v1.359.0",
       "status": "current"
     }
   ]

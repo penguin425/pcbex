@@ -1855,15 +1855,104 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "init_policy_lifecycle_public_log_gossip_observer_trust",
+            "Initialize lifecycle public-log gossip observer trust",
+            "Create generation-zero trust binding one organization and observer identity to its current Ed25519 key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["organization_id", "observer_id", "public_key", "output"],
+                "properties": {
+                    "organization_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                    },
+                    "observer_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+                    },
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_policy_lifecycle_public_log_gossip_observer_key_rotation",
+            "Sign lifecycle public-log gossip observer key rotation",
+            "Create old-key authorization and new-key possession proof for exactly one organization-bound observer generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "old_private_key", "new_private_key",
+                    "rotated_at_unix", "output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_policy_lifecycle_public_log_gossip_observer_key_rotation",
+            "Apply lifecycle public-log gossip observer key rotation",
+            "Verify both signatures and advance one organization-bound digest-chained observer trust state by exactly one generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "rotation", "output", "public_key_output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "public_key_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "export_policy_lifecycle_public_log_gossip_observer_key",
+            "Export lifecycle public-log gossip observer key",
+            "Strictly validate retained organization-bound observer trust and export its current key for legacy consumers.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_policy_lifecycle_public_log_gossip_quorum",
             "Verify policy lifecycle public-log gossip quorum",
             "Freshly verify paired observations from distinct trusted organizations and retain deterministic evidence even when the required organization quorum is not met.",
             json!({
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "local_anchor", "observations", "organization_ids",
-                    "observer_ids", "observer_public_keys", "log_id",
+                    "local_anchor", "observations", "log_id",
                     "log_public_key", "evaluated_at_unix", "output"
+                ],
+                "oneOf": [
+                    {
+                        "required": [
+                            "organization_ids", "observer_ids", "observer_public_keys"
+                        ]
+                    },
+                    {"required": ["observer_trust_states"]}
                 ],
                 "properties": {
                     "local_anchor": {"type": "string"},
@@ -1886,6 +1975,10 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         }
                     },
                     "observer_public_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "observer_trust_states": {
                         "type": "array", "minItems": 1, "maxItems": 100,
                         "items": {"type": "string"}
                     },
@@ -1914,8 +2007,15 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                 "type": "object", "additionalProperties": false,
                 "required": [
                     "local_anchor", "endpoint", "log_id", "log_public_key",
-                    "organization_id", "observer_id", "observer_public_key",
                     "evaluated_at_unix", "output", "receipt_output"
+                ],
+                "oneOf": [
+                    {
+                        "required": [
+                            "organization_id", "observer_id", "observer_public_key"
+                        ]
+                    },
+                    {"required": ["observer_trust_state"]}
                 ],
                 "properties": {
                     "local_anchor": {"type": "string"},
@@ -1934,6 +2034,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
                     },
                     "observer_public_key": {"type": "string"},
+                    "observer_trust_state": {"type": "string"},
                     "bearer_token_env": {"type": "string"},
                     "timeout_seconds": {
                         "type": "integer", "minimum": 1, "maximum": 600
@@ -2623,6 +2724,18 @@ fn call_tool(
         }
         "verify_policy_lifecycle_public_log_gossip_receipt" => {
             verify_policy_lifecycle_public_log_gossip_receipt(arguments, cancellation)?
+        }
+        "init_policy_lifecycle_public_log_gossip_observer_trust" => {
+            init_policy_lifecycle_public_log_gossip_observer_trust(arguments, cancellation)?
+        }
+        "sign_policy_lifecycle_public_log_gossip_observer_key_rotation" => {
+            sign_policy_lifecycle_public_log_gossip_observer_key_rotation(arguments, cancellation)?
+        }
+        "apply_policy_lifecycle_public_log_gossip_observer_key_rotation" => {
+            apply_policy_lifecycle_public_log_gossip_observer_key_rotation(arguments, cancellation)?
+        }
+        "export_policy_lifecycle_public_log_gossip_observer_key" => {
+            export_policy_lifecycle_public_log_gossip_observer_key(arguments, cancellation)?
         }
         "verify_policy_lifecycle_public_log_gossip_quorum" => {
             verify_policy_lifecycle_public_log_gossip_quorum(arguments, cancellation)?
@@ -5162,6 +5275,120 @@ fn verify_policy_lifecycle_public_log_gossip_receipt(
     ))
 }
 
+fn init_policy_lifecycle_public_log_gossip_observer_trust(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["organization_id", "observer_id", "public_key", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "init-policy-lifecycle-log-gossip-observer-trust".into(),
+        "--organization-id".into(),
+        required_string(&arguments, "organization_id")?,
+        "--observer-id".into(),
+        required_string(&arguments, "observer_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": state}),
+    ))
+}
+
+fn sign_policy_lifecycle_public_log_gossip_observer_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let rotated_at_unix = arguments
+        .get("rotated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "rotated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-policy-lifecycle-log-gossip-observer-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+        "--rotated-at-unix".into(),
+        rotated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_policy_lifecycle_public_log_gossip_observer_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["trust_state", "rotation", "output", "public_key_output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let public_key_output = required_string(&arguments, "public_key_output")?;
+    let command = vec![
+        "apply-policy-lifecycle-log-gossip-observer-key-rotation".into(),
+        required_string(&arguments, "trust_state")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+        "--public-key-output".into(),
+        public_key_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "public_key_output": public_key_output,
+            "trust_state": state
+        }),
+    ))
+}
+
+fn export_policy_lifecycle_public_log_gossip_observer_key(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["trust_state", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "export-policy-lifecycle-log-gossip-observer-public-key".into(),
+        required_string(&arguments, "trust_state")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    Ok(execution_result(execution, json!({"output": output})))
+}
+
 fn verify_policy_lifecycle_public_log_gossip_quorum(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -5174,6 +5401,7 @@ fn verify_policy_lifecycle_public_log_gossip_quorum(
             "organization_ids",
             "observer_ids",
             "observer_public_keys",
+            "observer_trust_states",
             "minimum_organizations",
             "log_id",
             "log_public_key",
@@ -5183,16 +5411,23 @@ fn verify_policy_lifecycle_public_log_gossip_quorum(
         ],
     )?;
     let observations = required_string_array(&arguments, "observations", false)?;
-    let organization_ids = required_string_array(&arguments, "organization_ids", false)?;
-    let observer_ids = required_string_array(&arguments, "observer_ids", false)?;
-    let observer_public_keys = required_string_array(&arguments, "observer_public_keys", false)?;
+    let organization_ids = required_string_array(&arguments, "organization_ids", true)?;
+    let observer_ids = required_string_array(&arguments, "observer_ids", true)?;
+    let observer_public_keys = required_string_array(&arguments, "observer_public_keys", true)?;
+    let observer_trust_states = required_string_array(&arguments, "observer_trust_states", true)?;
+    let direct = !organization_ids.is_empty()
+        || !observer_ids.is_empty()
+        || !observer_public_keys.is_empty();
     if observations.len() > 100
-        || observations.len() != organization_ids.len()
-        || observations.len() != observer_ids.len()
-        || observations.len() != observer_public_keys.len()
+        || direct == !observer_trust_states.is_empty()
+        || (direct
+            && (observations.len() != organization_ids.len()
+                || observations.len() != observer_ids.len()
+                || observations.len() != observer_public_keys.len()))
+        || (!observer_trust_states.is_empty() && observations.len() != observer_trust_states.len())
     {
         return Err(json!({
-            "detail": "observations and trusted organization, observer, and key arrays must be paired and contain at most 100 entries"
+            "detail": "observations require exactly one paired direct-trust or observer-trust-state array mode with at most 100 entries"
         }));
     }
     let minimum = match arguments.get("minimum_organizations") {
@@ -5217,14 +5452,20 @@ fn verify_policy_lifecycle_public_log_gossip_quorum(
     for observation in observations {
         command.extend(["--observation".into(), observation]);
     }
-    for organization_id in organization_ids {
-        command.extend(["--organization-id".into(), organization_id]);
-    }
-    for observer_id in observer_ids {
-        command.extend(["--observer-id".into(), observer_id]);
-    }
-    for key in observer_public_keys {
-        command.extend(["--observer-public-key".into(), key]);
+    if direct {
+        for organization_id in organization_ids {
+            command.extend(["--organization-id".into(), organization_id]);
+        }
+        for observer_id in observer_ids {
+            command.extend(["--observer-id".into(), observer_id]);
+        }
+        for key in observer_public_keys {
+            command.extend(["--observer-public-key".into(), key]);
+        }
+    } else {
+        for state in observer_trust_states {
+            command.extend(["--observer-trust-state".into(), state]);
+        }
     }
     command.extend([
         "--minimum-organizations".into(),
@@ -5266,6 +5507,7 @@ fn request_remote_policy_lifecycle_public_log_gossip(
             "organization_id",
             "observer_id",
             "observer_public_key",
+            "observer_trust_state",
             "bearer_token_env",
             "timeout_seconds",
             "evaluated_at_unix",
@@ -5288,6 +5530,19 @@ fn request_remote_policy_lifecycle_public_log_gossip(
     }
     let output = required_string(&arguments, "output")?;
     let receipt_output = required_string(&arguments, "receipt_output")?;
+    let direct_trust = [
+        arguments.contains_key("organization_id"),
+        arguments.contains_key("observer_id"),
+        arguments.contains_key("observer_public_key"),
+    ];
+    let trust_state = arguments.contains_key("observer_trust_state");
+    if trust_state == direct_trust.iter().all(|value| *value)
+        || (direct_trust.iter().any(|value| *value) && !direct_trust.iter().all(|value| *value))
+    {
+        return Err(json!({
+            "detail": "supply exactly one complete direct observer trust tuple or observer_trust_state"
+        }));
+    }
     let mut command = vec![
         "request-policy-lifecycle-log-gossip-observation".into(),
         "--local-anchor".into(),
@@ -5298,12 +5553,23 @@ fn request_remote_policy_lifecycle_public_log_gossip(
         required_string(&arguments, "log_id")?,
         "--log-public-key".into(),
         required_string(&arguments, "log_public_key")?,
-        "--organization-id".into(),
-        required_string(&arguments, "organization_id")?,
-        "--observer-id".into(),
-        required_string(&arguments, "observer_id")?,
-        "--observer-public-key".into(),
-        required_string(&arguments, "observer_public_key")?,
+    ];
+    if trust_state {
+        command.extend([
+            "--observer-trust-state".into(),
+            required_string(&arguments, "observer_trust_state")?,
+        ]);
+    } else {
+        command.extend([
+            "--organization-id".into(),
+            required_string(&arguments, "organization_id")?,
+            "--observer-id".into(),
+            required_string(&arguments, "observer_id")?,
+            "--observer-public-key".into(),
+            required_string(&arguments, "observer_public_key")?,
+        ]);
+    }
+    command.extend([
         "--timeout-seconds".into(),
         timeout.to_string(),
         "--evaluated-at-unix".into(),
@@ -5312,7 +5578,7 @@ fn request_remote_policy_lifecycle_public_log_gossip(
         output.clone(),
         "--receipt-output".into(),
         receipt_output.clone(),
-    ];
+    ]);
     optional_option(
         &arguments,
         "bearer_token_env",
@@ -6542,7 +6808,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 69);
+        assert_eq!(tools.len(), 73);
         let named = |name: &str| {
             tools
                 .iter()
@@ -6824,6 +7090,11 @@ mod tests {
             100
         );
         assert_eq!(
+            named("verify_policy_lifecycle_public_log_gossip_quorum")["inputSchema"]["oneOf"][1]["required"]
+                [0],
+            "observer_trust_states"
+        );
+        assert_eq!(
             named("verify_policy_lifecycle_public_log_gossip_quorum")["execution"]["taskSupport"],
             "optional"
         );
@@ -6834,6 +7105,14 @@ mod tests {
         );
         assert_eq!(
             named("request_remote_policy_lifecycle_public_log_gossip")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("init_policy_lifecycle_public_log_gossip_observer_trust")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("sign_policy_lifecycle_public_log_gossip_observer_key_rotation")["execution"]["taskSupport"],
             "forbidden"
         );
         assert_eq!(
