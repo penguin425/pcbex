@@ -64,6 +64,10 @@ write_output policy-deployment-rollback-required ""
 write_output policy-deployment-rollback ""
 write_output policy-deployment-rollback-status ""
 write_output policy-deployment-rollback-active-revision ""
+write_output policy-rollback-recovery ""
+write_output policy-rollback-recovery-verified ""
+write_output rollback-incident-closure ""
+write_output rollback-incident-status ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -601,6 +605,101 @@ print(data["active_revision"])
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+policy_rollback_recovery=""
+policy_rollback_recovery_verified=""
+recovery_inputs=0
+for value in \
+  "${PCBEX_POLICY_ROLLBACK_RECOVERY_PROJECT_ID:-}" \
+  "${PCBEX_POLICY_ROLLBACK_RECOVERY_EXPECTED_ANALYSIS:-}" \
+  "${PCBEX_POLICY_ROLLBACK_RECOVERY_OBSERVED_ANALYSIS:-}" \
+  "${PCBEX_POLICY_ROLLBACK_RECOVERY_VERIFIED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((recovery_inputs += 1)); fi
+done
+if ((recovery_inputs != 0 && recovery_inputs != 4)); then
+  echo "rollback recovery project, expected analysis, observation, and time must be supplied together" >&2
+  exit 2
+fi
+if ((recovery_inputs == 4)); then
+  recovery_state="${PCBEX_POLICY_ROLLBACK_RECOVERY_STATE:-$policy_deployment_rollback}"
+  recovery_rollout="${PCBEX_POLICY_ROLLBACK_RECOVERY_ROLLOUT:-${PCBEX_CANARY_ROLLOUT_REPORT:-$policy_rollout}}"
+  recovery_deployment="${PCBEX_POLICY_ROLLBACK_RECOVERY_DEPLOYMENT:-${PCBEX_POLICY_DEPLOYMENT_VERIFICATION_STATE:-$policy_deployment}}"
+  recovery_failed_verification="${PCBEX_POLICY_ROLLBACK_RECOVERY_FAILED_VERIFICATION:-${PCBEX_POLICY_DEPLOYMENT_ROLLBACK_VERIFICATION:-$policy_deployment_verification}}"
+  recovery_previous_deployment="${PCBEX_POLICY_ROLLBACK_RECOVERY_PREVIOUS_DEPLOYMENT:-}"
+  recovery_baseline_verification="${PCBEX_POLICY_ROLLBACK_RECOVERY_BASELINE_VERIFICATION:-}"
+  recovery_policy="${PCBEX_POLICY_ROLLBACK_RECOVERY_RESTORED_POLICY_PACK:-}"
+  if [[ -z "$recovery_state" || -z "$recovery_rollout" || -z "$recovery_deployment" || -z "$recovery_failed_verification" || -z "$recovery_previous_deployment" || -z "$recovery_baseline_verification" || -z "$recovery_policy" ]]; then
+    echo "rollback recovery requires rollback, failed and previous deployments, both verifications, exact rollout, and restored policy pack" >&2
+    exit 2
+  fi
+  policy_rollback_recovery="${artifact_dir}/policy-rollback-recovery.json"
+  policy_rollback_recovery_summary="${artifact_dir}/policy-rollback-recovery.md"
+  "$PCBEX_BINARY" verify-policy-rollback-recovery \
+    "$recovery_state" \
+    "$recovery_rollout" \
+    --deployment "$recovery_deployment" \
+    --failed-verification "$recovery_failed_verification" \
+    --previous-deployment "$recovery_previous_deployment" \
+    --baseline-verification "$recovery_baseline_verification" \
+    --restored-policy-pack "$recovery_policy" \
+    --project-id "$PCBEX_POLICY_ROLLBACK_RECOVERY_PROJECT_ID" \
+    --board "$PCBEX_BOARD" \
+    --expected-analysis "$PCBEX_POLICY_ROLLBACK_RECOVERY_EXPECTED_ANALYSIS" \
+    --observed-analysis "$PCBEX_POLICY_ROLLBACK_RECOVERY_OBSERVED_ANALYSIS" \
+    --verified-at-unix "$PCBEX_POLICY_ROLLBACK_RECOVERY_VERIFIED_AT_UNIX" \
+    --output "$policy_rollback_recovery" \
+    --summary-output "$policy_rollback_recovery_summary"
+  policy_rollback_recovery_verified="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["recovery_verified"]).lower())' \
+      "$policy_rollback_recovery"
+  )"
+  {
+    printf '\n'
+    cat "$policy_rollback_recovery_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+rollback_incident_closure=""
+rollback_incident_status=""
+closure_inputs=0
+for value in \
+  "${PCBEX_ROLLBACK_INCIDENT_ACKNOWLEDGMENT:-}" \
+  "${PCBEX_ROLLBACK_INCIDENT_CLOSED_AT_UNIX:-}"; do
+  if [[ -n "$value" ]]; then ((closure_inputs += 1)); fi
+done
+if ((closure_inputs != 0 && closure_inputs != 2)); then
+  echo "rollback incident acknowledgment and closed time must be supplied together" >&2
+  exit 2
+fi
+if ((closure_inputs == 2)); then
+  closure_state="${PCBEX_POLICY_ROLLBACK_RECOVERY_STATE:-$policy_deployment_rollback}"
+  closure_recovery="$policy_rollback_recovery"
+  closure_policy="${PCBEX_POLICY_ROLLBACK_RECOVERY_RESTORED_POLICY_PACK:-}"
+  if [[ -z "$closure_state" || -z "$closure_recovery" || -z "$closure_policy" ]]; then
+    echo "rollback incident closure requires rollback state, clean recovery, and restored policy pack" >&2
+    exit 2
+  fi
+  rollback_incident_closure="${artifact_dir}/rollback-incident-closure.json"
+  rollback_incident_closure_summary="${artifact_dir}/rollback-incident-closure.md"
+  "$PCBEX_BINARY" close-rollback-incident \
+    "$closure_state" \
+    "$closure_recovery" \
+    --restored-policy-pack "$closure_policy" \
+    --acknowledgment "$PCBEX_ROLLBACK_INCIDENT_ACKNOWLEDGMENT" \
+    --closed-at-unix "$PCBEX_ROLLBACK_INCIDENT_CLOSED_AT_UNIX" \
+    --output "$rollback_incident_closure" \
+    --summary-output "$rollback_incident_closure_summary"
+  rollback_incident_status="$(
+    python3 -c \
+      'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' \
+      "$rollback_incident_closure"
+  )"
+  {
+    printf '\n'
+    cat "$rollback_incident_closure_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 has_schematic=false
 has_baseline_schematic=false
 if [[ -n "${PCBEX_SCHEMATIC:-}" ]]; then has_schematic=true; fi
@@ -1011,6 +1110,10 @@ write_output policy-deployment-rollback-required "$policy_deployment_rollback_re
 write_output policy-deployment-rollback "$policy_deployment_rollback"
 write_output policy-deployment-rollback-status "$policy_deployment_rollback_status"
 write_output policy-deployment-rollback-active-revision "$policy_deployment_rollback_active_revision"
+write_output policy-rollback-recovery "$policy_rollback_recovery"
+write_output policy-rollback-recovery-verified "$policy_rollback_recovery_verified"
+write_output rollback-incident-closure "$rollback_incident_closure"
+write_output rollback-incident-status "$rollback_incident_status"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

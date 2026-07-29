@@ -239,6 +239,11 @@
     {
       "id": "verification-bound-dual-control-rollback",
       "release": "v1.344.0",
+      "status": "released"
+    },
+    {
+      "id": "verified-rollback-incident-closure",
+      "release": "v1.345.0",
       "status": "current"
     }
   ]

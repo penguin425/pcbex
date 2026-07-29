@@ -80,6 +80,7 @@ mod policy_deployment_rollback;
 mod policy_deployment_verification;
 mod policy_pack;
 mod policy_recommendation;
+mod policy_rollback_recovery;
 mod policy_rollout;
 mod policy_rollout_approval;
 mod remote_policy;
@@ -122,6 +123,14 @@ use policy_pack::{
 use policy_recommendation::{
     PolicyRecommendationInput, generate_policy_recommendations, parse_policy_recommendation_report,
     policy_recommendation_json_schema, render_policy_recommendation_summary,
+};
+use policy_rollback_recovery::{
+    PolicyRollbackRecoveryEvidence, close_rollback_incident, parse_policy_rollback_recovery,
+    parse_rollback_incident_closure, parse_signed_rollback_incident_acknowledgment,
+    policy_rollback_recovery_json_schema, render_policy_rollback_recovery_summary,
+    render_rollback_incident_closure_summary, rollback_incident_closure_json_schema,
+    sign_rollback_incident_acknowledgment, signed_rollback_incident_acknowledgment_json_schema,
+    verify_policy_rollback_recovery,
 };
 use policy_rollout::{
     CanaryMonitoringInput, RolloutAnalysisInput, RolloutProjectInput,
@@ -651,6 +660,39 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed post-rollback fleet recovery JSON Schema.
+    PolicyRollbackRecoverySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize retained post-rollback recovery evidence.
+    ValidatePolicyRollbackRecovery {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed signed rollback-incident acknowledgment JSON Schema.
+    SignedRollbackIncidentAcknowledgmentSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed rollback-incident acknowledgment.
+    ValidateRollbackIncidentAcknowledgment {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed rollback-incident closure JSON Schema.
+    RollbackIncidentClosureSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a retained rollback-incident closure.
+    ValidateRollbackIncidentClosure {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -926,6 +968,72 @@ enum Command {
         summary_output: Option<PathBuf>,
         #[arg(long)]
         require_applied: bool,
+    },
+    /// Verify the restored fleet against exact pre-promotion production evidence.
+    VerifyPolicyRollbackRecovery {
+        rollback: PathBuf,
+        rollout: PathBuf,
+        #[arg(long)]
+        deployment: PathBuf,
+        #[arg(long)]
+        failed_verification: PathBuf,
+        #[arg(long)]
+        previous_deployment: PathBuf,
+        #[arg(long)]
+        baseline_verification: PathBuf,
+        #[arg(long)]
+        restored_policy_pack: PathBuf,
+        #[arg(long = "project-id", required = true)]
+        project_ids: Vec<String>,
+        #[arg(long = "board", required = true)]
+        boards: Vec<PathBuf>,
+        #[arg(long = "expected-analysis", required = true)]
+        expected_analyses: Vec<PathBuf>,
+        #[arg(long = "observed-analysis", required = true)]
+        observed_analyses: Vec<PathBuf>,
+        #[arg(long)]
+        verified_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        /// Fail after retaining evidence unless recovery is complete and clean.
+        #[arg(long)]
+        require_passed: bool,
+    },
+    /// Sign an operator acknowledgment over exact clean recovery evidence.
+    SignRollbackIncidentAcknowledgment {
+        rollback: PathBuf,
+        recovery: PathBuf,
+        #[arg(long)]
+        acknowledged_at_unix: u64,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        operator_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Close a rollback incident after clean recovery and independent acknowledgment.
+    CloseRollbackIncident {
+        rollback: PathBuf,
+        recovery: PathBuf,
+        #[arg(long)]
+        restored_policy_pack: PathBuf,
+        #[arg(long)]
+        acknowledgment: PathBuf,
+        #[arg(long)]
+        closed_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        require_closed: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2464,6 +2572,37 @@ fn main() -> Result<()> {
                 parse_policy_deployment_rollback_state(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
         }
+        Command::PolicyRollbackRecoverySchema { output } => {
+            write_or_print_json(&policy_rollback_recovery_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyRollbackRecovery { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report = parse_policy_rollback_recovery(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
+        Command::SignedRollbackIncidentAcknowledgmentSchema { output } => {
+            write_or_print_json(
+                &signed_rollback_incident_acknowledgment_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidateRollbackIncidentAcknowledgment { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let acknowledgment = parse_signed_rollback_incident_acknowledgment(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(acknowledgment)?, output.as_ref())?;
+        }
+        Command::RollbackIncidentClosureSchema { output } => {
+            write_or_print_json(&rollback_incident_closure_json_schema(), output.as_ref())?;
+        }
+        Command::ValidateRollbackIncidentClosure { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state = parse_rollback_incident_closure(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -3417,6 +3556,253 @@ fn main() -> Result<()> {
             );
             if require_applied && !state.rollback_applied {
                 bail!("policy deployment rollback was not applied");
+            }
+        }
+        Command::VerifyPolicyRollbackRecovery {
+            rollback,
+            rollout,
+            deployment,
+            failed_verification,
+            previous_deployment,
+            baseline_verification,
+            restored_policy_pack,
+            project_ids,
+            boards,
+            expected_analyses,
+            observed_analyses,
+            verified_at_unix,
+            output,
+            summary_output,
+            require_passed,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy rollback recovery",
+            )?;
+            if project_ids.len() != boards.len()
+                || project_ids.len() != expected_analyses.len()
+                || project_ids.len() != observed_analyses.len()
+            {
+                bail!(
+                    "policy rollback recovery requires one board, expected, and observed analysis per project ID"
+                );
+            }
+            if project_ids.len() > 1_000 {
+                bail!("policy rollback recovery accepts at most 1000 projects");
+            }
+            let rollback_source = fs::read_to_string(&rollback)
+                .with_context(|| format!("reading {}", rollback.display()))?;
+            let rollback = parse_policy_deployment_rollback_state(&rollback_source)
+                .map_err(anyhow::Error::msg)?;
+            let deployment_source = fs::read_to_string(&deployment)
+                .with_context(|| format!("reading {}", deployment.display()))?;
+            let deployment =
+                parse_policy_deployment_state(&deployment_source).map_err(anyhow::Error::msg)?;
+            let failed_verification_source = fs::read_to_string(&failed_verification)
+                .with_context(|| format!("reading {}", failed_verification.display()))?;
+            let failed_verification =
+                parse_policy_deployment_verification(&failed_verification_source)
+                    .map_err(anyhow::Error::msg)?;
+            let previous_deployment_source = fs::read_to_string(&previous_deployment)
+                .with_context(|| format!("reading {}", previous_deployment.display()))?;
+            let previous_deployment = parse_policy_deployment_state(&previous_deployment_source)
+                .map_err(anyhow::Error::msg)?;
+            let baseline_verification_source = fs::read_to_string(&baseline_verification)
+                .with_context(|| format!("reading {}", baseline_verification.display()))?;
+            let baseline_verification =
+                parse_policy_deployment_verification(&baseline_verification_source)
+                    .map_err(anyhow::Error::msg)?;
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let restored_policy_pack_bytes = fs::read(&restored_policy_pack)
+                .with_context(|| format!("reading {}", restored_policy_pack.display()))?;
+            let restored_policy_source = std::str::from_utf8(&restored_policy_pack_bytes)
+                .with_context(|| {
+                    format!(
+                        "{} is not UTF-8 policy JSON",
+                        restored_policy_pack.display()
+                    )
+                })?;
+            let restored_policy =
+                parse_policy_pack(restored_policy_source).map_err(anyhow::Error::msg)?;
+            struct OwnedAnalysis {
+                run_path: String,
+                run: Vec<u8>,
+                checks_path: String,
+                checks: Vec<u8>,
+                quality_path: String,
+                quality: Vec<u8>,
+            }
+            fn read_analysis(directory: &Path) -> Result<OwnedAnalysis> {
+                let run_path = directory.join("run.json");
+                let checks_path = directory.join("checks.json");
+                let quality_path = directory.join("quality.json");
+                Ok(OwnedAnalysis {
+                    run: fs::read(&run_path)
+                        .with_context(|| format!("reading {}", run_path.display()))?,
+                    checks: fs::read(&checks_path)
+                        .with_context(|| format!("reading {}", checks_path.display()))?,
+                    quality: fs::read(&quality_path)
+                        .with_context(|| format!("reading {}", quality_path.display()))?,
+                    run_path: run_path.display().to_string(),
+                    checks_path: checks_path.display().to_string(),
+                    quality_path: quality_path.display().to_string(),
+                })
+            }
+            let analyses = boards
+                .iter()
+                .zip(&expected_analyses)
+                .zip(&observed_analyses)
+                .map(|((board, expected), observed)| {
+                    Ok((
+                        board.display().to_string(),
+                        fs::read(board).with_context(|| format!("reading {}", board.display()))?,
+                        read_analysis(expected)?,
+                        read_analysis(observed)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let inputs = project_ids
+                .iter()
+                .zip(&analyses)
+                .map(|(project_id, (board_path, board, expected, observed))| {
+                    CanaryMonitoringInput {
+                        project_id,
+                        board_path,
+                        board,
+                        baseline: RolloutAnalysisInput {
+                            run_path: &expected.run_path,
+                            run: &expected.run,
+                            checks_path: &expected.checks_path,
+                            checks: &expected.checks,
+                            quality_path: &expected.quality_path,
+                            quality: &expected.quality,
+                        },
+                        observed: RolloutAnalysisInput {
+                            run_path: &observed.run_path,
+                            run: &observed.run,
+                            checks_path: &observed.checks_path,
+                            checks: &observed.checks,
+                            quality_path: &observed.quality_path,
+                            quality: &observed.quality,
+                        },
+                    }
+                })
+                .collect::<Vec<_>>();
+            let report = verify_policy_rollback_recovery(
+                &PolicyRollbackRecoveryEvidence {
+                    rollback: &rollback,
+                    failed_deployment: &deployment,
+                    failed_verification: &failed_verification,
+                    previous_deployment: &previous_deployment,
+                    baseline_verification: &baseline_verification,
+                    rollout: &rollout,
+                },
+                &restored_policy,
+                &restored_policy_pack_bytes,
+                verified_at_unix,
+                &inputs,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&report)? + "\n";
+            let summary = render_policy_rollback_recovery_summary(&report);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "policy rollback recovery: {} passed, {} failed: {}",
+                report.passed_projects, report.failed_projects, report.status
+            );
+            if require_passed && !report.recovery_verified {
+                bail!("policy rollback recovery is incomplete or regressed");
+            }
+        }
+        Command::SignRollbackIncidentAcknowledgment {
+            rollback,
+            recovery,
+            acknowledged_at_unix,
+            private_key,
+            operator_id,
+            reason,
+            ticket,
+            output,
+        } => {
+            let rollback_source = fs::read_to_string(&rollback)
+                .with_context(|| format!("reading {}", rollback.display()))?;
+            let rollback = parse_policy_deployment_rollback_state(&rollback_source)
+                .map_err(anyhow::Error::msg)?;
+            let recovery_source = fs::read_to_string(&recovery)
+                .with_context(|| format!("reading {}", recovery.display()))?;
+            let recovery =
+                parse_policy_rollback_recovery(&recovery_source).map_err(anyhow::Error::msg)?;
+            let secret = read_hex_key(&private_key, "rollback incident operator private key")?;
+            let acknowledgment = sign_rollback_incident_acknowledgment(
+                &rollback,
+                &recovery,
+                acknowledged_at_unix,
+                &operator_id,
+                &reason,
+                &ticket,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&acknowledgment)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!("signed rollback incident acknowledgment as {operator_id}");
+        }
+        Command::CloseRollbackIncident {
+            rollback,
+            recovery,
+            restored_policy_pack,
+            acknowledgment,
+            closed_at_unix,
+            output,
+            summary_output,
+            require_closed,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "rollback incident closure",
+            )?;
+            let rollback_source = fs::read_to_string(&rollback)
+                .with_context(|| format!("reading {}", rollback.display()))?;
+            let rollback = parse_policy_deployment_rollback_state(&rollback_source)
+                .map_err(anyhow::Error::msg)?;
+            let recovery_source = fs::read_to_string(&recovery)
+                .with_context(|| format!("reading {}", recovery.display()))?;
+            let recovery =
+                parse_policy_rollback_recovery(&recovery_source).map_err(anyhow::Error::msg)?;
+            let restored_policy = load_policy_pack(&restored_policy_pack)?.0;
+            let acknowledgment_source = fs::read_to_string(&acknowledgment)
+                .with_context(|| format!("reading {}", acknowledgment.display()))?;
+            let acknowledgment =
+                parse_signed_rollback_incident_acknowledgment(&acknowledgment_source)
+                    .map_err(anyhow::Error::msg)?;
+            let state = close_rollback_incident(
+                &rollback,
+                &recovery,
+                &restored_policy,
+                &acknowledgment,
+                closed_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            let summary = render_rollback_incident_closure_summary(&state);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "rollback incident closed by {} for {}",
+                state.operator_id, state.ticket
+            );
+            if require_closed && !state.incident_closed {
+                bail!("rollback incident was not closed");
             }
         }
         Command::RecordSimulationEvidence {

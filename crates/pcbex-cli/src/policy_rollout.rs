@@ -554,6 +554,94 @@ pub fn observe_deployed_project(
     })
 }
 
+pub fn observe_restored_project(
+    input: &CanaryMonitoringInput<'_>,
+    expected_board: &RolloutArtifact,
+    expected_evidence: &RolloutAnalysisEvidence,
+    restored_policy_pack: &OrganizationPolicyPack,
+    restored_policy_pack_bytes: &[u8],
+) -> Result<CanaryMonitoringProject, String> {
+    validate_policy_pack(restored_policy_pack)?;
+    if restored_policy_pack_bytes.is_empty()
+        || restored_policy_pack_bytes.len() > MAXIMUM_ARTIFACT_BYTES
+    {
+        return Err("restored policy-pack artifact size is invalid".into());
+    }
+    let expected = parse_analysis(&input.baseline)?;
+    let observed = parse_analysis(&input.observed)?;
+    let board = artifact(input.board_path, input.board)?;
+    validate_manifest(&expected.manifest, &expected.checks, &expected.quality)?;
+    validate_manifest(&observed.manifest, &observed.checks, &observed.quality)?;
+    if board.bytes != expected_board.bytes
+        || board.sha256 != expected_board.sha256
+        || expected.evidence.run.bytes != expected_evidence.run.bytes
+        || expected.evidence.run.sha256 != expected_evidence.run.sha256
+        || expected.evidence.checks.bytes != expected_evidence.checks.bytes
+        || expected.evidence.checks.sha256 != expected_evidence.checks.sha256
+        || expected.evidence.quality.bytes != expected_evidence.quality.bytes
+        || expected.evidence.quality.sha256 != expected_evidence.quality.sha256
+    {
+        return Err(format!(
+            "project {:?} does not retain the pre-promotion production baseline",
+            input.project_id
+        ));
+    }
+    if expected.manifest.input.sha256 != board.sha256
+        || observed.manifest.input.sha256 != board.sha256
+        || expected.manifest.input.bytes != board.bytes
+        || observed.manifest.input.bytes != board.bytes
+        || expected.manifest.engine_version != observed.manifest.engine_version
+        || !same_optional_input(&expected.manifest.project, &observed.manifest.project)
+        || !same_optional_input(&expected.manifest.rules_file, &observed.manifest.rules_file)
+        || expected.manifest.configuration.project_settings_loaded
+            != observed.manifest.configuration.project_settings_loaded
+        || expected.manifest.configuration.applied_custom_rules
+            != observed.manifest.configuration.applied_custom_rules
+    {
+        return Err(format!(
+            "project {:?} recovery analysis changed the board or settings",
+            input.project_id
+        ));
+    }
+    let expected_policy = expected.manifest.policy_pack_file.as_ref();
+    let observed_policy = observed.manifest.policy_pack_file.as_ref();
+    let policy_sha256 = format!("{:x}", Sha256::digest(restored_policy_pack_bytes));
+    let uses_restored_pack =
+        |manifest: &AnalysisManifest, descriptor: Option<&AnalysisInputDescriptor>| {
+            manifest.configuration.dfm_profile.as_ref() == Some(&restored_policy_pack.dfm_profile)
+                && manifest.configuration.organization_policy_pack.as_deref()
+                    == Some(restored_policy_pack.id.as_str())
+                && manifest.dfm_profile_file.is_none()
+                && descriptor.is_some_and(|descriptor| {
+                    descriptor.bytes == restored_policy_pack_bytes.len()
+                        && descriptor.sha256 == policy_sha256
+                })
+        };
+    if !uses_restored_pack(&expected.manifest, expected_policy)
+        || !uses_restored_pack(&observed.manifest, observed_policy)
+    {
+        return Err(format!(
+            "project {:?} recovery evidence did not use the exact restored policy pack",
+            input.project_id
+        ));
+    }
+    let delta = AnalysisDelta::between(
+        &expected.quality,
+        &expected.checks,
+        &observed.quality,
+        &observed.checks,
+    );
+    let passed = !delta.is_regression();
+    Ok(CanaryMonitoringProject {
+        project_id: input.project_id.into(),
+        board,
+        baseline: expected.evidence,
+        observed: observed.evidence,
+        delta,
+        passed,
+    })
+}
+
 fn simulate_project(
     input: &RolloutProjectInput<'_>,
     policy_pack: &OrganizationPolicyPack,
@@ -883,7 +971,7 @@ pub fn validate_canary_monitoring_report(report: &CanaryMonitoringReport) -> Res
     Ok(())
 }
 
-fn validate_delta(delta: &AnalysisDelta) -> Result<(), String> {
+pub(crate) fn validate_delta(delta: &AnalysisDelta) -> Result<(), String> {
     if delta.schema_version != 1 {
         return Err("policy rollout contains an unsupported analysis delta".into());
     }
@@ -956,14 +1044,14 @@ fn validate_delta(delta: &AnalysisDelta) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_evidence(evidence: &RolloutAnalysisEvidence) -> Result<(), String> {
+pub(crate) fn validate_evidence(evidence: &RolloutAnalysisEvidence) -> Result<(), String> {
     for artifact in [&evidence.run, &evidence.checks, &evidence.quality] {
         validate_evidence_artifact(artifact)?;
     }
     Ok(())
 }
 
-fn validate_evidence_artifact(artifact: &RolloutArtifact) -> Result<(), String> {
+pub(crate) fn validate_evidence_artifact(artifact: &RolloutArtifact) -> Result<(), String> {
     if artifact.path.is_empty()
         || artifact.path.len() > 4096
         || artifact.bytes > MAXIMUM_ARTIFACT_BYTES

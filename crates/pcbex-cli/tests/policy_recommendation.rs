@@ -99,7 +99,13 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
     let public_a = temporary.join("reviewer-a.pub");
     let key_b = temporary.join("reviewer-b.key");
     let public_b = temporary.join("reviewer-b.pub");
-    for (private, public) in [(&key_a, &public_a), (&key_b, &public_b)] {
+    let key_c = temporary.join("incident-operator.key");
+    let public_c = temporary.join("incident-operator.pub");
+    for (private, public) in [
+        (&key_a, &public_a),
+        (&key_b, &public_b),
+        (&key_c, &public_c),
+    ] {
         assert!(
             Command::new(env!("CARGO_BIN_EXE_pcbex"))
                 .arg("approval-keygen")
@@ -124,6 +130,10 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
         {
             "signer_id": "reviewer-b",
             "public_key": fs::read_to_string(&public_b).unwrap().trim()
+        },
+        {
+            "signer_id": "incident-operator",
+            "public_key": fs::read_to_string(&public_c).unwrap().trim()
         }
     ]);
     let policy_path = temporary.join("policy-pack.json");
@@ -1356,6 +1366,194 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
         rollback_state_schema["properties"]["automatic_rollback"]["const"],
         false
     );
+    let restored_observation = temporary.join("restored-revision-two");
+    assert!(
+        analyze(
+            &restored_observation,
+            "--policy-pack",
+            &verified_candidate_policy
+        )
+        .status
+        .success()
+    );
+    let recovery = temporary.join("policy-rollback-recovery.json");
+    let recovery_result = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-policy-rollback-recovery")
+        .arg(&production_rollback_state)
+        .arg(&rollout)
+        .arg("--deployment")
+        .arg(&promoted_revision_three)
+        .arg("--failed-verification")
+        .arg(&revision_three_verification)
+        .arg("--previous-deployment")
+        .arg(&deployment)
+        .arg("--baseline-verification")
+        .arg(&deployment_verification)
+        .arg("--restored-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--project-id")
+        .arg("controller")
+        .arg("--board")
+        .arg(&board)
+        .arg("--expected-analysis")
+        .arg(&deployed)
+        .arg("--observed-analysis")
+        .arg(&restored_observation)
+        .arg("--verified-at-unix")
+        .arg("1903")
+        .arg("--output")
+        .arg(&recovery)
+        .arg("--require-passed")
+        .output()
+        .unwrap();
+    assert!(
+        recovery_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovery_result.stderr)
+    );
+    let recovery_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&recovery).unwrap()).unwrap();
+    assert_eq!(recovery_document["status"], "recovery_verified");
+    assert_eq!(recovery_document["coverage_complete"], true);
+    assert_eq!(recovery_document["recovery_verified"], true);
+    assert_eq!(recovery_document["requires_operator_acknowledgment"], true);
+    assert_eq!(recovery_document["automatic_incident_closure"], false);
+
+    let wrong_recovery = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-policy-rollback-recovery")
+        .arg(&production_rollback_state)
+        .arg(&rollout)
+        .arg("--deployment")
+        .arg(&promoted_revision_three)
+        .arg("--failed-verification")
+        .arg(&revision_three_verification)
+        .arg("--previous-deployment")
+        .arg(&deployment)
+        .arg("--baseline-verification")
+        .arg(&deployment_verification)
+        .arg("--restored-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--project-id")
+        .arg("controller")
+        .arg("--board")
+        .arg(&board)
+        .arg("--expected-analysis")
+        .arg(&candidate)
+        .arg("--observed-analysis")
+        .arg(&restored_observation)
+        .arg("--verified-at-unix")
+        .arg("1903")
+        .arg("--output")
+        .arg(temporary.join("wrong-recovery.json"))
+        .output()
+        .unwrap();
+    assert!(!wrong_recovery.status.success());
+    assert!(
+        String::from_utf8_lossy(&wrong_recovery.stderr)
+            .contains("pre-promotion production baseline")
+    );
+
+    let incident_acknowledgment = temporary.join("rollback-incident-acknowledgment.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-rollback-incident-acknowledgment")
+            .arg(&production_rollback_state)
+            .arg(&recovery)
+            .arg("--acknowledged-at-unix")
+            .arg("1904")
+            .arg("--private-key")
+            .arg(&key_c)
+            .arg("--operator-id")
+            .arg("incident-operator")
+            .arg("--reason")
+            .arg("The restored production fleet is complete and clean.")
+            .arg("--ticket")
+            .arg("HW-46")
+            .arg("--output")
+            .arg(&incident_acknowledgment)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let incident_closure = temporary.join("rollback-incident-closure.json");
+    let closure_result = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("close-rollback-incident")
+        .arg(&production_rollback_state)
+        .arg(&recovery)
+        .arg("--restored-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--acknowledgment")
+        .arg(&incident_acknowledgment)
+        .arg("--closed-at-unix")
+        .arg("1905")
+        .arg("--output")
+        .arg(&incident_closure)
+        .arg("--require-closed")
+        .output()
+        .unwrap();
+    assert!(
+        closure_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&closure_result.stderr)
+    );
+    let closure_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&incident_closure).unwrap()).unwrap();
+    assert_eq!(closure_document["status"], "incident_closed");
+    assert_eq!(closure_document["operator_id"], "incident-operator");
+    assert_eq!(closure_document["automatic_incident_closure"], false);
+
+    let self_acknowledgment = temporary.join("rollback-self-acknowledgment.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-rollback-incident-acknowledgment")
+            .arg(&production_rollback_state)
+            .arg(&recovery)
+            .arg("--acknowledged-at-unix")
+            .arg("1904")
+            .arg("--private-key")
+            .arg(&key_a)
+            .arg("--operator-id")
+            .arg("reviewer-a")
+            .arg("--reason")
+            .arg("Self closure must be rejected.")
+            .arg("--ticket")
+            .arg("HW-46")
+            .arg("--output")
+            .arg(&self_acknowledgment)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let self_closure = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("close-rollback-incident")
+        .arg(&production_rollback_state)
+        .arg(&recovery)
+        .arg("--restored-policy-pack")
+        .arg(&verified_candidate_policy)
+        .arg("--acknowledgment")
+        .arg(&self_acknowledgment)
+        .arg("--closed-at-unix")
+        .arg("1905")
+        .arg("--output")
+        .arg(temporary.join("rollback-self-closure.json"))
+        .output()
+        .unwrap();
+    assert!(!self_closure.status.success());
+    assert!(String::from_utf8_lossy(&self_closure.stderr).contains("independent"));
+
+    for schema_command in [
+        "policy-rollback-recovery-schema",
+        "signed-rollback-incident-acknowledgment-schema",
+        "rollback-incident-closure-schema",
+    ] {
+        let schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg(schema_command)
+            .output()
+            .unwrap();
+        assert!(schema.status.success());
+        let schema: serde_json::Value = serde_json::from_slice(&schema.stdout).unwrap();
+        assert_eq!(schema["additionalProperties"], false);
+    }
     let deployment_rollback_a = temporary.join("deployment-rollback-a.json");
     let deployment_rollback_b = temporary.join("deployment-rollback-b.json");
     for (private_key, signer_id, signed) in [
