@@ -1792,6 +1792,69 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "sign_policy_lifecycle_public_log_gossip_receipt",
+            "Sign policy lifecycle public-log gossip receipt",
+            "Verify a trusted signed lifecycle-log tree head and re-sign the exact observation with an independent, time-bounded observer identity.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "anchor", "log_id", "log_public_key", "observer_id",
+                    "private_key", "expires_at_unix", "output"
+                ],
+                "properties": {
+                    "anchor": {"type": "string"},
+                    "log_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+                    },
+                    "log_public_key": {"type": "string"},
+                    "observer_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+                    },
+                    "private_key": {"type": "string"},
+                    "received_at_unix": {"type": "integer", "minimum": 0},
+                    "expires_at_unix": {"type": "integer", "minimum": 1},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_policy_lifecycle_public_log_gossip_receipt",
+            "Verify policy lifecycle public-log gossip receipt",
+            "Compare one independently signed observation with the local anchor and require append-only consistency whenever their tree sizes differ.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "local_anchor", "receipt", "log_id", "log_public_key",
+                    "observer_id", "observer_public_key", "evaluated_at_unix", "output"
+                ],
+                "properties": {
+                    "local_anchor": {"type": "string"},
+                    "receipt": {"type": "string"},
+                    "consistency_proof": {"type": "string"},
+                    "log_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+                    },
+                    "log_public_key": {"type": "string"},
+                    "observer_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+                    },
+                    "observer_public_key": {"type": "string"},
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -2461,6 +2524,12 @@ fn call_tool(
         }
         "verify_policy_lifecycle_public_log_consistency" => {
             verify_policy_lifecycle_public_log_consistency(arguments, cancellation)?
+        }
+        "sign_policy_lifecycle_public_log_gossip_receipt" => {
+            sign_policy_lifecycle_public_log_gossip_receipt(arguments, cancellation)?
+        }
+        "verify_policy_lifecycle_public_log_gossip_receipt" => {
+            verify_policy_lifecycle_public_log_gossip_receipt(arguments, cancellation)?
         }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
@@ -4878,6 +4947,122 @@ fn verify_policy_lifecycle_public_log_consistency(
     ))
 }
 
+fn sign_policy_lifecycle_public_log_gossip_receipt(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "anchor",
+            "log_id",
+            "log_public_key",
+            "observer_id",
+            "private_key",
+            "received_at_unix",
+            "expires_at_unix",
+            "output",
+        ],
+    )?;
+    let expires_at_unix = arguments
+        .get("expires_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "expires_at_unix must be a positive integer"}))?;
+    if expires_at_unix == 0 {
+        return Err(json!({"detail": "expires_at_unix must be a positive integer"}));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-policy-lifecycle-log-gossip-receipt".into(),
+        "--anchor".into(),
+        required_string(&arguments, "anchor")?,
+        "--log-id".into(),
+        required_string(&arguments, "log_id")?,
+        "--log-public-key".into(),
+        required_string(&arguments, "log_public_key")?,
+        "--observer-id".into(),
+        required_string(&arguments, "observer_id")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+    ];
+    optional_nonnegative_integer(
+        &arguments,
+        "received_at_unix",
+        "--received-at-unix",
+        &mut command,
+    )?;
+    command.extend([
+        "--expires-at-unix".into(),
+        expires_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let receipt = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "receipt": receipt}),
+    ))
+}
+
+fn verify_policy_lifecycle_public_log_gossip_receipt(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "local_anchor",
+            "receipt",
+            "consistency_proof",
+            "log_id",
+            "log_public_key",
+            "observer_id",
+            "observer_public_key",
+            "evaluated_at_unix",
+            "output",
+        ],
+    )?;
+    let evaluated_at_unix = arguments
+        .get("evaluated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "evaluated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-policy-lifecycle-log-gossip-receipt".into(),
+        "--local-anchor".into(),
+        required_string(&arguments, "local_anchor")?,
+        "--receipt".into(),
+        required_string(&arguments, "receipt")?,
+    ];
+    optional_option(
+        &arguments,
+        "consistency_proof",
+        "--consistency-proof",
+        &mut command,
+    )?;
+    command.extend([
+        "--log-id".into(),
+        required_string(&arguments, "log_id")?,
+        "--log-public-key".into(),
+        required_string(&arguments, "log_public_key")?,
+        "--observer-id".into(),
+        required_string(&arguments, "observer_id")?,
+        "--observer-public-key".into(),
+        required_string(&arguments, "observer_public_key")?,
+        "--evaluated-at-unix".into(),
+        evaluated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 fn compare_schematics(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -6087,7 +6272,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 65);
+        assert_eq!(tools.len(), 67);
         let named = |name: &str| {
             tools
                 .iter()
@@ -6348,6 +6533,19 @@ mod tests {
         );
         assert_eq!(
             named("verify_policy_lifecycle_public_log_consistency")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("sign_policy_lifecycle_public_log_gossip_receipt")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("verify_policy_lifecycle_public_log_gossip_receipt")["inputSchema"]["properties"]
+                ["evaluated_at_unix"]["minimum"],
+            0
+        );
+        assert_eq!(
+            named("verify_policy_lifecycle_public_log_gossip_receipt")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(

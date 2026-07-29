@@ -200,7 +200,7 @@ pub fn verify_policy_lifecycle_log_anchor_proof(
             "policy lifecycle anchor audit path does not reconstruct the signed root".into(),
         );
     }
-    verify_signed_tree_head(head, trusted_log_id, trusted_public_key)?;
+    verify_policy_lifecycle_public_log_tree_head(head, trusted_log_id, trusted_public_key)?;
     Ok(PolicyLifecycleLogAnchorVerificationReport {
         schema_version: 1,
         checkpoint_sha256,
@@ -281,11 +281,20 @@ pub fn verify_policy_lifecycle_log_consistency_proof(
     if proof.new_tree_head != new_anchor.tree_head {
         return Err("policy lifecycle consistency proof does not match the current anchor".into());
     }
+    verify_policy_lifecycle_log_tree_head_consistency(proof, trusted_log_id, trusted_public_key)
+}
+
+pub fn verify_policy_lifecycle_log_tree_head_consistency(
+    proof: &PolicyLifecycleLogConsistencyProof,
+    trusted_log_id: &str,
+    trusted_public_key: &[u8; 32],
+) -> Result<PolicyLifecycleLogConsistencyVerificationReport, String> {
+    validate_policy_lifecycle_log_consistency_proof(proof)?;
     let old_head = &proof.old_tree_head;
     let new_head = &proof.new_tree_head;
     validate_consistency_head_pair(old_head, new_head)?;
-    verify_signed_tree_head(old_head, trusted_log_id, trusted_public_key)?;
-    verify_signed_tree_head(new_head, trusted_log_id, trusted_public_key)?;
+    verify_policy_lifecycle_public_log_tree_head(old_head, trusted_log_id, trusted_public_key)?;
+    verify_policy_lifecycle_public_log_tree_head(new_head, trusted_log_id, trusted_public_key)?;
     let path = proof
         .consistency_path
         .iter()
@@ -324,6 +333,15 @@ pub fn verify_policy_lifecycle_log_consistency_proof(
         tree_head_public_key: new_head.public_key.clone(),
         consistent: true,
     })
+}
+
+pub fn policy_lifecycle_public_log_tree_head_sha256(
+    head: &SignedPolicyLifecyclePublicLogTreeHead,
+) -> Result<String, String> {
+    validate_tree_head_shape(head)?;
+    let bytes = serde_json::to_vec(head)
+        .map_err(|error| format!("serializing policy lifecycle public-log tree head: {error}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
 }
 
 pub fn parse_policy_lifecycle_log_anchor_proof(
@@ -628,7 +646,7 @@ fn validate_consistency_head_pair(
     Ok(())
 }
 
-fn verify_signed_tree_head(
+pub fn verify_policy_lifecycle_public_log_tree_head(
     head: &SignedPolicyLifecyclePublicLogTreeHead,
     trusted_log_id: &str,
     trusted_public_key: &[u8; 32],

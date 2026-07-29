@@ -1427,6 +1427,52 @@ Closed contracts are available from
 publishes the verification report and boolean result, and can fail closed with
 `fail-on-policy-lifecycle-log-consistency: "true"`.
 
+Exchange a trusted tree-head observation with an independently operated CI
+consumer:
+
+```sh
+pcbex sign-policy-lifecycle-log-gossip-receipt \
+  --anchor policy-lifecycle.anchor.previous.json \
+  --log-id organization-lifecycle-log \
+  --log-public-key lifecycle-public-log.pub \
+  --observer-id independent-ci \
+  --private-key independent-ci-gossip.key \
+  --received-at-unix 1785301600 \
+  --expires-at-unix 1785906400 \
+  --output policy-lifecycle.gossip.json
+
+pcbex verify-policy-lifecycle-log-gossip-receipt \
+  --local-anchor policy-lifecycle.anchor.json \
+  --receipt policy-lifecycle.gossip.json \
+  --consistency-proof policy-lifecycle.consistency.json \
+  --log-id organization-lifecycle-log \
+  --log-public-key lifecycle-public-log.pub \
+  --observer-id independent-ci \
+  --observer-public-key independent-ci-gossip.pub \
+  --evaluated-at-unix 1785301700 \
+  --output policy-lifecycle.gossip-verification.json
+```
+
+The observer first verifies the original log signature, then domain-separates
+and signs the exact tree-head digest, log identity, tree size, root, log key,
+receipt time, and expiry. Observer and log keys must be independent. Receipts
+are valid for at most seven days and fail before their receipt time or after
+expiry. Verification pins the observer identity and key separately from the
+log identity and key. Equal-size trees must have the same root; different-size
+trees require an exact v1.356.0 consistency proof in either direction. This
+rejects observer, key, tree-head, timestamp, signature, log, root, and
+consistency-proof substitution, including same-size split views.
+
+Closed contracts are available from
+`signed-policy-lifecycle-log-gossip-receipt-schema` and
+`policy-lifecycle-log-gossip-verification-report-schema`. MCP exposes
+`sign_policy_lifecycle_public_log_gossip_receipt` and
+`verify_policy_lifecycle_public_log_gossip_receipt`; signing is task-forbidden.
+The Action accepts `policy-lifecycle-log-gossip-receipt`, separately trusted
+observer identity and key, evaluation time, and an optional consistency proof.
+It publishes the verification report and boolean result and can fail closed
+with `fail-on-policy-lifecycle-log-gossip: "true"`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1454,7 +1500,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.356.0
+    uses: penguin425/pcbex@v1.357.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2691,7 +2737,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.356.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.357.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
