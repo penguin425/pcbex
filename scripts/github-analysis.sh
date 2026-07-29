@@ -1152,16 +1152,35 @@ if [[ "$local_gossip_configured" == "true" && "$remote_gossip_configured" == "tr
   exit 2
 fi
 policy_lifecycle_log_gossip_organization_registry="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}"
+policy_lifecycle_log_gossip_organization_registry_governance="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}"
+governance_rotation_inputs=0
+for value in \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_OLD:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW:-}" \
+  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION:-}"; do
+  if [[ -n "$value" ]]; then
+    governance_rotation_inputs=$((governance_rotation_inputs + 1))
+  fi
+done
+if ((governance_rotation_inputs != 0 && governance_rotation_inputs != 3)); then
+  echo "gossip governance rotation requires old policy, new policy, and rotation" >&2
+  exit 2
+fi
+if ((governance_rotation_inputs == 3)); then
+  if [[ -z "$policy_lifecycle_log_gossip_organization_registry" ]]; then
+    echo "gossip governance rotation requires a retained registry" >&2
+    exit 2
+  fi
+  policy_lifecycle_log_gossip_organization_registry_governance="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW}"
+fi
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]] \
   && [[ -z "$policy_lifecycle_log_gossip_organization_registry" ]]; then
   echo "gossip organization registry authority rotation requires a retained registry" >&2
   exit 2
 fi
-if { [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]] \
-    && [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]]; } \
-  || { [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]] \
-    && [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]]; }; then
-  echo "gossip registry governance and threshold transition must be supplied together" >&2
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]] \
+  && [[ -z "$policy_lifecycle_log_gossip_organization_registry_governance" ]]; then
+  echo "gossip registry threshold transition requires governance" >&2
   exit 2
 fi
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]] \
@@ -1199,12 +1218,23 @@ if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "tr
       --public-key-output "$rotated_gossip_registry_key"
     policy_lifecycle_log_gossip_organization_registry="$rotated_gossip_registry"
   fi
+  if ((governance_rotation_inputs == 3)); then
+    governance_rotated_gossip_registry="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-governance-rotated.json"
+    "$PCBEX_BINARY" \
+      apply-policy-lifecycle-log-gossip-organization-registry-governance-rotation \
+      "$policy_lifecycle_log_gossip_organization_registry" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_OLD" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW" \
+      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION" \
+      --output "$governance_rotated_gossip_registry"
+    policy_lifecycle_log_gossip_organization_registry="$governance_rotated_gossip_registry"
+  fi
   if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]]; then
     governed_gossip_registry="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-governed.json"
     "$PCBEX_BINARY" \
       apply-policy-lifecycle-log-gossip-organization-registry-threshold-transition \
       "$policy_lifecycle_log_gossip_organization_registry" \
-      "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE" \
+      "$policy_lifecycle_log_gossip_organization_registry_governance" \
       "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION" \
       --output "$governed_gossip_registry"
     policy_lifecycle_log_gossip_organization_registry="$governed_gossip_registry"

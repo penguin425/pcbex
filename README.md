@@ -1699,6 +1699,22 @@ the governance and threshold transition together, applies them atomically
 after any authority-key rotation, and uses only the resulting registry for
 quorum verification.
 
+Governance itself rotates through the same registry chain. Create a successor
+root-signed policy, then run
+`sign-policy-lifecycle-log-gossip-organization-registry-governance-rotation`
+with repeated old and new authority identity/private-key pairs. Apply it with
+the retained registry, both policies, and the rotation artifact. The transition
+binds both policy digests, the prior registry digest, the next generation, and
+monotonic time under a dedicated domain. Both configured quorums must verify;
+missing members, key or policy substitution, signature mutation, replay, fork,
+and stale successor policies fail before the registry is written.
+
+The closed contract is emitted by
+`signed-policy-lifecycle-log-gossip-organization-registry-governance-rotation-schema`.
+MCP exposes sign/apply as task-forbidden tools. The Action accepts old policy,
+new policy, and rotation together, applies the change atomically, and uses the
+successor policy for any following threshold transition.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1726,7 +1742,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.362.0
+    uses: penguin425/pcbex@v1.363.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2963,7 +2979,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.362.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.363.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

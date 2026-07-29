@@ -23,6 +23,8 @@ const GOVERNANCE_DOMAIN: &str =
     "pcbex-policy-lifecycle-public-log-gossip-organization-registry-governance-v1";
 const THRESHOLD_TRANSITION_DOMAIN: &str =
     "pcbex-policy-lifecycle-public-log-gossip-organization-registry-threshold-transition-v1";
+const GOVERNANCE_ROTATION_DOMAIN: &str =
+    "pcbex-policy-lifecycle-public-log-gossip-organization-registry-governance-rotation-v1";
 const MAXIMUM_GOVERNANCE_AUTHORITIES: usize = 100;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -155,6 +157,22 @@ pub struct SignedPolicyLifecycleLogGossipOrganizationRegistryThresholdTransition
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceRotation {
+    pub schema_version: u32,
+    pub registry_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_transition_sha256: Option<String>,
+    pub old_governance_sha256: String,
+    pub new_governance_sha256: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_approvals: Vec<PolicyLifecycleLogGossipRegistryThresholdApproval>,
+    pub new_approvals: Vec<PolicyLifecycleLogGossipRegistryThresholdApproval>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyLifecycleLogGossipRegistryBoundQuorumReport {
     pub schema_version: u32,
     pub trust_quorum: PolicyLifecycleLogGossipTrustBoundQuorumReport,
@@ -216,6 +234,18 @@ struct ThresholdTransitionPayload<'a> {
     observer_trust_state_sha256: Option<&'a str>,
     reason_sha256: &'a str,
     effective_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct GovernanceRotationPayload<'a> {
+    domain: &'static str,
+    registry_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_transition_sha256: Option<&'a str>,
+    old_governance_sha256: &'a str,
+    new_governance_sha256: &'a str,
+    rotated_at_unix: u64,
 }
 
 pub fn new_policy_lifecycle_log_gossip_organization_registry(
@@ -757,6 +787,128 @@ pub fn apply_policy_lifecycle_log_gossip_organization_registry_threshold_transit
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn sign_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+    registry: &PolicyLifecycleLogGossipOrganizationRegistry,
+    old_governance: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernance,
+    new_governance: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernance,
+    old_signers: &[(String, [u8; 32])],
+    new_signers: &[(String, [u8; 32])],
+    rotated_at_unix: u64,
+) -> Result<SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceRotation, String> {
+    validate_governance_for_registry(registry, old_governance)?;
+    validate_governance_for_registry(registry, new_governance)?;
+    let old_governance_sha256 =
+        signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(old_governance)?;
+    let new_governance_sha256 =
+        signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(new_governance)?;
+    if old_governance_sha256 == new_governance_sha256 {
+        return Err("successor gossip registry governance must differ".into());
+    }
+    if new_governance.issued_at_unix < old_governance.issued_at_unix
+        || rotated_at_unix < new_governance.issued_at_unix
+        || registry
+            .last_updated_at_unix
+            .is_some_and(|last| rotated_at_unix < last)
+    {
+        return Err("gossip registry governance rotation timestamps must be monotonic".into());
+    }
+    let to_generation = registry
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "gossip organization registry generation overflow".to_string())?;
+    let payload = governance_rotation_payload(
+        &registry.registry_id,
+        registry.generation,
+        to_generation,
+        registry.last_transition_sha256.as_deref(),
+        &old_governance_sha256,
+        &new_governance_sha256,
+        rotated_at_unix,
+    )?;
+    let rotation = SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceRotation {
+        schema_version: 1,
+        registry_id: registry.registry_id.clone(),
+        from_generation: registry.generation,
+        to_generation,
+        previous_transition_sha256: registry.last_transition_sha256.clone(),
+        old_governance_sha256,
+        new_governance_sha256,
+        rotated_at_unix,
+        algorithm: "ed25519".into(),
+        old_approvals: sign_governance_approvals(old_governance, old_signers, &payload, "old")?,
+        new_approvals: sign_governance_approvals(new_governance, new_signers, &payload, "new")?,
+    };
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub fn apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+    registry: &PolicyLifecycleLogGossipOrganizationRegistry,
+    old_governance: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernance,
+    new_governance: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernance,
+    rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceRotation,
+) -> Result<PolicyLifecycleLogGossipOrganizationRegistry, String> {
+    validate_governance_for_registry(registry, old_governance)?;
+    validate_governance_for_registry(registry, new_governance)?;
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+        rotation,
+    )?;
+    let old_sha256 =
+        signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(old_governance)?;
+    let new_sha256 =
+        signed_policy_lifecycle_log_gossip_organization_registry_governance_sha256(new_governance)?;
+    if rotation.registry_id != registry.registry_id
+        || rotation.from_generation != registry.generation
+        || rotation.to_generation
+            != registry
+                .generation
+                .checked_add(1)
+                .ok_or_else(|| "gossip organization registry generation overflow".to_string())?
+        || rotation.previous_transition_sha256 != registry.last_transition_sha256
+        || rotation.old_governance_sha256 != old_sha256
+        || rotation.new_governance_sha256 != new_sha256
+    {
+        return Err("gossip registry governance rotation does not extend retained state".into());
+    }
+    if new_governance.issued_at_unix < old_governance.issued_at_unix
+        || rotation.rotated_at_unix < new_governance.issued_at_unix
+        || registry
+            .last_updated_at_unix
+            .is_some_and(|last| rotation.rotated_at_unix < last)
+    {
+        return Err("gossip registry governance rotation timestamps must be monotonic".into());
+    }
+    let payload = governance_rotation_payload(
+        &rotation.registry_id,
+        rotation.from_generation,
+        rotation.to_generation,
+        rotation.previous_transition_sha256.as_deref(),
+        &rotation.old_governance_sha256,
+        &rotation.new_governance_sha256,
+        rotation.rotated_at_unix,
+    )?;
+    verify_governance_approvals(old_governance, &rotation.old_approvals, &payload, "old")?;
+    verify_governance_approvals(new_governance, &rotation.new_approvals, &payload, "new")?;
+    let next = PolicyLifecycleLogGossipOrganizationRegistry {
+        schema_version: 1,
+        registry_id: registry.registry_id.clone(),
+        generation: rotation.to_generation,
+        authority_public_key: registry.authority_public_key.clone(),
+        last_transition_sha256: Some(
+            signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation_sha256(
+                rotation,
+            )?,
+        ),
+        last_updated_at_unix: Some(rotation.rotated_at_unix),
+        organizations: registry.organizations.clone(),
+    };
+    validate_policy_lifecycle_log_gossip_organization_registry(&next)?;
+    Ok(next)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn verify_policy_lifecycle_log_gossip_quorum_with_organization_registry(
     local_anchor: &PolicyLifecycleLogAnchorProof,
     observations: &[PolicyLifecycleLogGossipObservation],
@@ -871,6 +1023,17 @@ pub fn parse_signed_policy_lifecycle_log_gossip_organization_registry_threshold_
     Ok(transition)
 }
 
+pub fn parse_signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+    source: &str,
+) -> Result<SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceRotation, String> {
+    let rotation = serde_json::from_str(source)
+        .map_err(|error| format!("invalid signed gossip registry governance rotation: {error}"))?;
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
 pub fn parse_policy_lifecycle_log_gossip_registry_bound_quorum_report(
     source: &str,
 ) -> Result<PolicyLifecycleLogGossipRegistryBoundQuorumReport, String> {
@@ -917,6 +1080,15 @@ pub fn signed_policy_lifecycle_log_gossip_organization_registry_threshold_transi
         transition,
     )?;
     normalized_sha256(transition, "signed gossip registry threshold transition")
+}
+
+pub fn signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation_sha256(
+    rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceRotation,
+) -> Result<String, String> {
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+        rotation,
+    )?;
+    normalized_sha256(rotation, "signed gossip registry governance rotation")
 }
 
 pub fn validate_policy_lifecycle_log_gossip_organization_registry(
@@ -1198,6 +1370,42 @@ pub fn validate_signed_policy_lifecycle_log_gossip_organization_registry_thresho
     Ok(())
 }
 
+pub fn validate_signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+    rotation: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernanceRotation,
+) -> Result<(), String> {
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.from_generation.checked_add(1) != Some(rotation.to_generation)
+        || rotation.old_governance_sha256 == rotation.new_governance_sha256
+    {
+        return Err("invalid gossip registry governance rotation invariants".into());
+    }
+    validate_slug(&rotation.registry_id, "gossip organization registry id")?;
+    match (
+        rotation.from_generation,
+        &rotation.previous_transition_sha256,
+    ) {
+        (0, None) => {}
+        (0, Some(_)) => return Err("initial governance rotation cannot reference history".into()),
+        (_, Some(digest)) => validate_sha256(
+            digest,
+            "previous gossip registry governance rotation SHA-256",
+        )?,
+        (_, None) => return Err("advanced governance rotation requires chain evidence".into()),
+    }
+    validate_sha256(
+        &rotation.old_governance_sha256,
+        "old gossip registry governance SHA-256",
+    )?;
+    validate_sha256(
+        &rotation.new_governance_sha256,
+        "new gossip registry governance SHA-256",
+    )?;
+    validate_approval_shape(&rotation.old_approvals, "old")?;
+    validate_approval_shape(&rotation.new_approvals, "new")?;
+    Ok(())
+}
+
 pub fn validate_policy_lifecycle_log_gossip_registry_bound_quorum_report(
     report: &PolicyLifecycleLogGossipRegistryBoundQuorumReport,
 ) -> Result<(), String> {
@@ -1404,6 +1612,50 @@ pub fn signed_policy_lifecycle_log_gossip_organization_registry_threshold_transi
                         "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
                     }
                 }
+            }
+        }
+    })
+}
+
+pub fn signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation_json_schema()
+-> Value {
+    let approval = json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["authority_id", "public_key", "signature"],
+        "properties": {
+            "authority_id": slug_schema(),
+            "public_key": key_schema(),
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    });
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-policy-lifecycle-log-gossip-organization-registry-governance-rotation-v1.json",
+        "title": "Old-and-new quorum approved gossip registry governance rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "registry_id", "from_generation", "to_generation",
+            "previous_transition_sha256", "old_governance_sha256",
+            "new_governance_sha256", "rotated_at_unix", "algorithm",
+            "old_approvals", "new_approvals"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "registry_id": slug_schema(),
+            "from_generation": {"type": "integer", "minimum": 0},
+            "to_generation": {"type": "integer", "minimum": 1},
+            "previous_transition_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "old_governance_sha256": digest_schema(),
+            "new_governance_sha256": digest_schema(),
+            "rotated_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "old_approvals": {
+                "type": "array", "minItems": 2,
+                "maxItems": MAXIMUM_GOVERNANCE_AUTHORITIES, "items": approval.clone()
+            },
+            "new_approvals": {
+                "type": "array", "minItems": 2,
+                "maxItems": MAXIMUM_GOVERNANCE_AUTHORITIES, "items": approval
             }
         }
     })
@@ -1640,6 +1892,137 @@ fn threshold_transition_payload(
         effective_at_unix,
     })
     .map_err(|error| format!("serializing governed gossip registry transition: {error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn governance_rotation_payload(
+    registry_id: &str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_transition_sha256: Option<&str>,
+    old_governance_sha256: &str,
+    new_governance_sha256: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&GovernanceRotationPayload {
+        domain: GOVERNANCE_ROTATION_DOMAIN,
+        registry_id,
+        from_generation,
+        to_generation,
+        previous_transition_sha256,
+        old_governance_sha256,
+        new_governance_sha256,
+        rotated_at_unix,
+    })
+    .map_err(|error| format!("serializing gossip registry governance rotation: {error}"))
+}
+
+fn sign_governance_approvals(
+    governance: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernance,
+    signers: &[(String, [u8; 32])],
+    payload: &[u8],
+    label: &str,
+) -> Result<Vec<PolicyLifecycleLogGossipRegistryThresholdApproval>, String> {
+    if signers.len() < governance.minimum_approvals as usize
+        || signers.len() > governance.authorities.len()
+    {
+        return Err(format!(
+            "{label} governance rotation quorum is insufficient"
+        ));
+    }
+    let mut ids = HashSet::new();
+    let mut keys = HashSet::new();
+    let mut approvals = Vec::with_capacity(signers.len());
+    for (authority_id, secret) in signers {
+        if !ids.insert(authority_id.as_str()) {
+            return Err(format!("duplicate {label} governance authority identity"));
+        }
+        let key = SigningKey::from_bytes(secret);
+        let public_key = hex_encode(&key.verifying_key().to_bytes());
+        if !keys.insert(public_key.clone()) {
+            return Err(format!("duplicate {label} governance authority key"));
+        }
+        let trusted = governance
+            .authorities
+            .binary_search_by(|entry| entry.authority_id.as_str().cmp(authority_id))
+            .ok()
+            .map(|index| &governance.authorities[index])
+            .ok_or_else(|| format!("untrusted {label} governance authority {authority_id:?}"))?;
+        if trusted.public_key != public_key {
+            return Err(format!("{label} governance authority key substitution"));
+        }
+        approvals.push(PolicyLifecycleLogGossipRegistryThresholdApproval {
+            authority_id: authority_id.clone(),
+            public_key,
+            signature: hex_encode(&key.sign(payload).to_bytes()),
+        });
+    }
+    approvals.sort_by(|left, right| left.authority_id.cmp(&right.authority_id));
+    Ok(approvals)
+}
+
+fn verify_governance_approvals(
+    governance: &SignedPolicyLifecycleLogGossipOrganizationRegistryGovernance,
+    approvals: &[PolicyLifecycleLogGossipRegistryThresholdApproval],
+    payload: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    if approvals.len() < governance.minimum_approvals as usize {
+        return Err(format!(
+            "{label} governance rotation quorum is insufficient"
+        ));
+    }
+    validate_approval_shape(approvals, label)?;
+    for approval in approvals {
+        let trusted = governance
+            .authorities
+            .binary_search_by(|entry| entry.authority_id.cmp(&approval.authority_id))
+            .ok()
+            .map(|index| &governance.authorities[index])
+            .ok_or_else(|| format!("untrusted {label} governance rotation approval"))?;
+        if trusted.public_key != approval.public_key {
+            return Err(format!(
+                "{label} governance rotation approval key substitution"
+            ));
+        }
+        let key = hex_decode::<32>(&approval.public_key, "governance rotation public key")?;
+        let signature = Signature::from_bytes(&hex_decode::<64>(
+            &approval.signature,
+            "governance rotation signature",
+        )?);
+        VerifyingKey::from_bytes(&key)
+            .map_err(|error| format!("invalid governance rotation public key: {error}"))?
+            .verify_strict(payload, &signature)
+            .map_err(|_| format!("{label} governance rotation approval verification failed"))?;
+    }
+    Ok(())
+}
+
+fn validate_approval_shape(
+    approvals: &[PolicyLifecycleLogGossipRegistryThresholdApproval],
+    label: &str,
+) -> Result<(), String> {
+    if approvals.len() < 2 || approvals.len() > MAXIMUM_GOVERNANCE_AUTHORITIES {
+        return Err(format!(
+            "{label} governance approval set must contain 2 to 100 members"
+        ));
+    }
+    let mut previous = None;
+    let mut keys = HashSet::new();
+    for approval in approvals {
+        validate_slug(&approval.authority_id, "governance rotation authority id")?;
+        validate_public_key(&approval.public_key, "governance rotation public key")?;
+        hex_decode::<64>(&approval.signature, "governance rotation signature")?;
+        if previous.is_some_and(|id: &String| id >= &approval.authority_id)
+            || !keys.insert(approval.public_key.as_str())
+        {
+            return Err(format!(
+                "{label} governance approvals require ordered distinct identities and keys"
+            ));
+        }
+        previous = Some(&approval.authority_id);
+    }
+    Ok(())
 }
 
 fn validate_governance_authorities(
@@ -1922,6 +2305,11 @@ mod tests {
             false
         );
         assert_eq!(
+            signed_policy_lifecycle_log_gossip_organization_registry_governance_rotation_json_schema()
+                ["additionalProperties"],
+            false
+        );
+        assert_eq!(
             policy_lifecycle_log_gossip_registry_bound_quorum_report_json_schema()["additionalProperties"],
             false
         );
@@ -2040,6 +2428,102 @@ mod tests {
                 Some(&trust),
                 &"a".repeat(64),
                 2_000,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn governance_rotation_requires_old_and_successor_quorums() {
+        let root = [81; 32];
+        let old_a = [82; 32];
+        let old_b = [83; 32];
+        let new_a = [84; 32];
+        let new_b = [85; 32];
+        let initial = new_policy_lifecycle_log_gossip_organization_registry(
+            "production-gossip",
+            &SigningKey::from_bytes(&root).verifying_key().to_bytes(),
+        )
+        .unwrap();
+        let authorities = |pairs: &[(&str, [u8; 32])]| {
+            pairs
+                .iter()
+                .map(
+                    |(id, secret)| PolicyLifecycleLogGossipRegistryGovernanceAuthority {
+                        authority_id: (*id).into(),
+                        public_key: hex_encode(
+                            &SigningKey::from_bytes(secret).verifying_key().to_bytes(),
+                        ),
+                    },
+                )
+                .collect()
+        };
+        let old = sign_policy_lifecycle_log_gossip_organization_registry_governance(
+            &initial,
+            &root,
+            2,
+            authorities(&[("old-a", old_a), ("old-b", old_b)]),
+            1_000,
+        )
+        .unwrap();
+        let new = sign_policy_lifecycle_log_gossip_organization_registry_governance(
+            &initial,
+            &root,
+            2,
+            authorities(&[("new-a", new_a), ("new-b", new_b)]),
+            2_000,
+        )
+        .unwrap();
+        let rotation = sign_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+            &initial,
+            &old,
+            &new,
+            &[("old-a".into(), old_a), ("old-b".into(), old_b)],
+            &[("new-a".into(), new_a), ("new-b".into(), new_b)],
+            3_000,
+        )
+        .unwrap();
+        let rotated = apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+            &initial, &old, &new, &rotation,
+        )
+        .unwrap();
+        assert_eq!(rotated.generation, 1);
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+                &rotated, &old, &new, &rotation,
+            )
+            .is_err()
+        );
+        let mut old_tampered = rotation.clone();
+        old_tampered.old_approvals[0].signature = "0".repeat(128);
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+                &initial,
+                &old,
+                &new,
+                &old_tampered,
+            )
+            .is_err()
+        );
+        let mut new_tampered = rotation;
+        new_tampered.new_approvals.pop();
+        assert!(
+            apply_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+                &initial,
+                &old,
+                &new,
+                &new_tampered,
+            )
+            .is_err()
+        );
+        assert!(
+            sign_policy_lifecycle_log_gossip_organization_registry_governance_rotation(
+                &initial,
+                &old,
+                &new,
+                &[("old-a".into(), old_a)],
+                &[("new-a".into(), new_a), ("new-b".into(), new_b)],
+                3_000,
             )
             .is_err()
         );

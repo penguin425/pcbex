@@ -329,6 +329,11 @@
     {
       "id": "lifecycle-gossip-registry-threshold-governance",
       "release": "v1.362.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-gossip-registry-governance-rotation",
+      "release": "v1.363.0",
       "status": "current"
     }
   ]

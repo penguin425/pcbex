@@ -562,6 +562,18 @@ inputs:
     description: Optional threshold-approved admission, suspension, or revocation applied before quorum verification; requires registry governance.
     required: false
     default: ""
+  policy-lifecycle-log-gossip-organization-registry-governance-rotation-old:
+    description: Retained root-signed governance policy for an optional dual-quorum governance rotation.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-organization-registry-governance-rotation-new:
+    description: Successor root-signed governance policy for an optional dual-quorum governance rotation.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-organization-registry-governance-rotation:
+    description: Optional old-and-new quorum approved governance rotation applied before threshold transitions and quorum verification.
+    required: false
+    default: ""
   policy-lifecycle-log-gossip-minimum-organizations:
     description: Minimum distinct organizations required by the public-log gossip quorum.
     required: false
@@ -1140,6 +1152,9 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-authority-key-rotation }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-governance }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-threshold-transition }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_OLD: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-governance-rotation-old }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-governance-rotation-new }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-governance-rotation }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.policy-lifecycle-log-gossip-minimum-organizations }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.policy-lifecycle-log-remote-gossip-endpoints }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.policy-lifecycle-log-remote-gossip-organization-ids }}
