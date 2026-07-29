@@ -1573,6 +1573,35 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("optional"),
         ),
+        open_world_tool(
+            "request_remote_policy_lifecycle_checkpoint_witness",
+            "Request remote policy lifecycle witness",
+            "POST one accepted lifecycle checkpoint identity to bounded HTTPS and immediately verify the signed response against a separately trusted key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "trust_state", "endpoint", "public_key",
+                    "evaluated_at_unix", "output", "receipt_output"
+                ],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "endpoint": {"type": "string", "pattern": "^https://"},
+                    "public_key": {"type": "string"},
+                    "bearer_token_env": {
+                        "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "timeout_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 600, "default": 30
+                    },
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "receipt_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
         tool(
             "compare_schematics",
             "Compare KiCad schematics",
@@ -2216,6 +2245,9 @@ fn call_tool(
         }
         "verify_policy_lifecycle_checkpoint_witnesses" => {
             verify_policy_lifecycle_checkpoint_witnesses(arguments, cancellation)?
+        }
+        "request_remote_policy_lifecycle_checkpoint_witness" => {
+            request_remote_policy_lifecycle_checkpoint_witness(arguments, cancellation)?
         }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
@@ -4256,6 +4288,71 @@ fn verify_policy_lifecycle_checkpoint_witnesses(
     ))
 }
 
+fn request_remote_policy_lifecycle_checkpoint_witness(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "endpoint",
+            "public_key",
+            "bearer_token_env",
+            "timeout_seconds",
+            "evaluated_at_unix",
+            "output",
+            "receipt_output",
+        ],
+    )?;
+    let evaluated_at_unix = arguments
+        .get("evaluated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "evaluated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let receipt_output = required_string(&arguments, "receipt_output")?;
+    let mut command = vec![
+        "request-policy-lifecycle-checkpoint-witness".into(),
+        required_string(&arguments, "trust_state")?,
+        "--endpoint".into(),
+        required_string(&arguments, "endpoint")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+    ];
+    optional_option(
+        &arguments,
+        "bearer_token_env",
+        "--bearer-token-env",
+        &mut command,
+    )?;
+    optional_positive_integer(
+        &arguments,
+        "timeout_seconds",
+        "--timeout-seconds",
+        &mut command,
+    )?;
+    command.extend([
+        "--evaluated-at-unix".into(),
+        evaluated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+        "--receipt-output".into(),
+        receipt_output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let witness = read_json_if_present(Path::new(&output));
+    let receipt = read_json_if_present(Path::new(&receipt_output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "receipt_output": receipt_output,
+            "witness": witness,
+            "receipt": receipt
+        }),
+    ))
+}
+
 fn compare_schematics(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -5465,7 +5562,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 56);
+        assert_eq!(tools.len(), 57);
         let named = |name: &str| {
             tools
                 .iter()
@@ -5671,6 +5768,19 @@ mod tests {
             named("verify_policy_lifecycle_checkpoint_witnesses")["inputSchema"]["properties"]["minimum_witnesses"]
                 ["default"],
             2
+        );
+        assert_eq!(
+            named("request_remote_policy_lifecycle_checkpoint_witness")["inputSchema"]["properties"]
+                ["endpoint"]["pattern"],
+            "^https://"
+        );
+        assert_eq!(
+            named("request_remote_policy_lifecycle_checkpoint_witness")["annotations"]["openWorldHint"],
+            true
+        );
+        assert_eq!(
+            named("request_remote_policy_lifecycle_checkpoint_witness")["execution"]["taskSupport"],
+            "forbidden"
         );
         assert_eq!(
             named("verify_policy_lifecycle_checkpoint")["inputSchema"]["properties"]["accepted_at_unix"]

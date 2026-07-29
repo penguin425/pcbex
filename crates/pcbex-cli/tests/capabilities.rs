@@ -75,6 +75,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "validate-policy-lifecycle-key-rotation",
         "witness-policy-lifecycle-checkpoint",
         "verify-policy-lifecycle-checkpoint-witnesses",
+        "request-policy-lifecycle-checkpoint-witness",
         "validate-policy-lifecycle-checkpoint-witness",
         "validate-policy-lifecycle-witness-quorum",
         "compare-schematics",

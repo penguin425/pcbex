@@ -81,6 +81,8 @@ write_output policy-lifecycle-trust-state ""
 write_output policy-lifecycle-checkpoint-accepted ""
 write_output policy-lifecycle-witness-quorum ""
 write_output policy-lifecycle-witness-quorum-met ""
+write_output policy-lifecycle-remote-witnesses ""
+write_output policy-lifecycle-remote-witness-receipts ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -946,23 +948,45 @@ fi
 
 policy_lifecycle_witness_quorum=""
 policy_lifecycle_witness_quorum_met=""
-lifecycle_witness_inputs=0
-for value in \
-  "${PCBEX_POLICY_LIFECYCLE_WITNESS_FILES:-}" \
-  "${PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES:-}" \
-  "${PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX:-}"; do
-  if [[ -n "$value" ]]; then ((lifecycle_witness_inputs += 1)); fi
-done
-if ((lifecycle_witness_inputs != 0 && lifecycle_witness_inputs != 3)); then
-  echo "lifecycle witness files, public keys, and evaluated-at timestamp must be supplied together" >&2
+policy_lifecycle_remote_witnesses=""
+policy_lifecycle_remote_witness_receipts=""
+lifecycle_local_witness_inputs=0
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_WITNESS_FILES:-}" ]]; then
+  ((lifecycle_local_witness_inputs += 1))
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES:-}" ]]; then
+  ((lifecycle_local_witness_inputs += 1))
+fi
+if ((lifecycle_local_witness_inputs == 1)); then
+  echo "local lifecycle witness files and public keys must be supplied together" >&2
+  exit 2
+fi
+remote_lifecycle_witness_inputs=0
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_ENDPOINTS:-}" ]]; then
+  ((remote_lifecycle_witness_inputs += 1))
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_PUBLIC_KEY_FILES:-}" ]]; then
+  ((remote_lifecycle_witness_inputs += 1))
+fi
+if ((remote_lifecycle_witness_inputs == 1)); then
+  echo "remote lifecycle witness endpoints and public keys must be supplied together" >&2
+  exit 2
+fi
+lifecycle_witness_configured=false
+if ((lifecycle_local_witness_inputs == 2 || remote_lifecycle_witness_inputs == 2)); then
+  lifecycle_witness_configured=true
+fi
+if [[ "$lifecycle_witness_configured" == "true" ]] \
+  && [[ -z "${PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX:-}" ]]; then
+  echo "lifecycle witness verification requires an explicit evaluated-at timestamp" >&2
   exit 2
 fi
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_WITNESS_TRUST_STATE:-}" ]] \
-  && ((lifecycle_witness_inputs != 3)); then
+  && [[ "$lifecycle_witness_configured" != "true" ]]; then
   echo "policy lifecycle witness trust state requires complete witness inputs" >&2
   exit 2
 fi
-if ((lifecycle_witness_inputs == 3)); then
+if [[ "$lifecycle_witness_configured" == "true" ]]; then
   lifecycle_witness_state="${PCBEX_POLICY_LIFECYCLE_WITNESS_TRUST_STATE:-$policy_lifecycle_trust_state}"
   if [[ -z "$lifecycle_witness_state" ]]; then
     echo "policy lifecycle witness verification requires an explicit or newly verified trust state" >&2
@@ -974,16 +998,56 @@ if ((lifecycle_witness_inputs == 3)); then
     --minimum-witnesses "${PCBEX_POLICY_LIFECYCLE_WITNESS_MINIMUM:-2}" \
     --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX" \
     --output "$policy_lifecycle_witness_quorum")
-  while IFS= read -r witness; do
-    if [[ -n "$witness" ]]; then
-      lifecycle_witness_arguments+=(--witness "$witness")
+  if ((lifecycle_local_witness_inputs == 2)); then
+    while IFS= read -r witness; do
+      if [[ -n "$witness" ]]; then
+        lifecycle_witness_arguments+=(--witness "$witness")
+      fi
+    done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_FILES"
+    while IFS= read -r public_key; do
+      if [[ -n "$public_key" ]]; then
+        lifecycle_witness_arguments+=(--public-key "$public_key")
+      fi
+    done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES"
+  fi
+  if ((remote_lifecycle_witness_inputs == 2)); then
+    mapfile -t lifecycle_remote_endpoints < <(
+      printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_ENDPOINTS" | sed '/^[[:space:]]*$/d'
+    )
+    mapfile -t lifecycle_remote_public_keys < <(
+      printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
+    )
+    if ((${#lifecycle_remote_endpoints[@]} == 0 \
+      || ${#lifecycle_remote_endpoints[@]} != ${#lifecycle_remote_public_keys[@]} \
+      || ${#lifecycle_remote_endpoints[@]} > 10)); then
+      echo "remote lifecycle witness endpoints and public keys must form 1 to 10 pairs" >&2
+      exit 2
     fi
-  done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_FILES"
-  while IFS= read -r public_key; do
-    if [[ -n "$public_key" ]]; then
-      lifecycle_witness_arguments+=(--public-key "$public_key")
-    fi
-  done <<< "$PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES"
+    policy_lifecycle_remote_witnesses="${artifact_dir}/policy-lifecycle-remote-witnesses"
+    policy_lifecycle_remote_witness_receipts="${artifact_dir}/policy-lifecycle-remote-witness-receipts"
+    mkdir -p "$policy_lifecycle_remote_witnesses" "$policy_lifecycle_remote_witness_receipts"
+    for index in "${!lifecycle_remote_endpoints[@]}"; do
+      remote_witness_path="${policy_lifecycle_remote_witnesses}/witness-${index}.json"
+      remote_receipt_path="${policy_lifecycle_remote_witness_receipts}/receipt-${index}.json"
+      remote_lifecycle_arguments=(request-policy-lifecycle-checkpoint-witness \
+        "$lifecycle_witness_state" \
+        --endpoint "${lifecycle_remote_endpoints[$index]}" \
+        --public-key "${lifecycle_remote_public_keys[$index]}" \
+        --timeout-seconds "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_TIMEOUT_SECONDS:-30}" \
+        --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX" \
+        --output "$remote_witness_path" \
+        --receipt-output "$remote_receipt_path")
+      if [[ -n "${PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_BEARER_TOKEN:-}" ]]; then
+        remote_lifecycle_arguments+=(--bearer-token-env PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_BEARER_TOKEN)
+      fi
+      if [[ "${PCBEX_TEST_ALLOW_HTTP_LOOPBACK:-false}" == "true" ]]; then
+        remote_lifecycle_arguments+=(--allow-http-loopback)
+      fi
+      "$PCBEX_BINARY" "${remote_lifecycle_arguments[@]}"
+      lifecycle_witness_arguments+=(--witness "$remote_witness_path")
+      lifecycle_witness_arguments+=(--public-key "${lifecycle_remote_public_keys[$index]}")
+    done
+  fi
   "$PCBEX_BINARY" "${lifecycle_witness_arguments[@]}"
   policy_lifecycle_witness_quorum_met="$(
     python3 -c \
@@ -1419,6 +1483,8 @@ write_output policy-lifecycle-trust-state "$policy_lifecycle_trust_state"
 write_output policy-lifecycle-checkpoint-accepted "$policy_lifecycle_checkpoint_accepted"
 write_output policy-lifecycle-witness-quorum "$policy_lifecycle_witness_quorum"
 write_output policy-lifecycle-witness-quorum-met "$policy_lifecycle_witness_quorum_met"
+write_output policy-lifecycle-remote-witnesses "$policy_lifecycle_remote_witnesses"
+write_output policy-lifecycle-remote-witness-receipts "$policy_lifecycle_remote_witness_receipts"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

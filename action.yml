@@ -446,6 +446,22 @@ inputs:
     description: Explicit Unix timestamp used to enforce witness freshness.
     required: false
     default: ""
+  policy-lifecycle-remote-witness-endpoints:
+    description: Newline-separated HTTPS lifecycle-witness service endpoints.
+    required: false
+    default: ""
+  policy-lifecycle-remote-witness-public-key-files:
+    description: Newline-separated trusted public-key files paired with remote lifecycle-witness endpoints.
+    required: false
+    default: ""
+  policy-lifecycle-remote-witness-bearer-token:
+    description: Optional Bearer token sent only to configured lifecycle-witness services.
+    required: false
+    default: ""
+  policy-lifecycle-remote-witness-timeout-seconds:
+    description: End-to-end timeout for each remote lifecycle-witness request.
+    required: false
+    default: "30"
   fail-on-policy-lifecycle-witness-quorum:
     description: Fail unless the independent lifecycle checkpoint witness quorum is met.
     required: false
@@ -761,6 +777,12 @@ outputs:
   policy-lifecycle-witness-quorum-met:
     description: Whether the configured independent lifecycle witness threshold was met.
     value: ${{ steps.analyze.outputs.policy-lifecycle-witness-quorum-met }}
+  policy-lifecycle-remote-witnesses:
+    description: Directory containing verified remote lifecycle-witness responses.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-remote-witnesses }}
+  policy-lifecycle-remote-witness-receipts:
+    description: Directory containing hash-bound remote lifecycle-witness transport receipts.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-remote-witness-receipts }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -931,6 +953,10 @@ runs:
         PCBEX_POLICY_LIFECYCLE_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-witness-public-key-files }}
         PCBEX_POLICY_LIFECYCLE_WITNESS_MINIMUM: ${{ inputs.policy-lifecycle-witness-minimum }}
         PCBEX_POLICY_LIFECYCLE_WITNESS_EVALUATED_AT_UNIX: ${{ inputs.policy-lifecycle-witness-evaluated-at-unix }}
+        PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_ENDPOINTS: ${{ inputs.policy-lifecycle-remote-witness-endpoints }}
+        PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-remote-witness-public-key-files }}
+        PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_BEARER_TOKEN: ${{ inputs.policy-lifecycle-remote-witness-bearer-token }}
+        PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_TIMEOUT_SECONDS: ${{ inputs.policy-lifecycle-remote-witness-timeout-seconds }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
