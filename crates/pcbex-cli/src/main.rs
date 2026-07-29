@@ -73,6 +73,7 @@ use std::{
 mod manufacturing_feedback;
 mod mcp;
 mod policy_pack;
+mod remote_policy;
 mod remote_witness;
 
 use manufacturing_feedback::{
@@ -90,6 +91,7 @@ use policy_pack::{
     policy_trust_state_json_schema, sign_policy_pack, signed_policy_pack_json_schema,
     verify_signed_policy_pack,
 };
+use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_witness::{remote_witness_receipt_json_schema, request_remote_witness};
 
 #[derive(Parser)]
@@ -594,6 +596,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed central policy-registry receipt JSON Schema.
+    RemotePolicyPackReceiptSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Prepare a complete, digest-bound request for an AI schematic reviewer.
     PrepareAiReview {
         input: PathBuf,
@@ -964,6 +971,32 @@ enum Command {
         state_output: Option<PathBuf>,
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+    /// Fetch and verify a signed policy pack from a bounded HTTPS registry.
+    FetchPolicyPack {
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        public_key: CompactPath,
+        /// Previously accepted state used to reject revision rollback and equivocation.
+        #[arg(long)]
+        baseline_state: Option<CompactPath>,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+        timeout_seconds: u64,
+        #[arg(long)]
+        signed_output: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        state_output: CompactPath,
+        #[arg(long)]
+        receipt_output: CompactPath,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
     },
     /// Upgrade an older board JSON document to the current schema.
     Migrate {
@@ -2145,6 +2178,9 @@ fn main() -> Result<()> {
         Command::RemoteWitnessReceiptSchema { output } => {
             write_or_print_json(&remote_witness_receipt_json_schema(), output.as_ref())?;
         }
+        Command::RemotePolicyPackReceiptSchema { output } => {
+            write_or_print_json(&remote_policy_pack_receipt_json_schema(), output.as_ref())?;
+        }
         Command::PrepareAiReview {
             input,
             electrical_review,
@@ -3166,6 +3202,68 @@ fn main() -> Result<()> {
             eprintln!(
                 "verified policy pack {} revision {} signed by {}",
                 signed.policy_pack.id, signed.policy_pack.revision, signed.signer_id
+            );
+        }
+        Command::FetchPolicyPack {
+            endpoint,
+            public_key,
+            baseline_state,
+            bearer_token_env,
+            timeout_seconds,
+            signed_output,
+            output,
+            state_output,
+            receipt_output,
+            allow_http_loopback,
+        } => {
+            let mut paths = vec![
+                public_key.0.as_ref(),
+                signed_output.0.as_ref(),
+                output.0.as_ref(),
+                state_output.0.as_ref(),
+                receipt_output.0.as_ref(),
+            ];
+            if let Some(baseline) = &baseline_state {
+                paths.push(baseline.0.as_ref());
+            }
+            require_distinct_outputs(paths.into_iter().map(Some), "remote policy pack")?;
+            for path in [
+                signed_output.0.as_ref(),
+                output.0.as_ref(),
+                state_output.0.as_ref(),
+                receipt_output.0.as_ref(),
+            ] {
+                if path.exists() {
+                    bail!("refusing to overwrite existing output {}", path.display());
+                }
+            }
+            let trusted = read_hex_key(&public_key, "trusted policy registry public key")?;
+            let baseline = baseline_state
+                .as_deref()
+                .map(load_policy_trust_state)
+                .transpose()?;
+            let fetched = fetch_remote_policy_pack(
+                &endpoint,
+                &trusted,
+                baseline.as_ref(),
+                bearer_token_env.as_deref(),
+                timeout_seconds,
+                allow_http_loopback,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let signed_json = format!("{}\n", serde_json::to_string_pretty(&fetched.signed)?);
+            let policy_json = format!("{}\n", serde_json::to_string_pretty(&fetched.policy_pack)?);
+            let state_json = format!("{}\n", serde_json::to_string_pretty(&fetched.trust_state)?);
+            let receipt_json = format!("{}\n", serde_json::to_string_pretty(&fetched.receipt)?);
+            write_new_file_set(&[
+                (signed_output.0.as_ref(), signed_json.as_str()),
+                (output.0.as_ref(), policy_json.as_str()),
+                (state_output.0.as_ref(), state_json.as_str()),
+                (receipt_output.0.as_ref(), receipt_json.as_str()),
+            ])?;
+            eprintln!(
+                "fetched and verified policy pack {} revision {} signed by {}",
+                fetched.policy_pack.id, fetched.policy_pack.revision, fetched.signed.signer_id
             );
         }
         Command::Migrate { input, output } => {
@@ -4269,6 +4367,36 @@ fn write_new_file(path: &Path, contents: &str, private: bool) -> Result<()> {
         .with_context(|| format!("creating {}", path.display()))?;
     file.write_all(contents.as_bytes())
         .with_context(|| format!("writing {}", path.display()))
+}
+
+fn write_new_file_set(files: &[(&Path, &str)]) -> Result<()> {
+    let mut created = Vec::with_capacity(files.len());
+    for (path, contents) in files {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o644);
+        }
+        let mut file = match options.open(path) {
+            Ok(file) => file,
+            Err(error) => {
+                for created_path in created {
+                    let _ = fs::remove_file(created_path);
+                }
+                return Err(error).with_context(|| format!("creating {}", path.display()));
+            }
+        };
+        created.push(*path);
+        if let Err(error) = file.write_all(contents.as_bytes()) {
+            for created_path in created {
+                let _ = fs::remove_file(created_path);
+            }
+            return Err(error).with_context(|| format!("writing {}", path.display()));
+        }
+    }
+    Ok(())
 }
 
 fn read_secret_key(path: &Path) -> Result<[u8; 32]> {

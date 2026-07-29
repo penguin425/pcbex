@@ -627,6 +627,37 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("forbidden"),
         ),
+        open_world_tool(
+            "fetch_policy_pack",
+            "Fetch organization policy pack",
+            "Fetch a signed policy pack from a bounded HTTPS registry, verify its Ed25519 signature, and reject rollback or equivocation.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "endpoint", "public_key", "signed_output", "output",
+                    "state_output", "receipt_output"
+                ],
+                "properties": {
+                    "endpoint": {"type": "string", "pattern": "^https://"},
+                    "public_key": {"type": "string"},
+                    "baseline_state": {"type": "string"},
+                    "bearer_token_env": {
+                        "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "timeout_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 600, "default": 30
+                    },
+                    "signed_output": {"type": "string"},
+                    "output": {"type": "string"},
+                    "state_output": {"type": "string"},
+                    "receipt_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
         tool(
             "analyze_kicad",
             "Analyze KiCad board",
@@ -1196,7 +1227,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("forbidden"),
         ),
-        tool(
+        open_world_tool(
             "request_remote_approval_transparency_witness",
             "Request remote approval-log witness",
             "POST one checkpoint to a bounded HTTPS witness service and verify its response against a trusted key.",
@@ -1252,6 +1283,28 @@ fn tool(
     definition
 }
 
+fn open_world_tool(
+    name: &str,
+    title: &str,
+    description: &str,
+    input_schema: Value,
+    read_only: bool,
+    destructive: bool,
+    task_support: Option<&str>,
+) -> Value {
+    let mut definition = tool(
+        name,
+        title,
+        description,
+        input_schema,
+        read_only,
+        destructive,
+        task_support,
+    );
+    definition["annotations"]["openWorldHint"] = Value::Bool(true);
+    definition
+}
+
 fn call_tool(
     params: Option<&Value>,
     cancellation: Option<&AtomicBool>,
@@ -1280,6 +1333,7 @@ fn call_tool(
             json!({"ok": true, "profiles": dfm_profiles()})
         }
         "verify_policy_pack" => verify_policy_pack(arguments, cancellation)?,
+        "fetch_policy_pack" => fetch_policy_pack(arguments, cancellation)?,
         "analyze_kicad" => analyze_kicad(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
@@ -1395,6 +1449,78 @@ fn verify_policy_pack(
     Ok(execution_result(
         execution,
         json!({"output": output, "policy_pack": policy_pack, "trust_state": trust_state}),
+    ))
+}
+
+fn fetch_policy_pack(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "endpoint",
+            "public_key",
+            "baseline_state",
+            "bearer_token_env",
+            "timeout_seconds",
+            "signed_output",
+            "output",
+            "state_output",
+            "receipt_output",
+        ],
+    )?;
+    let signed_output = required_string(&arguments, "signed_output")?;
+    let output = required_string(&arguments, "output")?;
+    let state_output = required_string(&arguments, "state_output")?;
+    let receipt_output = required_string(&arguments, "receipt_output")?;
+    let mut command = vec![
+        "fetch-policy-pack".into(),
+        "--endpoint".into(),
+        required_string(&arguments, "endpoint")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--signed-output".into(),
+        signed_output.clone(),
+        "--output".into(),
+        output.clone(),
+        "--state-output".into(),
+        state_output.clone(),
+        "--receipt-output".into(),
+        receipt_output.clone(),
+    ];
+    optional_option(
+        &arguments,
+        "baseline_state",
+        "--baseline-state",
+        &mut command,
+    )?;
+    optional_option(
+        &arguments,
+        "bearer_token_env",
+        "--bearer-token-env",
+        &mut command,
+    )?;
+    if let Some(timeout) = arguments.get("timeout_seconds") {
+        let timeout = timeout
+            .as_u64()
+            .filter(|timeout| (1..=600).contains(timeout))
+            .ok_or_else(|| json!({"detail": "timeout_seconds must be an integer from 1 to 600"}))?;
+        command.extend(["--timeout-seconds".into(), timeout.to_string()]);
+    }
+    let execution = execute(&command, cancellation)?;
+    Ok(execution_result(
+        execution,
+        json!({
+            "signed_output": signed_output,
+            "output": output,
+            "state_output": state_output,
+            "receipt_output": receipt_output,
+            "signed_policy_pack": read_json_if_present(Path::new(&signed_output)),
+            "policy_pack": read_json_if_present(Path::new(&output)),
+            "trust_state": read_json_if_present(Path::new(&state_output)),
+            "receipt": read_json_if_present(Path::new(&receipt_output))
+        }),
     ))
 }
 
@@ -2773,7 +2899,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 29);
         let named = |name: &str| {
             tools
                 .iter()
@@ -2886,6 +3012,18 @@ mod tests {
             named("create_approval_transparency_public_anchor")["inputSchema"]["properties"]["log_checkpoints"]
                 ["maxItems"],
             100000
+        );
+        assert_eq!(
+            named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],
+            600
+        );
+        assert_eq!(
+            named("fetch_policy_pack")["annotations"]["openWorldHint"],
+            true
+        );
+        assert_eq!(
+            named("request_remote_approval_transparency_witness")["annotations"]["openWorldHint"],
+            true
         );
         let verify_policy = tools
             .iter()

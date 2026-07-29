@@ -41,6 +41,8 @@ write_output comment-body ""
 write_output violation-count ""
 write_output regression false
 write_output verified-policy-trust-state ""
+write_output fetched-signed-policy-pack ""
+write_output policy-pack-fetch-receipt ""
 write_output manufacturing-feedback ""
 write_output manufacturing-feedback-passed ""
 write_output schematic-diff ""
@@ -67,24 +69,33 @@ if [[ -n "${PCBEX_FAB:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_POLICY_PACK:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then ((profile_selections += 1)); fi
+if [[ -n "${PCBEX_POLICY_PACK_URL:-}" ]]; then ((profile_selections += 1)); fi
 if ((profile_selections > 1)); then
   echo "physical policy inputs are mutually exclusive" >&2
   exit 2
 fi
-has_signed_policy_pack=false
+has_authenticated_policy_pack=false
 has_policy_public_key=false
-if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then has_signed_policy_pack=true; fi
+if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" || -n "${PCBEX_POLICY_PACK_URL:-}" ]]; then
+  has_authenticated_policy_pack=true
+fi
 if [[ -n "${PCBEX_POLICY_PUBLIC_KEY:-}" ]]; then has_policy_public_key=true; fi
-if [[ "$has_signed_policy_pack" != "$has_policy_public_key" ]]; then
-  echo "PCBEX_SIGNED_POLICY_PACK and PCBEX_POLICY_PUBLIC_KEY must be supplied together" >&2
+if [[ "$has_authenticated_policy_pack" != "$has_policy_public_key" ]]; then
+  echo "a signed local or remote policy pack and PCBEX_POLICY_PUBLIC_KEY must be supplied together" >&2
   exit 2
 fi
-if [[ -n "${PCBEX_POLICY_TRUST_STATE:-}" && "$has_signed_policy_pack" != "true" ]]; then
-  echo "PCBEX_POLICY_TRUST_STATE requires PCBEX_SIGNED_POLICY_PACK" >&2
+if [[ -n "${PCBEX_POLICY_TRUST_STATE:-}" && "$has_authenticated_policy_pack" != "true" ]]; then
+  echo "PCBEX_POLICY_TRUST_STATE requires a signed local or remote policy pack" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_PACK_BEARER_TOKEN:-}" && -z "${PCBEX_POLICY_PACK_URL:-}" ]]; then
+  echo "PCBEX_POLICY_PACK_BEARER_TOKEN requires PCBEX_POLICY_PACK_URL" >&2
   exit 2
 fi
 effective_policy_pack="${PCBEX_POLICY_PACK:-}"
 verified_policy_trust_state=""
+fetched_signed_policy_pack=""
+policy_pack_fetch_receipt=""
 if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then
   effective_policy_pack="${artifact_dir}/verified-policy-pack.json"
   verified_policy_trust_state="${artifact_dir}/verified-policy-trust-state.json"
@@ -97,6 +108,30 @@ if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then
     verify_arguments+=(--baseline-state "$PCBEX_POLICY_TRUST_STATE")
   fi
   "$PCBEX_BINARY" "${verify_arguments[@]}"
+fi
+if [[ -n "${PCBEX_POLICY_PACK_URL:-}" ]]; then
+  fetched_signed_policy_pack="${artifact_dir}/fetched-signed-policy-pack.json"
+  effective_policy_pack="${artifact_dir}/verified-policy-pack.json"
+  verified_policy_trust_state="${artifact_dir}/verified-policy-trust-state.json"
+  policy_pack_fetch_receipt="${artifact_dir}/policy-pack-fetch-receipt.json"
+  fetch_arguments=(fetch-policy-pack \
+    --endpoint "$PCBEX_POLICY_PACK_URL" \
+    --public-key "$PCBEX_POLICY_PUBLIC_KEY" \
+    --timeout-seconds "${PCBEX_POLICY_PACK_TIMEOUT_SECONDS:-30}" \
+    --signed-output "$fetched_signed_policy_pack" \
+    --output "$effective_policy_pack" \
+    --state-output "$verified_policy_trust_state" \
+    --receipt-output "$policy_pack_fetch_receipt")
+  if [[ -n "${PCBEX_POLICY_TRUST_STATE:-}" ]]; then
+    fetch_arguments+=(--baseline-state "$PCBEX_POLICY_TRUST_STATE")
+  fi
+  if [[ -n "${PCBEX_POLICY_PACK_BEARER_TOKEN:-}" ]]; then
+    fetch_arguments+=(--bearer-token-env PCBEX_POLICY_PACK_BEARER_TOKEN)
+  fi
+  if [[ "${PCBEX_POLICY_PACK_ALLOW_HTTP_LOOPBACK:-false}" == "true" ]]; then
+    fetch_arguments+=(--allow-http-loopback)
+  fi
+  "$PCBEX_BINARY" "${fetch_arguments[@]}"
 fi
 if [[ -n "${PCBEX_FAB:-}" ]]; then
   analysis_arguments+=(--fab "$PCBEX_FAB")
@@ -543,6 +578,8 @@ write_output comment-body "$comment_body"
 write_output violation-count "$violation_count"
 write_output regression "$regression"
 write_output verified-policy-trust-state "$verified_policy_trust_state"
+write_output fetched-signed-policy-pack "$fetched_signed_policy_pack"
+write_output policy-pack-fetch-receipt "$policy_pack_fetch_receipt"
 write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
 write_output schematic-diff "$schematic_diff"
