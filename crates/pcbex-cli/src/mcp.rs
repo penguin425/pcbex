@@ -307,6 +307,7 @@ impl McpServer {
                     | "apply_policy_deployment_rollback"
                     | "verify_policy_rollback_recovery"
                     | "close_rollback_incident"
+                    | "append_policy_incident_ledger"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1232,6 +1233,33 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "append_policy_incident_ledger",
+            "Append policy incident ledger",
+            "Append one closed rollback incident to a hash chain, recompute recovery metrics, and flag repeated failed revisions for human suspension review without automatic suspension.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollback", "failed_verification", "recovery", "closure", "output"
+                ],
+                "properties": {
+                    "rollback": {"type": "string"},
+                    "failed_verification": {"type": "string"},
+                    "recovery": {"type": "string"},
+                    "closure": {"type": "string"},
+                    "baseline_ledger": {"type": "string"},
+                    "suspension_threshold": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_no_suspension_review": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -1847,6 +1875,7 @@ fn call_tool(
             sign_rollback_incident_acknowledgment(arguments, cancellation)?
         }
         "close_rollback_incident" => close_rollback_incident(arguments, cancellation)?,
+        "append_policy_incident_ledger" => append_policy_incident_ledger(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -3181,6 +3210,70 @@ fn close_rollback_incident(
     ))
 }
 
+fn append_policy_incident_ledger(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollback",
+            "failed_verification",
+            "recovery",
+            "closure",
+            "baseline_ledger",
+            "suspension_threshold",
+            "output",
+            "summary_output",
+            "require_no_suspension_review",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "append-policy-incident-ledger".into(),
+        required_string(&arguments, "rollback")?,
+        "--failed-verification".into(),
+        required_string(&arguments, "failed_verification")?,
+        "--recovery".into(),
+        required_string(&arguments, "recovery")?,
+        "--closure".into(),
+        required_string(&arguments, "closure")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_option(
+        &arguments,
+        "baseline_ledger",
+        "--baseline-ledger",
+        &mut command,
+    )?;
+    if let Some(value) = arguments.get("suspension_threshold") {
+        let value = value
+            .as_u64()
+            .filter(|value| (2..=100).contains(value))
+            .ok_or_else(|| json!({"detail": "suspension_threshold must be 2 to 100"}))?;
+        command.extend(["--suspension-threshold".into(), value.to_string()]);
+    }
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_no_suspension_review",
+        "--require-no-suspension-review",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let ledger = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "ledger": ledger}),
+    ))
+}
+
 fn compare_schematics(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -4374,7 +4467,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 44);
+        assert_eq!(tools.len(), 45);
         let named = |name: &str| {
             tools
                 .iter()
@@ -4505,6 +4598,15 @@ mod tests {
         assert_eq!(
             named("close_rollback_incident")["inputSchema"]["properties"]["require_closed"]["default"],
             false
+        );
+        assert_eq!(
+            named("append_policy_incident_ledger")["inputSchema"]["properties"]["suspension_threshold"]
+                ["default"],
+            2
+        );
+        assert_eq!(
+            named("append_policy_incident_ledger")["execution"]["taskSupport"],
+            "optional"
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],

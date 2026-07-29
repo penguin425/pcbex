@@ -282,6 +282,22 @@ inputs:
     description: Fail unless clean recovery has an independent trusted operator acknowledgment.
     required: false
     default: "false"
+  record-policy-incident:
+    description: Append the closed rollback incident to a hash-chained operational ledger.
+    required: false
+    default: "false"
+  policy-incident-ledger-baseline:
+    description: Optional previously retained policy-incident ledger.
+    required: false
+    default: ""
+  policy-incident-suspension-threshold:
+    description: Repeated incidents for one failed revision before human suspension review is required.
+    required: false
+    default: "2"
+  fail-on-policy-incident-suspension-review:
+    description: Fail when repeated incidents require a human decision about suspending a policy revision.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -554,6 +570,12 @@ outputs:
   rollback-incident-status:
     description: Whether the rollback incident is closed.
     value: ${{ steps.analyze.outputs.rollback-incident-status }}
+  policy-incident-ledger:
+    description: Hash-chained policy rollback incident ledger.
+    value: ${{ steps.analyze.outputs.policy-incident-ledger }}
+  policy-incident-suspension-review-required:
+    description: Whether repeated failed revisions require human suspension review.
+    value: ${{ steps.analyze.outputs.policy-incident-suspension-review-required }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -688,6 +710,9 @@ runs:
         PCBEX_POLICY_ROLLBACK_RECOVERY_VERIFIED_AT_UNIX: ${{ inputs.policy-rollback-recovery-verified-at-unix }}
         PCBEX_ROLLBACK_INCIDENT_ACKNOWLEDGMENT: ${{ inputs.rollback-incident-acknowledgment }}
         PCBEX_ROLLBACK_INCIDENT_CLOSED_AT_UNIX: ${{ inputs.rollback-incident-closed-at-unix }}
+        PCBEX_RECORD_POLICY_INCIDENT: ${{ inputs.record-policy-incident }}
+        PCBEX_POLICY_INCIDENT_LEDGER_BASELINE: ${{ inputs.policy-incident-ledger-baseline }}
+        PCBEX_POLICY_INCIDENT_SUSPENSION_THRESHOLD: ${{ inputs.policy-incident-suspension-threshold }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -766,6 +791,7 @@ runs:
         PCBEX_POLICY_DEPLOYMENT_ROLLBACK_STATUS: ${{ steps.analyze.outputs.policy-deployment-rollback-status }}
         PCBEX_POLICY_ROLLBACK_RECOVERY_VERIFIED: ${{ steps.analyze.outputs.policy-rollback-recovery-verified }}
         PCBEX_ROLLBACK_INCIDENT_STATUS: ${{ steps.analyze.outputs.rollback-incident-status }}
+        PCBEX_POLICY_INCIDENT_SUSPENSION_REVIEW_REQUIRED: ${{ steps.analyze.outputs.policy-incident-suspension-review-required }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -784,6 +810,7 @@ runs:
         PCBEX_FAIL_ON_POLICY_DEPLOYMENT_ROLLBACK: ${{ inputs.fail-on-policy-deployment-rollback }}
         PCBEX_FAIL_ON_POLICY_ROLLBACK_RECOVERY: ${{ inputs.fail-on-policy-rollback-recovery }}
         PCBEX_FAIL_ON_ROLLBACK_INCIDENT_CLOSURE: ${{ inputs.fail-on-rollback-incident-closure }}
+        PCBEX_FAIL_ON_POLICY_INCIDENT_SUSPENSION_REVIEW: ${{ inputs.fail-on-policy-incident-suspension-review }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -860,5 +887,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_ROLLBACK_INCIDENT_CLOSURE" == "true" && "$PCBEX_ROLLBACK_INCIDENT_STATUS" != "incident_closed" ]]; then
           echo "::error::pcbex rollback incident lacks clean recovery and independent operator acknowledgment"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_INCIDENT_SUSPENSION_REVIEW" == "true" && "$PCBEX_POLICY_INCIDENT_SUSPENSION_REVIEW_REQUIRED" != "false" ]]; then
+          echo "::error::pcbex policy incident history requires human suspension review"
           exit 1
         fi

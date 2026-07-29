@@ -244,6 +244,11 @@
     {
       "id": "verified-rollback-incident-closure",
       "release": "v1.345.0",
+      "status": "released"
+    },
+    {
+      "id": "hash-chained-policy-incident-ledger",
+      "release": "v1.346.0",
       "status": "current"
     }
   ]

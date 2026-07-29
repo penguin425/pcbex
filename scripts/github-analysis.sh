@@ -68,6 +68,8 @@ write_output policy-rollback-recovery ""
 write_output policy-rollback-recovery-verified ""
 write_output rollback-incident-closure ""
 write_output rollback-incident-status ""
+write_output policy-incident-ledger ""
+write_output policy-incident-suspension-review-required ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -700,6 +702,38 @@ if ((closure_inputs == 2)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+policy_incident_ledger=""
+policy_incident_suspension_review_required=""
+if [[ "${PCBEX_RECORD_POLICY_INCIDENT:-false}" == "true" ]]; then
+  if [[ -z "$policy_deployment_rollback" || -z "$policy_rollback_recovery" || -z "$rollback_incident_closure" || -z "${recovery_failed_verification:-}" ]]; then
+    echo "policy incident retention requires rollback, failed verification, clean recovery, and closure from this run" >&2
+    exit 2
+  fi
+  policy_incident_ledger="${artifact_dir}/policy-incident-ledger.json"
+  policy_incident_ledger_summary="${artifact_dir}/policy-incident-ledger.md"
+  incident_arguments=(append-policy-incident-ledger \
+    "$policy_deployment_rollback" \
+    --failed-verification "$recovery_failed_verification" \
+    --recovery "$policy_rollback_recovery" \
+    --closure "$rollback_incident_closure" \
+    --suspension-threshold "${PCBEX_POLICY_INCIDENT_SUSPENSION_THRESHOLD:-2}" \
+    --output "$policy_incident_ledger" \
+    --summary-output "$policy_incident_ledger_summary")
+  if [[ -n "${PCBEX_POLICY_INCIDENT_LEDGER_BASELINE:-}" ]]; then
+    incident_arguments+=(--baseline-ledger "$PCBEX_POLICY_INCIDENT_LEDGER_BASELINE")
+  fi
+  "$PCBEX_BINARY" "${incident_arguments[@]}"
+  policy_incident_suspension_review_required="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["requires_human_suspension_review"]).lower())' \
+      "$policy_incident_ledger"
+  )"
+  {
+    printf '\n'
+    cat "$policy_incident_ledger_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 has_schematic=false
 has_baseline_schematic=false
 if [[ -n "${PCBEX_SCHEMATIC:-}" ]]; then has_schematic=true; fi
@@ -1114,6 +1148,8 @@ write_output policy-rollback-recovery "$policy_rollback_recovery"
 write_output policy-rollback-recovery-verified "$policy_rollback_recovery_verified"
 write_output rollback-incident-closure "$rollback_incident_closure"
 write_output rollback-incident-status "$rollback_incident_status"
+write_output policy-incident-ledger "$policy_incident_ledger"
+write_output policy-incident-suspension-review-required "$policy_incident_suspension_review_required"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

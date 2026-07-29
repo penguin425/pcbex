@@ -1044,6 +1044,29 @@ rollback-approver self-closure fail closed. Automatic incident closure is
 always false. MCP exposes all three operations, and the Action accepts
 `policy-rollback-recovery-*` and `rollback-incident-*` inputs.
 
+Retain each closed rollback in an append-only operational ledger:
+
+```sh
+pcbex append-policy-incident-ledger policy-deployment-rollback.json \
+  --failed-verification policy-deployment-verification.failed.json \
+  --recovery policy-rollback-recovery.json \
+  --closure rollback-incident-closure.json \
+  --baseline-ledger policy-incident-ledger.previous.json \
+  --suspension-threshold 2 \
+  --output policy-incident-ledger.json \
+  --summary-output policy-incident-ledger.md
+```
+
+Every entry binds the failed verification, rollback, recovery, and closure
+digests, then chains to the previous entry. The ledger recomputes time to
+rollback, clean recovery, and closure, plus per-revision incident counts.
+Repeated failure of the same revision and policy digest produces a human
+suspension-review candidate at the retained threshold. It never suspends a
+policy automatically. Duplicate incidents, reordered or truncated entries,
+duration tampering, policy identity changes, and threshold changes fail
+closed. MCP exposes `append_policy_incident_ledger`; the Action can opt in with
+`record-policy-incident` and retain the resulting ledger as evidence.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1071,7 +1094,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.345.0
+    uses: penguin425/pcbex@v1.346.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2308,7 +2331,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.345.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.346.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
