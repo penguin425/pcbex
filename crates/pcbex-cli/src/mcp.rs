@@ -304,6 +304,7 @@ impl McpServer {
                     | "verify_canary_completion"
                     | "advance_policy_deployment"
                     | "verify_policy_deployment"
+                    | "apply_policy_deployment_rollback"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1088,6 +1089,62 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "sign_policy_deployment_rollback",
+            "Sign production rollback approval",
+            "Sign an explicit human rollback approval bound to the exact failed production verification, failed revision, and retained restore target.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "deployment", "verification", "approved_at_unix",
+                    "private_key", "signer_id", "reason", "ticket", "output"
+                ],
+                "properties": {
+                    "deployment": {"type": "string"},
+                    "verification": {"type": "string"},
+                    "approved_at_unix": {"type": "integer", "minimum": 0},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "ticket": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            Some("forbidden"),
+        ),
+        tool(
+            "apply_policy_deployment_rollback",
+            "Apply dual-control production rollback",
+            "Re-verify distinct trusted human approvals over failed production evidence and retain a hash-bound state restoring only the recorded prior revision.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "deployment", "verification", "active_policy_pack",
+                    "approvals", "recorded_at_unix", "output"
+                ],
+                "properties": {
+                    "deployment": {"type": "string"},
+                    "verification": {"type": "string"},
+                    "active_policy_pack": {"type": "string"},
+                    "approvals": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "minimum_approvals": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_applied": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -1690,6 +1747,12 @@ fn call_tool(
         "verify_canary_completion" => verify_canary_completion(arguments, cancellation)?,
         "advance_policy_deployment" => advance_policy_deployment(arguments, cancellation)?,
         "verify_policy_deployment" => verify_policy_deployment(arguments, cancellation)?,
+        "sign_policy_deployment_rollback" => {
+            sign_policy_deployment_rollback(arguments, cancellation)?
+        }
+        "apply_policy_deployment_rollback" => {
+            apply_policy_deployment_rollback(arguments, cancellation)?
+        }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2707,6 +2770,123 @@ fn verify_policy_deployment(
     Ok(execution_result(
         execution,
         json!({"output": output, "verification": verification}),
+    ))
+}
+
+fn sign_policy_deployment_rollback(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "deployment",
+            "verification",
+            "approved_at_unix",
+            "private_key",
+            "signer_id",
+            "reason",
+            "ticket",
+            "output",
+        ],
+    )?;
+    let approved_at = arguments
+        .get("approved_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "approved_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-policy-deployment-rollback".into(),
+        required_string(&arguments, "deployment")?,
+        required_string(&arguments, "verification")?,
+        "--approved-at-unix".into(),
+        approved_at.to_string(),
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--reason".into(),
+        required_string(&arguments, "reason")?,
+        "--ticket".into(),
+        required_string(&arguments, "ticket")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let approval = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "approval": approval}),
+    ))
+}
+
+fn apply_policy_deployment_rollback(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "deployment",
+            "verification",
+            "active_policy_pack",
+            "approvals",
+            "minimum_approvals",
+            "recorded_at_unix",
+            "output",
+            "summary_output",
+            "require_applied",
+        ],
+    )?;
+    let approvals = required_string_array(&arguments, "approvals", false)?;
+    if approvals.len() > 100 {
+        return Err(json!({"detail": "approvals cannot exceed 100 entries"}));
+    }
+    let recorded_at = arguments
+        .get("recorded_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "recorded_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "apply-policy-deployment-rollback".into(),
+        required_string(&arguments, "deployment")?,
+        required_string(&arguments, "verification")?,
+        "--active-policy-pack".into(),
+        required_string(&arguments, "active_policy_pack")?,
+    ];
+    for approval in approvals {
+        command.extend(["--approval".into(), approval]);
+    }
+    if let Some(value) = arguments.get("minimum_approvals") {
+        let value = value
+            .as_u64()
+            .filter(|value| (2..=100).contains(value))
+            .ok_or_else(|| json!({"detail": "minimum_approvals must be 2 to 100"}))?;
+        command.extend(["--minimum-approvals".into(), value.to_string()]);
+    }
+    command.extend([
+        "--recorded-at-unix".into(),
+        recorded_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_applied",
+        "--require-applied",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rollback": state}),
     ))
 }
 
@@ -3903,7 +4083,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 39);
+        assert_eq!(tools.len(), 41);
         let named = |name: &str| {
             tools
                 .iter()
@@ -4004,6 +4184,19 @@ mod tests {
         );
         assert_eq!(
             named("verify_policy_deployment")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("sign_policy_deployment_rollback")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("apply_policy_deployment_rollback")["inputSchema"]["properties"]["minimum_approvals"]
+                ["default"],
+            2
+        );
+        assert_eq!(
+            named("apply_policy_deployment_rollback")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(

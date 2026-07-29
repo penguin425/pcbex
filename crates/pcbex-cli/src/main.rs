@@ -76,6 +76,7 @@ mod canary_completion;
 mod manufacturing_feedback;
 mod mcp;
 mod policy_deployment;
+mod policy_deployment_rollback;
 mod policy_deployment_verification;
 mod policy_pack;
 mod policy_recommendation;
@@ -101,6 +102,12 @@ use manufacturing_feedback::{
 use policy_deployment::{
     advance_policy_deployment, parse_policy_deployment_state, policy_deployment_state_json_schema,
     render_policy_deployment_summary,
+};
+use policy_deployment_rollback::{
+    apply_policy_deployment_rollback, parse_policy_deployment_rollback_state,
+    parse_signed_policy_deployment_rollback, policy_deployment_rollback_state_json_schema,
+    render_policy_deployment_rollback_summary, sign_policy_deployment_rollback,
+    signed_policy_deployment_rollback_json_schema,
 };
 use policy_deployment_verification::{
     parse_policy_deployment_verification, policy_deployment_verification_json_schema,
@@ -622,6 +629,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed production-rollback approval JSON Schema.
+    SignedPolicyDeploymentRollbackSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed production-rollback approval.
+    ValidatePolicyDeploymentRollbackApproval {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed dual-control production-rollback state JSON Schema.
+    PolicyDeploymentRollbackStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a retained production-rollback state.
+    ValidatePolicyDeploymentRollbackState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -861,6 +890,42 @@ enum Command {
         /// Fail after retaining evidence unless the deployment is verified.
         #[arg(long)]
         require_passed: bool,
+    },
+    /// Sign an explicit rollback approval over failed production verification.
+    SignPolicyDeploymentRollback {
+        deployment: PathBuf,
+        verification: PathBuf,
+        #[arg(long)]
+        approved_at_unix: u64,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Apply a verification-bound rollback after a trusted dual-control quorum.
+    ApplyPolicyDeploymentRollback {
+        deployment: PathBuf,
+        verification: PathBuf,
+        #[arg(long)]
+        active_policy_pack: PathBuf,
+        #[arg(long = "approval", required = true)]
+        approvals: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_approvals: u32,
+        #[arg(long)]
+        recorded_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        require_applied: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2373,6 +2438,32 @@ fn main() -> Result<()> {
                 parse_policy_deployment_verification(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
+        Command::SignedPolicyDeploymentRollbackSchema { output } => {
+            write_or_print_json(
+                &signed_policy_deployment_rollback_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyDeploymentRollbackApproval { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let approval =
+                parse_signed_policy_deployment_rollback(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(approval)?, output.as_ref())?;
+        }
+        Command::PolicyDeploymentRollbackStateSchema { output } => {
+            write_or_print_json(
+                &policy_deployment_rollback_state_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyDeploymentRollbackState { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state =
+                parse_policy_deployment_rollback_state(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -3232,6 +3323,100 @@ fn main() -> Result<()> {
             );
             if require_passed && !report.deployment_verified {
                 bail!("post-deployment verification requires dual-control rollback");
+            }
+        }
+        Command::SignPolicyDeploymentRollback {
+            deployment,
+            verification,
+            approved_at_unix,
+            private_key,
+            signer_id,
+            reason,
+            ticket,
+            output,
+        } => {
+            let deployment_source = fs::read_to_string(&deployment)
+                .with_context(|| format!("reading {}", deployment.display()))?;
+            let deployment =
+                parse_policy_deployment_state(&deployment_source).map_err(anyhow::Error::msg)?;
+            let verification_source = fs::read_to_string(&verification)
+                .with_context(|| format!("reading {}", verification.display()))?;
+            let verification = parse_policy_deployment_verification(&verification_source)
+                .map_err(anyhow::Error::msg)?;
+            let secret = read_hex_key(&private_key, "deployment rollback private key")?;
+            let approval = sign_policy_deployment_rollback(
+                &deployment,
+                &verification,
+                approved_at_unix,
+                &reason,
+                &ticket,
+                &signer_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&approval)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!("signed policy deployment rollback as {signer_id}");
+        }
+        Command::ApplyPolicyDeploymentRollback {
+            deployment,
+            verification,
+            active_policy_pack,
+            approvals,
+            minimum_approvals,
+            recorded_at_unix,
+            output,
+            summary_output,
+            require_applied,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy deployment rollback",
+            )?;
+            if approvals.len() > 100 {
+                bail!("policy deployment rollback accepts at most 100 approvals");
+            }
+            let deployment_source = fs::read_to_string(&deployment)
+                .with_context(|| format!("reading {}", deployment.display()))?;
+            let deployment =
+                parse_policy_deployment_state(&deployment_source).map_err(anyhow::Error::msg)?;
+            let verification_source = fs::read_to_string(&verification)
+                .with_context(|| format!("reading {}", verification.display()))?;
+            let verification = parse_policy_deployment_verification(&verification_source)
+                .map_err(anyhow::Error::msg)?;
+            let active_policy = load_policy_pack(&active_policy_pack)?.0;
+            let approvals = approvals
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_policy_deployment_rollback(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let state = apply_policy_deployment_rollback(
+                &deployment,
+                &verification,
+                &active_policy,
+                &approvals,
+                minimum_approvals,
+                recorded_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            let summary = render_policy_deployment_rollback_summary(&state);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "policy deployment rollback: revision {} restored from failed revision {}",
+                state.active_revision, state.failed_revision
+            );
+            if require_applied && !state.rollback_applied {
+                bail!("policy deployment rollback was not applied");
             }
         }
         Command::RecordSimulationEvidence {
