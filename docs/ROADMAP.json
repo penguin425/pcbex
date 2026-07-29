@@ -219,6 +219,11 @@
     {
       "id": "bound-canary-monitoring-evidence",
       "release": "v1.340.0",
+      "status": "released"
+    },
+    {
+      "id": "dual-control-canary-completion",
+      "release": "v1.341.0",
       "status": "current"
     }
   ]

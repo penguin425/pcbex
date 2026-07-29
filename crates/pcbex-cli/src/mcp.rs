@@ -300,6 +300,8 @@ impl McpServer {
                     | "sign_rollout_approval"
                     | "verify_rollout_approvals"
                     | "record_canary_monitoring"
+                    | "sign_canary_completion"
+                    | "verify_canary_completion"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -946,6 +948,65 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "sign_canary_completion",
+            "Sign canary completion decision",
+            "Sign one explicit promote or rollback decision over exact bound canary monitoring evidence.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollout", "monitoring", "authorization", "decision",
+                    "decided_at_unix", "private_key", "signer_id",
+                    "reason", "ticket", "output"
+                ],
+                "properties": {
+                    "rollout": {"type": "string"},
+                    "monitoring": {"type": "string"},
+                    "authorization": {"type": "string"},
+                    "decision": {"enum": ["promote", "rollback"]},
+                    "decided_at_unix": {"type": "integer", "minimum": 0},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "ticket": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "verify_canary_completion",
+            "Finalize canary completion",
+            "Verify a unanimous trusted human quorum over promotion or rollback; monitoring failures permit rollback only.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollout", "monitoring", "authorization", "policy_pack",
+                    "decisions", "output"
+                ],
+                "properties": {
+                    "rollout": {"type": "string"},
+                    "monitoring": {"type": "string"},
+                    "authorization": {"type": "string"},
+                    "policy_pack": {"type": "string"},
+                    "decisions": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "minimum_decisions": {
+                        "type": "integer", "minimum": 2, "maximum": 100, "default": 2
+                    },
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_finalized": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -1544,6 +1605,8 @@ fn call_tool(
         "sign_rollout_approval" => sign_rollout_approval(arguments, cancellation)?,
         "verify_rollout_approvals" => verify_rollout_approvals(arguments, cancellation)?,
         "record_canary_monitoring" => record_canary_monitoring(arguments, cancellation)?,
+        "sign_canary_completion" => sign_canary_completion(arguments, cancellation)?,
+        "verify_canary_completion" => verify_canary_completion(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2272,6 +2335,124 @@ fn record_canary_monitoring(
     Ok(execution_result(
         execution,
         json!({"output": output, "monitoring": monitoring}),
+    ))
+}
+
+fn sign_canary_completion(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollout",
+            "monitoring",
+            "authorization",
+            "decision",
+            "decided_at_unix",
+            "private_key",
+            "signer_id",
+            "reason",
+            "ticket",
+            "output",
+        ],
+    )?;
+    let decision = required_string(&arguments, "decision")?;
+    if !matches!(decision.as_str(), "promote" | "rollback") {
+        return Err(json!({"detail": "decision must be promote or rollback"}));
+    }
+    let decided_at = arguments
+        .get("decided_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "decided_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-canary-completion".into(),
+        required_string(&arguments, "rollout")?,
+        required_string(&arguments, "monitoring")?,
+        required_string(&arguments, "authorization")?,
+        "--decision".into(),
+        decision,
+        "--decided-at-unix".into(),
+        decided_at.to_string(),
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--reason".into(),
+        required_string(&arguments, "reason")?,
+        "--ticket".into(),
+        required_string(&arguments, "ticket")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let decision = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "decision": decision}),
+    ))
+}
+
+fn verify_canary_completion(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollout",
+            "monitoring",
+            "authorization",
+            "policy_pack",
+            "decisions",
+            "minimum_decisions",
+            "output",
+            "summary_output",
+            "require_finalized",
+        ],
+    )?;
+    let decisions = required_string_array(&arguments, "decisions", false)?;
+    if decisions.len() > 100 {
+        return Err(json!({"detail": "decisions cannot exceed 100 entries"}));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-canary-completion".into(),
+        required_string(&arguments, "rollout")?,
+        required_string(&arguments, "monitoring")?,
+        required_string(&arguments, "authorization")?,
+        "--policy-pack".into(),
+        required_string(&arguments, "policy_pack")?,
+    ];
+    for decision in decisions {
+        command.extend(["--decision".into(), decision]);
+    }
+    if let Some(value) = arguments.get("minimum_decisions") {
+        let value = value
+            .as_u64()
+            .filter(|value| (2..=100).contains(value))
+            .ok_or_else(|| json!({"detail": "minimum_decisions must be 2 to 100"}))?;
+        command.extend(["--minimum-decisions".into(), value.to_string()]);
+    }
+    command.extend(["--output".into(), output.clone()]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_finalized",
+        "--require-finalized",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let completion = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "completion": completion}),
     ))
 }
 
@@ -3468,7 +3649,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 35);
+        assert_eq!(tools.len(), 37);
         let named = |name: &str| {
             tools
                 .iter()
@@ -3542,6 +3723,14 @@ mod tests {
         assert_eq!(
             named("record_canary_monitoring")["inputSchema"]["properties"]["project_ids"]["maxItems"],
             100
+        );
+        assert_eq!(
+            named("sign_canary_completion")["inputSchema"]["properties"]["decision"]["enum"][0],
+            "promote"
+        );
+        assert_eq!(
+            named("verify_canary_completion")["inputSchema"]["properties"]["minimum_decisions"]["default"],
+            2
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],

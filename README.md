@@ -857,6 +857,39 @@ Passing evidence only sets `promotion_eligible: true`; it always retains
 `record_canary_monitoring`, and the Action provides equivalent retained outputs
 and an opt-in `fail-on-canary-monitoring` gate.
 
+Promotion or rollback is then finalized by a separate unanimous human quorum:
+
+```sh
+pcbex sign-canary-completion policy-rollout.json \
+  canary-monitoring.json \
+  canary-rollout-authorization.json \
+  --decision promote \
+  --decided-at-unix 1785287300 \
+  --private-key engineer-a.key \
+  --signer-id engineer-a \
+  --reason "Bound monitoring passed without regression." \
+  --ticket HW-ROLLOUT-42 \
+  --output completion-a.json
+
+pcbex verify-canary-completion policy-rollout.json \
+  canary-monitoring.json \
+  canary-rollout-authorization.json \
+  --policy-pack organization-policy-pack.json \
+  --decision completion-a.json \
+  --decision completion-b.json \
+  --output canary-completion.json \
+  --summary-output canary-completion.md \
+  --require-finalized
+```
+
+Each Ed25519 signature binds the exact monitoring and authorization digests,
+rollout and policy identities, final action, decision time, reason, ticket, and
+signer. Signers and keys must be distinct and trusted. Promotion is impossible
+when monitoring requires rollback; mixed promotion/rollback votes never
+finalize. The completion report continues to declare
+`automatic_promotion: false`. MCP and the repository Action expose the same
+two-stage signing and verification boundary.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -884,7 +917,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.340.0
+    uses: penguin425/pcbex@v1.341.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2121,7 +2154,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.340.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.341.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

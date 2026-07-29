@@ -138,6 +138,22 @@ inputs:
     description: Fail unless complete bound canary monitoring is eligible for human promotion review.
     required: false
     default: "false"
+  canary-completion-monitoring-report:
+    description: Optional existing bound monitoring report; defaults to monitoring produced in this run.
+    required: false
+    default: ""
+  canary-completion-decision-files:
+    description: Newline-separated signed human promotion or rollback decisions.
+    required: false
+    default: ""
+  canary-completion-minimum-decisions:
+    description: Minimum distinct trusted human decisions required to finalize the canary.
+    required: false
+    default: "2"
+  fail-on-canary-completion:
+    description: Fail unless a unanimous trusted canary completion quorum is finalized.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -362,6 +378,15 @@ outputs:
   canary-monitoring-passed:
     description: Whether monitoring passed without permitting automatic promotion.
     value: ${{ steps.analyze.outputs.canary-monitoring-passed }}
+  canary-completion:
+    description: Trusted unanimous canary promotion or rollback completion report.
+    value: ${{ steps.analyze.outputs.canary-completion }}
+  canary-completion-finalized:
+    description: Whether the explicit canary completion decision is finalized.
+    value: ${{ steps.analyze.outputs.canary-completion-finalized }}
+  canary-completion-decision:
+    description: Final promote or rollback decision, when finalized.
+    value: ${{ steps.analyze.outputs.canary-completion-decision }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -466,6 +491,9 @@ runs:
         PCBEX_CANARY_MONITORING_BASELINE_ANALYSIS: ${{ inputs.canary-monitoring-baseline-analysis }}
         PCBEX_CANARY_MONITORING_OBSERVED_ANALYSIS: ${{ inputs.canary-monitoring-observed-analysis }}
         PCBEX_CANARY_MONITORING_OBSERVED_AT_UNIX: ${{ inputs.canary-monitoring-observed-at-unix }}
+        PCBEX_CANARY_COMPLETION_MONITORING_REPORT: ${{ inputs.canary-completion-monitoring-report }}
+        PCBEX_CANARY_COMPLETION_DECISION_FILES: ${{ inputs.canary-completion-decision-files }}
+        PCBEX_CANARY_COMPLETION_MINIMUM_DECISIONS: ${{ inputs.canary-completion-minimum-decisions }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -538,6 +566,7 @@ runs:
         PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.approval-log-witness-quorum-met }}
         PCBEX_CANARY_ROLLOUT_AUTHORIZED: ${{ steps.analyze.outputs.canary-rollout-authorized }}
         PCBEX_CANARY_MONITORING_PASSED: ${{ steps.analyze.outputs.canary-monitoring-passed }}
+        PCBEX_CANARY_COMPLETION_FINALIZED: ${{ steps.analyze.outputs.canary-completion-finalized }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -550,6 +579,7 @@ runs:
         PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES: ${{ inputs.fail-on-approval-log-witnesses }}
         PCBEX_FAIL_ON_CANARY_ROLLOUT_AUTHORIZATION: ${{ inputs.fail-on-canary-rollout-authorization }}
         PCBEX_FAIL_ON_CANARY_MONITORING: ${{ inputs.fail-on-canary-monitoring }}
+        PCBEX_FAIL_ON_CANARY_COMPLETION: ${{ inputs.fail-on-canary-completion }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -602,5 +632,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_CANARY_MONITORING" == "true" && "$PCBEX_CANARY_MONITORING_PASSED" != "true" ]]; then
           echo "::error::pcbex canary monitoring is absent, incomplete, or requires rollback"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_CANARY_COMPLETION" == "true" && "$PCBEX_CANARY_COMPLETION_FINALIZED" != "true" ]]; then
+          echo "::error::pcbex canary completion lacks a unanimous trusted human decision"
           exit 1
         fi

@@ -177,6 +177,37 @@ jobs:
               --ticket PCBEX-CI-ROLL-1 \
               --output "build/action-rollout/approval-$engineer.json"
           done
+          target/release/pcbex verify-rollout-approvals \
+            build/action-rollout/rollout.json \
+            --policy-pack build/action-quorum/policy-pack.json \
+            --approval build/action-rollout/approval-a.json \
+            --approval build/action-rollout/approval-b.json \
+            --evaluated-at-unix 2 \
+            --output build/action-rollout/authorization.json \
+            --require-authorized
+          target/release/pcbex record-canary-monitoring \
+            build/action-rollout/rollout.json \
+            build/action-rollout/authorization.json \
+            --project-id action-controller \
+            --board examples/simple.kicad_pcb \
+            --baseline-analysis build/action-rollout/analysis-a \
+            --observed-analysis build/action-rollout/candidate \
+            --observed-at-unix 3 \
+            --output build/action-rollout/monitoring.json \
+            --require-passed
+          for engineer in a b; do
+            target/release/pcbex sign-canary-completion \
+              build/action-rollout/rollout.json \
+              build/action-rollout/monitoring.json \
+              build/action-rollout/authorization.json \
+              --decision promote \
+              --decided-at-unix 4 \
+              --private-key "build/action-quorum/engineer-$engineer.key" \
+              --signer-id "engineer-$engineer" \
+              --reason "CI bound canary monitoring passed" \
+              --ticket PCBEX-CI-ROLL-2 \
+              --output "build/action-rollout/completion-$engineer.json"
+          done
           target/release/pcbex check-schematic examples/simple.kicad_sch \
             --policy-pack build/action-quorum/policy-pack.json \
             --output build/action-quorum/electrical-review.json \
@@ -363,6 +394,11 @@ jobs:
           canary-monitoring-observed-analysis: build/action-rollout/candidate
           canary-monitoring-observed-at-unix: "3"
           fail-on-canary-monitoring: "true"
+          canary-completion-monitoring-report: build/action-rollout/monitoring.json
+          canary-completion-decision-files: |
+            build/action-rollout/completion-a.json
+            build/action-rollout/completion-b.json
+          fail-on-canary-completion: "true"
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -385,6 +421,9 @@ jobs:
           CANARY_ROLLOUT_AUTHORIZED: ${{ steps.pcbex.outputs.canary-rollout-authorized }}
           CANARY_MONITORING: ${{ steps.pcbex.outputs.canary-monitoring }}
           CANARY_MONITORING_PASSED: ${{ steps.pcbex.outputs.canary-monitoring-passed }}
+          CANARY_COMPLETION: ${{ steps.pcbex.outputs.canary-completion }}
+          CANARY_COMPLETION_FINALIZED: ${{ steps.pcbex.outputs.canary-completion-finalized }}
+          CANARY_COMPLETION_DECISION: ${{ steps.pcbex.outputs.canary-completion-decision }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
           SCHEMATIC_REVIEWER_ROUTING: ${{ steps.pcbex.outputs.schematic-reviewer-routing }}
@@ -415,6 +454,10 @@ jobs:
           test "$(jq -r '.promotion_eligible' "$CANARY_MONITORING")" = "true"
           test "$(jq -r '.automatic_promotion' "$CANARY_MONITORING")" = "false"
           test "$(jq -r '.requires_human_decision' "$CANARY_MONITORING")" = "true"
+          test "$CANARY_COMPLETION_FINALIZED" = "true"
+          test "$CANARY_COMPLETION_DECISION" = "promote"
+          test "$(jq -r '.status' "$CANARY_COMPLETION")" = "promotion_authorized"
+          test "$(jq -r '.policy.automatic_promotion' "$CANARY_COMPLETION")" = "false"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"

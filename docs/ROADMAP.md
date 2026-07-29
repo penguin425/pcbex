@@ -50,6 +50,7 @@ auditable release.
 | v1.338.0 | Multi-project policy rollout simulation | Re-analyze exact boards under a proposal-derived simulation profile before any policy deployment |
 | v1.339.0 | Dual-control canary rollout authorization | Require two trusted human signatures for a time-bound, 10%-bounded canary with mandatory rollback |
 | v1.340.0 | Bound canary monitoring evidence | Compare observed canary analyses with exact authorized baselines and fail closed to rollback |
+| v1.341.0 | Dual-control canary completion | Finalize promotion or rollback only with unanimous trusted human signatures over exact monitoring evidence |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -58,6 +59,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should focus on dual-control signatures for the explicit
-promotion or rollback decision over bound monitoring evidence. Automatic
-promotion remains forbidden.
+The next roadmap should focus on applying a finalized policy revision through
+a monotonic trust state, with a separately retained rollback revision and
+post-deployment verification.

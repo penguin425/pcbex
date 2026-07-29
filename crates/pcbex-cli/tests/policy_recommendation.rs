@@ -520,6 +520,169 @@ fn proposes_validates_and_refuses_to_overwrite_governed_policy_evidence() {
             .unwrap()
             .success()
     );
+    let completion_a = temporary.join("completion-a.json");
+    let completion_b = temporary.join("completion-b.json");
+    for (private_key, signer_id, signed) in [
+        (&key_a, "reviewer-a", &completion_a),
+        (&key_b, "reviewer-b", &completion_b),
+    ] {
+        let result = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-canary-completion")
+            .arg(&rollout)
+            .arg(&monitoring)
+            .arg(&authorization)
+            .arg("--decision")
+            .arg("promote")
+            .arg("--decided-at-unix")
+            .arg("1700")
+            .arg("--private-key")
+            .arg(private_key)
+            .arg("--signer-id")
+            .arg(signer_id)
+            .arg("--reason")
+            .arg("Bound canary monitoring passed without regression.")
+            .arg("--ticket")
+            .arg("HW-43")
+            .arg("--output")
+            .arg(signed)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+    let completion = temporary.join("completion.json");
+    let finalized = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("verify-canary-completion")
+        .arg(&rollout)
+        .arg(&monitoring)
+        .arg(&authorization)
+        .arg("--policy-pack")
+        .arg(&policy_path)
+        .arg("--decision")
+        .arg(&completion_a)
+        .arg("--decision")
+        .arg(&completion_b)
+        .arg("--output")
+        .arg(&completion)
+        .arg("--require-finalized")
+        .output()
+        .unwrap();
+    assert!(
+        finalized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&finalized.stderr)
+    );
+    let completion_document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&completion).unwrap()).unwrap();
+    assert_eq!(completion_document["status"], "promotion_authorized");
+    assert_eq!(completion_document["finalized"], true);
+    assert_eq!(completion_document["final_decision"], "promote");
+    assert_eq!(completion_document["policy"]["automatic_promotion"], false);
+    assert_eq!(
+        completion_document["policy"]["unanimous_decision_required"],
+        true
+    );
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("validate-canary-completion")
+            .arg(&completion)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let rollback_b = temporary.join("completion-rollback-b.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-canary-completion")
+            .arg(&rollout)
+            .arg(&monitoring)
+            .arg(&authorization)
+            .arg("--decision")
+            .arg("rollback")
+            .arg("--decided-at-unix")
+            .arg("1700")
+            .arg("--private-key")
+            .arg(&key_b)
+            .arg("--signer-id")
+            .arg("reviewer-b")
+            .arg("--reason")
+            .arg("Conservative rollback requested.")
+            .arg("--ticket")
+            .arg("HW-43")
+            .arg("--output")
+            .arg(&rollback_b)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let disagreement_path = temporary.join("completion-disagreement.json");
+    assert!(
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("verify-canary-completion")
+            .arg(&rollout)
+            .arg(&monitoring)
+            .arg(&authorization)
+            .arg("--policy-pack")
+            .arg(&policy_path)
+            .arg("--decision")
+            .arg(&completion_a)
+            .arg("--decision")
+            .arg(&rollback_b)
+            .arg("--output")
+            .arg(&disagreement_path)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let disagreement: serde_json::Value =
+        serde_json::from_slice(&fs::read(&disagreement_path).unwrap()).unwrap();
+    assert_eq!(disagreement["finalized"], false);
+    assert!(
+        disagreement["gate_failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure == "completion_decisions_disagree")
+    );
+    for schema_command in [
+        "signed-canary-completion-schema",
+        "canary-completion-schema",
+    ] {
+        let schema = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg(schema_command)
+            .output()
+            .unwrap();
+        assert!(schema.status.success());
+        let schema: serde_json::Value = serde_json::from_slice(&schema.stdout).unwrap();
+        assert_eq!(schema["additionalProperties"], false);
+    }
+    assert!(
+        !Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("sign-canary-completion")
+            .arg(&rollout)
+            .arg(&monitoring)
+            .arg(&authorization)
+            .arg("--decision")
+            .arg("promote")
+            .arg("--decided-at-unix")
+            .arg("2001")
+            .arg("--private-key")
+            .arg(&key_a)
+            .arg("--signer-id")
+            .arg("reviewer-a")
+            .arg("--reason")
+            .arg("Too late.")
+            .arg("--ticket")
+            .arg("HW-44")
+            .arg("--output")
+            .arg(temporary.join("late-completion.json"))
+            .status()
+            .unwrap()
+            .success()
+    );
     let expired_authorization = temporary.join("expired-canary.json");
     let expired = Command::new(env!("CARGO_BIN_EXE_pcbex"))
         .arg("verify-rollout-approvals")
