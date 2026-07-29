@@ -1533,6 +1533,55 @@ observation tuples and/or up to ten remote observer tuples, publishes quorum
 and remote transport evidence, and can fail closed with
 `fail-on-policy-lifecycle-log-gossip-quorum: "true"`.
 
+Retain each organization's observer identity across controlled key changes:
+
+```sh
+pcbex init-policy-lifecycle-log-gossip-observer-trust \
+  --organization-id independent-lab \
+  --observer-id independent-lab-ci \
+  --public-key independent-lab-gossip.pub \
+  --output independent-lab-gossip.trust.json
+
+pcbex sign-policy-lifecycle-log-gossip-observer-key-rotation \
+  independent-lab-gossip.trust.json \
+  --old-private-key independent-lab-gossip.key \
+  --new-private-key independent-lab-gossip.next.key \
+  --rotated-at-unix 1785301800 \
+  --output independent-lab-gossip.rotation.json
+
+pcbex apply-policy-lifecycle-log-gossip-observer-key-rotation \
+  independent-lab-gossip.trust.json \
+  independent-lab-gossip.rotation.json \
+  --output independent-lab-gossip.next.trust.json \
+  --public-key-output independent-lab-gossip.next.pub
+```
+
+The immutable trust state binds organization ID, observer ID, exact key
+generation, current Ed25519 key, previous rotation digest, and monotonic
+rotation time. A one-generation transition is domain-separated and requires
+both old-key authorization and proof of possession of the new key. Replay,
+fork, skipped generation, same-key replacement, identity substitution,
+wrong-old-key use, signature mutation, and time reversal fail before any
+output is written.
+
+Pass repeated `--observer-trust-state` values instead of the direct
+organization/observer/key tuples to
+`verify-policy-lifecycle-log-gossip-quorum` or pass one
+`--observer-trust-state` to remote acquisition. The resulting trust-bound
+quorum nests the complete v1.358.0 quorum and canonically records every
+observer trust-state digest, generation, identity, and current key. Remote
+transport receipts likewise bind the accepted trust-state digest and
+generation.
+
+Closed contracts are emitted by
+`policy-lifecycle-log-gossip-observer-trust-state-schema`,
+`signed-policy-lifecycle-log-gossip-observer-key-rotation-schema`, and
+`policy-lifecycle-log-gossip-trust-bound-quorum-schema`. MCP exposes
+initialize, sign, apply, and export operations as task-forbidden tools, while
+quorum verification accepts trust-state arrays. The Action accepts local and
+remote `*-gossip-*-trust-state-files` as a mutually exclusive replacement for
+direct identity/key tuples.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1560,7 +1609,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.358.0
+    uses: penguin425/pcbex@v1.359.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2797,7 +2846,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.358.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.359.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

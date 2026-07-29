@@ -84,6 +84,7 @@ mod policy_lifecycle_anchor;
 mod policy_lifecycle_checkpoint;
 mod policy_lifecycle_gossip;
 mod policy_lifecycle_gossip_quorum;
+mod policy_lifecycle_gossip_trust;
 mod policy_pack;
 mod policy_recommendation;
 mod policy_remediation;
@@ -175,6 +176,20 @@ use policy_lifecycle_gossip_quorum::{
     policy_lifecycle_log_gossip_observation_json_schema,
     policy_lifecycle_log_gossip_quorum_report_json_schema,
     verify_policy_lifecycle_log_gossip_quorum,
+};
+use policy_lifecycle_gossip_trust::{
+    apply_policy_lifecycle_log_gossip_observer_key_rotation,
+    new_policy_lifecycle_log_gossip_observer_trust_state,
+    parse_policy_lifecycle_log_gossip_observer_trust_state,
+    parse_policy_lifecycle_log_gossip_trust_bound_quorum_report,
+    parse_signed_policy_lifecycle_log_gossip_observer_key_rotation,
+    policy_lifecycle_log_gossip_observer_trust_state_json_schema,
+    policy_lifecycle_log_gossip_observer_trust_state_sha256,
+    policy_lifecycle_log_gossip_observer_trusted_public_key,
+    policy_lifecycle_log_gossip_trust_bound_quorum_report_json_schema,
+    sign_policy_lifecycle_log_gossip_observer_key_rotation,
+    signed_policy_lifecycle_log_gossip_observer_key_rotation_json_schema,
+    verify_policy_lifecycle_log_gossip_quorum_with_observer_trust_states,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -1023,6 +1038,39 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed gossip-observer trust-state JSON Schema.
+    PolicyLifecycleLogGossipObserverTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a gossip-observer trust state.
+    ValidatePolicyLifecycleLogGossipObserverTrustState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed dual-signed gossip-observer key-rotation JSON Schema.
+    SignedPolicyLifecycleLogGossipObserverKeyRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed gossip-observer key rotation.
+    ValidatePolicyLifecycleLogGossipObserverKeyRotation {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed trust-bound gossip quorum JSON Schema.
+    PolicyLifecycleLogGossipTrustBoundQuorumSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a trust-bound gossip quorum report.
+    ValidatePolicyLifecycleLogGossipTrustBoundQuorum {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1759,6 +1807,44 @@ enum Command {
         #[arg(short, long)]
         output: CompactPath,
     },
+    /// Initialize immutable organization-bound trust for one gossip observer.
+    InitPolicyLifecycleLogGossipObserverTrust {
+        #[arg(long)]
+        organization_id: String,
+        #[arg(long)]
+        observer_id: String,
+        #[arg(long)]
+        public_key: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Dual-sign a one-generation gossip-observer key transition.
+    SignPolicyLifecycleLogGossipObserverKeyRotation {
+        trust_state: PathBuf,
+        #[arg(long)]
+        old_private_key: PathBuf,
+        #[arg(long)]
+        new_private_key: PathBuf,
+        #[arg(long)]
+        rotated_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify and apply one gossip-observer key transition.
+    ApplyPolicyLifecycleLogGossipObserverKeyRotation {
+        trust_state: PathBuf,
+        rotation: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        public_key_output: PathBuf,
+    },
+    /// Validate gossip-observer trust and export its current public key.
+    ExportPolicyLifecycleLogGossipObserverPublicKey {
+        trust_state: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Verify fresh observations from distinct organizations as one gossip quorum.
     VerifyPolicyLifecycleLogGossipQuorum {
         #[arg(long)]
@@ -1766,14 +1852,20 @@ enum Command {
         #[arg(long = "observation", required = true)]
         observations: Vec<PathBuf>,
         /// Trusted organization identities paired with observations.
-        #[arg(long = "organization-id", required = true)]
+        #[arg(long = "organization-id", conflicts_with = "observer_trust_states")]
         organization_ids: Vec<String>,
         /// Trusted observer identities paired with observations.
-        #[arg(long = "observer-id", required = true)]
+        #[arg(long = "observer-id", conflicts_with = "observer_trust_states")]
         observer_ids: Vec<String>,
         /// Trusted observer keys paired with observations.
-        #[arg(long = "observer-public-key", required = true)]
+        #[arg(long = "observer-public-key", conflicts_with = "observer_trust_states")]
         observer_public_keys: Vec<PathBuf>,
+        /// Immutable organization- and identity-bound observer trust states.
+        #[arg(
+            long = "observer-trust-state",
+            conflicts_with_all = ["organization_ids", "observer_ids", "observer_public_keys"]
+        )]
+        observer_trust_states: Vec<PathBuf>,
         #[arg(long, default_value_t = 2)]
         minimum_organizations: u32,
         #[arg(long)]
@@ -1798,12 +1890,31 @@ enum Command {
         log_id: String,
         #[arg(long)]
         log_public_key: CompactPath,
-        #[arg(long)]
-        organization_id: String,
-        #[arg(long)]
-        observer_id: String,
-        #[arg(long)]
-        observer_public_key: CompactPath,
+        #[arg(
+            long,
+            required_unless_present = "observer_trust_state",
+            conflicts_with = "observer_trust_state"
+        )]
+        organization_id: Option<String>,
+        #[arg(
+            long,
+            required_unless_present = "observer_trust_state",
+            conflicts_with = "observer_trust_state"
+        )]
+        observer_id: Option<String>,
+        #[arg(
+            long,
+            required_unless_present = "observer_trust_state",
+            conflicts_with = "observer_trust_state"
+        )]
+        observer_public_key: Option<CompactPath>,
+        /// Immutable organization- and identity-bound observer trust state.
+        #[arg(
+            long,
+            required_unless_present_all = ["organization_id", "observer_id", "observer_public_key"],
+            conflicts_with_all = ["organization_id", "observer_id", "observer_public_key"]
+        )]
+        observer_trust_state: Option<CompactPath>,
         /// Environment-variable name containing an optional Bearer token.
         #[arg(long)]
         bearer_token_env: Option<String>,
@@ -3639,6 +3750,45 @@ fn main() -> Result<()> {
                 &remote_policy_lifecycle_log_gossip_receipt_json_schema(),
                 output.as_ref(),
             )?;
+        }
+        Command::PolicyLifecycleLogGossipObserverTrustStateSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_observer_trust_state_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipObserverTrustState { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state = parse_policy_lifecycle_log_gossip_observer_trust_state(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
+        Command::SignedPolicyLifecycleLogGossipObserverKeyRotationSchema { output } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_log_gossip_observer_key_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipObserverKeyRotation { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let rotation = parse_signed_policy_lifecycle_log_gossip_observer_key_rotation(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(rotation)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipTrustBoundQuorumSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_trust_bound_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipTrustBoundQuorum { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report = parse_policy_lifecycle_log_gossip_trust_bound_quorum_report(&source)
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
         Command::RecordManufacturingFeedback {
             declaration,
@@ -5928,12 +6078,143 @@ fn main() -> Result<()> {
                 report.observer_id, report.relationship
             );
         }
+        Command::InitPolicyLifecycleLogGossipObserverTrust {
+            organization_id,
+            observer_id,
+            public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(public_key.as_path()), Some(output.as_path())],
+                "policy lifecycle gossip observer trust initialization",
+            )?;
+            let key = read_hex_key(
+                &public_key,
+                "initial policy lifecycle gossip observer public key",
+            )?;
+            let state = new_policy_lifecycle_log_gossip_observer_trust_state(
+                &organization_id,
+                &observer_id,
+                &key,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "initialized lifecycle gossip observer trust {}/{} at generation 0",
+                state.organization_id, state.observer_id
+            );
+        }
+        Command::SignPolicyLifecycleLogGossipObserverKeyRotation {
+            trust_state,
+            old_private_key,
+            new_private_key,
+            rotated_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(trust_state.as_path()),
+                    Some(old_private_key.as_path()),
+                    Some(new_private_key.as_path()),
+                    Some(output.as_path()),
+                ],
+                "policy lifecycle gossip observer key rotation",
+            )?;
+            let source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state = parse_policy_lifecycle_log_gossip_observer_trust_state(&source)
+                .map_err(anyhow::Error::msg)?;
+            let old_key = read_hex_key(
+                &old_private_key,
+                "current policy lifecycle gossip observer private key",
+            )?;
+            let new_key = read_hex_key(
+                &new_private_key,
+                "new policy lifecycle gossip observer private key",
+            )?;
+            let rotation = sign_policy_lifecycle_log_gossip_observer_key_rotation(
+                &state,
+                &old_key,
+                &new_key,
+                rotated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&rotation)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed lifecycle gossip observer rotation {}/{} generation {} -> {}",
+                rotation.organization_id,
+                rotation.observer_id,
+                rotation.from_generation,
+                rotation.to_generation
+            );
+        }
+        Command::ApplyPolicyLifecycleLogGossipObserverKeyRotation {
+            trust_state,
+            rotation,
+            output,
+            public_key_output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(trust_state.as_path()),
+                    Some(rotation.as_path()),
+                    Some(output.as_path()),
+                    Some(public_key_output.as_path()),
+                ],
+                "policy lifecycle gossip observer key rotation",
+            )?;
+            let state_source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state = parse_policy_lifecycle_log_gossip_observer_trust_state(&state_source)
+                .map_err(anyhow::Error::msg)?;
+            let rotation_source = fs::read_to_string(&rotation)
+                .with_context(|| format!("reading {}", rotation.display()))?;
+            let rotation =
+                parse_signed_policy_lifecycle_log_gossip_observer_key_rotation(&rotation_source)
+                    .map_err(anyhow::Error::msg)?;
+            let next = apply_policy_lifecycle_log_gossip_observer_key_rotation(&state, &rotation)
+                .map_err(anyhow::Error::msg)?;
+            let state_document = serde_json::to_string_pretty(&next)? + "\n";
+            let key_document = format!("{}\n", next.current_public_key);
+            write_new_file_set(&[
+                (output.as_path(), state_document.as_str()),
+                (public_key_output.as_path(), key_document.as_str()),
+            ])?;
+            eprintln!(
+                "trusted lifecycle gossip observer {}/{} at generation {}",
+                next.organization_id, next.observer_id, next.generation
+            );
+        }
+        Command::ExportPolicyLifecycleLogGossipObserverPublicKey {
+            trust_state,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(trust_state.as_path()), Some(output.as_path())],
+                "policy lifecycle gossip observer trust export",
+            )?;
+            let source = fs::read_to_string(&trust_state)
+                .with_context(|| format!("reading {}", trust_state.display()))?;
+            let state = parse_policy_lifecycle_log_gossip_observer_trust_state(&source)
+                .map_err(anyhow::Error::msg)?;
+            policy_lifecycle_log_gossip_observer_trusted_public_key(&state)
+                .map_err(anyhow::Error::msg)?;
+            let key_document = format!("{}\n", state.current_public_key);
+            write_new_file_set(&[(output.as_path(), key_document.as_str())])?;
+            eprintln!(
+                "exported lifecycle gossip observer key {}/{} at generation {}",
+                state.organization_id, state.observer_id, state.generation
+            );
+        }
         Command::VerifyPolicyLifecycleLogGossipQuorum {
             local_anchor,
             observations,
             organization_ids,
             observer_ids,
             observer_public_keys,
+            observer_trust_states,
             minimum_organizations,
             log_id,
             log_public_key,
@@ -5941,12 +6222,26 @@ fn main() -> Result<()> {
             output,
             require_quorum,
         } => {
-            if observations.len() != organization_ids.len()
-                || observations.len() != observer_ids.len()
-                || observations.len() != observer_public_keys.len()
+            let direct_trust = !organization_ids.is_empty()
+                || !observer_ids.is_empty()
+                || !observer_public_keys.is_empty();
+            if direct_trust == !observer_trust_states.is_empty() {
+                bail!(
+                    "supply exactly one complete set of direct gossip observer trust or observer trust states"
+                );
+            }
+            if direct_trust
+                && (observations.len() != organization_ids.len()
+                    || observations.len() != observer_ids.len()
+                    || observations.len() != observer_public_keys.len())
+            {
+                bail!("direct policy lifecycle gossip observer trust must be paired");
+            }
+            if !observer_trust_states.is_empty()
+                && observations.len() != observer_trust_states.len()
             {
                 bail!(
-                    "policy lifecycle gossip observations, organizations, observers, and keys must be paired"
+                    "policy lifecycle gossip observations and observer trust states must be paired"
                 );
             }
             let local_source = fs::read_to_string(local_anchor.0.as_ref())
@@ -5963,33 +6258,65 @@ fn main() -> Result<()> {
                         .with_context(|| format!("parsing {}", path.display()))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let observer_keys = observer_public_keys
-                .iter()
-                .map(|path| {
-                    read_hex_key(path, "trusted policy lifecycle gossip observer public key")
-                })
-                .collect::<Result<Vec<_>>>()?;
             let trusted_log_key =
                 read_hex_key(&log_public_key, "trusted policy lifecycle public-log key")?;
-            let report = verify_policy_lifecycle_log_gossip_quorum(
-                &local,
-                &observations,
-                &organization_ids,
-                &observer_ids,
-                &observer_keys,
-                minimum_organizations,
-                &log_id,
-                &trusted_log_key,
-                evaluated_at_unix,
-            )
-            .map_err(anyhow::Error::msg)?;
-            let document = serde_json::to_string_pretty(&report)? + "\n";
+            let (document, distinct_organizations, quorum_met) = if direct_trust {
+                let observer_keys = observer_public_keys
+                    .iter()
+                    .map(|path| {
+                        read_hex_key(path, "trusted policy lifecycle gossip observer public key")
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let report = verify_policy_lifecycle_log_gossip_quorum(
+                    &local,
+                    &observations,
+                    &organization_ids,
+                    &observer_ids,
+                    &observer_keys,
+                    minimum_organizations,
+                    &log_id,
+                    &trusted_log_key,
+                    evaluated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+                (
+                    serde_json::to_string_pretty(&report)? + "\n",
+                    report.distinct_organizations,
+                    report.quorum_met,
+                )
+            } else {
+                let states = observer_trust_states
+                    .iter()
+                    .map(|path| {
+                        let source = fs::read_to_string(path)
+                            .with_context(|| format!("reading {}", path.display()))?;
+                        parse_policy_lifecycle_log_gossip_observer_trust_state(&source)
+                            .map_err(anyhow::Error::msg)
+                            .with_context(|| format!("parsing {}", path.display()))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let report = verify_policy_lifecycle_log_gossip_quorum_with_observer_trust_states(
+                    &local,
+                    &observations,
+                    &states,
+                    minimum_organizations,
+                    &log_id,
+                    &trusted_log_key,
+                    evaluated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+                (
+                    serde_json::to_string_pretty(&report)? + "\n",
+                    report.quorum.distinct_organizations,
+                    report.quorum.quorum_met,
+                )
+            };
             write_new_file_set(&[(output.0.as_ref(), document.as_str())])?;
             eprintln!(
                 "policy lifecycle public-log gossip organization quorum: {}/{}",
-                report.distinct_organizations, report.minimum_organizations
+                distinct_organizations, minimum_organizations
             );
-            if require_quorum && !report.quorum_met {
+            if require_quorum && !quorum_met {
                 bail!("policy lifecycle public-log gossip organization quorum was not met");
             }
         }
@@ -6001,6 +6328,7 @@ fn main() -> Result<()> {
             organization_id,
             observer_id,
             observer_public_key,
+            observer_trust_state,
             bearer_token_env,
             timeout_seconds,
             evaluated_at_unix,
@@ -6008,11 +6336,15 @@ fn main() -> Result<()> {
             receipt_output,
             allow_http_loopback,
         } => {
+            let observer_evidence_path = observer_public_key
+                .as_ref()
+                .map(|path| path.0.as_ref())
+                .or_else(|| observer_trust_state.as_ref().map(|path| path.0.as_ref()));
             require_distinct_outputs(
                 [
                     Some(local_anchor.0.as_ref()),
                     Some(log_public_key.0.as_ref()),
-                    Some(observer_public_key.0.as_ref()),
+                    observer_evidence_path,
                     Some(output.0.as_ref()),
                     Some(receipt_output.0.as_ref()),
                 ],
@@ -6024,10 +6356,38 @@ fn main() -> Result<()> {
                 .map_err(anyhow::Error::msg)?;
             let trusted_log_key =
                 read_hex_key(&log_public_key, "trusted policy lifecycle public-log key")?;
-            let trusted_observer_key = read_hex_key(
-                &observer_public_key,
-                "trusted policy lifecycle gossip observer public key",
-            )?;
+            let (organization_id, observer_id, trusted_observer_key, trust_binding) =
+                if let Some(trust_state) = &observer_trust_state {
+                    let source = fs::read_to_string(trust_state.0.as_ref())
+                        .with_context(|| format!("reading {}", trust_state.0.display()))?;
+                    let state = parse_policy_lifecycle_log_gossip_observer_trust_state(&source)
+                        .map_err(anyhow::Error::msg)?;
+                    let key = policy_lifecycle_log_gossip_observer_trusted_public_key(&state)
+                        .map_err(anyhow::Error::msg)?;
+                    let digest = policy_lifecycle_log_gossip_observer_trust_state_sha256(&state)
+                        .map_err(anyhow::Error::msg)?;
+                    (
+                        state.organization_id,
+                        state.observer_id,
+                        key,
+                        Some((digest, state.generation)),
+                    )
+                } else {
+                    (
+                        organization_id.ok_or_else(|| {
+                            anyhow::anyhow!("missing gossip observer organization id")
+                        })?,
+                        observer_id
+                            .ok_or_else(|| anyhow::anyhow!("missing gossip observer identity"))?,
+                        read_hex_key(
+                            observer_public_key.as_ref().ok_or_else(|| {
+                                anyhow::anyhow!("missing gossip observer public key")
+                            })?,
+                            "trusted policy lifecycle gossip observer public key",
+                        )?,
+                        None,
+                    )
+                };
             let (observation, receipt) = request_remote_policy_lifecycle_log_gossip(
                 &local,
                 &endpoint,
@@ -6036,6 +6396,8 @@ fn main() -> Result<()> {
                 &organization_id,
                 &observer_id,
                 &trusted_observer_key,
+                trust_binding.as_ref().map(|(digest, _)| digest.as_str()),
+                trust_binding.as_ref().map(|(_, generation)| *generation),
                 bearer_token_env.as_deref(),
                 timeout_seconds,
                 evaluated_at_unix,

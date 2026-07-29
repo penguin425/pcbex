@@ -68,6 +68,7 @@ auditable release.
 | v1.356.0 | Lifecycle public-log consistency | Reject signed tree rollback, equivocation, and non-prefix split views across retained anchors |
 | v1.357.0 | Lifecycle public-log gossip | Compare independent signed tree-head observations without requiring a shared retained baseline |
 | v1.358.0 | Remote lifecycle public-log gossip quorum | Acquire bounded remote observations and require fresh consistent views from distinct organizations |
+| v1.359.0 | Lifecycle gossip observer key rotation | Bind each organization observer to generation-chained trust and require dual-signed key transitions |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -76,6 +77,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should bind each gossip observer identity to an immutable,
-generation-chained trust snapshot and require dual-signed key rotation before
-a long-lived organization can replace its observer key.
+The next roadmap should add a signed organization trust registry with explicit
+observer admission, suspension, and revocation so a compromised or departed
+organization cannot continue satisfying gossip quorum.

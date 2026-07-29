@@ -1079,31 +1079,79 @@ policy_lifecycle_log_gossip_quorum=""
 policy_lifecycle_log_gossip_quorum_met=""
 policy_lifecycle_log_remote_gossip_observations=""
 policy_lifecycle_log_remote_gossip_receipts=""
-local_gossip_quorum_inputs=0
+local_gossip_configured=false
+local_gossip_trust_mode=""
+local_gossip_direct_inputs=0
 for value in \
-  "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVATION_FILES:-}" \
   "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_IDS:-}" \
   "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_IDS:-}" \
   "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES:-}"; do
-  if [[ -n "$value" ]]; then ((local_gossip_quorum_inputs += 1)); fi
+  if [[ -n "$value" ]]; then ((local_gossip_direct_inputs += 1)); fi
 done
-if ((local_gossip_quorum_inputs != 0 && local_gossip_quorum_inputs != 4)); then
-  echo "local gossip observations, organizations, observer identities, and keys must be supplied together" >&2
+if ((local_gossip_direct_inputs != 0 && local_gossip_direct_inputs != 3)); then
+  echo "local direct gossip organizations, observer identities, and keys must be supplied together" >&2
   exit 2
 fi
-remote_gossip_quorum_inputs=0
+if ((local_gossip_direct_inputs == 3)) \
+  && [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES:-}" ]]; then
+  echo "local direct gossip trust and observer trust states are mutually exclusive" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVATION_FILES:-}" ]]; then
+  local_gossip_configured=true
+  if ((local_gossip_direct_inputs == 3)); then
+    local_gossip_trust_mode="direct"
+  elif [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES:-}" ]]; then
+    local_gossip_trust_mode="trust-state"
+  else
+    echo "local gossip observations require direct trust or observer trust states" >&2
+    exit 2
+  fi
+elif ((local_gossip_direct_inputs != 0)) \
+  || [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES:-}" ]]; then
+  echo "local gossip trust requires observation files" >&2
+  exit 2
+fi
+
+remote_gossip_configured=false
+remote_gossip_trust_mode=""
+remote_gossip_direct_inputs=0
 for value in \
-  "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ENDPOINTS:-}" \
   "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS:-}" \
   "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_OBSERVER_IDS:-}" \
   "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES:-}"; do
-  if [[ -n "$value" ]]; then ((remote_gossip_quorum_inputs += 1)); fi
+  if [[ -n "$value" ]]; then ((remote_gossip_direct_inputs += 1)); fi
 done
-if ((remote_gossip_quorum_inputs != 0 && remote_gossip_quorum_inputs != 4)); then
-  echo "remote gossip endpoints, organizations, observer identities, and keys must be supplied together" >&2
+if ((remote_gossip_direct_inputs != 0 && remote_gossip_direct_inputs != 3)); then
+  echo "remote direct gossip organizations, observer identities, and keys must be supplied together" >&2
   exit 2
 fi
-if ((local_gossip_quorum_inputs == 4 || remote_gossip_quorum_inputs == 4)); then
+if ((remote_gossip_direct_inputs == 3)) \
+  && [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES:-}" ]]; then
+  echo "remote direct gossip trust and observer trust states are mutually exclusive" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ENDPOINTS:-}" ]]; then
+  remote_gossip_configured=true
+  if ((remote_gossip_direct_inputs == 3)); then
+    remote_gossip_trust_mode="direct"
+  elif [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES:-}" ]]; then
+    remote_gossip_trust_mode="trust-state"
+  else
+    echo "remote gossip endpoints require direct trust or observer trust states" >&2
+    exit 2
+  fi
+elif ((remote_gossip_direct_inputs != 0)) \
+  || [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES:-}" ]]; then
+  echo "remote gossip trust requires endpoint files" >&2
+  exit 2
+fi
+if [[ "$local_gossip_configured" == "true" && "$remote_gossip_configured" == "true" ]] \
+  && [[ "$local_gossip_trust_mode" != "$remote_gossip_trust_mode" ]]; then
+  echo "local and remote gossip observations must use the same trust mode" >&2
+  exit 2
+fi
+if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "true" ]]; then
   if ((lifecycle_anchor_inputs != 3)); then
     echo "policy lifecycle gossip quorum requires a configured current anchor" >&2
     exit 2
@@ -1120,46 +1168,64 @@ if ((local_gossip_quorum_inputs == 4 || remote_gossip_quorum_inputs == 4)); then
     --log-public-key "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY" \
     --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_EVALUATED_AT_UNIX" \
     --output "$policy_lifecycle_log_gossip_quorum")
-  if ((local_gossip_quorum_inputs == 4)); then
+  if [[ "$local_gossip_configured" == "true" ]]; then
     while IFS= read -r observation; do
       if [[ -n "$observation" ]]; then
         gossip_quorum_arguments+=(--observation "$observation")
       fi
     done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVATION_FILES"
-    while IFS= read -r organization_id; do
-      if [[ -n "$organization_id" ]]; then
-        gossip_quorum_arguments+=(--organization-id "$organization_id")
-      fi
-    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_IDS"
-    while IFS= read -r observer_id; do
-      if [[ -n "$observer_id" ]]; then
-        gossip_quorum_arguments+=(--observer-id "$observer_id")
-      fi
-    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_IDS"
-    while IFS= read -r observer_key; do
-      if [[ -n "$observer_key" ]]; then
-        gossip_quorum_arguments+=(--observer-public-key "$observer_key")
-      fi
-    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES"
+    if [[ "$local_gossip_trust_mode" == "direct" ]]; then
+      while IFS= read -r organization_id; do
+        if [[ -n "$organization_id" ]]; then
+          gossip_quorum_arguments+=(--organization-id "$organization_id")
+        fi
+      done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_IDS"
+      while IFS= read -r observer_id; do
+        if [[ -n "$observer_id" ]]; then
+          gossip_quorum_arguments+=(--observer-id "$observer_id")
+        fi
+      done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_IDS"
+      while IFS= read -r observer_key; do
+        if [[ -n "$observer_key" ]]; then
+          gossip_quorum_arguments+=(--observer-public-key "$observer_key")
+        fi
+      done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES"
+    else
+      while IFS= read -r observer_trust_state; do
+        if [[ -n "$observer_trust_state" ]]; then
+          gossip_quorum_arguments+=(--observer-trust-state "$observer_trust_state")
+        fi
+      done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES"
+    fi
   fi
-  if ((remote_gossip_quorum_inputs == 4)); then
+  if [[ "$remote_gossip_configured" == "true" ]]; then
     mapfile -t remote_gossip_endpoints < <(
       printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ENDPOINTS" | sed '/^[[:space:]]*$/d'
     )
-    mapfile -t remote_gossip_organizations < <(
-      printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS" | sed '/^[[:space:]]*$/d'
-    )
-    mapfile -t remote_gossip_observers < <(
-      printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_OBSERVER_IDS" | sed '/^[[:space:]]*$/d'
-    )
-    mapfile -t remote_gossip_keys < <(
-      printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
-    )
+    if [[ "$remote_gossip_trust_mode" == "direct" ]]; then
+      mapfile -t remote_gossip_organizations < <(
+        printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS" | sed '/^[[:space:]]*$/d'
+      )
+      mapfile -t remote_gossip_observers < <(
+        printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_OBSERVER_IDS" | sed '/^[[:space:]]*$/d'
+      )
+      mapfile -t remote_gossip_trust_evidence < <(
+        printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
+      )
+    else
+      mapfile -t remote_gossip_trust_evidence < <(
+        printf '%s\n' "$PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TRUST_STATE_FILES" | sed '/^[[:space:]]*$/d'
+      )
+    fi
     if ((${#remote_gossip_endpoints[@]} == 0 \
-      || ${#remote_gossip_endpoints[@]} != ${#remote_gossip_organizations[@]} \
-      || ${#remote_gossip_endpoints[@]} != ${#remote_gossip_observers[@]} \
-      || ${#remote_gossip_endpoints[@]} != ${#remote_gossip_keys[@]} \
+      || ${#remote_gossip_endpoints[@]} != ${#remote_gossip_trust_evidence[@]} \
       || ${#remote_gossip_endpoints[@]} > 10)); then
+      echo "remote gossip trust configuration must form 1 to 10 complete endpoint pairs" >&2
+      exit 2
+    fi
+    if [[ "$remote_gossip_trust_mode" == "direct" ]] \
+      && ((${#remote_gossip_endpoints[@]} != ${#remote_gossip_organizations[@]} \
+        || ${#remote_gossip_endpoints[@]} != ${#remote_gossip_observers[@]})); then
       echo "remote gossip trust configuration must form 1 to 10 complete endpoint pairs" >&2
       exit 2
     fi
@@ -1176,13 +1242,19 @@ if ((local_gossip_quorum_inputs == 4 || remote_gossip_quorum_inputs == 4)); then
         --endpoint "${remote_gossip_endpoints[$index]}" \
         --log-id "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_ID" \
         --log-public-key "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY" \
-        --organization-id "${remote_gossip_organizations[$index]}" \
-        --observer-id "${remote_gossip_observers[$index]}" \
-        --observer-public-key "${remote_gossip_keys[$index]}" \
         --timeout-seconds "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS:-30}" \
         --evaluated-at-unix "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_EVALUATED_AT_UNIX" \
         --output "$remote_observation" \
         --receipt-output "$remote_transport_receipt")
+      if [[ "$remote_gossip_trust_mode" == "direct" ]]; then
+        remote_gossip_arguments+=( \
+          --organization-id "${remote_gossip_organizations[$index]}" \
+          --observer-id "${remote_gossip_observers[$index]}" \
+          --observer-public-key "${remote_gossip_trust_evidence[$index]}")
+      else
+        remote_gossip_arguments+=( \
+          --observer-trust-state "${remote_gossip_trust_evidence[$index]}")
+      fi
       if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_BEARER_TOKEN:-}" ]]; then
         remote_gossip_arguments+=( \
           --bearer-token-env PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_BEARER_TOKEN)
@@ -1191,24 +1263,29 @@ if ((local_gossip_quorum_inputs == 4 || remote_gossip_quorum_inputs == 4)); then
         remote_gossip_arguments+=(--allow-http-loopback)
       fi
       "$PCBEX_BINARY" "${remote_gossip_arguments[@]}"
-      gossip_quorum_arguments+=( \
-        --observation "$remote_observation" \
-        --organization-id "${remote_gossip_organizations[$index]}" \
-        --observer-id "${remote_gossip_observers[$index]}" \
-        --observer-public-key "${remote_gossip_keys[$index]}")
+      gossip_quorum_arguments+=(--observation "$remote_observation")
+      if [[ "$remote_gossip_trust_mode" == "direct" ]]; then
+        gossip_quorum_arguments+=( \
+          --organization-id "${remote_gossip_organizations[$index]}" \
+          --observer-id "${remote_gossip_observers[$index]}" \
+          --observer-public-key "${remote_gossip_trust_evidence[$index]}")
+      else
+        gossip_quorum_arguments+=( \
+          --observer-trust-state "${remote_gossip_trust_evidence[$index]}")
+      fi
     done
   fi
   "$PCBEX_BINARY" "${gossip_quorum_arguments[@]}"
   policy_lifecycle_log_gossip_quorum_met="$(
     python3 -c \
-      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["quorum_met"]).lower())' \
+      'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(str(data.get("quorum", data)["quorum_met"]).lower())' \
       "$policy_lifecycle_log_gossip_quorum"
   )"
   {
     printf '\n# Lifecycle public-log gossip quorum\n\n'
     printf -- '- Quorum met: `%s`\n' "$policy_lifecycle_log_gossip_quorum_met"
     printf -- '- Organizations: `%s/%s`\n' \
-      "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["distinct_organizations"])' "$policy_lifecycle_log_gossip_quorum")" \
+      "$(python3 -c 'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); print(data.get("quorum", data)["distinct_organizations"])' "$policy_lifecycle_log_gossip_quorum")" \
       "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_MINIMUM_ORGANIZATIONS:-2}"
     printf -- '- All observations consistent: `true`\n'
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
