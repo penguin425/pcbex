@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NetQuality {
     pub net_id: u32,
     pub name: String,
@@ -16,6 +17,7 @@ pub struct NetQuality {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DifferentialQuality {
     pub name: String,
     pub positive_length_nm: Nm,
@@ -25,6 +27,7 @@ pub struct DifferentialQuality {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoutingQuality {
     pub total_length_nm: Nm,
     pub total_vias: usize,

@@ -46,6 +46,8 @@ write_output policy-pack-fetch-receipt ""
 write_output manufacturing-feedback ""
 write_output manufacturing-feedback-passed ""
 write_output policy-recommendation ""
+write_output policy-rollout-profile ""
+write_output policy-rollout ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -242,6 +244,44 @@ if [[ -n "${PCBEX_POLICY_RECOMMENDATION_GENERATED_ON:-}" ]]; then
   {
     printf '\n'
     cat "$policy_recommendation_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+policy_rollout_profile=""
+policy_rollout=""
+if [[ -n "${PCBEX_POLICY_ROLLOUT_PROJECT_ID:-}" ]]; then
+  rollout_recommendation="${PCBEX_POLICY_ROLLOUT_RECOMMENDATION:-$policy_recommendation}"
+  if [[ -z "$rollout_recommendation" || -z "$effective_policy_pack" || \
+    -z "${PCBEX_POLICY_ROLLOUT_GENERATED_ON:-}" ]]; then
+    echo "policy rollout simulation requires a recommendation, generated-on date, and organization policy pack" >&2
+    exit 2
+  fi
+  policy_rollout_profile="${artifact_dir}/policy-rollout-profile.json"
+  policy_rollout="${artifact_dir}/policy-rollout.json"
+  policy_rollout_summary="${artifact_dir}/policy-rollout.md"
+  policy_rollout_candidate_dir="${artifact_dir}/policy-rollout-candidate"
+  "$PCBEX_BINARY" policy-rollout-profile \
+    "$effective_policy_pack" \
+    "$rollout_recommendation" \
+    --generated-on "$PCBEX_POLICY_ROLLOUT_GENERATED_ON" \
+    --output "$policy_rollout_profile"
+  "$PCBEX_BINARY" analyze-kicad \
+    "$PCBEX_BOARD" \
+    --fab-profile "$policy_rollout_profile" \
+    --output-dir "$policy_rollout_candidate_dir"
+  "$PCBEX_BINARY" simulate-policy-rollout \
+    "$effective_policy_pack" \
+    "$rollout_recommendation" \
+    --project-id "$PCBEX_POLICY_ROLLOUT_PROJECT_ID" \
+    --board "$PCBEX_BOARD" \
+    --baseline-analysis "$current_dir" \
+    --candidate-analysis "$policy_rollout_candidate_dir" \
+    --generated-on "$PCBEX_POLICY_ROLLOUT_GENERATED_ON" \
+    --output "$policy_rollout" \
+    --summary-output "$policy_rollout_summary"
+  {
+    printf '\n'
+    cat "$policy_rollout_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -637,6 +677,8 @@ write_output policy-pack-fetch-receipt "$policy_pack_fetch_receipt"
 write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
 write_output policy-recommendation "$policy_recommendation"
+write_output policy-rollout-profile "$policy_rollout_profile"
+write_output policy-rollout "$policy_rollout"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

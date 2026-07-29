@@ -96,6 +96,57 @@ jobs:
                   {signer_id: "engineer-b", public_key: $human_key_b}
                 ]
             ' examples/acme-policy-pack.json > build/action-quorum/policy-pack.json
+          mkdir -p build/action-rollout
+          board_sha256="$(sha256sum examples/simple.kicad_pcb | cut -d' ' -f1)"
+          for lot in a b; do
+            target/release/pcbex analyze-kicad examples/simple.kicad_pcb \
+              --policy-pack build/action-quorum/policy-pack.json \
+              --output-dir "build/action-rollout/analysis-$lot"
+            printf '%s\n' 'clearance_mm,0.10' \
+              > "build/action-rollout/inspection-$lot.csv"
+            jq -n \
+              --arg id "rollout-lot-$lot" \
+              --arg board_sha256 "$board_sha256" \
+              '{
+                schema_version: 1,
+                id: $id,
+                manufacturer: {
+                  id: "example-fab",
+                  process: "CI rollout fixture",
+                  lot: $id
+                },
+                received_on: "2026-07-29",
+                board_sha256: $board_sha256,
+                disposition: "accepted_with_notes",
+                findings: [{
+                  id: ("clearance-" + $id),
+                  category: "clearance",
+                  severity: "warning",
+                  message: "Recurring process target exceeds the current policy.",
+                  measurement: {
+                    name: "minimum clearance",
+                    value: 0.10,
+                    unit: "mm",
+                    minimum: 0.15
+                  },
+                  evidence: [("inspection-" + ($id | sub("rollout-lot-"; "")) + ".csv")]
+                }]
+              }' > "build/action-rollout/declaration-$lot.json"
+            target/release/pcbex record-manufacturing-feedback \
+              "build/action-rollout/declaration-$lot.json" \
+              --analysis-dir "build/action-rollout/analysis-$lot" \
+              --board examples/simple.kicad_pcb \
+              --artifact "build/action-rollout/inspection-$lot.csv" \
+              --output "build/action-rollout/feedback-$lot.json"
+          done
+          target/release/pcbex recommend-policy \
+            build/action-quorum/policy-pack.json \
+            --feedback build/action-rollout/feedback-a.json \
+            --feedback build/action-rollout/feedback-b.json \
+            --analysis-manifest build/action-rollout/analysis-a/run.json \
+            --analysis-manifest build/action-rollout/analysis-b/run.json \
+            --generated-on 2026-07-29 \
+            --output build/action-rollout/recommendation.json
           target/release/pcbex check-schematic examples/simple.kicad_sch \
             --policy-pack build/action-quorum/policy-pack.json \
             --output build/action-quorum/electrical-review.json \
@@ -268,6 +319,9 @@ jobs:
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
           fail-on-manufacturing-feedback: "true"
           policy-recommendation-generated-on: "2026-07-29"
+          policy-rollout-project-id: action-controller
+          policy-rollout-recommendation: build/action-rollout/recommendation.json
+          policy-rollout-generated-on: "2026-07-29"
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -284,6 +338,8 @@ jobs:
           MANUFACTURING_FEEDBACK: ${{ steps.pcbex.outputs.manufacturing-feedback }}
           MANUFACTURING_FEEDBACK_PASSED: ${{ steps.pcbex.outputs.manufacturing-feedback-passed }}
           POLICY_RECOMMENDATION: ${{ steps.pcbex.outputs.policy-recommendation }}
+          POLICY_ROLLOUT_PROFILE: ${{ steps.pcbex.outputs.policy-rollout-profile }}
+          POLICY_ROLLOUT: ${{ steps.pcbex.outputs.policy-rollout }}
           SCHEMATIC_DIFF: ${{ steps.pcbex.outputs.schematic-diff }}
           SCHEMATIC_REVIEW_REQUIRED: ${{ steps.pcbex.outputs.schematic-review-required }}
           SCHEMATIC_REVIEWER_ROUTING: ${{ steps.pcbex.outputs.schematic-reviewer-routing }}
@@ -320,6 +376,13 @@ jobs:
           test "$(jq -r '.requires_human_approval' "$POLICY_RECOMMENDATION")" = "true"
           test "$(jq -r '.may_relax_constraints' "$POLICY_RECOMMENDATION")" = "false"
           test "$(jq -r '.recommendations | length' "$POLICY_RECOMMENDATION")" = "0"
+          test -s "$POLICY_ROLLOUT_PROFILE"
+          test "$(jq -r '.rules.minimum_clearance_nm' "$POLICY_ROLLOUT_PROFILE")" = "150000"
+          test -s "$POLICY_ROLLOUT"
+          test "$(jq -r '.status' "$POLICY_ROLLOUT")" = "simulation_only"
+          test "$(jq -r '.deployable' "$POLICY_ROLLOUT")" = "false"
+          test "$(jq -r '.requires_human_approval' "$POLICY_ROLLOUT")" = "true"
+          test "$(jq -r '.projects[0].project_id' "$POLICY_ROLLOUT")" = "action-controller"
           test -s "$SCHEMATIC_DIFF"
           test "$SCHEMATIC_REVIEW_REQUIRED" = "false"
           test "$(jq -r '.changed' "$SCHEMATIC_DIFF")" = "false"

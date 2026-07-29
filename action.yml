@@ -86,6 +86,18 @@ inputs:
     description: Independent feedback IDs required before one tightening is proposed.
     required: false
     default: "2"
+  policy-rollout-project-id:
+    description: Optional stable project ID that reruns the current board with the recommendation-derived simulation profile.
+    required: false
+    default: ""
+  policy-rollout-recommendation:
+    description: Optional existing governed recommendation used for rollout simulation instead of the recommendation generated in this run.
+    required: false
+    default: ""
+  policy-rollout-generated-on:
+    description: Deterministic YYYY-MM-DD date for the simulation profile and rollout report.
+    required: false
+    default: ""
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -292,6 +304,12 @@ outputs:
   policy-recommendation:
     description: Proposal-only, human-gated manufacturing policy recommendation path.
     value: ${{ steps.analyze.outputs.policy-recommendation }}
+  policy-rollout-profile:
+    description: Simulation-only DFM profile derived from the governed recommendation.
+    value: ${{ steps.analyze.outputs.policy-rollout-profile }}
+  policy-rollout:
+    description: Non-deployable, human-gated policy rollout impact report.
+    value: ${{ steps.analyze.outputs.policy-rollout }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -385,6 +403,9 @@ runs:
         PCBEX_POLICY_RECOMMENDATION_ANALYSIS_MANIFESTS: ${{ inputs.policy-recommendation-analysis-manifests }}
         PCBEX_POLICY_RECOMMENDATION_GENERATED_ON: ${{ inputs.policy-recommendation-generated-on }}
         PCBEX_POLICY_RECOMMENDATION_MINIMUM_OCCURRENCES: ${{ inputs.policy-recommendation-minimum-occurrences }}
+        PCBEX_POLICY_ROLLOUT_PROJECT_ID: ${{ inputs.policy-rollout-project-id }}
+        PCBEX_POLICY_ROLLOUT_RECOMMENDATION: ${{ inputs.policy-rollout-recommendation }}
+        PCBEX_POLICY_ROLLOUT_GENERATED_ON: ${{ inputs.policy-rollout-generated-on }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}

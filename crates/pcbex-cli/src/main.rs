@@ -76,6 +76,7 @@ mod manufacturing_feedback;
 mod mcp;
 mod policy_pack;
 mod policy_recommendation;
+mod policy_rollout;
 mod remote_policy;
 mod remote_witness;
 
@@ -97,6 +98,11 @@ use policy_pack::{
 use policy_recommendation::{
     PolicyRecommendationInput, generate_policy_recommendations, parse_policy_recommendation_report,
     policy_recommendation_json_schema, render_policy_recommendation_summary,
+};
+use policy_rollout::{
+    RolloutAnalysisInput, RolloutProjectInput, parse_policy_rollout_report,
+    policy_rollout_json_schema, render_policy_rollout_summary, rollout_candidate_profile,
+    simulate_policy_rollout,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_witness::{remote_witness_receipt_json_schema, request_remote_witness};
@@ -481,6 +487,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed governed policy-rollout simulation JSON Schema.
+    PolicyRolloutSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a governed policy-rollout simulation report.
+    ValidatePolicyRollout {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -531,6 +548,38 @@ enum Command {
         /// Independent feedback IDs required before proposing one rule change.
         #[arg(long, default_value_t = 2)]
         minimum_occurrences: u32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+    },
+    /// Materialize the simulation-only DFM profile bound to a recommendation.
+    PolicyRolloutProfile {
+        policy_pack: PathBuf,
+        recommendation: PathBuf,
+        #[arg(long)]
+        generated_on: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Compare baseline and candidate analyses across projects before policy rollout.
+    SimulatePolicyRollout {
+        policy_pack: PathBuf,
+        recommendation: PathBuf,
+        /// Stable project ID; repeat and pair by position with both analysis directories.
+        #[arg(long = "project-id", required = true)]
+        project_ids: Vec<String>,
+        /// Exact board file bound by both analyses; repeat in project-ID order.
+        #[arg(long = "board", required = true)]
+        boards: Vec<PathBuf>,
+        /// Analysis directories produced with the exact organization policy pack.
+        #[arg(long = "baseline-analysis", required = true)]
+        baseline_analyses: Vec<PathBuf>,
+        /// Analysis directories produced with the simulation-only candidate profile.
+        #[arg(long = "candidate-analysis", required = true)]
+        candidate_analyses: Vec<PathBuf>,
+        #[arg(long)]
+        generated_on: String,
         #[arg(short, long)]
         output: PathBuf,
         #[arg(long)]
@@ -1971,6 +2020,15 @@ fn main() -> Result<()> {
             let report = parse_policy_recommendation_report(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
+        Command::PolicyRolloutSchema { output } => {
+            write_or_print_json(&policy_rollout_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyRollout { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report = parse_policy_rollout_report(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -2158,6 +2216,135 @@ fn main() -> Result<()> {
                 "policy recommendation: {} proposed tightening(s), {} skipped finding(s); human approval required",
                 report.recommendations.len(),
                 report.skipped_findings.len()
+            );
+        }
+        Command::PolicyRolloutProfile {
+            policy_pack,
+            recommendation,
+            generated_on,
+            output,
+        } => {
+            let policy = load_policy_pack(&policy_pack)?.0;
+            let recommendation_source = fs::read_to_string(&recommendation)
+                .with_context(|| format!("reading {}", recommendation.display()))?;
+            let recommendation = parse_policy_recommendation_report(&recommendation_source)
+                .map_err(anyhow::Error::msg)?;
+            let profile = rollout_candidate_profile(&policy, &recommendation, &generated_on)
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&profile)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "simulation-only rollout profile written to {}; not deployable",
+                output.display()
+            );
+        }
+        Command::SimulatePolicyRollout {
+            policy_pack,
+            recommendation,
+            project_ids,
+            boards,
+            baseline_analyses,
+            candidate_analyses,
+            generated_on,
+            output,
+            summary_output,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy rollout",
+            )?;
+            if project_ids.len() != boards.len()
+                || project_ids.len() != baseline_analyses.len()
+                || project_ids.len() != candidate_analyses.len()
+            {
+                bail!(
+                    "policy rollout requires one board, baseline, and candidate analysis per project ID"
+                );
+            }
+            if project_ids.len() > 1_000 {
+                bail!("policy rollout accepts at most 1000 projects");
+            }
+            let policy = load_policy_pack(&policy_pack)?.0;
+            let recommendation_source = fs::read_to_string(&recommendation)
+                .with_context(|| format!("reading {}", recommendation.display()))?;
+            let recommendation = parse_policy_recommendation_report(&recommendation_source)
+                .map_err(anyhow::Error::msg)?;
+            struct OwnedAnalysis {
+                run_path: String,
+                run: Vec<u8>,
+                checks_path: String,
+                checks: Vec<u8>,
+                quality_path: String,
+                quality: Vec<u8>,
+            }
+            fn read_analysis(directory: &Path) -> Result<OwnedAnalysis> {
+                let run_path = directory.join("run.json");
+                let checks_path = directory.join("checks.json");
+                let quality_path = directory.join("quality.json");
+                Ok(OwnedAnalysis {
+                    run: fs::read(&run_path)
+                        .with_context(|| format!("reading {}", run_path.display()))?,
+                    checks: fs::read(&checks_path)
+                        .with_context(|| format!("reading {}", checks_path.display()))?,
+                    quality: fs::read(&quality_path)
+                        .with_context(|| format!("reading {}", quality_path.display()))?,
+                    run_path: run_path.display().to_string(),
+                    checks_path: checks_path.display().to_string(),
+                    quality_path: quality_path.display().to_string(),
+                })
+            }
+            let analyses = boards
+                .iter()
+                .zip(&baseline_analyses)
+                .zip(&candidate_analyses)
+                .map(|((board, baseline), candidate)| {
+                    Ok((
+                        board.display().to_string(),
+                        fs::read(board).with_context(|| format!("reading {}", board.display()))?,
+                        read_analysis(baseline)?,
+                        read_analysis(candidate)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let inputs = project_ids
+                .iter()
+                .zip(&analyses)
+                .map(
+                    |(project_id, (board_path, board, baseline, candidate))| RolloutProjectInput {
+                        project_id,
+                        board_path,
+                        board,
+                        baseline: RolloutAnalysisInput {
+                            run_path: &baseline.run_path,
+                            run: &baseline.run,
+                            checks_path: &baseline.checks_path,
+                            checks: &baseline.checks,
+                            quality_path: &baseline.quality_path,
+                            quality: &baseline.quality,
+                        },
+                        candidate: RolloutAnalysisInput {
+                            run_path: &candidate.run_path,
+                            run: &candidate.run,
+                            checks_path: &candidate.checks_path,
+                            checks: &candidate.checks,
+                            quality_path: &candidate.quality_path,
+                            quality: &candidate.quality,
+                        },
+                    },
+                )
+                .collect::<Vec<_>>();
+            let report = simulate_policy_rollout(&policy, &recommendation, &generated_on, &inputs)
+                .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&report)? + "\n";
+            let summary = render_policy_rollout_summary(&report);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "policy rollout simulation: {} compatible, {} affected; human approval required",
+                report.compatible_projects, report.affected_projects
             );
         }
         Command::RecordSimulationEvidence {

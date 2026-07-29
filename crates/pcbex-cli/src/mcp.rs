@@ -295,6 +295,8 @@ impl McpServer {
                     | "record_manufacturing_feedback"
                     | "compare_manufacturing_feedback"
                     | "recommend_policy"
+                    | "policy_rollout_profile"
+                    | "simulate_policy_rollout"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -774,6 +776,63 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "type": "integer", "minimum": 2, "maximum": 100,
                         "default": 2
                     },
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "policy_rollout_profile",
+            "Create policy rollout simulation profile",
+            "Materialize a deterministic simulation-only DFM profile from a governed recommendation without approving or deploying it.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["policy_pack", "recommendation", "generated_on", "output"],
+                "properties": {
+                    "policy_pack": {"type": "string"},
+                    "recommendation": {"type": "string"},
+                    "generated_on": {"type": "string", "format": "date"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "simulate_policy_rollout",
+            "Simulate policy rollout across projects",
+            "Bind baseline and candidate pcbex analyses across projects into a non-deployable, human-gated rollout impact report.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "policy_pack", "recommendation", "project_ids",
+                    "boards", "baseline_analyses", "candidate_analyses",
+                    "generated_on", "output"
+                ],
+                "properties": {
+                    "policy_pack": {"type": "string"},
+                    "recommendation": {"type": "string"},
+                    "project_ids": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "boards": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "baseline_analyses": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "candidate_analyses": {
+                        "type": "array", "minItems": 1, "maxItems": 1000,
+                        "items": {"type": "string"}
+                    },
+                    "generated_on": {"type": "string", "format": "date"},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"}
                 }
@@ -1376,6 +1435,8 @@ fn call_tool(
             compare_manufacturing_feedback(arguments, cancellation)?
         }
         "recommend_policy" => recommend_policy(arguments, cancellation)?,
+        "policy_rollout_profile" => policy_rollout_profile(arguments, cancellation)?,
+        "simulate_policy_rollout" => simulate_policy_rollout(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -1804,6 +1865,103 @@ fn recommend_policy(
     Ok(execution_result(
         execution,
         json!({"output": output, "recommendation": recommendation}),
+    ))
+}
+
+fn policy_rollout_profile(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["policy_pack", "recommendation", "generated_on", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "policy-rollout-profile".into(),
+        required_string(&arguments, "policy_pack")?,
+        required_string(&arguments, "recommendation")?,
+        "--generated-on".into(),
+        required_string(&arguments, "generated_on")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let profile = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "profile": profile}),
+    ))
+}
+
+fn simulate_policy_rollout(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "policy_pack",
+            "recommendation",
+            "project_ids",
+            "boards",
+            "baseline_analyses",
+            "candidate_analyses",
+            "generated_on",
+            "output",
+            "summary_output",
+        ],
+    )?;
+    let project_ids = required_string_array(&arguments, "project_ids", false)?;
+    let boards = required_string_array(&arguments, "boards", false)?;
+    let baselines = required_string_array(&arguments, "baseline_analyses", false)?;
+    let candidates = required_string_array(&arguments, "candidate_analyses", false)?;
+    if project_ids.len() != boards.len()
+        || project_ids.len() != baselines.len()
+        || project_ids.len() != candidates.len()
+    {
+        return Err(json!({
+            "detail": "project_ids, boards, baseline_analyses, and candidate_analyses must have equal lengths"
+        }));
+    }
+    if project_ids.len() > 1_000 {
+        return Err(json!({"detail": "policy rollout cannot exceed 1000 projects"}));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "simulate-policy-rollout".into(),
+        required_string(&arguments, "policy_pack")?,
+        required_string(&arguments, "recommendation")?,
+    ];
+    for project_id in project_ids {
+        command.extend(["--project-id".into(), project_id]);
+    }
+    for board in boards {
+        command.extend(["--board".into(), board]);
+    }
+    for baseline in baselines {
+        command.extend(["--baseline-analysis".into(), baseline]);
+    }
+    for candidate in candidates {
+        command.extend(["--candidate-analysis".into(), candidate]);
+    }
+    command.extend([
+        "--generated-on".into(),
+        required_string(&arguments, "generated_on")?,
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let rollout = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rollout": rollout}),
     ))
 }
 
@@ -3000,7 +3158,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 30);
+        assert_eq!(tools.len(), 32);
         let named = |name: &str| {
             tools
                 .iter()
@@ -3042,6 +3200,18 @@ mod tests {
         assert_eq!(
             named("recommend_policy")["inputSchema"]["properties"]["minimum_occurrences"]["minimum"],
             2
+        );
+        assert_eq!(
+            named("policy_rollout_profile")["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named("simulate_policy_rollout")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("simulate_policy_rollout")["inputSchema"]["properties"]["project_ids"]["maxItems"],
+            1000
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],
