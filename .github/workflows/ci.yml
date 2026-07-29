@@ -177,6 +177,17 @@ jobs:
             --private-key build/action-quorum/transparency.key \
             --signer-id action-security-log \
             --output build/action-quorum/approval-log.checkpoint.json
+          for witness in a b; do
+            target/release/pcbex approval-keygen \
+              --private-key "build/action-quorum/witness-$witness.key" \
+              --public-key "build/action-quorum/witness-$witness.pub"
+            target/release/pcbex witness-approval-log \
+              build/action-quorum/approval-log.checkpoint.json \
+              --private-key "build/action-quorum/witness-$witness.key" \
+              --witness-id "witness-$witness" \
+              --observed-at-unix 2 \
+              --output "build/action-quorum/witness-$witness.json"
+          done
       - name: Exercise the public composite action
         id: pcbex
         uses: ./
@@ -206,6 +217,13 @@ jobs:
           approval-log-checkpoint: build/action-quorum/approval-log.checkpoint.json
           approval-log-public-key: build/action-quorum/transparency.pub
           fail-on-approval-log: "true"
+          approval-log-witness-files: |
+            build/action-quorum/witness-a.json
+            build/action-quorum/witness-b.json
+          approval-log-witness-public-keys: |
+            build/action-quorum/witness-a.pub
+            build/action-quorum/witness-b.pub
+          fail-on-approval-log-witnesses: "true"
           manufacturing-feedback-declaration: build/action-feedback/declaration.json
           manufacturing-feedback-artifacts: build/action-feedback/inspection.txt
           fail-on-manufacturing-feedback: "true"
@@ -235,6 +253,8 @@ jobs:
           SCHEMATIC_APPROVAL_MET: ${{ steps.pcbex.outputs.schematic-approval-met }}
           APPROVAL_LOG_VERIFICATION: ${{ steps.pcbex.outputs.approval-log-verification }}
           APPROVAL_LOG_VERIFIED: ${{ steps.pcbex.outputs.approval-log-verified }}
+          APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
+          APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-witness-quorum-met }}
           SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           test -s "$ARTIFACT_DIR/pr-comment.md"
@@ -268,6 +288,9 @@ jobs:
           test -s "$APPROVAL_LOG_VERIFICATION"
           test "$APPROVAL_LOG_VERIFIED" = "true"
           test "$(jq -r '.entry_count' "$APPROVAL_LOG_VERIFICATION")" = "1"
+          test -s "$APPROVAL_LOG_WITNESS_QUORUM"
+          test "$APPROVAL_LOG_WITNESS_QUORUM_MET" = "true"
+          test "$(jq -r '.valid_witnesses' "$APPROVAL_LOG_WITNESS_QUORUM")" = "2"
           if [[ "$SHOULD_COMMENT" == "true" ]]; then
             [[ "$COMMENT_URL" == https://github.com/* ]]
           else

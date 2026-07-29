@@ -169,6 +169,11 @@
     {
       "id": "signed-approval-transparency-log",
       "release": "v1.330.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-witness-quorum",
+      "release": "v1.331.0",
       "status": "current"
     }
   ]

@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 const CHECKPOINT_DOMAIN: &str = "pcbex-approval-transparency-checkpoint-v1";
+const WITNESS_DOMAIN: &str = "pcbex-approval-transparency-witness-v1";
 const MAX_LOG_ENTRIES: usize = 100_000;
 const MAX_TEXT_BYTES: usize = 256;
 
@@ -76,6 +77,36 @@ pub struct ApprovalLogVerificationReport {
     pub verified: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedApprovalLogWitness {
+    pub schema_version: u32,
+    pub checkpoint_sha256: String,
+    pub log_id: String,
+    pub entry_count: u64,
+    pub head_sha256: Option<String>,
+    pub witness_id: String,
+    pub observed_at_unix: u64,
+    pub algorithm: String,
+    pub public_key: String,
+    pub signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLogWitnessQuorumReport {
+    pub schema_version: u32,
+    pub checkpoint_sha256: String,
+    pub log_id: String,
+    pub entry_count: u64,
+    pub head_sha256: Option<String>,
+    pub minimum_witnesses: u32,
+    pub valid_witnesses: u32,
+    pub witness_ids: Vec<String>,
+    pub witness_public_keys: Vec<String>,
+    pub quorum_met: bool,
+}
+
 #[derive(Serialize)]
 struct CheckpointPayload<'a> {
     domain: &'static str,
@@ -84,6 +115,17 @@ struct CheckpointPayload<'a> {
     head_sha256: Option<&'a str>,
     log_sha256: &'a str,
     signer_id: &'a str,
+}
+
+#[derive(Serialize)]
+struct WitnessPayload<'a> {
+    domain: &'static str,
+    checkpoint_sha256: &'a str,
+    log_id: &'a str,
+    entry_count: u64,
+    head_sha256: Option<&'a str>,
+    witness_id: &'a str,
+    observed_at_unix: u64,
 }
 
 pub fn new_approval_transparency_log(log_id: &str) -> Result<ApprovalTransparencyLog, String> {
@@ -263,6 +305,129 @@ pub fn verify_approval_log_checkpoint(
     })
 }
 
+pub fn signed_approval_log_checkpoint_sha256(
+    checkpoint: &SignedApprovalLogCheckpoint,
+) -> Result<String, String> {
+    validate_checkpoint(checkpoint)?;
+    let bytes = serde_json::to_vec(checkpoint)
+        .map_err(|error| format!("serializing approval checkpoint: {error}"))?;
+    Ok(format!("{:x}", Sha256::digest(bytes)))
+}
+
+pub fn sign_approval_log_witness(
+    checkpoint: &SignedApprovalLogCheckpoint,
+    witness_id: &str,
+    observed_at_unix: u64,
+    secret_key: &[u8; 32],
+) -> Result<SignedApprovalLogWitness, String> {
+    validate_slug(witness_id, "approval-log witness id")?;
+    let checkpoint_sha256 = signed_approval_log_checkpoint_sha256(checkpoint)?;
+    let payload = witness_payload(
+        &checkpoint_sha256,
+        &checkpoint.log_id,
+        checkpoint.entry_count,
+        checkpoint.head_sha256.as_deref(),
+        witness_id,
+        observed_at_unix,
+    )?;
+    let signing_key = SigningKey::from_bytes(secret_key);
+    Ok(SignedApprovalLogWitness {
+        schema_version: 1,
+        checkpoint_sha256,
+        log_id: checkpoint.log_id.clone(),
+        entry_count: checkpoint.entry_count,
+        head_sha256: checkpoint.head_sha256.clone(),
+        witness_id: witness_id.into(),
+        observed_at_unix,
+        algorithm: "ed25519".into(),
+        public_key: hex_encode(&signing_key.verifying_key().to_bytes()),
+        signature: hex_encode(&signing_key.sign(&payload).to_bytes()),
+    })
+}
+
+pub fn verify_approval_log_witness_quorum(
+    checkpoint: &SignedApprovalLogCheckpoint,
+    witnesses: &[(&SignedApprovalLogWitness, &[u8; 32])],
+    minimum_witnesses: u32,
+) -> Result<ApprovalLogWitnessQuorumReport, String> {
+    if minimum_witnesses < 2 {
+        return Err("approval-log witness quorum requires at least two witnesses".into());
+    }
+    if witnesses.len() > 64 {
+        return Err("approval-log witness quorum cannot exceed 64 candidates".into());
+    }
+    let checkpoint_sha256 = signed_approval_log_checkpoint_sha256(checkpoint)?;
+    let mut witness_ids = Vec::with_capacity(witnesses.len());
+    let mut witness_public_keys = Vec::with_capacity(witnesses.len());
+    for (witness, trusted_key) in witnesses {
+        if witness.schema_version != 1 || witness.algorithm != "ed25519" {
+            return Err("unsupported approval-log witness contract".into());
+        }
+        validate_slug(&witness.witness_id, "approval-log witness id")?;
+        if witness.checkpoint_sha256 != checkpoint_sha256
+            || witness.log_id != checkpoint.log_id
+            || witness.entry_count != checkpoint.entry_count
+            || witness.head_sha256 != checkpoint.head_sha256
+        {
+            return Err("approval-log witness is bound to a different checkpoint".into());
+        }
+        let public_key =
+            hex_decode_array::<32>(&witness.public_key, "approval-log witness public key")?;
+        if &public_key != *trusted_key {
+            return Err("approval-log witness key does not match its trusted public key".into());
+        }
+        if witness_ids.contains(&witness.witness_id)
+            || witness_public_keys.contains(&witness.public_key)
+        {
+            return Err("approval-log witness identities and keys must be unique".into());
+        }
+        let signature =
+            hex_decode_array::<64>(&witness.signature, "approval-log witness signature")?;
+        let payload = witness_payload(
+            &witness.checkpoint_sha256,
+            &witness.log_id,
+            witness.entry_count,
+            witness.head_sha256.as_deref(),
+            &witness.witness_id,
+            witness.observed_at_unix,
+        )?;
+        VerifyingKey::from_bytes(&public_key)
+            .map_err(|error| format!("invalid approval-log witness public key: {error}"))?
+            .verify_strict(&payload, &Signature::from_bytes(&signature))
+            .map_err(|error| format!("invalid approval-log witness signature: {error}"))?;
+        witness_ids.push(witness.witness_id.clone());
+        witness_public_keys.push(witness.public_key.clone());
+    }
+    let valid_witnesses = witness_ids.len() as u32;
+    Ok(ApprovalLogWitnessQuorumReport {
+        schema_version: 1,
+        checkpoint_sha256,
+        log_id: checkpoint.log_id.clone(),
+        entry_count: checkpoint.entry_count,
+        head_sha256: checkpoint.head_sha256.clone(),
+        minimum_witnesses,
+        valid_witnesses,
+        witness_ids,
+        witness_public_keys,
+        quorum_met: valid_witnesses >= minimum_witnesses,
+    })
+}
+
+fn validate_checkpoint(checkpoint: &SignedApprovalLogCheckpoint) -> Result<(), String> {
+    if checkpoint.schema_version != 1 || checkpoint.algorithm != "ed25519" {
+        return Err("unsupported approval checkpoint contract".into());
+    }
+    validate_slug(&checkpoint.log_id, "approval transparency log id")?;
+    validate_slug(&checkpoint.signer_id, "approval checkpoint signer id")?;
+    validate_sha256(&checkpoint.log_sha256, "approval checkpoint log SHA-256")?;
+    if let Some(head) = &checkpoint.head_sha256 {
+        validate_sha256(head, "approval checkpoint head SHA-256")?;
+    }
+    hex_decode_array::<32>(&checkpoint.public_key, "approval checkpoint public key")?;
+    hex_decode_array::<64>(&checkpoint.signature, "approval checkpoint signature")?;
+    Ok(())
+}
+
 fn validate_event(event: &ApprovalEventDescriptor) -> Result<(), String> {
     validate_sha256(&event.artifact_sha256, "approval event artifact SHA-256")?;
     validate_text(&event.subject_id, "approval event subject id")?;
@@ -306,6 +471,26 @@ fn checkpoint_payload(
         signer_id,
     })
     .map_err(|error| format!("serializing approval checkpoint payload: {error}"))
+}
+
+fn witness_payload(
+    checkpoint_sha256: &str,
+    log_id: &str,
+    entry_count: u64,
+    head_sha256: Option<&str>,
+    witness_id: &str,
+    observed_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&WitnessPayload {
+        domain: WITNESS_DOMAIN,
+        checkpoint_sha256,
+        log_id,
+        entry_count,
+        head_sha256,
+        witness_id,
+        observed_at_unix,
+    })
+    .map_err(|error| format!("serializing approval-log witness payload: {error}"))
 }
 
 fn validate_sha256(value: &str, label: &str) -> Result<(), String> {
@@ -466,6 +651,66 @@ pub fn approval_log_verification_report_json_schema() -> Value {
     })
 }
 
+pub fn signed_approval_log_witness_json_schema() -> Value {
+    let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/signed-approval-log-witness-v1.json",
+        "title": "pcbex signed approval-log witness",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "checkpoint_sha256", "log_id", "entry_count",
+            "head_sha256", "witness_id", "observed_at_unix", "algorithm",
+            "public_key", "signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "checkpoint_sha256": digest.clone(),
+            "log_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+            "entry_count": {"type": "integer", "minimum": 0},
+            "head_sha256": {"anyOf": [digest, {"type": "null"}]},
+            "witness_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+            "observed_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
+pub fn approval_log_witness_quorum_report_json_schema() -> Value {
+    let digest = json!({"type": "string", "pattern": "^[0-9a-f]{64}$"});
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schemas/approval-log-witness-quorum-report-v1.json",
+        "title": "pcbex approval-log witness quorum report",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "checkpoint_sha256", "log_id", "entry_count",
+            "head_sha256", "minimum_witnesses", "valid_witnesses", "witness_ids",
+            "witness_public_keys", "quorum_met"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "checkpoint_sha256": digest.clone(),
+            "log_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+            "entry_count": {"type": "integer", "minimum": 0},
+            "head_sha256": {"anyOf": [digest, {"type": "null"}]},
+            "minimum_witnesses": {"type": "integer", "minimum": 2},
+            "valid_witnesses": {"type": "integer", "minimum": 0},
+            "witness_ids": {
+                "type": "array", "maxItems": 64, "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"}
+            },
+            "witness_public_keys": {
+                "type": "array", "maxItems": 64, "uniqueItems": true,
+                "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            },
+            "quorum_met": {"type": "boolean"}
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,6 +780,52 @@ mod tests {
         assert_eq!(
             approval_log_verification_report_json_schema()["additionalProperties"],
             false
+        );
+        assert_eq!(
+            signed_approval_log_witness_json_schema()["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            approval_log_witness_quorum_report_json_schema()["additionalProperties"],
+            false
+        );
+    }
+
+    #[test]
+    fn verifies_two_independent_witnesses_and_rejects_replay() {
+        let mut log = new_approval_transparency_log("production-approvals").unwrap();
+        append_approval_transparency_event(&mut log, event('a', "approved"), 100).unwrap();
+        let checkpoint = sign_approval_log_checkpoint(&log, "security-log", &[7; 32]).unwrap();
+        let first = sign_approval_log_witness(&checkpoint, "witness-a", 101, &[8; 32]).unwrap();
+        let second = sign_approval_log_witness(&checkpoint, "witness-b", 102, &[9; 32]).unwrap();
+        let first_key = SigningKey::from_bytes(&[8; 32]).verifying_key().to_bytes();
+        let second_key = SigningKey::from_bytes(&[9; 32]).verifying_key().to_bytes();
+        let report = verify_approval_log_witness_quorum(
+            &checkpoint,
+            &[(&first, &first_key), (&second, &second_key)],
+            2,
+        )
+        .unwrap();
+        assert!(report.quorum_met);
+
+        let mut advanced = log;
+        append_approval_transparency_event(&mut advanced, event('b', "approved"), 103).unwrap();
+        let newer = sign_approval_log_checkpoint(&advanced, "security-log", &[7; 32]).unwrap();
+        assert!(
+            verify_approval_log_witness_quorum(
+                &newer,
+                &[(&first, &first_key), (&second, &second_key)],
+                2,
+            )
+            .is_err()
+        );
+        assert!(
+            verify_approval_log_witness_quorum(
+                &checkpoint,
+                &[(&first, &first_key), (&first, &first_key)],
+                2,
+            )
+            .is_err()
         );
     }
 }

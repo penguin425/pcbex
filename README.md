@@ -729,7 +729,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.330.0
+    uses: penguin425/pcbex@v1.331.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -1752,6 +1752,32 @@ result with `fail-on-approval-log`. Closed contracts are emitted by
 `approval-transparency-log-schema`,
 `signed-approval-log-checkpoint-schema`, and
 `approval-log-verification-report-schema`.
+
+Independent services or security domains can witness that exact checkpoint
+before it is accepted:
+
+```sh
+pcbex witness-approval-log approvals.checkpoint.json \
+  --private-key .secrets/witness-a.key \
+  --witness-id witness-a \
+  --output witness-a.json
+
+pcbex verify-approval-log-witnesses approvals.checkpoint.json \
+  --witness witness-a.json --public-key witness-a.pub \
+  --witness witness-b.json --public-key witness-b.pub \
+  --minimum-witnesses 2 \
+  --output witness-quorum.json \
+  --require-quorum
+```
+
+Every witness signature binds the normalized checkpoint digest, log identity,
+head, entry count, witness identity, and observation time. Verification
+requires at least two distinct trusted witness IDs and keys, rejects signatures
+replayed against a newer checkpoint, and retains a report even when a valid
+set is below threshold. Callers first verify the log and origin checkpoint,
+then verify its witnesses. The Action accepts paired
+`approval-log-witness-files` and `approval-log-witness-public-keys`, and can
+enforce them with `fail-on-approval-log-witnesses`.
 
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit

@@ -54,6 +54,8 @@ write_output human-escalation-approved ""
 write_output schematic-approval-met ""
 write_output approval-log-verification ""
 write_output approval-log-verified ""
+write_output approval-log-witness-quorum ""
+write_output approval-log-witness-quorum-met ""
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -358,6 +360,48 @@ if ((approval_log_inputs == 3)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+approval_log_witness_quorum=""
+approval_log_witness_quorum_met=""
+witness_inputs=0
+if [[ -n "${PCBEX_APPROVAL_LOG_WITNESS_FILES:-}" ]]; then ((witness_inputs += 1)); fi
+if [[ -n "${PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS:-}" ]]; then ((witness_inputs += 1)); fi
+if ((witness_inputs != 0 && witness_inputs != 2)); then
+  echo "PCBEX_APPROVAL_LOG_WITNESS_FILES and PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS must be supplied together" >&2
+  exit 2
+fi
+if ((witness_inputs == 2)); then
+  if [[ -z "${PCBEX_APPROVAL_LOG_CHECKPOINT:-}" ]]; then
+    echo "approval-log witnesses require PCBEX_APPROVAL_LOG_CHECKPOINT" >&2
+    exit 2
+  fi
+  approval_log_witness_quorum="${artifact_dir}/approval-log-witness-quorum.json"
+  witness_arguments=(verify-approval-log-witnesses \
+    "$PCBEX_APPROVAL_LOG_CHECKPOINT" \
+    --minimum-witnesses "${PCBEX_APPROVAL_LOG_MINIMUM_WITNESSES:-2}" \
+    --output "$approval_log_witness_quorum")
+  while IFS= read -r witness; do
+    if [[ -n "$witness" ]]; then witness_arguments+=(--witness "$witness"); fi
+  done <<< "${PCBEX_APPROVAL_LOG_WITNESS_FILES:-}"
+  while IFS= read -r public_key; do
+    if [[ -n "$public_key" ]]; then witness_arguments+=(--public-key "$public_key"); fi
+  done <<< "${PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS:-}"
+  "$PCBEX_BINARY" "${witness_arguments[@]}"
+  approval_log_witness_quorum_met="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["quorum_met"]).lower())' \
+      "$approval_log_witness_quorum"
+  )"
+  {
+    printf '\n# Approval transparency-log witnesses\n\n'
+    printf -- '- Quorum met: `%s`\n' "$approval_log_witness_quorum_met"
+    printf -- '- Valid witnesses: `%s`\n' "$(
+      python3 -c \
+        'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["valid_witnesses"])' \
+        "$approval_log_witness_quorum"
+    )"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 comparison_sarif=""
 regression=false
 if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
@@ -410,4 +454,6 @@ write_output human-escalation-approved "$human_escalation_approved"
 write_output schematic-approval-met "$schematic_approval_met"
 write_output approval-log-verification "$approval_log_verification"
 write_output approval-log-verified "$approval_log_verified"
+write_output approval-log-witness-quorum "$approval_log_witness_quorum"
+write_output approval-log-witness-quorum-met "$approval_log_witness_quorum_met"
 write_output status ok

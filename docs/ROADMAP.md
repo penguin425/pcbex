@@ -40,6 +40,7 @@ auditable release.
 | v1.328.0 | Time-bound AI review sessions | Prevent approval replay with expiring request-bound random challenges |
 | v1.329.0 | Dual-control human AI escalation | Govern AI uncertainty without permitting safety-gate overrides |
 | v1.330.0 | Signed approval transparency log | Detect deletion, reordering, mutation, truncation, and stale checkpoints across approval evidence |
+| v1.331.0 | Approval transparency witness quorum | Require independent trusted observers to attest the exact signed log checkpoint |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing

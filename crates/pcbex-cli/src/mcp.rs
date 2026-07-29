@@ -1042,6 +1042,45 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("forbidden"),
         ),
+        tool(
+            "witness_approval_transparency_log",
+            "Witness approval-log checkpoint",
+            "Independently sign the exact normalized checkpoint observed by a witness.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["checkpoint", "private_key", "witness_id", "output"],
+                "properties": {
+                    "checkpoint": {"type": "string"},
+                    "private_key": {"type": "string"},
+                    "witness_id": {"type": "string"},
+                    "observed_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_approval_transparency_witnesses",
+            "Verify approval-log witness quorum",
+            "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["checkpoint", "witnesses", "public_keys", "output"],
+                "properties": {
+                    "checkpoint": {"type": "string"},
+                    "witnesses": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string"}},
+                    "public_keys": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string"}},
+                    "minimum_witnesses": {"type": "integer", "minimum": 2, "maximum": 64, "default": 2},
+                    "output": {"type": "string"},
+                    "require_quorum": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
     ]
 }
 
@@ -1137,6 +1176,12 @@ fn call_tool(
         }
         "verify_approval_transparency_log" => {
             verify_approval_transparency_log(arguments, cancellation)?
+        }
+        "witness_approval_transparency_log" => {
+            witness_approval_transparency_log(arguments, cancellation)?
+        }
+        "verify_approval_transparency_witnesses" => {
+            verify_approval_transparency_witnesses(arguments, cancellation)?
         }
         _ => return Err(json!({"detail": format!("unknown tool {name:?}")})),
     };
@@ -1999,6 +2044,91 @@ fn verify_approval_transparency_log(
     ))
 }
 
+fn witness_approval_transparency_log(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "checkpoint",
+            "private_key",
+            "witness_id",
+            "observed_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "witness-approval-log".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+    ];
+    optional_nonnegative_integer(
+        &arguments,
+        "observed_at_unix",
+        "--observed-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let witness = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "witness": witness}),
+    ))
+}
+
+fn verify_approval_transparency_witnesses(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "checkpoint",
+            "witnesses",
+            "public_keys",
+            "minimum_witnesses",
+            "output",
+            "require_quorum",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-approval-log-witnesses".into(),
+        required_string(&arguments, "checkpoint")?,
+    ];
+    for witness in required_string_array(&arguments, "witnesses", false)? {
+        command.extend(["--witness".into(), witness]);
+    }
+    for public_key in required_string_array(&arguments, "public_keys", false)? {
+        command.extend(["--public-key".into(), public_key]);
+    }
+    optional_positive_integer(
+        &arguments,
+        "minimum_witnesses",
+        "--minimum-witnesses",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    optional_flag(
+        &arguments,
+        "require_quorum",
+        "--require-quorum",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 struct Execution {
     success: bool,
     exit_code: Option<i32>,
@@ -2245,7 +2375,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 19);
+        assert_eq!(tools.len(), 21);
         let named = |name: &str| {
             tools
                 .iter()
@@ -2339,6 +2469,11 @@ mod tests {
         assert_eq!(
             named("verify_approval_transparency_log")["annotations"]["destructiveHint"],
             true
+        );
+        assert_eq!(
+            named("verify_approval_transparency_witnesses")["inputSchema"]["properties"]["minimum_witnesses"]
+                ["minimum"],
+            2
         );
         let verify_policy = tools
             .iter()
