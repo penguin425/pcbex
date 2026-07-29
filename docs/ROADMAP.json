@@ -254,6 +254,11 @@
     {
       "id": "signed-policy-suspension-decision",
       "release": "v1.347.0",
+      "status": "released"
+    },
+    {
+      "id": "independently-verified-policy-remediation",
+      "release": "v1.348.0",
       "status": "current"
     }
   ]

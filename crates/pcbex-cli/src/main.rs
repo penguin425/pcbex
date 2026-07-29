@@ -81,6 +81,7 @@ mod policy_deployment_verification;
 mod policy_incident_ledger;
 mod policy_pack;
 mod policy_recommendation;
+mod policy_remediation;
 mod policy_rollback_recovery;
 mod policy_rollout;
 mod policy_rollout_approval;
@@ -129,6 +130,12 @@ use policy_pack::{
 use policy_recommendation::{
     PolicyRecommendationInput, generate_policy_recommendations, parse_policy_recommendation_report,
     policy_recommendation_json_schema, render_policy_recommendation_summary,
+};
+use policy_remediation::{
+    apply_policy_remediation, parse_policy_remediation_state,
+    parse_signed_policy_remediation_approval, policy_remediation_state_json_schema,
+    render_policy_remediation_summary, sign_policy_remediation_approval,
+    signed_policy_remediation_approval_json_schema,
 };
 use policy_rollback_recovery::{
     PolicyRollbackRecoveryEvidence, close_rollback_incident, parse_policy_rollback_recovery,
@@ -753,6 +760,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed policy-remediation approval JSON Schema.
+    SignedPolicyRemediationApprovalSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed policy-remediation approval.
+    ValidatePolicyRemediationApproval {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed verified policy-remediation state JSON Schema.
+    PolicyRemediationStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a retained policy-remediation state.
+    ValidatePolicyRemediationState {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -962,6 +991,9 @@ enum Command {
         /// Retained suspension decisions that deny exact candidate digests.
         #[arg(long = "suspension-state")]
         suspension_states: Vec<PathBuf>,
+        /// Independently approved clean successor evidence for suspended policies.
+        #[arg(long = "remediation-state")]
+        remediation_states: Vec<PathBuf>,
         #[arg(long)]
         recorded_at_unix: u64,
         #[arg(short, long)]
@@ -1162,6 +1194,52 @@ enum Command {
         summary_output: Option<PathBuf>,
         #[arg(long)]
         require_suspended: bool,
+    },
+    /// Sign an independent approval over a clean successor remediation candidate.
+    SignPolicyRemediationApproval {
+        suspension: PathBuf,
+        candidate_policy_pack: PathBuf,
+        candidate_policy_trust_state: PathBuf,
+        rollout: PathBuf,
+        monitoring: PathBuf,
+        #[arg(long)]
+        approved_at_unix: u64,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify independent approvals and lift one suspension for one exact successor digest.
+    ApplyPolicyRemediation {
+        suspension: PathBuf,
+        #[arg(long)]
+        policy_pack: PathBuf,
+        #[arg(long)]
+        candidate_policy_pack: PathBuf,
+        #[arg(long)]
+        candidate_policy_trust_state: PathBuf,
+        #[arg(long)]
+        rollout: PathBuf,
+        #[arg(long)]
+        monitoring: PathBuf,
+        #[arg(long = "approval", required = true)]
+        approvals: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_approvals: u32,
+        #[arg(long)]
+        recorded_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        require_verified: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2762,6 +2840,28 @@ fn main() -> Result<()> {
             let state = parse_policy_suspension_state(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
         }
+        Command::SignedPolicyRemediationApprovalSchema { output } => {
+            write_or_print_json(
+                &signed_policy_remediation_approval_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyRemediationApproval { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let approval =
+                parse_signed_policy_remediation_approval(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(approval)?, output.as_ref())?;
+        }
+        Command::PolicyRemediationStateSchema { output } => {
+            write_or_print_json(&policy_remediation_state_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePolicyRemediationState { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let state = parse_policy_remediation_state(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -3412,6 +3512,7 @@ fn main() -> Result<()> {
             minimum_decisions,
             baseline_state,
             suspension_states,
+            remediation_states,
             recorded_at_unix,
             output,
             summary_output,
@@ -3448,7 +3549,17 @@ fn main() -> Result<()> {
                         .with_context(|| format!("parsing {}", path.display()))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            enforce_policy_suspensions(&candidate_policy, &suspension_states)
+            let remediation_states = remediation_states
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_remediation_state(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            enforce_policy_suspensions(&candidate_policy, &suspension_states, &remediation_states)
                 .map_err(anyhow::Error::msg)?;
             let source_trust_state = load_policy_trust_state(&source_policy_trust_state)?;
             let candidate_trust_state = load_policy_trust_state(&candidate_policy_trust_state)?;
@@ -4128,6 +4239,124 @@ fn main() -> Result<()> {
             eprintln!("policy suspension decision retained: {}", state.status);
             if require_suspended && !state.policy_suspended {
                 bail!("policy suspension quorum chose to continue under review");
+            }
+        }
+        Command::SignPolicyRemediationApproval {
+            suspension,
+            candidate_policy_pack,
+            candidate_policy_trust_state,
+            rollout,
+            monitoring,
+            approved_at_unix,
+            private_key,
+            signer_id,
+            reason,
+            ticket,
+            output,
+        } => {
+            let suspension_source = fs::read_to_string(&suspension)
+                .with_context(|| format!("reading {}", suspension.display()))?;
+            let suspension =
+                parse_policy_suspension_state(&suspension_source).map_err(anyhow::Error::msg)?;
+            let candidate = load_policy_pack(&candidate_policy_pack)?.0;
+            let candidate_trust_state = load_policy_trust_state(&candidate_policy_trust_state)?;
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let monitoring_source = fs::read_to_string(&monitoring)
+                .with_context(|| format!("reading {}", monitoring.display()))?;
+            let monitoring =
+                parse_canary_monitoring_report(&monitoring_source).map_err(anyhow::Error::msg)?;
+            let secret = read_secret_key(&private_key)?;
+            let approval = sign_policy_remediation_approval(
+                &suspension,
+                &candidate,
+                &candidate_trust_state,
+                &rollout,
+                &monitoring,
+                approved_at_unix,
+                &reason,
+                &ticket,
+                &signer_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&approval)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!("signed policy remediation approval as {signer_id}");
+        }
+        Command::ApplyPolicyRemediation {
+            suspension,
+            policy_pack,
+            candidate_policy_pack,
+            candidate_policy_trust_state,
+            rollout,
+            monitoring,
+            approvals,
+            minimum_approvals,
+            recorded_at_unix,
+            output,
+            summary_output,
+            require_verified,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "policy remediation",
+            )?;
+            if approvals.len() > 100 {
+                bail!("policy remediation accepts at most 100 approvals");
+            }
+            let suspension_source = fs::read_to_string(&suspension)
+                .with_context(|| format!("reading {}", suspension.display()))?;
+            let suspension =
+                parse_policy_suspension_state(&suspension_source).map_err(anyhow::Error::msg)?;
+            let policy = load_policy_pack(&policy_pack)?.0;
+            let candidate = load_policy_pack(&candidate_policy_pack)?.0;
+            let candidate_trust_state = load_policy_trust_state(&candidate_policy_trust_state)?;
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let monitoring_source = fs::read_to_string(&monitoring)
+                .with_context(|| format!("reading {}", monitoring.display()))?;
+            let monitoring =
+                parse_canary_monitoring_report(&monitoring_source).map_err(anyhow::Error::msg)?;
+            let approvals = approvals
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_policy_remediation_approval(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let state = apply_policy_remediation(
+                &suspension,
+                &policy,
+                &candidate,
+                &candidate_trust_state,
+                &rollout,
+                &monitoring,
+                &approvals,
+                minimum_approvals,
+                recorded_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&state)? + "\n";
+            let summary = render_policy_remediation_summary(&state);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "policy remediation retained for revision {}",
+                state.remediation_revision
+            );
+            if require_verified && !state.suspension_lifted_for_remediation {
+                bail!("policy remediation was not independently verified");
             }
         }
         Command::RecordSimulationEvidence {

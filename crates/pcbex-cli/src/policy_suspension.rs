@@ -264,6 +264,7 @@ pub fn apply_policy_suspension_decision(
 pub fn enforce_policy_suspensions(
     candidate: &OrganizationPolicyPack,
     states: &[PolicySuspensionState],
+    remediations: &[crate::policy_remediation::PolicyRemediationState],
 ) -> Result<(), String> {
     validate_policy_pack(candidate)?;
     let digest = normalized_sha256(candidate, "candidate policy pack")?;
@@ -293,6 +294,27 @@ pub fn enforce_policy_suspensions(
                 "candidate policy revision {} digest {} is suspended by incident decision {}",
                 candidate.revision, digest, state.ledger_head_sha256
             ));
+        }
+        if state.policy_suspended && candidate.revision > state.failed_revision {
+            let state_sha256 = normalized_sha256(state, "policy suspension state")?;
+            let remediation = remediations
+                .iter()
+                .find(|remediation| {
+                    remediation.suspension_state_sha256 == state_sha256
+                        && remediation.remediation_revision == candidate.revision
+                        && remediation.remediation_policy_pack_sha256 == digest
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "candidate policy revision {} requires an independently verified remediation for suspension {}",
+                        candidate.revision, state.ledger_head_sha256
+                    )
+                })?;
+            crate::policy_remediation::validate_remediation_for_candidate(
+                remediation,
+                state,
+                candidate,
+            )?;
         }
     }
     Ok(())
@@ -736,7 +758,7 @@ mod tests {
         assert!(!state.automatic_policy_suspension);
         assert_eq!(state.decisions, 2);
         assert!(
-            enforce_policy_suspensions(&policy, std::slice::from_ref(&state))
+            enforce_policy_suspensions(&policy, std::slice::from_ref(&state), &[])
                 .unwrap_err()
                 .contains("is suspended")
         );

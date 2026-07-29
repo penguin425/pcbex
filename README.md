@@ -1103,6 +1103,42 @@ candidate digest before writing deployment state. Suspension is never
 automatic. MCP exposes signing and application tools; the Action accepts
 `policy-suspension-*` inputs and enforces the same promotion deny gate.
 
+Release one exact successor remediation after independent review:
+
+```sh
+pcbex sign-policy-remediation-approval policy-suspension.json \
+  candidate-policy.json candidate-policy-trust-state.json \
+  policy-rollout.json canary-monitoring.json \
+  --approved-at-unix 1785301000 \
+  --private-key remediator-a.key \
+  --signer-id remediator-a \
+  --reason "Successor passed complete clean canary verification" \
+  --ticket HW-422 \
+  --output remediation-a.json
+
+pcbex apply-policy-remediation policy-suspension.json \
+  --policy-pack active-policy.json \
+  --candidate-policy-pack candidate-policy.json \
+  --candidate-policy-trust-state candidate-policy-trust-state.json \
+  --rollout policy-rollout.json \
+  --monitoring canary-monitoring.json \
+  --approval remediation-a.json \
+  --approval remediation-b.json \
+  --recorded-at-unix 1785301060 \
+  --output policy-remediation.json \
+  --require-verified
+```
+
+The successor must have a higher revision and different digest, an accepted
+policy trust state, unchanged human trust roots, and complete regression-free
+canary evidence. At least two remediation approvers must be distinct from every
+suspension approver and from each other. Their signatures bind the suspension,
+successor digest, accepted trust state, rollout, monitoring, reason, ticket,
+and time. A suspended policy identity blocks later promotion until
+`advance-policy-deployment` receives a matching `--remediation-state`; the
+release applies only to that exact successor digest and never lifts suspension
+automatically. CLI, MCP, and the composite Action enforce the same boundary.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1130,7 +1166,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.347.0
+    uses: penguin425/pcbex@v1.348.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2367,7 +2403,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.347.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.348.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

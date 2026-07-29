@@ -72,6 +72,8 @@ write_output policy-incident-ledger ""
 write_output policy-incident-suspension-review-required ""
 write_output policy-suspension-state ""
 write_output policy-suspension-status ""
+write_output policy-remediation-state ""
+write_output policy-remediation-status ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -487,6 +489,11 @@ if [[ -n "${PCBEX_POLICY_DEPLOYMENT_RECORDED_AT_UNIX:-}" ]]; then
       deployment_arguments+=(--suspension-state "$suspension_state")
     fi
   done <<< "${PCBEX_POLICY_SUSPENSION_STATE_FILES:-}"
+  while IFS= read -r remediation_state; do
+    if [[ -n "$remediation_state" ]]; then
+      deployment_arguments+=(--remediation-state "$remediation_state")
+    fi
+  done <<< "${PCBEX_POLICY_REMEDIATION_STATE_FILES:-}"
   while IFS= read -r decision; do
     if [[ -n "$decision" ]]; then
       deployment_arguments+=(--decision "$decision")
@@ -775,6 +782,48 @@ if [[ -n "${PCBEX_POLICY_SUSPENSION_RECORDED_AT_UNIX:-}" ]]; then
   {
     printf '\n'
     cat "$policy_suspension_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+policy_remediation_state=""
+policy_remediation_status=""
+if [[ -n "${PCBEX_POLICY_REMEDIATION_RECORDED_AT_UNIX:-}" ]]; then
+  remediation_suspension="${PCBEX_POLICY_REMEDIATION_SUSPENSION_STATE:-$policy_suspension_state}"
+  remediation_candidate="${PCBEX_POLICY_REMEDIATION_CANDIDATE_POLICY_PACK:-${PCBEX_POLICY_DEPLOYMENT_CANDIDATE_POLICY_PACK:-}}"
+  remediation_trust_state="${PCBEX_POLICY_REMEDIATION_CANDIDATE_TRUST_STATE:-${PCBEX_POLICY_DEPLOYMENT_CANDIDATE_TRUST_STATE:-}}"
+  remediation_rollout="${PCBEX_POLICY_REMEDIATION_ROLLOUT:-${PCBEX_CANARY_ROLLOUT_REPORT:-$policy_rollout}}"
+  remediation_monitoring="${PCBEX_POLICY_REMEDIATION_MONITORING:-${PCBEX_CANARY_COMPLETION_MONITORING_REPORT:-$canary_monitoring}}"
+  if [[ -z "$remediation_suspension" || -z "$effective_policy_pack" || -z "$remediation_candidate" || -z "$remediation_trust_state" || -z "$remediation_rollout" || -z "$remediation_monitoring" || -z "${PCBEX_POLICY_REMEDIATION_APPROVAL_FILES:-}" ]]; then
+    echo "policy remediation requires suspension, trust policy, accepted successor, rollout, clean monitoring, and independent approvals" >&2
+    exit 2
+  fi
+  policy_remediation_state="${artifact_dir}/policy-remediation-state.json"
+  policy_remediation_summary="${artifact_dir}/policy-remediation-state.md"
+  remediation_arguments=(apply-policy-remediation \
+    "$remediation_suspension" \
+    --policy-pack "$effective_policy_pack" \
+    --candidate-policy-pack "$remediation_candidate" \
+    --candidate-policy-trust-state "$remediation_trust_state" \
+    --rollout "$remediation_rollout" \
+    --monitoring "$remediation_monitoring" \
+    --minimum-approvals "${PCBEX_POLICY_REMEDIATION_MINIMUM_APPROVALS:-2}" \
+    --recorded-at-unix "$PCBEX_POLICY_REMEDIATION_RECORDED_AT_UNIX" \
+    --output "$policy_remediation_state" \
+    --summary-output "$policy_remediation_summary")
+  while IFS= read -r approval; do
+    if [[ -n "$approval" ]]; then
+      remediation_arguments+=(--approval "$approval")
+    fi
+  done <<< "${PCBEX_POLICY_REMEDIATION_APPROVAL_FILES:-}"
+  "$PCBEX_BINARY" "${remediation_arguments[@]}"
+  policy_remediation_status="$(
+    python3 -c \
+      'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["status"])' \
+      "$policy_remediation_state"
+  )"
+  {
+    printf '\n'
+    cat "$policy_remediation_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -1196,6 +1245,8 @@ write_output policy-incident-ledger "$policy_incident_ledger"
 write_output policy-incident-suspension-review-required "$policy_incident_suspension_review_required"
 write_output policy-suspension-state "$policy_suspension_state"
 write_output policy-suspension-status "$policy_suspension_status"
+write_output policy-remediation-state "$policy_remediation_state"
+write_output policy-remediation-status "$policy_remediation_status"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"
