@@ -1775,6 +1775,38 @@ MCP exposes successor-policy creation and sign/apply rotation as task-forbidden
 tools, and the closed artifact contract is available from
 `signed-policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation-schema`.
 
+Audit an entire mixed registry history without accepting intermediate registry
+snapshots as trust anchors:
+
+```sh
+pcbex audit-policy-lifecycle-log-gossip-organization-registry-history \
+  gossip-registry.history.json \
+  --output gossip-registry.history.audit.json \
+  --final-registry-output gossip-registry.verified.json
+```
+
+The closed history contains only an empty generation-zero registry and an
+ordered typed event stream. Events may be legacy root-signed transitions,
+dual-signed legacy root rotations, threshold transitions with their exact
+root-signed governance, dual-quorum governance rotations, or dual-quorum
+governed root rotations. `pcbex` replays every event through the same
+production verifier used by the individual apply commands and emits an entry
+for each exact event digest, computed registry digest, retained root, and
+active governance digest. The audit rejects non-genesis starts, more than
+10,000 events, reordering, chain-breaking omissions, replay, forks, generation gaps, stale
+time, policy substitution, invalid signatures, and insufficient quorums before
+either output is written. Its schemas are available from
+`policy-lifecycle-log-gossip-organization-registry-history-schema` and
+`policy-lifecycle-log-gossip-organization-registry-history-audit-schema`.
+GitHub Actions accepts
+`policy-lifecycle-log-gossip-organization-registry-history`, exports the audit
+and computed final registry, and forbids pairing the history with a copied
+retained registry. MCP exposes the same atomic audit as a task-forbidden tool.
+The audit proves internal completeness and authenticity of the supplied chain;
+it does not by itself prove that a valid prefix is the globally latest head.
+The next witnessed-checkpoint milestone closes that freshness/equivocation
+boundary.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1802,7 +1834,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.365.0
+    uses: penguin425/pcbex@v1.366.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3039,7 +3071,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.365.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.366.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

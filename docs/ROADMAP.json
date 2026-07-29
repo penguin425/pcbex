@@ -344,6 +344,11 @@
     {
       "id": "lifecycle-gossip-registry-governed-root-rotation",
       "release": "v1.365.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-gossip-registry-history-audit",
+      "release": "v1.366.0",
       "status": "current"
     }
   ]

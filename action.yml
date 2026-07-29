@@ -578,6 +578,10 @@ inputs:
     description: Optional retained-and-successor quorum approved registry-root rotation; reuses the old/new governance policy inputs and atomically replaces both root and active governance.
     required: false
     default: ""
+  policy-lifecycle-log-gossip-organization-registry-history:
+    description: Optional complete typed registry event history replayed from genesis; mutually exclusive with a copied organization trust registry.
+    required: false
+    default: ""
   policy-lifecycle-log-gossip-minimum-organizations:
     description: Minimum distinct organizations required by the public-log gossip quorum.
     required: false
@@ -955,6 +959,12 @@ outputs:
   policy-lifecycle-log-gossip-quorum-met:
     description: Whether fresh consistent gossip observations meet the organization threshold.
     value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-quorum-met }}
+  policy-lifecycle-log-gossip-organization-registry-history-audit:
+    description: Deterministic genesis-to-head registry history audit path.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-organization-registry-history-audit }}
+  policy-lifecycle-log-gossip-organization-registry-history-final:
+    description: Final registry computed exclusively by replaying the supplied history.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-organization-registry-history-final }}
   policy-lifecycle-log-remote-gossip-observations:
     description: Directory containing verified remote gossip observation envelopes.
     value: ${{ steps.analyze.outputs.policy-lifecycle-log-remote-gossip-observations }}
@@ -1160,6 +1170,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-governance-rotation-new }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-governance-rotation }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNED_AUTHORITY_KEY_ROTATION: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-governed-authority-key-rotation }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.policy-lifecycle-log-gossip-minimum-organizations }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.policy-lifecycle-log-remote-gossip-endpoints }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.policy-lifecycle-log-remote-gossip-organization-ids }}

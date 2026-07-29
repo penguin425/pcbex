@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -573,6 +573,98 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
     );
     let revoked_value: Value = serde_json::from_slice(&fs::read(&revoked).unwrap()).unwrap();
     assert_eq!(revoked_value["organizations"][0]["status"], "revoked");
+
+    let read_json =
+        |path: &Path| -> Value { serde_json::from_slice(&fs::read(path).unwrap()).unwrap() };
+    let history = directory.join("registry.history.json");
+    let history_value = json!({
+        "schema_version": 1,
+        "initial_registry": read_json(&initial),
+        "events": [
+            {"kind": "root_transition", "transition": read_json(&admission)},
+            {"kind": "root_authority_key_rotation", "rotation": read_json(&authority_rotation)},
+            {
+                "kind": "threshold_transition",
+                "governance": read_json(&governance),
+                "transition": read_json(&suspension)
+            },
+            {
+                "kind": "governance_rotation",
+                "old_governance": read_json(&governance),
+                "new_governance": read_json(&successor_governance),
+                "rotation": read_json(&governance_rotation)
+            },
+            {
+                "kind": "governed_authority_key_rotation",
+                "old_governance": read_json(&successor_governance),
+                "new_governance": read_json(&final_governance),
+                "rotation": read_json(&governed_authority_rotation)
+            },
+            {
+                "kind": "threshold_transition",
+                "governance": read_json(&final_governance),
+                "transition": read_json(&revocation)
+            }
+        ]
+    });
+    fs::write(&history, serde_json::to_vec_pretty(&history_value).unwrap()).unwrap();
+    let history_audit = directory.join("registry.history.audit.json");
+    let history_final = directory.join("registry.history.final.json");
+    assert!(
+        run(&[
+            "audit-policy-lifecycle-log-gossip-organization-registry-history",
+            path(&history),
+            "--output",
+            path(&history_audit),
+            "--final-registry-output",
+            path(&history_final),
+        ])
+        .status
+        .success()
+    );
+    let history_audit_value = read_json(&history_audit);
+    assert_eq!(history_audit_value["event_count"], 6);
+    assert_eq!(history_audit_value["chain_valid"], true);
+    assert_eq!(read_json(&history_final), revoked_value);
+    for (command, input) in [
+        (
+            "validate-policy-lifecycle-log-gossip-organization-registry-history",
+            &history,
+        ),
+        (
+            "validate-policy-lifecycle-log-gossip-organization-registry-history-audit",
+            &history_audit,
+        ),
+    ] {
+        assert!(run(&[command, path(input)]).status.success());
+    }
+    let mut reordered_history = history_value;
+    reordered_history["events"]
+        .as_array_mut()
+        .unwrap()
+        .swap(0, 1);
+    let reordered_history_path = directory.join("registry.history.reordered.json");
+    fs::write(
+        &reordered_history_path,
+        serde_json::to_vec_pretty(&reordered_history).unwrap(),
+    )
+    .unwrap();
+    let rejected_audit = directory.join("registry.history.rejected-audit.json");
+    let rejected_final = directory.join("registry.history.rejected-final.json");
+    assert!(
+        !run(&[
+            "audit-policy-lifecycle-log-gossip-organization-registry-history",
+            path(&reordered_history_path),
+            "--output",
+            path(&rejected_audit),
+            "--final-registry-output",
+            path(&rejected_final),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_audit.exists());
+    assert!(!rejected_final.exists());
 
     for (command, input) in [
         (
