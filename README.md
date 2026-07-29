@@ -1473,6 +1473,66 @@ observer identity and key, evaluation time, and an optional consistency proof.
 It publishes the verification report and boolean result and can fail closed
 with `fail-on-policy-lifecycle-log-gossip: "true"`.
 
+Require a fresh view shared by distinct organizations, including observations
+acquired directly from bounded remote services:
+
+```sh
+pcbex request-policy-lifecycle-log-gossip-observation \
+  --local-anchor policy-lifecycle.anchor.json \
+  --endpoint https://observer-a.example/v1/gossip \
+  --log-id organization-lifecycle-log \
+  --log-public-key lifecycle-public-log.pub \
+  --organization-id independent-lab \
+  --observer-id independent-lab-ci \
+  --observer-public-key independent-lab-gossip.pub \
+  --evaluated-at-unix 1785301700 \
+  --output independent-lab.observation.json \
+  --receipt-output independent-lab.transport.json
+
+pcbex verify-policy-lifecycle-log-gossip-quorum \
+  --local-anchor policy-lifecycle.anchor.json \
+  --observation independent-lab.observation.json \
+  --observation security-partner.observation.json \
+  --organization-id independent-lab \
+  --organization-id security-partner \
+  --observer-id independent-lab-ci \
+  --observer-id security-partner-ci \
+  --observer-public-key independent-lab-gossip.pub \
+  --observer-public-key security-partner-gossip.pub \
+  --minimum-organizations 2 \
+  --log-id organization-lifecycle-log \
+  --log-public-key lifecycle-public-log.pub \
+  --evaluated-at-unix 1785301700 \
+  --output policy-lifecycle.gossip-quorum.json \
+  --require-quorum
+```
+
+Each observation envelope pairs one signed receipt with its optional exact
+consistency proof, preventing proof/receipt re-pairing between observers.
+Quorum verification freshly checks every log signature, observer signature,
+validity window, and prefix proof, then rejects duplicate organizations,
+observer identities, keys, or receipts. Members are canonically ordered and a
+below-threshold report is retained before the optional gate fails. Even when a
+receipt has a longer valid lifetime, quorum membership additionally requires
+receipt acquisition within the preceding 24 hours.
+
+Remote acquisition accepts HTTPS only, follows no redirects, limits the
+end-to-end request to 1–600 seconds and the response to 1 MiB, keeps an
+optional Bearer secret out of argv and retained evidence, and writes the
+observation plus a request/response-hash-bound transport receipt atomically
+only after full cryptographic verification. Loopback HTTP exists solely as a
+hidden test escape hatch.
+
+Closed contracts are emitted by
+`policy-lifecycle-log-gossip-observation-schema`,
+`policy-lifecycle-log-gossip-quorum-schema`, and
+`remote-policy-lifecycle-log-gossip-receipt-schema`. MCP exposes
+`verify_policy_lifecycle_public_log_gossip_quorum` and
+`request_remote_policy_lifecycle_public_log_gossip`. The Action accepts local
+observation tuples and/or up to ten remote observer tuples, publishes quorum
+and remote transport evidence, and can fail closed with
+`fail-on-policy-lifecycle-log-gossip-quorum: "true"`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1500,7 +1560,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.357.0
+    uses: penguin425/pcbex@v1.358.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2737,7 +2797,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.357.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.358.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

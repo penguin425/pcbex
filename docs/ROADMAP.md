@@ -67,6 +67,7 @@ auditable release.
 | v1.355.0 | Lifecycle public-log anchoring | Verify lifecycle-checkpoint inclusion under a separately trusted signed Merkle tree head |
 | v1.356.0 | Lifecycle public-log consistency | Reject signed tree rollback, equivocation, and non-prefix split views across retained anchors |
 | v1.357.0 | Lifecycle public-log gossip | Compare independent signed tree-head observations without requiring a shared retained baseline |
+| v1.358.0 | Remote lifecycle public-log gossip quorum | Acquire bounded remote observations and require fresh consistent views from distinct organizations |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -75,6 +76,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should acquire gossip receipts from bounded remote observer
-services and require a fresh quorum of distinct organizations before accepting
-one lifecycle public-log view.
+The next roadmap should bind each gossip observer identity to an immutable,
+generation-chained trust snapshot and require dual-signed key rotation before
+a long-lived organization can replace its observer key.
