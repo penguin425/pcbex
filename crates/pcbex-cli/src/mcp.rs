@@ -1483,6 +1483,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "checkpoint": {"type": "string"},
                     "public_key": {"type": "string"},
                     "baseline_state": {"type": "string"},
+                    "key_rotation": {"type": "string"},
                     "accepted_at_unix": {"type": "integer", "minimum": 0},
                     "output": {"type": "string"},
                     "require_accepted": {"type": "boolean", "default": false}
@@ -1491,6 +1492,28 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             false,
             true,
             tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "sign_policy_lifecycle_key_rotation",
+            "Sign policy lifecycle key rotation",
+            "Authorize one signing-root transition with dual Ed25519 signatures from both the currently trusted and successor private keys.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "baseline_state", "old_private_key", "new_private_key",
+                    "rotated_at_unix", "output"
+                ],
+                "properties": {
+                    "baseline_state": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
         ),
         tool(
             "compare_schematics",
@@ -2126,6 +2149,9 @@ fn call_tool(
         }
         "verify_policy_lifecycle_checkpoint" => {
             verify_policy_lifecycle_checkpoint(arguments, cancellation)?
+        }
+        "sign_policy_lifecycle_key_rotation" => {
+            sign_policy_lifecycle_key_rotation(arguments, cancellation)?
         }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
@@ -3980,6 +4006,7 @@ fn verify_policy_lifecycle_checkpoint(
             "checkpoint",
             "public_key",
             "baseline_state",
+            "key_rotation",
             "accepted_at_unix",
             "output",
             "require_accepted",
@@ -4007,6 +4034,7 @@ fn verify_policy_lifecycle_checkpoint(
         "--baseline-state",
         &mut command,
     )?;
+    optional_option(&arguments, "key_rotation", "--key-rotation", &mut command)?;
     optional_flag(
         &arguments,
         "require_accepted",
@@ -4018,6 +4046,45 @@ fn verify_policy_lifecycle_checkpoint(
     Ok(execution_result(
         execution,
         json!({"output": output, "trust_state": state}),
+    ))
+}
+
+fn sign_policy_lifecycle_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "baseline_state",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let rotated_at_unix = arguments
+        .get("rotated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "rotated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-policy-lifecycle-key-rotation".into(),
+        required_string(&arguments, "baseline_state")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+        "--rotated-at-unix".into(),
+        rotated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "key_rotation": rotation}),
     ))
 }
 
@@ -5230,7 +5297,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 53);
+        assert_eq!(tools.len(), 54);
         let named = |name: &str| {
             tools
                 .iter()
@@ -5419,6 +5486,10 @@ mod tests {
         assert_eq!(
             named("verify_policy_lifecycle_checkpoint")["execution"]["taskSupport"],
             "optional"
+        );
+        assert_eq!(
+            named("sign_policy_lifecycle_key_rotation")["execution"]["taskSupport"],
+            "forbidden"
         );
         assert_eq!(
             named("verify_policy_lifecycle_checkpoint")["inputSchema"]["properties"]["accepted_at_unix"]

@@ -1204,6 +1204,36 @@ Action accepts `policy-lifecycle-checkpoint-*`, publishes the newly accepted
 trust state, and can fail closed with
 `fail-on-policy-lifecycle-checkpoint: "true"`.
 
+Rotate a lifecycle signing root without resetting trusted history:
+
+```sh
+pcbex sign-policy-lifecycle-key-rotation \
+  policy-lifecycle.previous.trust.json \
+  --old-private-key lifecycle-root.key \
+  --new-private-key lifecycle-root.next.key \
+  --rotated-at-unix 1785301200 \
+  --output policy-lifecycle.key-rotation.json
+
+pcbex verify-policy-lifecycle-checkpoint \
+  policy-lifecycle.next.json policy-lifecycle.next.checkpoint.json \
+  --public-key lifecycle-root.next.pub \
+  --baseline-state policy-lifecycle.previous.trust.json \
+  --key-rotation policy-lifecycle.key-rotation.json \
+  --accepted-at-unix 1785301201 \
+  --output policy-lifecycle.next.trust.json \
+  --require-accepted
+```
+
+The rotation advances exactly one key generation and binds the policy,
+signer, previously accepted checkpoint, prior rotation digest, old and new
+public keys, and rotation time. Both private keys must sign the same payload.
+The verifier rejects missing, replayed, skipped, reordered, future-dated, or
+single-key transitions and carries the rotation digest into the next trust
+state. The closed contract is emitted by
+`signed-policy-lifecycle-key-rotation-schema`; MCP exposes signing as
+task-forbidden, and the Action accepts
+`policy-lifecycle-checkpoint-key-rotation`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1231,7 +1261,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.350.0
+    uses: penguin425/pcbex@v1.351.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2468,7 +2498,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.350.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.351.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

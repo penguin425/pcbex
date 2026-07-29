@@ -71,6 +71,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "verify-policy-lifecycle-checkpoint",
         "validate-policy-lifecycle-checkpoint",
         "validate-policy-lifecycle-trust-state",
+        "sign-policy-lifecycle-key-rotation",
+        "validate-policy-lifecycle-key-rotation",
         "compare-schematics",
         "route-schematic-review",
         "check-schematic",

@@ -131,8 +131,10 @@ use policy_lifecycle::{
 };
 use policy_lifecycle_checkpoint::{
     parse_policy_lifecycle_trust_state, parse_signed_policy_lifecycle_checkpoint,
-    policy_lifecycle_trust_state_json_schema, sign_policy_lifecycle_checkpoint,
-    signed_policy_lifecycle_checkpoint_json_schema, verify_policy_lifecycle_checkpoint,
+    parse_signed_policy_lifecycle_key_rotation, policy_lifecycle_trust_state_json_schema,
+    sign_policy_lifecycle_checkpoint, sign_policy_lifecycle_key_rotation,
+    signed_policy_lifecycle_checkpoint_json_schema,
+    signed_policy_lifecycle_key_rotation_json_schema, verify_policy_lifecycle_checkpoint,
 };
 use policy_pack::{
     OrganizationPolicyPack, PolicyTrustState, SignedPolicyPack, advance_policy_trust_state,
@@ -839,6 +841,17 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed dual-signed lifecycle key-rotation JSON Schema.
+    SignedPolicyLifecycleKeyRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a dual-signed lifecycle key rotation.
+    ValidatePolicyLifecycleKeyRotation {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -1349,6 +1362,9 @@ enum Command {
         /// Previously accepted state used to reject rollback, equivocation, and forks.
         #[arg(long)]
         baseline_state: Option<PathBuf>,
+        /// Dual-signed old-to-new key transition required when the signer key changes.
+        #[arg(long, requires = "baseline_state")]
+        key_rotation: Option<PathBuf>,
         #[arg(long)]
         accepted_at_unix: u64,
         #[arg(short, long)]
@@ -1356,6 +1372,18 @@ enum Command {
         /// Fail unless the checkpoint is accepted (useful for CI policy gates).
         #[arg(long)]
         require_accepted: bool,
+    },
+    /// Authorize one exact lifecycle signing-key transition with both old and new keys.
+    SignPolicyLifecycleKeyRotation {
+        baseline_state: PathBuf,
+        #[arg(long)]
+        old_private_key: PathBuf,
+        #[arg(long)]
+        new_private_key: PathBuf,
+        #[arg(long)]
+        rotated_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -3018,6 +3046,19 @@ fn main() -> Result<()> {
             let state = parse_policy_lifecycle_trust_state(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(state)?, output.as_ref())?;
         }
+        Command::SignedPolicyLifecycleKeyRotationSchema { output } => {
+            write_or_print_json(
+                &signed_policy_lifecycle_key_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleKeyRotation { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let rotation =
+                parse_signed_policy_lifecycle_key_rotation(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(rotation)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -4639,6 +4680,7 @@ fn main() -> Result<()> {
             checkpoint,
             public_key,
             baseline_state,
+            key_rotation,
             accepted_at_unix,
             output,
             require_accepted,
@@ -4665,11 +4707,22 @@ fn main() -> Result<()> {
                         .with_context(|| format!("parsing {}", path.display()))
                 })
                 .transpose()?;
+            let key_rotation = key_rotation
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_policy_lifecycle_key_rotation(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .transpose()?;
             let state = verify_policy_lifecycle_checkpoint(
                 &ledger,
                 &checkpoint,
                 &public_key,
                 baseline.as_ref(),
+                key_rotation.as_ref(),
                 accepted_at_unix,
             )
             .map_err(anyhow::Error::msg)?;
@@ -4682,6 +4735,31 @@ fn main() -> Result<()> {
             if require_accepted && state.status != "checkpoint_accepted" {
                 bail!("policy lifecycle checkpoint was not accepted");
             }
+        }
+        Command::SignPolicyLifecycleKeyRotation {
+            baseline_state,
+            old_private_key,
+            new_private_key,
+            rotated_at_unix,
+            output,
+        } => {
+            let source = fs::read_to_string(&baseline_state)
+                .with_context(|| format!("reading {}", baseline_state.display()))?;
+            let baseline =
+                parse_policy_lifecycle_trust_state(&source).map_err(anyhow::Error::msg)?;
+            let old_key =
+                read_hex_key(&old_private_key, "old policy lifecycle signing private key")?;
+            let new_key =
+                read_hex_key(&new_private_key, "new policy lifecycle signing private key")?;
+            let rotation =
+                sign_policy_lifecycle_key_rotation(&baseline, &old_key, &new_key, rotated_at_unix)
+                    .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&rotation)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed policy lifecycle key rotation generation {} -> {}",
+                rotation.from_key_generation, rotation.to_key_generation
+            );
         }
         Command::RecordSimulationEvidence {
             declaration,

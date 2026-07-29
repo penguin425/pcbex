@@ -906,6 +906,11 @@ if [[ -n "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE:-}" ]] \
   echo "policy lifecycle checkpoint baseline state requires complete checkpoint inputs" >&2
   exit 2
 fi
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_KEY_ROTATION:-}" ]] \
+  && [[ -z "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE:-}" ]]; then
+  echo "policy lifecycle checkpoint key rotation requires a baseline trust state" >&2
+  exit 2
+fi
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_LEDGER:-}" ]] \
   && ((lifecycle_checkpoint_inputs != 3)); then
   echo "policy lifecycle checkpoint ledger requires complete checkpoint inputs" >&2
@@ -928,6 +933,10 @@ if ((lifecycle_checkpoint_inputs == 3)); then
   if [[ -n "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE:-}" ]]; then
     lifecycle_checkpoint_arguments+=( \
       --baseline-state "$PCBEX_POLICY_LIFECYCLE_CHECKPOINT_BASELINE_STATE")
+  fi
+  if [[ -n "${PCBEX_POLICY_LIFECYCLE_CHECKPOINT_KEY_ROTATION:-}" ]]; then
+    lifecycle_checkpoint_arguments+=( \
+      --key-rotation "$PCBEX_POLICY_LIFECYCLE_CHECKPOINT_KEY_ROTATION")
   fi
   "$PCBEX_BINARY" "${lifecycle_checkpoint_arguments[@]}"
   policy_lifecycle_checkpoint_accepted=true
