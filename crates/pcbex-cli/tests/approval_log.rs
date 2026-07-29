@@ -178,6 +178,76 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     assert_eq!(report["verified"], true);
     assert_eq!(report["entry_count"], 2);
 
+    let witness_a_key = directory.join("witness-a.key");
+    let witness_a_public = directory.join("witness-a.pub");
+    let witness_b_key = directory.join("witness-b.key");
+    let witness_b_public = directory.join("witness-b.pub");
+    for (private, public) in [
+        (&witness_a_key, &witness_a_public),
+        (&witness_b_key, &witness_b_public),
+    ] {
+        assert!(
+            run(&[
+                "approval-keygen",
+                "--private-key",
+                path(private),
+                "--public-key",
+                path(public),
+            ])
+            .status
+            .success()
+        );
+    }
+    let witness_a = directory.join("witness-a.json");
+    let witness_b = directory.join("witness-b.json");
+    for (id, private, output, observed_at) in [
+        ("witness-a", &witness_a_key, &witness_a, "102"),
+        ("witness-b", &witness_b_key, &witness_b, "103"),
+    ] {
+        assert!(
+            run(&[
+                "witness-approval-log",
+                path(&checkpoint),
+                "--private-key",
+                path(private),
+                "--witness-id",
+                id,
+                "--observed-at-unix",
+                observed_at,
+                "--output",
+                path(output),
+            ])
+            .status
+            .success()
+        );
+    }
+    let witness_report = directory.join("witness-quorum.json");
+    assert!(
+        run(&[
+            "verify-approval-log-witnesses",
+            path(&checkpoint),
+            "--witness",
+            path(&witness_a),
+            "--witness",
+            path(&witness_b),
+            "--public-key",
+            path(&witness_a_public),
+            "--public-key",
+            path(&witness_b_public),
+            "--minimum-witnesses",
+            "2",
+            "--output",
+            path(&witness_report),
+            "--require-quorum",
+        ])
+        .status
+        .success()
+    );
+    let witness_report: Value =
+        serde_json::from_slice(&fs::read(&witness_report).unwrap()).unwrap();
+    assert_eq!(witness_report["quorum_met"], true);
+    assert_eq!(witness_report["valid_witnesses"], 2);
+
     let log: Value = serde_json::from_slice(&fs::read(&second).unwrap()).unwrap();
     assert_eq!(log["entries"][0]["sequence"], 0);
     assert_eq!(

@@ -110,6 +110,18 @@ inputs:
     description: Trusted Ed25519 public-key file for the approval-log checkpoint.
     required: false
     default: ""
+  approval-log-witness-files:
+    description: Newline-separated independent witness signatures over the checkpoint.
+    required: false
+    default: ""
+  approval-log-witness-public-keys:
+    description: Newline-separated trusted witness keys paired with witness files.
+    required: false
+    default: ""
+  approval-log-minimum-witnesses:
+    description: Minimum distinct trusted witnesses required; cannot be less than two.
+    required: false
+    default: "2"
   output-dir:
     description: Directory for analysis bundles, relative to the caller workspace.
     required: false
@@ -144,6 +156,10 @@ inputs:
     default: "false"
   fail-on-approval-log:
     description: Fail unless the supplied approval transparency log and checkpoint verify.
+    required: false
+    default: "false"
+  fail-on-approval-log-witnesses:
+    description: Fail unless the supplied checkpoint has the configured independent witness quorum.
     required: false
     default: "false"
   upload-artifact:
@@ -240,6 +256,12 @@ outputs:
   approval-log-verified:
     description: Whether the complete approval hash chain and checkpoint verified.
     value: ${{ steps.analyze.outputs.approval-log-verified }}
+  approval-log-witness-quorum:
+    description: Verified approval-log witness quorum report path, when supplied.
+    value: ${{ steps.analyze.outputs.approval-log-witness-quorum }}
+  approval-log-witness-quorum-met:
+    description: Whether the independent approval-log witness threshold passed.
+    value: ${{ steps.analyze.outputs.approval-log-witness-quorum-met }}
 
 runs:
   using: composite
@@ -288,6 +310,9 @@ runs:
         PCBEX_APPROVAL_TRANSPARENCY_LOG: ${{ inputs.approval-transparency-log }}
         PCBEX_APPROVAL_LOG_CHECKPOINT: ${{ inputs.approval-log-checkpoint }}
         PCBEX_APPROVAL_LOG_PUBLIC_KEY: ${{ inputs.approval-log-public-key }}
+        PCBEX_APPROVAL_LOG_WITNESS_FILES: ${{ inputs.approval-log-witness-files }}
+        PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS: ${{ inputs.approval-log-witness-public-keys }}
+        PCBEX_APPROVAL_LOG_MINIMUM_WITNESSES: ${{ inputs.approval-log-minimum-witnesses }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
       run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
 
@@ -333,6 +358,7 @@ runs:
         PCBEX_AI_APPROVAL_QUORUM_MET: ${{ steps.analyze.outputs.ai-approval-quorum-met }}
         PCBEX_SCHEMATIC_APPROVAL_MET: ${{ steps.analyze.outputs.schematic-approval-met }}
         PCBEX_APPROVAL_LOG_VERIFIED: ${{ steps.analyze.outputs.approval-log-verified }}
+        PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.approval-log-witness-quorum-met }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -341,6 +367,7 @@ runs:
         PCBEX_FAIL_ON_AI_QUORUM: ${{ inputs.fail-on-ai-quorum }}
         PCBEX_FAIL_ON_SCHEMATIC_APPROVAL: ${{ inputs.fail-on-schematic-approval }}
         PCBEX_FAIL_ON_APPROVAL_LOG: ${{ inputs.fail-on-approval-log }}
+        PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES: ${{ inputs.fail-on-approval-log-witnesses }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -377,5 +404,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG" == "true" && "$PCBEX_APPROVAL_LOG_VERIFIED" != "true" ]]; then
           echo "::error::pcbex approval transparency log is absent or invalid"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES" == "true" && "$PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET" != "true" ]]; then
+          echo "::error::pcbex approval transparency-log witness quorum is absent or invalid"
           exit 1
         fi

@@ -37,6 +37,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "append-approval-log",
         "sign-approval-log",
         "verify-approval-log",
+        "witness-approval-log",
+        "verify-approval-log-witnesses",
         "mcp-server",
         "fabricate",
     ] {

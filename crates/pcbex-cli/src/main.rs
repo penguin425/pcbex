@@ -21,11 +21,12 @@ use pcbex_kicad::{
     ElectricalWaiverSet, HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
     HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
     SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
-    SignedApprovalLogCheckpoint, SignedHumanEscalation, SimulationArtifact, SimulationEvidence,
-    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
-    ai_review_response_json_schema, append_approval_transparency_event, apply_custom_design_rules,
-    apply_electrical_waivers, apply_project_net_settings,
-    approval_log_verification_report_json_schema, approval_public_key,
+    SignedApprovalLogCheckpoint, SignedApprovalLogWitness, SignedHumanEscalation,
+    SimulationArtifact, SimulationEvidence, ai_approval_quorum_report_json_schema,
+    ai_review_request_json_schema, ai_review_response_json_schema,
+    append_approval_transparency_event, apply_custom_design_rules, apply_electrical_waivers,
+    apply_project_net_settings, approval_log_verification_report_json_schema,
+    approval_log_witness_quorum_report_json_schema, approval_public_key,
     approval_transparency_log_json_schema, build_ai_review_request, build_ai_review_session,
     check_schematic, compare_electrical_reviews, compare_schematics,
     electrical_explanation_json_schema, electrical_policy_json_schema,
@@ -42,10 +43,11 @@ use pcbex_kicad::{
     schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
     schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
     sign_ai_review, sign_ai_review_for_session, sign_approval_log_checkpoint,
-    sign_human_escalation, signed_ai_approval_json_schema,
-    signed_approval_log_checkpoint_json_schema, signed_human_escalation_json_schema,
-    simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
-    verify_approval_log_checkpoint, verify_human_escalation, verify_routed_ai_approval_quorum,
+    sign_approval_log_witness, sign_human_escalation, signed_ai_approval_json_schema,
+    signed_approval_log_checkpoint_json_schema, signed_approval_log_witness_json_schema,
+    signed_human_escalation_json_schema, simulation_declaration_json_schema,
+    simulation_evidence_json_schema, verify_ai_approval_quorum, verify_approval_log_checkpoint,
+    verify_approval_log_witness_quorum, verify_human_escalation, verify_routed_ai_approval_quorum,
     verify_session_ai_approval_quorum, verify_session_routed_ai_approval_quorum,
     verify_session_signed_ai_approval, verify_signed_ai_approval,
 };
@@ -548,6 +550,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed approval-log witness JSON Schema.
+    SignedApprovalLogWitnessSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed approval-log witness quorum report JSON Schema.
+    ApprovalLogWitnessQuorumReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Prepare a complete, digest-bound request for an AI schematic reviewer.
     PrepareAiReview {
         input: PathBuf,
@@ -735,6 +747,35 @@ enum Command {
         public_key: CompactPath,
         #[arg(short, long)]
         output: CompactPath,
+    },
+    /// Independently witness one exact signed approval-log checkpoint.
+    WitnessApprovalLog {
+        checkpoint: CompactPath,
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        witness_id: String,
+        /// Explicit observation time; defaults to the current clock.
+        #[arg(long)]
+        observed_at_unix: Option<u64>,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify independent witnesses over one exact approval-log checkpoint.
+    VerifyApprovalLogWitnesses {
+        checkpoint: CompactPath,
+        #[arg(long = "witness", required = true)]
+        witnesses: Vec<PathBuf>,
+        /// Trusted public key paired by position with each --witness.
+        #[arg(long = "public-key", required = true)]
+        public_keys: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_witnesses: u32,
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Fail after writing the report unless the witness threshold is met.
+        #[arg(long)]
+        require_quorum: bool,
     },
     /// List built-in, revisioned fabrication profiles as JSON.
     DfmProfiles {
@@ -1951,6 +1992,15 @@ fn main() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::SignedApprovalLogWitnessSchema { output } => {
+            write_or_print_json(&signed_approval_log_witness_json_schema(), output.as_ref())?;
+        }
+        Command::ApprovalLogWitnessQuorumReportSchema { output } => {
+            write_or_print_json(
+                &approval_log_witness_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::PrepareAiReview {
             input,
             electrical_review,
@@ -2580,6 +2630,68 @@ fn main() -> Result<()> {
                 "verified approval transparency log {} with {} entries",
                 report.log_id, report.entry_count
             );
+        }
+        Command::WitnessApprovalLog {
+            checkpoint,
+            private_key,
+            witness_id,
+            observed_at_unix,
+            output,
+        } => {
+            if checkpoint.0.as_ref() == output.0.as_ref() {
+                bail!("approval checkpoint and witness output paths must differ");
+            }
+            let (checkpoint, _) = read_described_json::<SignedApprovalLogCheckpoint>(&checkpoint)?;
+            let secret = read_hex_key(&private_key, "approval-log witness private key")?;
+            let witness = sign_approval_log_witness(
+                &checkpoint,
+                &witness_id,
+                observed_at_unix.unwrap_or(current_unix_seconds()?),
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&witness)?, false)?;
+            eprintln!(
+                "witnessed approval log {} as {}",
+                witness.log_id, witness.witness_id
+            );
+        }
+        Command::VerifyApprovalLogWitnesses {
+            checkpoint,
+            witnesses,
+            public_keys,
+            minimum_witnesses,
+            output,
+            require_quorum,
+        } => {
+            if witnesses.len() != public_keys.len() {
+                bail!("each --witness requires one positionally paired --public-key");
+            }
+            let (checkpoint, _) = read_described_json::<SignedApprovalLogCheckpoint>(&checkpoint)?;
+            let witness_values = witnesses
+                .iter()
+                .map(|path| {
+                    read_described_json::<SignedApprovalLogWitness>(path).map(|value| value.0)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let trusted_keys = public_keys
+                .iter()
+                .map(|path| read_hex_key(path, "trusted approval-log witness public key"))
+                .collect::<Result<Vec<_>>>()?;
+            let candidates = witness_values.iter().zip(&trusted_keys).collect::<Vec<_>>();
+            let report =
+                verify_approval_log_witness_quorum(&checkpoint, &candidates, minimum_witnesses)
+                    .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "approval-log witnesses: {}/{}; quorum {}",
+                report.valid_witnesses,
+                report.minimum_witnesses,
+                if report.quorum_met { "met" } else { "not met" }
+            );
+            if require_quorum && !report.quorum_met {
+                bail!("approval-log witness quorum was not met");
+            }
         }
         Command::DfmProfiles { output } => {
             let profiles = serde_json::to_string_pretty(&dfm_profiles())?;

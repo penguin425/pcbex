@@ -36,11 +36,14 @@ pub use human_escalation::{
 mod transparency;
 pub use transparency::{
     ApprovalArtifactKind, ApprovalEventDescriptor, ApprovalLogVerificationReport,
-    ApprovalTransparencyEntry, ApprovalTransparencyLog, SignedApprovalLogCheckpoint,
-    append_approval_transparency_event, approval_log_verification_report_json_schema,
+    ApprovalLogWitnessQuorumReport, ApprovalTransparencyEntry, ApprovalTransparencyLog,
+    SignedApprovalLogCheckpoint, SignedApprovalLogWitness, append_approval_transparency_event,
+    approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
     approval_transparency_log_json_schema, approval_transparency_log_sha256,
-    new_approval_transparency_log, sign_approval_log_checkpoint,
-    signed_approval_log_checkpoint_json_schema, verify_approval_log_checkpoint,
+    new_approval_transparency_log, sign_approval_log_checkpoint, sign_approval_log_witness,
+    signed_approval_log_checkpoint_json_schema, signed_approval_log_checkpoint_sha256,
+    signed_approval_log_witness_json_schema, verify_approval_log_checkpoint,
+    verify_approval_log_witness_quorum,
 };
 mod electrical;
 pub use electrical::{
