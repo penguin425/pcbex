@@ -48,6 +48,8 @@ write_output manufacturing-feedback-passed ""
 write_output policy-recommendation ""
 write_output policy-rollout-profile ""
 write_output policy-rollout ""
+write_output canary-rollout-authorization ""
+write_output canary-rollout-authorized ""
 write_output schematic-diff ""
 write_output schematic-review-required ""
 write_output schematic-reviewer-routing ""
@@ -282,6 +284,51 @@ if [[ -n "${PCBEX_POLICY_ROLLOUT_PROJECT_ID:-}" ]]; then
   {
     printf '\n'
     cat "$policy_rollout_summary"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
+canary_rollout_authorization=""
+canary_rollout_authorized=""
+canary_approval_inputs=0
+if [[ -n "${PCBEX_CANARY_ROLLOUT_APPROVAL_FILES:-}" ]]; then
+  ((canary_approval_inputs += 1))
+fi
+if [[ -n "${PCBEX_CANARY_ROLLOUT_EVALUATED_AT_UNIX:-}" ]]; then
+  ((canary_approval_inputs += 1))
+fi
+if ((canary_approval_inputs != 0 && canary_approval_inputs != 2)); then
+  echo "canary rollout approvals and evaluated-at Unix time must be supplied together" >&2
+  exit 2
+fi
+if ((canary_approval_inputs == 2)); then
+  rollout_to_authorize="${PCBEX_CANARY_ROLLOUT_REPORT:-$policy_rollout}"
+  if [[ -z "$rollout_to_authorize" || -z "$effective_policy_pack" ]]; then
+    echo "canary rollout authorization requires a rollout report and organization policy pack" >&2
+    exit 2
+  fi
+  canary_rollout_authorization="${artifact_dir}/canary-rollout-authorization.json"
+  canary_rollout_summary="${artifact_dir}/canary-rollout-authorization.md"
+  canary_arguments=(verify-rollout-approvals \
+    "$rollout_to_authorize" \
+    --policy-pack "$effective_policy_pack" \
+    --evaluated-at-unix "$PCBEX_CANARY_ROLLOUT_EVALUATED_AT_UNIX" \
+    --minimum-approvals "${PCBEX_CANARY_ROLLOUT_MINIMUM_APPROVALS:-2}" \
+    --output "$canary_rollout_authorization" \
+    --summary-output "$canary_rollout_summary")
+  while IFS= read -r approval; do
+    if [[ -n "$approval" ]]; then
+      canary_arguments+=(--approval "$approval")
+    fi
+  done <<< "${PCBEX_CANARY_ROLLOUT_APPROVAL_FILES:-}"
+  "$PCBEX_BINARY" "${canary_arguments[@]}"
+  canary_rollout_authorized="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["canary_authorized"]).lower())' \
+      "$canary_rollout_authorization"
+  )"
+  {
+    printf '\n'
+    cat "$canary_rollout_summary"
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
@@ -679,6 +726,8 @@ write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
 write_output policy-recommendation "$policy_recommendation"
 write_output policy-rollout-profile "$policy_rollout_profile"
 write_output policy-rollout "$policy_rollout"
+write_output canary-rollout-authorization "$canary_rollout_authorization"
+write_output canary-rollout-authorized "$canary_rollout_authorized"
 write_output schematic-diff "$schematic_diff"
 write_output schematic-review-required "$schematic_review_required"
 write_output schematic-reviewer-routing "$schematic_reviewer_routing"

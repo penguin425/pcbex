@@ -209,6 +209,11 @@
     {
       "id": "multi-project-policy-rollout-simulation",
       "release": "v1.338.0",
+      "status": "released"
+    },
+    {
+      "id": "dual-control-canary-rollout-authorization",
+      "release": "v1.339.0",
       "status": "current"
     }
   ]

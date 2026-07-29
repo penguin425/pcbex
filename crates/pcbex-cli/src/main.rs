@@ -77,6 +77,7 @@ mod mcp;
 mod policy_pack;
 mod policy_recommendation;
 mod policy_rollout;
+mod policy_rollout_approval;
 mod remote_policy;
 mod remote_witness;
 
@@ -103,6 +104,11 @@ use policy_rollout::{
     RolloutAnalysisInput, RolloutProjectInput, parse_policy_rollout_report,
     policy_rollout_json_schema, render_policy_rollout_summary, rollout_candidate_profile,
     simulate_policy_rollout,
+};
+use policy_rollout_approval::{
+    RolloutApprovalDecision, canary_authorization_json_schema, parse_canary_authorization,
+    parse_signed_rollout_approval, render_canary_authorization_summary, sign_rollout_approval,
+    signed_rollout_approval_json_schema, verify_rollout_approvals,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_witness::{remote_witness_receipt_json_schema, request_remote_witness};
@@ -146,6 +152,15 @@ enum HumanDecisionArg {
 }
 
 impl From<HumanDecisionArg> for HumanEscalationDecision {
+    fn from(value: HumanDecisionArg) -> Self {
+        match value {
+            HumanDecisionArg::Approve => Self::Approve,
+            HumanDecisionArg::Reject => Self::Reject,
+        }
+    }
+}
+
+impl From<HumanDecisionArg> for RolloutApprovalDecision {
     fn from(value: HumanDecisionArg) -> Self {
         match value {
             HumanDecisionArg::Approve => Self::Approve,
@@ -498,6 +513,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed canary-rollout approval JSON Schema.
+    SignedRolloutApprovalSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed canary-rollout authorization JSON Schema.
+    CanaryRolloutAuthorizationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed canary-rollout approval.
+    ValidateRolloutApproval {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a canary-rollout authorization.
+    ValidateCanaryRolloutAuthorization {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Bind fabrication findings and raw evidence to an exact analyzed board.
     RecordManufacturingFeedback {
         declaration: PathBuf,
@@ -584,6 +621,46 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         summary_output: Option<PathBuf>,
+    },
+    /// Sign one human decision over an exact rollout simulation and canary scope.
+    SignRolloutApproval {
+        rollout: PathBuf,
+        #[arg(long = "canary-project", required = true)]
+        canary_projects: Vec<String>,
+        #[arg(long)]
+        valid_from_unix: u64,
+        #[arg(long)]
+        expires_at_unix: u64,
+        #[arg(long)]
+        private_key: PathBuf,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(long, value_enum)]
+        decision: HumanDecisionArg,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Verify dual-control approval and issue a bounded, rollback-safe canary authorization.
+    VerifyRolloutApprovals {
+        rollout: PathBuf,
+        #[arg(long)]
+        policy_pack: PathBuf,
+        #[arg(long = "approval", required = true)]
+        approvals: Vec<PathBuf>,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(long, default_value_t = 2)]
+        minimum_approvals: u32,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        summary_output: Option<PathBuf>,
+        #[arg(long)]
+        require_authorized: bool,
     },
     /// Bind simulation assertions and raw artifacts to an electrical review.
     RecordSimulationEvidence {
@@ -2029,6 +2106,24 @@ fn main() -> Result<()> {
             let report = parse_policy_rollout_report(&source).map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
+        Command::SignedRolloutApprovalSchema { output } => {
+            write_or_print_json(&signed_rollout_approval_json_schema(), output.as_ref())?;
+        }
+        Command::CanaryRolloutAuthorizationSchema { output } => {
+            write_or_print_json(&canary_authorization_json_schema(), output.as_ref())?;
+        }
+        Command::ValidateRolloutApproval { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let approval = parse_signed_rollout_approval(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(approval)?, output.as_ref())?;
+        }
+        Command::ValidateCanaryRolloutAuthorization { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let authorization = parse_canary_authorization(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(authorization)?, output.as_ref())?;
+        }
         Command::RecordManufacturingFeedback {
             declaration,
             analysis_dir,
@@ -2346,6 +2441,100 @@ fn main() -> Result<()> {
                 "policy rollout simulation: {} compatible, {} affected; human approval required",
                 report.compatible_projects, report.affected_projects
             );
+        }
+        Command::SignRolloutApproval {
+            rollout,
+            canary_projects,
+            valid_from_unix,
+            expires_at_unix,
+            private_key,
+            signer_id,
+            decision,
+            reason,
+            ticket,
+            output,
+        } => {
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let secret = read_hex_key(&private_key, "rollout approval private key")?;
+            let approval = sign_rollout_approval(
+                &rollout,
+                decision.into(),
+                &canary_projects,
+                valid_from_unix,
+                expires_at_unix,
+                &reason,
+                &ticket,
+                &signer_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&approval)? + "\n";
+            write_new_file_set(&[(output.as_path(), document.as_str())])?;
+            eprintln!(
+                "signed {:?} canary decision for {} as {}",
+                approval.decision, approval.rollout_sha256, approval.signer_id
+            );
+        }
+        Command::VerifyRolloutApprovals {
+            rollout,
+            policy_pack,
+            approvals,
+            evaluated_at_unix,
+            minimum_approvals,
+            output,
+            summary_output,
+            require_authorized,
+        } => {
+            require_distinct_outputs(
+                [Some(output.as_path()), summary_output.as_deref()],
+                "canary rollout authorization",
+            )?;
+            if approvals.len() > 100 {
+                bail!("canary rollout verification accepts at most 100 approvals");
+            }
+            let rollout_source = fs::read_to_string(&rollout)
+                .with_context(|| format!("reading {}", rollout.display()))?;
+            let rollout =
+                parse_policy_rollout_report(&rollout_source).map_err(anyhow::Error::msg)?;
+            let policy = load_policy_pack(&policy_pack)?.0;
+            let approvals = approvals
+                .iter()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_signed_rollout_approval(&source)
+                        .map_err(anyhow::Error::msg)
+                        .with_context(|| format!("parsing {}", path.display()))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let authorization = verify_rollout_approvals(
+                &rollout,
+                &policy,
+                &approvals,
+                evaluated_at_unix,
+                minimum_approvals,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let document = serde_json::to_string_pretty(&authorization)? + "\n";
+            let summary = render_canary_authorization_summary(&authorization);
+            let mut files = vec![(output.as_path(), document.as_str())];
+            if let Some(path) = summary_output.as_deref() {
+                files.push((path, summary.as_str()));
+            }
+            write_new_file_set(&files)?;
+            eprintln!(
+                "canary rollout: {}/{} approval(s), {} rejection(s): {}",
+                authorization.approvals,
+                authorization.policy.minimum_approvals,
+                authorization.rejections,
+                authorization.status
+            );
+            if require_authorized && !authorization.canary_authorized {
+                bail!("canary rollout did not receive bounded dual-control authorization");
+            }
         }
         Command::RecordSimulationEvidence {
             declaration,
