@@ -96,6 +96,8 @@ write_output policy-lifecycle-log-gossip-organization-registry-history-final ""
 write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-trust-state ""
 write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum ""
 write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum-met ""
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witnesses ""
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-receipts ""
 write_output policy-lifecycle-log-remote-gossip-observations ""
 write_output policy-lifecycle-log-remote-gossip-receipts ""
 write_output schematic-diff ""
@@ -1162,6 +1164,8 @@ policy_lifecycle_log_gossip_organization_registry_history_final=""
 policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state=""
 policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum=""
 policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_met=""
+policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witnesses=""
+policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witness_receipts=""
 if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
   if [[ -n "$policy_lifecycle_log_gossip_organization_registry" ]]; then
     echo "gossip registry history and copied retained registry are mutually exclusive" >&2
@@ -1207,40 +1211,135 @@ elif [[ -n "$registry_checkpoint_baseline" ]] \
   exit 2
 fi
 
-registry_checkpoint_witness_configured=false
+mapfile -t registry_checkpoint_witness_paths < <(
+  printf '%s\n' "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t registry_checkpoint_direct_ids < <(
+  printf '%s\n' "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t registry_checkpoint_direct_keys < <(
+  printf '%s\n' "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t registry_checkpoint_trust_states < <(
+  printf '%s\n' "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t registry_checkpoint_remote_endpoints < <(
+  printf '%s\n' "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_ENDPOINTS:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t registry_checkpoint_remote_ids < <(
+  printf '%s\n' "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_IDS:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t registry_checkpoint_remote_keys < <(
+  printf '%s\n' "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_PUBLIC_KEY_FILES:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t registry_checkpoint_remote_trust_states < <(
+  printf '%s\n' "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_TRUST_STATE_FILES:-}" |
+    sed '/^[[:space:]]*$/d'
+)
 registry_checkpoint_witness_key_mode=""
-registry_checkpoint_direct_inputs=0
-if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS:-}" ]]; then
-  registry_checkpoint_direct_inputs=$((registry_checkpoint_direct_inputs + 1))
-fi
-if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES:-}" ]]; then
-  registry_checkpoint_direct_inputs=$((registry_checkpoint_direct_inputs + 1))
-fi
-if ((registry_checkpoint_direct_inputs != 0 && registry_checkpoint_direct_inputs != 2)); then
-  echo "registry-history checkpoint trusted witness IDs and keys must be supplied together" >&2
+if ((${#registry_checkpoint_direct_ids[@]} != ${#registry_checkpoint_direct_keys[@]})); then
+  echo "registry-history checkpoint trusted witness IDs and keys must have matching counts" >&2
   exit 2
 fi
-if ((registry_checkpoint_direct_inputs == 2)) \
-  && [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES:-}" ]]; then
+if ((${#registry_checkpoint_remote_ids[@]} != ${#registry_checkpoint_remote_keys[@]})); then
+  echo "remote registry-history witness IDs and keys must have matching counts" >&2
+  exit 2
+fi
+if ((${#registry_checkpoint_remote_endpoints[@]} > 0)); then
+  if [[ -z "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state" ]]; then
+    echo "remote registry-history witnesses require an accepted checkpoint trust state" >&2
+    exit 2
+  fi
+  if [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX:-}" ]]; then
+    echo "remote registry-history witnesses require an explicit evaluation time" >&2
+    exit 2
+  fi
+  remote_direct=false
+  remote_state=false
+  if ((${#registry_checkpoint_remote_keys[@]} > 0)); then remote_direct=true; fi
+  if ((${#registry_checkpoint_remote_trust_states[@]} > 0)); then remote_state=true; fi
+  if [[ "$remote_direct" == "$remote_state" ]]; then
+    echo "remote registry-history witnesses require exactly one direct or trust-state key mode" >&2
+    exit 2
+  fi
+  if [[ "$remote_direct" == "true" ]] && ((${#registry_checkpoint_trust_states[@]} > 0)); then
+    echo "local trust-state and remote direct registry-history witness modes are mutually exclusive" >&2
+    exit 2
+  fi
+  if [[ "$remote_state" == "true" ]] && ((${#registry_checkpoint_direct_ids[@]} > 0)); then
+    echo "local direct and remote trust-state registry-history witness modes are mutually exclusive" >&2
+    exit 2
+  fi
+  if [[ "$remote_direct" == "true" ]] \
+    && ((${#registry_checkpoint_remote_endpoints[@]} != ${#registry_checkpoint_remote_keys[@]})); then
+    echo "remote registry-history witness endpoints, IDs, and keys must have matching counts" >&2
+    exit 2
+  fi
+  if [[ "$remote_state" == "true" ]] \
+    && ((${#registry_checkpoint_remote_endpoints[@]} != ${#registry_checkpoint_remote_trust_states[@]})); then
+    echo "remote registry-history witness endpoints and trust states must have matching counts" >&2
+    exit 2
+  fi
+  policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witnesses="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witnesses"
+  policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witness_receipts="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-receipts"
+  mkdir -p \
+    "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witnesses" \
+    "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witness_receipts"
+  for index in "${!registry_checkpoint_remote_endpoints[@]}"; do
+    remote_witness_path="${policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witnesses}/witness-${index}.json"
+    remote_receipt_path="${policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witness_receipts}/receipt-${index}.json"
+    remote_registry_witness_arguments=(
+      request-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness
+      "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state"
+      --endpoint "${registry_checkpoint_remote_endpoints[$index]}"
+      --timeout-seconds "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_TIMEOUT_SECONDS:-30}"
+      --evaluated-at-unix "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX:-}"
+      --output "$remote_witness_path"
+      --receipt-output "$remote_receipt_path"
+    )
+    if [[ "$remote_direct" == "true" ]]; then
+      remote_registry_witness_arguments+=(--public-key "${registry_checkpoint_remote_keys[$index]}")
+      registry_checkpoint_direct_ids+=("${registry_checkpoint_remote_ids[$index]}")
+      registry_checkpoint_direct_keys+=("${registry_checkpoint_remote_keys[$index]}")
+    else
+      remote_registry_witness_arguments+=(--witness-key-trust-state "${registry_checkpoint_remote_trust_states[$index]}")
+      registry_checkpoint_trust_states+=("${registry_checkpoint_remote_trust_states[$index]}")
+    fi
+    if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_BEARER_TOKEN:-}" ]]; then
+      remote_registry_witness_arguments+=(
+        --bearer-token-env
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_BEARER_TOKEN
+      )
+    fi
+    "$PCBEX_BINARY" "${remote_registry_witness_arguments[@]}"
+    registry_checkpoint_witness_paths+=("$remote_witness_path")
+  done
+elif ((${#registry_checkpoint_remote_ids[@]} > 0 \
+  || ${#registry_checkpoint_remote_keys[@]} > 0 \
+  || ${#registry_checkpoint_remote_trust_states[@]} > 0)); then
+  echo "remote registry-history witness trust requires endpoints" >&2
+  exit 2
+fi
+if ((${#registry_checkpoint_direct_ids[@]} > 0 && ${#registry_checkpoint_trust_states[@]} > 0)); then
   echo "registry-history checkpoint direct trust and witness trust states are mutually exclusive" >&2
   exit 2
 fi
-if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES:-}" ]]; then
-  registry_checkpoint_witness_configured=true
-  if ((registry_checkpoint_direct_inputs == 2)); then
+if ((${#registry_checkpoint_witness_paths[@]} > 0)); then
+  if ((${#registry_checkpoint_direct_ids[@]} == ${#registry_checkpoint_witness_paths[@]})); then
     registry_checkpoint_witness_key_mode="direct"
-  elif [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES:-}" ]]; then
+  elif ((${#registry_checkpoint_trust_states[@]} == ${#registry_checkpoint_witness_paths[@]})); then
     registry_checkpoint_witness_key_mode="trust-state"
   else
-    echo "registry-history checkpoint witnesses require direct trust or witness trust states" >&2
+    echo "registry-history checkpoint witnesses and trust evidence must have matching counts" >&2
     exit 2
   fi
-elif ((registry_checkpoint_direct_inputs != 0)) \
-  || [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES:-}" ]]; then
-  echo "registry-history checkpoint witness trust requires witness artifacts" >&2
-  exit 2
-fi
-if [[ "$registry_checkpoint_witness_configured" == "true" ]]; then
   if [[ -z "$registry_checkpoint" ]]; then
     echo "registry-history checkpoint witness verification requires a checkpoint" >&2
     exit 2
@@ -1262,28 +1361,20 @@ if [[ "$registry_checkpoint_witness_configured" == "true" ]]; then
     --output
     "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum"
   )
-  while IFS= read -r witness; do
-    if [[ -n "$witness" ]]; then
-      registry_checkpoint_witness_arguments+=(--witness "$witness")
-    fi
-  done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES"
+  for witness in "${registry_checkpoint_witness_paths[@]}"; do
+    registry_checkpoint_witness_arguments+=(--witness "$witness")
+  done
   if [[ "$registry_checkpoint_witness_key_mode" == "direct" ]]; then
-    while IFS= read -r witness_id; do
-      if [[ -n "$witness_id" ]]; then
-        registry_checkpoint_witness_arguments+=(--trusted-witness-id "$witness_id")
-      fi
-    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS"
-    while IFS= read -r witness_key; do
-      if [[ -n "$witness_key" ]]; then
-        registry_checkpoint_witness_arguments+=(--trusted-witness-public-key "$witness_key")
-      fi
-    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES"
+    for witness_id in "${registry_checkpoint_direct_ids[@]}"; do
+      registry_checkpoint_witness_arguments+=(--trusted-witness-id "$witness_id")
+    done
+    for witness_key in "${registry_checkpoint_direct_keys[@]}"; do
+      registry_checkpoint_witness_arguments+=(--trusted-witness-public-key "$witness_key")
+    done
   else
-    while IFS= read -r trust_state; do
-      if [[ -n "$trust_state" ]]; then
-        registry_checkpoint_witness_arguments+=(--witness-trust-state "$trust_state")
-      fi
-    done <<< "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES"
+    for trust_state in "${registry_checkpoint_trust_states[@]}"; do
+      registry_checkpoint_witness_arguments+=(--witness-trust-state "$trust_state")
+    done
   fi
   "$PCBEX_BINARY" "${registry_checkpoint_witness_arguments[@]}"
   policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_met="$(
@@ -2172,6 +2263,8 @@ write_output policy-lifecycle-log-gossip-organization-registry-history-final "$p
 write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-trust-state "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state"
 write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum"
 write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum-met "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_quorum_met"
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witnesses "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witnesses"
+write_output policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-receipts "$policy_lifecycle_log_gossip_organization_registry_history_checkpoint_remote_witness_receipts"
 write_output policy-lifecycle-log-remote-gossip-observations "$policy_lifecycle_log_remote_gossip_observations"
 write_output policy-lifecycle-log-remote-gossip-receipts "$policy_lifecycle_log_remote_gossip_receipts"
 write_output schematic-diff "$schematic_diff"

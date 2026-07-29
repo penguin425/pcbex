@@ -1874,6 +1874,33 @@ ID/key pairs. The Action exposes the same alternative through
 `policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-trust-state-files`,
 and MCP exposes initialize/sign/apply/export operations as task-forbidden tools.
 
+Independent witnesses no longer need to be pre-staged. A consumer can send the
+accepted checkpoint trust state to a bounded HTTPS service and immediately
+verify the returned signature against either a direct key or the rotatable
+identity-bound trust state:
+
+```sh
+pcbex request-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness \
+  gossip-registry.history.checkpoint.trust.json \
+  --endpoint https://witness.example/v1/registry-history-checkpoint \
+  --witness-key-trust-state independent-a.next.trust.json \
+  --evaluated-at-unix 1785302900 \
+  --output independent-a.remote-witness.json \
+  --receipt-output independent-a.remote-receipt.json
+```
+
+The client permits HTTPS only, follows no redirects, bounds the complete
+request to 600 seconds and the JSON response to 1 MiB, and keeps optional
+Bearer credentials in an environment variable. Both output files are written
+atomically only after the closed response is checkpoint-bound, fresh,
+identity/key-bound, and cryptographically valid. The receipt binds the endpoint,
+accepted checkpoint and trust-state digests, exact request and response hashes,
+response length, evaluation time, and witness-key generation. GitHub Actions
+accepts paired remote endpoints with either identities/public keys or witness
+trust states, retains every response and receipt, and composes them with local
+artifacts in the same fail-closed quorum. MCP exposes the same HTTPS-only
+operation as an open-world, task-forbidden tool.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1901,7 +1928,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.368.0
+    uses: penguin425/pcbex@v1.369.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3138,7 +3165,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.368.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.369.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

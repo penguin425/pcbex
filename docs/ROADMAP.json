@@ -359,6 +359,11 @@
     {
       "id": "lifecycle-gossip-registry-history-witness-key-rotation",
       "release": "v1.368.0",
+      "status": "released"
+    },
+    {
+      "id": "remote-lifecycle-gossip-registry-history-checkpoint-witnesses",
+      "release": "v1.369.0",
       "status": "current"
     }
   ]

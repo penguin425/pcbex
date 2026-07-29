@@ -600,6 +600,50 @@ pub fn verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoi
     )
 }
 
+pub fn verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_for_trust_state(
+    checkpoint_state: &PolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+    witness: &SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness,
+    trusted_public_key: &[u8; 32],
+    evaluated_at_unix: u64,
+) -> Result<(), String> {
+    validate_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state(
+        checkpoint_state,
+    )?;
+    validate_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness(
+        witness,
+    )?;
+    if witness.registry_id != checkpoint_state.registry_id
+        || witness.generation != checkpoint_state.accepted_generation
+        || witness.checkpoint_sha256 != checkpoint_state.checkpoint_sha256
+    {
+        return Err("gossip registry history witness is bound to another checkpoint".into());
+    }
+    if witness.witnessed_at_unix < checkpoint_state.issued_at_unix
+        || witness.witnessed_at_unix > evaluated_at_unix
+        || evaluated_at_unix.saturating_sub(witness.witnessed_at_unix) > MAXIMUM_WITNESS_AGE_SECONDS
+    {
+        return Err("gossip registry history witness is stale or future-dated".into());
+    }
+    if witness.public_key != hex_encode(trusted_public_key) {
+        return Err("gossip registry history witness key substitution".into());
+    }
+    let payload = witness_payload(
+        &witness.registry_id,
+        witness.generation,
+        &witness.checkpoint_sha256,
+        &witness.witness_id,
+        witness.witnessed_at_unix,
+    )?;
+    let signature = Signature::from_bytes(&hex_decode::<64>(
+        &witness.signature,
+        "gossip registry history witness signature",
+    )?);
+    VerifyingKey::from_bytes(trusted_public_key)
+        .map_err(|error| format!("invalid trusted history witness key: {error}"))?
+        .verify_strict(&payload, &signature)
+        .map_err(|_| "gossip registry history witness signature verification failed".to_string())
+}
+
 pub fn parse_signed_policy_lifecycle_log_gossip_organization_registry_history_checkpoint(
     source: &str,
 ) -> Result<SignedPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpoint, String> {
@@ -1368,6 +1412,15 @@ mod tests {
                 1_300,
             )
             .unwrap();
+        verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_for_trust_state(
+            &trusted,
+            &signed_a,
+            &SigningKey::from_bytes(&witness_a)
+                .verifying_key()
+                .to_bytes(),
+            1_400,
+        )
+        .unwrap();
         let quorum =
             verify_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witnesses(
                 &registry_history,
