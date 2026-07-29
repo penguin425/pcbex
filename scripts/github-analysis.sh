@@ -91,6 +91,8 @@ write_output policy-lifecycle-log-gossip-verification ""
 write_output policy-lifecycle-log-gossip-verified ""
 write_output policy-lifecycle-log-gossip-quorum ""
 write_output policy-lifecycle-log-gossip-quorum-met ""
+write_output policy-lifecycle-log-gossip-organization-registry-history-audit ""
+write_output policy-lifecycle-log-gossip-organization-registry-history-final ""
 write_output policy-lifecycle-log-remote-gossip-observations ""
 write_output policy-lifecycle-log-remote-gossip-receipts ""
 write_output schematic-diff ""
@@ -1152,6 +1154,22 @@ if [[ "$local_gossip_configured" == "true" && "$remote_gossip_configured" == "tr
   exit 2
 fi
 policy_lifecycle_log_gossip_organization_registry="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_TRUST_REGISTRY:-}"
+policy_lifecycle_log_gossip_organization_registry_history_audit=""
+policy_lifecycle_log_gossip_organization_registry_history_final=""
+if [[ -n "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
+  if [[ -n "$policy_lifecycle_log_gossip_organization_registry" ]]; then
+    echo "gossip registry history and copied retained registry are mutually exclusive" >&2
+    exit 2
+  fi
+  policy_lifecycle_log_gossip_organization_registry_history_audit="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-history-audit.json"
+  policy_lifecycle_log_gossip_organization_registry_history_final="${artifact_dir}/policy-lifecycle-log-gossip-organization-registry-history-final.json"
+  "$PCBEX_BINARY" \
+    audit-policy-lifecycle-log-gossip-organization-registry-history \
+    "$PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY" \
+    --output "$policy_lifecycle_log_gossip_organization_registry_history_audit" \
+    --final-registry-output "$policy_lifecycle_log_gossip_organization_registry_history_final"
+  policy_lifecycle_log_gossip_organization_registry="$policy_lifecycle_log_gossip_organization_registry_history_final"
+fi
 policy_lifecycle_log_gossip_organization_registry_governance="${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}"
 governance_policy_inputs=0
 for value in \
@@ -1219,8 +1237,21 @@ if [[ -n "$policy_lifecycle_log_gossip_organization_registry" ]]; then
     exit 2
   fi
   if [[ "$local_gossip_configured" != "true" && "$remote_gossip_configured" != "true" ]]; then
-    echo "gossip organization trust registry requires configured observations" >&2
-    exit 2
+    if [[ -z "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
+      echo "gossip organization trust registry requires configured observations" >&2
+      exit 2
+    fi
+    for followup in \
+      "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" \
+      "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" \
+      "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" \
+      "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION:-}" \
+      "${PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNED_AUTHORITY_KEY_ROTATION:-}"; do
+      if [[ -n "$followup" ]]; then
+        echo "standalone gossip registry history audit cannot ignore follow-up registry changes" >&2
+        exit 2
+      fi
+    done
   fi
 fi
 if [[ "$local_gossip_configured" == "true" || "$remote_gossip_configured" == "true" ]]; then
@@ -2011,6 +2042,8 @@ write_output policy-lifecycle-log-gossip-verification "$policy_lifecycle_log_gos
 write_output policy-lifecycle-log-gossip-verified "$policy_lifecycle_log_gossip_verified"
 write_output policy-lifecycle-log-gossip-quorum "$policy_lifecycle_log_gossip_quorum"
 write_output policy-lifecycle-log-gossip-quorum-met "$policy_lifecycle_log_gossip_quorum_met"
+write_output policy-lifecycle-log-gossip-organization-registry-history-audit "$policy_lifecycle_log_gossip_organization_registry_history_audit"
+write_output policy-lifecycle-log-gossip-organization-registry-history-final "$policy_lifecycle_log_gossip_organization_registry_history_final"
 write_output policy-lifecycle-log-remote-gossip-observations "$policy_lifecycle_log_remote_gossip_observations"
 write_output policy-lifecycle-log-remote-gossip-receipts "$policy_lifecycle_log_remote_gossip_receipts"
 write_output schematic-diff "$schematic_diff"

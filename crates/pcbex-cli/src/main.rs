@@ -186,8 +186,11 @@ use policy_lifecycle_gossip_registry::{
     apply_policy_lifecycle_log_gossip_organization_registry_governed_authority_key_rotation,
     apply_policy_lifecycle_log_gossip_organization_registry_threshold_transition,
     apply_policy_lifecycle_log_gossip_organization_registry_transition,
+    audit_policy_lifecycle_log_gossip_organization_registry_history,
     new_policy_lifecycle_log_gossip_organization_registry,
     parse_policy_lifecycle_log_gossip_organization_registry,
+    parse_policy_lifecycle_log_gossip_organization_registry_history,
+    parse_policy_lifecycle_log_gossip_organization_registry_history_audit_report,
     parse_policy_lifecycle_log_gossip_registry_bound_quorum_report,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_governance,
@@ -195,6 +198,8 @@ use policy_lifecycle_gossip_registry::{
     parse_signed_policy_lifecycle_log_gossip_organization_registry_governed_authority_key_rotation,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_threshold_transition,
     parse_signed_policy_lifecycle_log_gossip_organization_registry_transition,
+    policy_lifecycle_log_gossip_organization_registry_history_audit_report_json_schema,
+    policy_lifecycle_log_gossip_organization_registry_history_json_schema,
     policy_lifecycle_log_gossip_organization_registry_json_schema,
     policy_lifecycle_log_gossip_registry_bound_quorum_report_json_schema,
     sign_policy_lifecycle_log_gossip_organization_registry_authority_key_rotation,
@@ -1172,6 +1177,28 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed complete organization-registry history JSON Schema.
+    PolicyLifecycleLogGossipOrganizationRegistryHistorySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a complete organization-registry history.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryHistory {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed organization-registry history-audit JSON Schema.
+    PolicyLifecycleLogGossipOrganizationRegistryHistoryAuditSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize an organization-registry history audit.
+    ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryAudit {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed threshold-approved registry-transition JSON Schema.
     SignedPolicyLifecycleLogGossipOrganizationRegistryThresholdTransitionSchema {
         #[arg(short, long)]
@@ -2141,6 +2168,14 @@ enum Command {
         output: PathBuf,
         #[arg(long)]
         public_key_output: PathBuf,
+    },
+    /// Replay and verify every registry event from genesis without trusting snapshots.
+    AuditPolicyLifecycleLogGossipOrganizationRegistryHistory {
+        history: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        final_registry_output: PathBuf,
     },
     /// Verify fresh observations from distinct organizations as one gossip quorum.
     VerifyPolicyLifecycleLogGossipQuorum {
@@ -4199,6 +4234,43 @@ fn main() -> Result<()> {
                 )
                 .map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(rotation)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipOrganizationRegistryHistorySchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_organization_registry_history_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryHistory {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let history =
+                parse_policy_lifecycle_log_gossip_organization_registry_history(&source)
+                    .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(history)?, output.as_ref())?;
+        }
+        Command::PolicyLifecycleLogGossipOrganizationRegistryHistoryAuditSchema { output } => {
+            write_or_print_json(
+                &policy_lifecycle_log_gossip_organization_registry_history_audit_report_json_schema(
+                ),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryAudit {
+            input,
+            output,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let report =
+                parse_policy_lifecycle_log_gossip_organization_registry_history_audit_report(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
         }
         Command::SignedPolicyLifecycleLogGossipOrganizationRegistryThresholdTransitionSchema {
             output,
@@ -7333,6 +7405,41 @@ fn main() -> Result<()> {
             eprintln!(
                 "trusted successor lifecycle gossip registry root at generation {}",
                 next.generation
+            );
+        }
+        Command::AuditPolicyLifecycleLogGossipOrganizationRegistryHistory {
+            history,
+            output,
+            final_registry_output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(history.as_path()),
+                    Some(output.as_path()),
+                    Some(final_registry_output.as_path()),
+                ],
+                "policy lifecycle gossip registry history audit",
+            )?;
+            let source = fs::read_to_string(&history)
+                .with_context(|| format!("reading {}", history.display()))?;
+            let history =
+                parse_policy_lifecycle_log_gossip_organization_registry_history(&source)
+                    .map_err(anyhow::Error::msg)?;
+            let report =
+                audit_policy_lifecycle_log_gossip_organization_registry_history(&history)
+                    .map_err(anyhow::Error::msg)?;
+            let report_document = serde_json::to_string_pretty(&report)? + "\n";
+            let registry_document = serde_json::to_string_pretty(&report.final_registry)? + "\n";
+            write_new_file_set(&[
+                (output.as_path(), report_document.as_str()),
+                (
+                    final_registry_output.as_path(),
+                    registry_document.as_str(),
+                ),
+            ])?;
+            eprintln!(
+                "verified {} lifecycle gossip registry event(s) through generation {}",
+                report.event_count, report.final_registry.generation
             );
         }
         Command::VerifyPolicyLifecycleLogGossipQuorum {

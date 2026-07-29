@@ -2261,6 +2261,23 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "audit_policy_lifecycle_public_log_gossip_organization_registry_history",
+            "Audit complete lifecycle gossip registry history",
+            "Replay every typed event from genesis, verify signatures, quorums, generations, time, and digest continuity, then atomically emit the audit and computed final registry.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["history", "output", "final_registry_output"],
+                "properties": {
+                    "history": {"type": "string"},
+                    "output": {"type": "string"},
+                    "final_registry_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_policy_lifecycle_public_log_gossip_quorum",
             "Verify policy lifecycle public-log gossip quorum",
             "Freshly verify paired observations from distinct trusted organizations and retain deterministic evidence even when the required organization quorum is not met.",
@@ -3133,6 +3150,12 @@ fn call_tool(
         }
         "apply_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation" => {
             apply_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "audit_policy_lifecycle_public_log_gossip_organization_registry_history" => {
+            audit_policy_lifecycle_public_log_gossip_organization_registry_history(
                 arguments,
                 cancellation,
             )?
@@ -6382,6 +6405,35 @@ fn apply_policy_lifecycle_public_log_gossip_organization_registry_governed_autho
     ))
 }
 
+fn audit_policy_lifecycle_public_log_gossip_organization_registry_history(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["history", "output", "final_registry_output"])?;
+    let output = required_string(&arguments, "output")?;
+    let final_registry_output = required_string(&arguments, "final_registry_output")?;
+    let command = vec![
+        "audit-policy-lifecycle-log-gossip-organization-registry-history".into(),
+        required_string(&arguments, "history")?,
+        "--output".into(),
+        output.clone(),
+        "--final-registry-output".into(),
+        final_registry_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let audit = read_json_if_present(Path::new(&output));
+    let final_registry = read_json_if_present(Path::new(&final_registry_output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "final_registry_output": final_registry_output,
+            "audit": audit,
+            "final_registry": final_registry
+        }),
+    ))
+}
+
 fn verify_policy_lifecycle_public_log_gossip_quorum(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -7807,7 +7859,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 86);
+        assert_eq!(tools.len(), 87);
         let named = |name: &str| {
             tools
                 .iter()
@@ -8186,6 +8238,11 @@ mod tests {
                 "apply_policy_lifecycle_public_log_gossip_organization_registry_governed_authority_key_rotation"
             )["inputSchema"]["properties"]["public_key_output"]["type"],
             "string"
+        );
+        assert_eq!(
+            named("audit_policy_lifecycle_public_log_gossip_organization_registry_history")["execution"]
+                ["taskSupport"],
+            "forbidden"
         );
         assert_eq!(
             named("request_remote_policy_lifecycle_public_log_gossip")["annotations"]["openWorldHint"],

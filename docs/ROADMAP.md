@@ -75,6 +75,7 @@ auditable release.
 | v1.363.0 | Dual-quorum registry governance rotation | Require both retained and successor authority quorums for threshold, membership, or governance-key changes |
 | v1.364.0 | Retained active registry governance | Pin the active governance digest in registry state and reject stale validly root-signed policies or root-only bypasses |
 | v1.365.0 | Governed registry root rotation | Require retained and new-root successor quorums to atomically replace the registry root and active governance |
+| v1.366.0 | Complete registry history audit | Replay mixed legacy, threshold, governance, and governed-root events from genesis without trusting copied snapshots |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -83,7 +84,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should audit a complete mixed registry history from genesis
-across root-only legacy, threshold, governance, and governed-root transitions,
-producing one deterministic chain-verification report without trusting copied
-snapshots.
+The next roadmap should checkpoint complete registry-history audit reports into
+an independently witnessed transparency log, so operators can detect equivocal
+but individually valid registry histories across CI runs and organizations.
