@@ -222,6 +222,66 @@ inputs:
     description: Fail unless the failed policy revision is restored to its exact retained predecessor.
     required: false
     default: "false"
+  policy-rollback-recovery-state:
+    description: Optional dual-control rollback state; defaults to the rollback produced in this run.
+    required: false
+    default: ""
+  policy-rollback-recovery-rollout:
+    description: Exact rollout retaining the pre-promotion production baseline.
+    required: false
+    default: ""
+  policy-rollback-recovery-deployment:
+    description: Exact failed promoted deployment state bound by the rollback.
+    required: false
+    default: ""
+  policy-rollback-recovery-failed-verification:
+    description: Exact failed production verification bound by the rollback.
+    required: false
+    default: ""
+  policy-rollback-recovery-previous-deployment:
+    description: Exact deployment state active immediately before the failed promotion.
+    required: false
+    default: ""
+  policy-rollback-recovery-baseline-verification:
+    description: Clean full-fleet verification of the previous deployment retained before promotion.
+    required: false
+    default: ""
+  policy-rollback-recovery-restored-policy-pack:
+    description: Exact organization policy pack restored by the rollback.
+    required: false
+    default: ""
+  policy-rollback-recovery-project-id:
+    description: Rollout project ID whose restored production evidence is being verified.
+    required: false
+    default: ""
+  policy-rollback-recovery-expected-analysis:
+    description: Exact pre-promotion production analysis retained by the rollout.
+    required: false
+    default: ""
+  policy-rollback-recovery-observed-analysis:
+    description: Restored production analysis generated with the exact restored policy pack.
+    required: false
+    default: ""
+  policy-rollback-recovery-verified-at-unix:
+    description: Explicit Unix timestamp for restored-fleet verification.
+    required: false
+    default: ""
+  rollback-incident-acknowledgment:
+    description: Independent trusted operator acknowledgment bound to clean recovery evidence.
+    required: false
+    default: ""
+  rollback-incident-closed-at-unix:
+    description: Opt-in Unix timestamp for retaining the closed rollback incident.
+    required: false
+    default: ""
+  fail-on-policy-rollback-recovery:
+    description: Fail unless complete restored-fleet evidence is clean.
+    required: false
+    default: "false"
+  fail-on-rollback-incident-closure:
+    description: Fail unless clean recovery has an independent trusted operator acknowledgment.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -482,6 +542,18 @@ outputs:
   policy-deployment-rollback-active-revision:
     description: Active policy revision after dual-control production rollback.
     value: ${{ steps.analyze.outputs.policy-deployment-rollback-active-revision }}
+  policy-rollback-recovery:
+    description: Complete restored-fleet recovery verification report.
+    value: ${{ steps.analyze.outputs.policy-rollback-recovery }}
+  policy-rollback-recovery-verified:
+    description: Whether every restored project matches its pre-promotion production baseline.
+    value: ${{ steps.analyze.outputs.policy-rollback-recovery-verified }}
+  rollback-incident-closure:
+    description: Independently acknowledged rollback-incident closure state.
+    value: ${{ steps.analyze.outputs.rollback-incident-closure }}
+  rollback-incident-status:
+    description: Whether the rollback incident is closed.
+    value: ${{ steps.analyze.outputs.rollback-incident-status }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -603,6 +675,19 @@ runs:
         PCBEX_POLICY_DEPLOYMENT_ROLLBACK_APPROVAL_FILES: ${{ inputs.policy-deployment-rollback-approval-files }}
         PCBEX_POLICY_DEPLOYMENT_ROLLBACK_MINIMUM_APPROVALS: ${{ inputs.policy-deployment-rollback-minimum-approvals }}
         PCBEX_POLICY_DEPLOYMENT_ROLLBACK_RECORDED_AT_UNIX: ${{ inputs.policy-deployment-rollback-recorded-at-unix }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_STATE: ${{ inputs.policy-rollback-recovery-state }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_ROLLOUT: ${{ inputs.policy-rollback-recovery-rollout }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_DEPLOYMENT: ${{ inputs.policy-rollback-recovery-deployment }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_FAILED_VERIFICATION: ${{ inputs.policy-rollback-recovery-failed-verification }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_PREVIOUS_DEPLOYMENT: ${{ inputs.policy-rollback-recovery-previous-deployment }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_BASELINE_VERIFICATION: ${{ inputs.policy-rollback-recovery-baseline-verification }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_RESTORED_POLICY_PACK: ${{ inputs.policy-rollback-recovery-restored-policy-pack }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_PROJECT_ID: ${{ inputs.policy-rollback-recovery-project-id }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_EXPECTED_ANALYSIS: ${{ inputs.policy-rollback-recovery-expected-analysis }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_OBSERVED_ANALYSIS: ${{ inputs.policy-rollback-recovery-observed-analysis }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_VERIFIED_AT_UNIX: ${{ inputs.policy-rollback-recovery-verified-at-unix }}
+        PCBEX_ROLLBACK_INCIDENT_ACKNOWLEDGMENT: ${{ inputs.rollback-incident-acknowledgment }}
+        PCBEX_ROLLBACK_INCIDENT_CLOSED_AT_UNIX: ${{ inputs.rollback-incident-closed-at-unix }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -679,6 +764,8 @@ runs:
         PCBEX_POLICY_DEPLOYMENT_STATUS: ${{ steps.analyze.outputs.policy-deployment-status }}
         PCBEX_POLICY_DEPLOYMENT_VERIFIED: ${{ steps.analyze.outputs.policy-deployment-verified }}
         PCBEX_POLICY_DEPLOYMENT_ROLLBACK_STATUS: ${{ steps.analyze.outputs.policy-deployment-rollback-status }}
+        PCBEX_POLICY_ROLLBACK_RECOVERY_VERIFIED: ${{ steps.analyze.outputs.policy-rollback-recovery-verified }}
+        PCBEX_ROLLBACK_INCIDENT_STATUS: ${{ steps.analyze.outputs.rollback-incident-status }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -695,6 +782,8 @@ runs:
         PCBEX_FAIL_ON_POLICY_DEPLOYMENT_PROMOTION: ${{ inputs.fail-on-policy-deployment-promotion }}
         PCBEX_FAIL_ON_POLICY_DEPLOYMENT_VERIFICATION: ${{ inputs.fail-on-policy-deployment-verification }}
         PCBEX_FAIL_ON_POLICY_DEPLOYMENT_ROLLBACK: ${{ inputs.fail-on-policy-deployment-rollback }}
+        PCBEX_FAIL_ON_POLICY_ROLLBACK_RECOVERY: ${{ inputs.fail-on-policy-rollback-recovery }}
+        PCBEX_FAIL_ON_ROLLBACK_INCIDENT_CLOSURE: ${{ inputs.fail-on-rollback-incident-closure }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -763,5 +852,13 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_DEPLOYMENT_ROLLBACK" == "true" && "$PCBEX_POLICY_DEPLOYMENT_ROLLBACK_STATUS" != "rollback_applied" ]]; then
           echo "::error::pcbex production rollback is absent or lacks a valid dual-control authorization"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_ROLLBACK_RECOVERY" == "true" && "$PCBEX_POLICY_ROLLBACK_RECOVERY_VERIFIED" != "true" ]]; then
+          echo "::error::pcbex post-rollback recovery is absent, incomplete, or regressed"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_ROLLBACK_INCIDENT_CLOSURE" == "true" && "$PCBEX_ROLLBACK_INCIDENT_STATUS" != "incident_closed" ]]; then
+          echo "::error::pcbex rollback incident lacks clean recovery and independent operator acknowledgment"
           exit 1
         fi

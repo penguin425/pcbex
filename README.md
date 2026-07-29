@@ -990,6 +990,60 @@ revision, and every approval digest. `automatic_rollback` remains false. MCP
 exposes signing and application tools, and the Action accepts
 `policy-deployment-rollback-*` inputs.
 
+After rollback, verify every restored project against the production baseline
+retained by the rollout:
+
+```sh
+pcbex verify-policy-rollback-recovery policy-deployment-rollback.json \
+  policy-rollout.json \
+  --deployment policy-deployment.failed.json \
+  --failed-verification policy-deployment-verification.failed.json \
+  --previous-deployment policy-deployment.previous.json \
+  --baseline-verification policy-deployment-verification.previous.json \
+  --restored-policy-pack organization-policy-pack.previous.json \
+  --project-id controller \
+  --board controller.kicad_pcb \
+  --expected-analysis rollout/controller-baseline \
+  --observed-analysis production/controller-restored \
+  --verified-at-unix 1785292200 \
+  --output policy-rollback-recovery.json \
+  --summary-output policy-rollback-recovery.md \
+  --require-passed
+
+pcbex sign-rollback-incident-acknowledgment \
+  policy-deployment-rollback.json policy-rollback-recovery.json \
+  --acknowledged-at-unix 1785292300 \
+  --private-key operator.key \
+  --operator-id incident-operator \
+  --reason "Restored fleet is complete and clean." \
+  --ticket HW-ROLLBACK-42 \
+  --output rollback-incident-acknowledgment.json
+
+pcbex close-rollback-incident \
+  policy-deployment-rollback.json policy-rollback-recovery.json \
+  --restored-policy-pack organization-policy-pack.previous.json \
+  --acknowledgment rollback-incident-acknowledgment.json \
+  --closed-at-unix 1785292400 \
+  --output rollback-incident-closure.json \
+  --summary-output rollback-incident-closure.md \
+  --require-closed
+```
+
+Recovery first verifies the rollback, failed deployment, failed verification,
+previous deployment, previous clean fleet verification, and rollout as one
+continuous digest chain. Coverage must exactly equal that retained baseline
+and the failed rollout scope. Expected evidence is the observed production
+evidence from the clean pre-promotion verification; new observations must use
+the exact restored policy pack without changing the board, engine, rules, or
+analysis settings. Missing projects, new violations, or quality regressions
+keep the incident open. Closure then requires a fresh Ed25519 acknowledgment
+from a trusted operator who did not approve the rollback, within 24 hours of
+clean recovery. The acknowledgment binds the exact rollback and recovery
+digests; tampering, replay against another incident, stale signatures, and
+rollback-approver self-closure fail closed. Automatic incident closure is
+always false. MCP exposes all three operations, and the Action accepts
+`policy-rollback-recovery-*` and `rollback-incident-*` inputs.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1017,7 +1071,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.344.0
+    uses: penguin425/pcbex@v1.345.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2254,7 +2308,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.344.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.345.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

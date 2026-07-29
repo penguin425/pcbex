@@ -305,6 +305,8 @@ impl McpServer {
                     | "advance_policy_deployment"
                     | "verify_policy_deployment"
                     | "apply_policy_deployment_rollback"
+                    | "verify_policy_rollback_recovery"
+                    | "close_rollback_incident"
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
@@ -1145,6 +1147,91 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("optional"),
         ),
         tool(
+            "verify_policy_rollback_recovery",
+            "Verify rollback recovery",
+            "Compare the complete restored fleet with exact retained pre-promotion production evidence; incomplete coverage or regression keeps the incident open.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollback", "rollout", "deployment", "failed_verification",
+                    "previous_deployment", "baseline_verification",
+                    "restored_policy_pack", "project_ids",
+                    "boards", "expected_analyses", "observed_analyses",
+                    "verified_at_unix", "output"
+                ],
+                "properties": {
+                    "rollback": {"type": "string"},
+                    "rollout": {"type": "string"},
+                    "deployment": {"type": "string"},
+                    "failed_verification": {"type": "string"},
+                    "previous_deployment": {"type": "string"},
+                    "baseline_verification": {"type": "string"},
+                    "restored_policy_pack": {"type": "string"},
+                    "project_ids": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"type": "string"}},
+                    "boards": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"type": "string"}},
+                    "expected_analyses": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"type": "string"}},
+                    "observed_analyses": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"type": "string"}},
+                    "verified_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_passed": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "sign_rollback_incident_acknowledgment",
+            "Sign rollback incident acknowledgment",
+            "Sign an operator acknowledgment bound to exact complete and clean post-rollback recovery evidence.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollback", "recovery", "acknowledged_at_unix", "private_key",
+                    "operator_id", "reason", "ticket", "output"
+                ],
+                "properties": {
+                    "rollback": {"type": "string"},
+                    "recovery": {"type": "string"},
+                    "acknowledged_at_unix": {"type": "integer", "minimum": 0},
+                    "private_key": {"type": "string"},
+                    "operator_id": {"type": "string"},
+                    "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "ticket": {"type": "string", "minLength": 1, "maxLength": 256},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            Some("forbidden"),
+        ),
+        tool(
+            "close_rollback_incident",
+            "Close rollback incident",
+            "Verify clean recovery and a trusted operator signature independent of rollback approvers before retaining a closed incident state.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "rollback", "recovery", "restored_policy_pack",
+                    "acknowledgment", "closed_at_unix", "output"
+                ],
+                "properties": {
+                    "rollback": {"type": "string"},
+                    "recovery": {"type": "string"},
+                    "restored_policy_pack": {"type": "string"},
+                    "acknowledgment": {"type": "string"},
+                    "closed_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "summary_output": {"type": "string"},
+                    "require_closed": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -1753,6 +1840,13 @@ fn call_tool(
         "apply_policy_deployment_rollback" => {
             apply_policy_deployment_rollback(arguments, cancellation)?
         }
+        "verify_policy_rollback_recovery" => {
+            verify_policy_rollback_recovery(arguments, cancellation)?
+        }
+        "sign_rollback_incident_acknowledgment" => {
+            sign_rollback_incident_acknowledgment(arguments, cancellation)?
+        }
+        "close_rollback_incident" => close_rollback_incident(arguments, cancellation)?,
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
         "route_kicad" => route_kicad(arguments, cancellation)?,
@@ -2887,6 +2981,203 @@ fn apply_policy_deployment_rollback(
     Ok(execution_result(
         execution,
         json!({"output": output, "rollback": state}),
+    ))
+}
+
+fn verify_policy_rollback_recovery(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollback",
+            "rollout",
+            "deployment",
+            "failed_verification",
+            "previous_deployment",
+            "baseline_verification",
+            "restored_policy_pack",
+            "project_ids",
+            "boards",
+            "expected_analyses",
+            "observed_analyses",
+            "verified_at_unix",
+            "output",
+            "summary_output",
+            "require_passed",
+        ],
+    )?;
+    let project_ids = required_string_array(&arguments, "project_ids", false)?;
+    let boards = required_string_array(&arguments, "boards", false)?;
+    let expected = required_string_array(&arguments, "expected_analyses", false)?;
+    let observed = required_string_array(&arguments, "observed_analyses", false)?;
+    if project_ids.len() > 1_000
+        || project_ids.len() != boards.len()
+        || project_ids.len() != expected.len()
+        || project_ids.len() != observed.len()
+    {
+        return Err(
+            json!({"detail": "recovery project arrays must have equal lengths of at most 1000"}),
+        );
+    }
+    let verified_at = arguments
+        .get("verified_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "verified_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-policy-rollback-recovery".into(),
+        required_string(&arguments, "rollback")?,
+        required_string(&arguments, "rollout")?,
+        "--deployment".into(),
+        required_string(&arguments, "deployment")?,
+        "--failed-verification".into(),
+        required_string(&arguments, "failed_verification")?,
+        "--previous-deployment".into(),
+        required_string(&arguments, "previous_deployment")?,
+        "--baseline-verification".into(),
+        required_string(&arguments, "baseline_verification")?,
+        "--restored-policy-pack".into(),
+        required_string(&arguments, "restored_policy_pack")?,
+    ];
+    for value in project_ids {
+        command.extend(["--project-id".into(), value]);
+    }
+    for value in boards {
+        command.extend(["--board".into(), value]);
+    }
+    for value in expected {
+        command.extend(["--expected-analysis".into(), value]);
+    }
+    for value in observed {
+        command.extend(["--observed-analysis".into(), value]);
+    }
+    command.extend([
+        "--verified-at-unix".into(),
+        verified_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_passed",
+        "--require-passed",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let recovery = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "recovery": recovery}),
+    ))
+}
+
+fn sign_rollback_incident_acknowledgment(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollback",
+            "recovery",
+            "acknowledged_at_unix",
+            "private_key",
+            "operator_id",
+            "reason",
+            "ticket",
+            "output",
+        ],
+    )?;
+    let acknowledged_at = arguments
+        .get("acknowledged_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "acknowledged_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-rollback-incident-acknowledgment".into(),
+        required_string(&arguments, "rollback")?,
+        required_string(&arguments, "recovery")?,
+        "--acknowledged-at-unix".into(),
+        acknowledged_at.to_string(),
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--operator-id".into(),
+        required_string(&arguments, "operator_id")?,
+        "--reason".into(),
+        required_string(&arguments, "reason")?,
+        "--ticket".into(),
+        required_string(&arguments, "ticket")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let acknowledgment = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "acknowledgment": acknowledgment}),
+    ))
+}
+
+fn close_rollback_incident(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "rollback",
+            "recovery",
+            "restored_policy_pack",
+            "acknowledgment",
+            "closed_at_unix",
+            "output",
+            "summary_output",
+            "require_closed",
+        ],
+    )?;
+    let closed_at = arguments
+        .get("closed_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "closed_at_unix must be an unsigned integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "close-rollback-incident".into(),
+        required_string(&arguments, "rollback")?,
+        required_string(&arguments, "recovery")?,
+        "--restored-policy-pack".into(),
+        required_string(&arguments, "restored_policy_pack")?,
+        "--acknowledgment".into(),
+        required_string(&arguments, "acknowledgment")?,
+        "--closed-at-unix".into(),
+        closed_at.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_option(
+        &arguments,
+        "summary_output",
+        "--summary-output",
+        &mut command,
+    )?;
+    optional_flag(
+        &arguments,
+        "require_closed",
+        "--require-closed",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let closure = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "closure": closure}),
     ))
 }
 
@@ -4083,7 +4374,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 41);
+        assert_eq!(tools.len(), 44);
         let named = |name: &str| {
             tools
                 .iter()
@@ -4198,6 +4489,22 @@ mod tests {
         assert_eq!(
             named("apply_policy_deployment_rollback")["execution"]["taskSupport"],
             "optional"
+        );
+        assert_eq!(
+            named("verify_policy_rollback_recovery")["inputSchema"]["properties"]["project_ids"]["maxItems"],
+            1000
+        );
+        assert_eq!(
+            named("verify_policy_rollback_recovery")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("sign_rollback_incident_acknowledgment")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("close_rollback_incident")["inputSchema"]["properties"]["require_closed"]["default"],
+            false
         );
         assert_eq!(
             named("compare_schematics")["execution"]["taskSupport"],
