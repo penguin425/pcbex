@@ -20,19 +20,21 @@ use pcbex_kicad::{
     AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiApprovalQuorumReport, AiRequirement,
     AiReviewRequest, AiReviewResponse, AiReviewSession, ApprovalArtifactKind,
     ApprovalEventDescriptor, ApprovalLogAnchorProof, ApprovalLogConsistencyProof,
-    ApprovalLogWitnessTrustState, ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview,
-    ElectricalWaiverSet, HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
-    HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
-    SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
-    SignedApprovalLogCheckpoint, SignedApprovalLogGossipReceipt, SignedApprovalLogWitness,
-    SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation, SimulationArtifact,
-    SimulationEvidence, ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
+    ApprovalLogGossipObservation, ApprovalLogWitnessTrustState, ApprovalTransparencyLog,
+    ElectricalPolicy, ElectricalReview, ElectricalWaiverSet, HumanEscalationCandidate,
+    HumanEscalationDecision, HumanEscalationPolicy, HumanEscalationReport,
+    RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport, SessionAiQuorumEvidence,
+    SessionRoutedAiApprovalQuorumReport, SignedAiApproval, SignedApprovalLogCheckpoint,
+    SignedApprovalLogGossipReceipt, SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation,
+    SignedHumanEscalation, SimulationArtifact, SimulationEvidence,
+    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
     ai_review_response_json_schema, append_approval_transparency_event,
     apply_approval_log_witness_key_rotation, apply_custom_design_rules, apply_electrical_waivers,
     apply_project_net_settings, approval_log_anchor_proof_json_schema,
     approval_log_anchor_verification_report_json_schema,
     approval_log_consistency_proof_json_schema,
     approval_log_consistency_verification_report_json_schema,
+    approval_log_gossip_observation_json_schema, approval_log_gossip_quorum_report_json_schema,
     approval_log_gossip_verification_report_json_schema,
     approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
@@ -60,10 +62,11 @@ use pcbex_kicad::{
     signed_approval_log_witness_key_rotation_json_schema, signed_human_escalation_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
     verify_approval_log_anchor_proof, verify_approval_log_checkpoint,
-    verify_approval_log_consistency_proof, verify_approval_log_gossip_receipt,
-    verify_approval_log_witness_quorum, verify_human_escalation, verify_routed_ai_approval_quorum,
-    verify_session_ai_approval_quorum, verify_session_routed_ai_approval_quorum,
-    verify_session_signed_ai_approval, verify_signed_ai_approval,
+    verify_approval_log_consistency_proof, verify_approval_log_gossip_quorum,
+    verify_approval_log_gossip_receipt, verify_approval_log_witness_quorum,
+    verify_human_escalation, verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
+    verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
+    verify_signed_ai_approval,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -99,6 +102,7 @@ mod policy_rollback_recovery;
 mod policy_rollout;
 mod policy_rollout_approval;
 mod policy_suspension;
+mod remote_approval_gossip;
 mod remote_policy;
 mod remote_policy_lifecycle_gossip;
 mod remote_policy_lifecycle_gossip_registry_checkpoint_witness;
@@ -301,6 +305,9 @@ use policy_suspension::{
     parse_policy_suspension_state, parse_signed_policy_suspension_decision,
     policy_suspension_state_json_schema, render_policy_suspension_summary,
     sign_policy_suspension_decision, signed_policy_suspension_decision_json_schema,
+};
+use remote_approval_gossip::{
+    remote_approval_log_gossip_receipt_json_schema, request_remote_approval_log_gossip,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_policy_lifecycle_gossip::{
@@ -2610,6 +2617,21 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed approval public-log gossip observation JSON Schema.
+    ApprovalLogGossipObservationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed approval public-log gossip organization-quorum JSON Schema.
+    ApprovalLogGossipQuorumReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed remote approval-gossip transport receipt JSON Schema.
+    RemoteApprovalLogGossipReceiptSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed approval-log witness quorum report JSON Schema.
     ApprovalLogWitnessQuorumReportSchema {
         #[arg(short, long)]
@@ -2952,6 +2974,61 @@ enum Command {
         evaluated_at_unix: u64,
         #[arg(short, long)]
         output: CompactPath,
+    },
+    /// Require fresh consistent approval-log observations from distinct organizations.
+    VerifyApprovalLogGossipQuorum {
+        #[arg(long)]
+        local_anchor: CompactPath,
+        #[arg(long = "observation", required = true)]
+        observations: Vec<PathBuf>,
+        /// Organization identity positionally paired with each observation.
+        #[arg(long = "organization-id", required = true)]
+        organization_ids: Vec<String>,
+        /// Trusted observer identity positionally paired with each observation.
+        #[arg(long = "observer-id", required = true)]
+        observer_ids: Vec<String>,
+        /// Trusted observer key positionally paired with each observation.
+        #[arg(long = "observer-public-key", required = true)]
+        observer_public_keys: Vec<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        minimum_organizations: u32,
+        #[arg(long)]
+        log_public_key: CompactPath,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Fail after writing the report unless the organization quorum is met.
+        #[arg(long)]
+        require_quorum: bool,
+    },
+    /// Acquire and immediately verify one bounded remote approval-log observation.
+    RequestApprovalLogGossipObservation {
+        #[arg(long)]
+        local_anchor: CompactPath,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long)]
+        log_public_key: CompactPath,
+        #[arg(long)]
+        organization_id: String,
+        #[arg(long)]
+        observer_id: String,
+        #[arg(long)]
+        observer_public_key: CompactPath,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+        timeout_seconds: u64,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        receipt_output: CompactPath,
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
     },
     /// Verify independent witnesses over one exact approval-log checkpoint.
     VerifyApprovalLogWitnesses {
@@ -8702,6 +8779,24 @@ fn run_cli() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::ApprovalLogGossipObservationSchema { output } => {
+            write_or_print_json(
+                &approval_log_gossip_observation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ApprovalLogGossipQuorumReportSchema { output } => {
+            write_or_print_json(
+                &approval_log_gossip_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::RemoteApprovalLogGossipReceiptSchema { output } => {
+            write_or_print_json(
+                &remote_approval_log_gossip_receipt_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ApprovalLogWitnessQuorumReportSchema { output } => {
             write_or_print_json(
                 &approval_log_witness_quorum_report_json_schema(),
@@ -9690,6 +9785,126 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "verified approval public-log gossip {}: {}",
                 report.observer_id, report.relationship
+            );
+        }
+        Command::VerifyApprovalLogGossipQuorum {
+            local_anchor,
+            observations,
+            organization_ids,
+            observer_ids,
+            observer_public_keys,
+            minimum_organizations,
+            log_public_key,
+            evaluated_at_unix,
+            output,
+            require_quorum,
+        } => {
+            if observations.len() != organization_ids.len()
+                || observations.len() != observer_ids.len()
+                || observations.len() != observer_public_keys.len()
+            {
+                bail!(
+                    "each --observation requires one positionally paired --organization-id, --observer-id, and --observer-public-key"
+                );
+            }
+            let mut paths = vec![
+                Some(local_anchor.0.as_ref()),
+                Some(log_public_key.0.as_ref()),
+                Some(output.0.as_ref()),
+            ];
+            paths.extend(observations.iter().map(PathBuf::as_path).map(Some));
+            paths.extend(observer_public_keys.iter().map(PathBuf::as_path).map(Some));
+            require_distinct_outputs(paths, "approval-log gossip quorum")?;
+            let (local, _) = read_described_json::<ApprovalLogAnchorProof>(&local_anchor)?;
+            let observations = observations
+                .iter()
+                .map(|path| {
+                    read_described_json::<ApprovalLogGossipObservation>(&CompactPath(
+                        path.clone().into_boxed_path(),
+                    ))
+                    .map(|value| value.0)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let observer_keys = observer_public_keys
+                .iter()
+                .map(|path| {
+                    read_hex_key(
+                        &CompactPath(path.clone().into_boxed_path()),
+                        "trusted approval gossip observer public key",
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let log_key = read_hex_key(&log_public_key, "trusted approval public-log key")?;
+            let report = verify_approval_log_gossip_quorum(
+                &local,
+                &observations,
+                &organization_ids,
+                &observer_ids,
+                &observer_keys,
+                minimum_organizations,
+                &log_key,
+                evaluated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "approval public-log gossip organization quorum: {}/{}",
+                report.distinct_organizations, report.minimum_organizations
+            );
+            if require_quorum && !report.quorum_met {
+                bail!("approval public-log gossip organization quorum was not met");
+            }
+        }
+        Command::RequestApprovalLogGossipObservation {
+            local_anchor,
+            endpoint,
+            log_public_key,
+            organization_id,
+            observer_id,
+            observer_public_key,
+            bearer_token_env,
+            timeout_seconds,
+            evaluated_at_unix,
+            output,
+            receipt_output,
+            allow_http_loopback,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(local_anchor.0.as_ref()),
+                    Some(log_public_key.0.as_ref()),
+                    Some(observer_public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                    Some(receipt_output.0.as_ref()),
+                ],
+                "remote approval-log gossip",
+            )?;
+            let (local, _) = read_described_json::<ApprovalLogAnchorProof>(&local_anchor)?;
+            let log_key = read_hex_key(&log_public_key, "trusted approval public-log key")?;
+            let observer_key =
+                read_hex_key(&observer_public_key, "trusted approval gossip observer key")?;
+            let (observation, receipt) = request_remote_approval_log_gossip(
+                &local,
+                &endpoint,
+                &log_key,
+                &organization_id,
+                &observer_id,
+                &observer_key,
+                bearer_token_env.as_deref(),
+                timeout_seconds,
+                evaluated_at_unix,
+                allow_http_loopback,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let observation_document = serde_json::to_string_pretty(&observation)? + "\n";
+            let receipt_document = serde_json::to_string_pretty(&receipt)? + "\n";
+            write_new_file_set(&[
+                (output.0.as_ref(), observation_document.as_str()),
+                (receipt_output.0.as_ref(), receipt_document.as_str()),
+            ])?;
+            eprintln!(
+                "verified remote approval public-log gossip from {}/{}",
+                receipt.organization_id, receipt.observer_id
             );
         }
         Command::VerifyApprovalLogWitnesses {
@@ -11553,7 +11768,7 @@ mod tests {
             .map(|value| value.to_string())
             .collect::<Vec<_>>();
         std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
+            .stack_size(16 * 1024 * 1024)
             .spawn(move || Cli::try_parse_from(arguments))
             .expect("CLI parser test thread starts")
             .join()
@@ -11563,7 +11778,7 @@ mod tests {
     #[test]
     fn generates_completions_for_every_supported_shell() {
         std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
+            .stack_size(16 * 1024 * 1024)
             .spawn(|| {
                 for shell in [
                     Shell::Bash,

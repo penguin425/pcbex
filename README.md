@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.372.0
+    uses: penguin425/pcbex@v1.373.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3197,6 +3197,55 @@ MCP exposes task-forbidden signing and verification tools. Closed contracts
 come from `signed-approval-log-gossip-receipt-schema` and
 `approval-log-gossip-verification-report-schema`.
 
+Require fresh consistent observations from multiple independent organizations:
+
+```sh
+pcbex verify-approval-log-gossip-quorum \
+  --local-anchor approvals.previous-anchor.json \
+  --observation independent-lab.observation.json \
+  --observation security-partner.observation.json \
+  --organization-id independent-lab \
+  --organization-id security-partner \
+  --observer-id lab-observer \
+  --observer-id partner-observer \
+  --observer-public-key lab-observer.pub \
+  --observer-public-key partner-observer.pub \
+  --minimum-organizations 2 \
+  --log-public-key public-log.pub \
+  --evaluated-at-unix 1770000100 \
+  --output approvals.gossip-quorum.json \
+  --require-quorum
+
+pcbex request-approval-log-gossip-observation \
+  --local-anchor approvals.previous-anchor.json \
+  --endpoint https://observer.example/v1/gossip \
+  --log-public-key public-log.pub \
+  --organization-id independent-lab \
+  --observer-id lab-observer \
+  --observer-public-key lab-observer.pub \
+  --evaluated-at-unix 1770000100 \
+  --output independent-lab.observation.json \
+  --receipt-output independent-lab.transport.json
+```
+
+Each quorum member is independently reverified against the trusted log key and
+must be no more than 24 hours old. Organizations, observer identities, keys,
+and receipt digests must all be distinct, preventing one operator from
+inflating the threshold. The HTTPS adapter follows no redirects, limits the
+response to 1 MiB and the timeout to 600 seconds, and binds the endpoint,
+request, response, byte count, identities, and verified gossip receipt into a
+transport receipt. Bearer credentials are read only from an environment
+variable.
+
+The Action combines local observations with up to ten bounded remote
+endpoints, publishes the quorum and every remote response/transport receipt,
+and can enforce `fail-on-approval-log-gossip-quorum`. MCP exposes quorum
+verification as an optional task and remote acquisition as open-world and
+task-forbidden. Closed contracts come from
+`approval-log-gossip-observation-schema`,
+`approval-log-gossip-quorum-report-schema`, and
+`remote-approval-log-gossip-receipt-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3264,7 +3313,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.372.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.373.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

@@ -379,6 +379,11 @@
     {
       "id": "approval-transparency-public-log-gossip",
       "release": "v1.372.0",
+      "status": "released"
+    },
+    {
+      "id": "remote-approval-transparency-public-log-gossip-quorum",
+      "release": "v1.373.0",
       "status": "current"
     }
   ]
