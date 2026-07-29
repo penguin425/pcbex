@@ -2382,6 +2382,40 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("forbidden"),
         ),
+        open_world_tool(
+            "request_remote_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness",
+            "Request remote registry history checkpoint witness",
+            "POST one accepted complete registry-history checkpoint to bounded HTTPS and immediately verify the response against a direct or rotatable witness key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "checkpoint_trust_state", "endpoint", "evaluated_at_unix",
+                    "output", "receipt_output"
+                ],
+                "oneOf": [
+                    {"required": ["public_key"]},
+                    {"required": ["witness_key_trust_state"]}
+                ],
+                "properties": {
+                    "checkpoint_trust_state": {"type": "string"},
+                    "endpoint": {"type": "string", "pattern": "^https://"},
+                    "public_key": {"type": "string"},
+                    "witness_key_trust_state": {"type": "string"},
+                    "bearer_token_env": {
+                        "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "timeout_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 600, "default": 30
+                    },
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "receipt_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
         tool(
             "init_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_trust",
             "Initialize registry history witness trust",
@@ -3358,6 +3392,12 @@ fn call_tool(
         }
         "verify_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witnesses" => {
             verify_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witnesses(
+                arguments,
+                cancellation,
+            )?
+        }
+        "request_remote_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness" => {
+            request_remote_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness(
                 arguments,
                 cancellation,
             )?
@@ -6859,6 +6899,86 @@ fn verify_policy_lifecycle_public_log_gossip_organization_registry_history_check
     ))
 }
 
+fn request_remote_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "checkpoint_trust_state",
+            "endpoint",
+            "public_key",
+            "witness_key_trust_state",
+            "bearer_token_env",
+            "timeout_seconds",
+            "evaluated_at_unix",
+            "output",
+            "receipt_output",
+        ],
+    )?;
+    let evaluated_at_unix = arguments
+        .get("evaluated_at_unix")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "evaluated_at_unix must be a non-negative integer"}))?;
+    let output = required_string(&arguments, "output")?;
+    let receipt_output = required_string(&arguments, "receipt_output")?;
+    let public_key = arguments.get("public_key").and_then(Value::as_str);
+    let witness_key_trust_state = arguments
+        .get("witness_key_trust_state")
+        .and_then(Value::as_str);
+    if public_key.is_some() == witness_key_trust_state.is_some() {
+        return Err(json!({
+            "detail": "exactly one of public_key or witness_key_trust_state is required"
+        }));
+    }
+    let mut command = vec![
+        "request-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness"
+            .into(),
+        required_string(&arguments, "checkpoint_trust_state")?,
+        "--endpoint".into(),
+        required_string(&arguments, "endpoint")?,
+    ];
+    if let Some(public_key) = public_key {
+        command.extend(["--public-key".into(), public_key.into()]);
+    }
+    if let Some(trust_state) = witness_key_trust_state {
+        command.extend(["--witness-key-trust-state".into(), trust_state.into()]);
+    }
+    optional_option(
+        &arguments,
+        "bearer_token_env",
+        "--bearer-token-env",
+        &mut command,
+    )?;
+    optional_positive_integer(
+        &arguments,
+        "timeout_seconds",
+        "--timeout-seconds",
+        &mut command,
+    )?;
+    command.extend([
+        "--evaluated-at-unix".into(),
+        evaluated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+        "--receipt-output".into(),
+        receipt_output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let witness = read_json_if_present(Path::new(&output));
+    let receipt = read_json_if_present(Path::new(&receipt_output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "receipt_output": receipt_output,
+            "witness": witness,
+            "receipt": receipt
+        }),
+    ))
+}
+
 fn init_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness_trust(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -8395,7 +8515,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 95);
+        assert_eq!(tools.len(), 96);
         let named = |name: &str| {
             tools
                 .iter()
@@ -8803,6 +8923,24 @@ mod tests {
                 "verify_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witnesses"
             )["inputSchema"]["properties"]["minimum_witnesses"]["minimum"],
             2
+        );
+        assert_eq!(
+            named(
+                "request_remote_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness"
+            )["inputSchema"]["properties"]["endpoint"]["pattern"],
+            "^https://"
+        );
+        assert_eq!(
+            named(
+                "request_remote_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness"
+            )["annotations"]["openWorldHint"],
+            true
+        );
+        assert_eq!(
+            named(
+                "request_remote_policy_lifecycle_public_log_gossip_organization_registry_history_checkpoint_witness"
+            )["execution"]["taskSupport"],
+            "forbidden"
         );
         assert_eq!(
             named(

@@ -618,6 +618,30 @@ inputs:
     description: Explicit deterministic evaluation time for registry-history checkpoint witnesses.
     required: false
     default: ""
+  policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-endpoints:
+    description: Newline-separated bounded HTTPS registry-history checkpoint witness endpoints.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-ids:
+    description: Newline-separated trusted witness identities paired with remote public-key files.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-public-key-files:
+    description: Newline-separated trusted public-key files paired with remote endpoints and identities.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-trust-state-files:
+    description: Newline-separated rotatable witness trust states paired with remote endpoints; mutually exclusive with remote identities and keys.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-bearer-token:
+    description: Optional Bearer token sent only to configured remote registry-history witness services.
+    required: false
+    default: ""
+  policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-timeout-seconds:
+    description: End-to-end timeout for each remote registry-history witness request.
+    required: false
+    default: "30"
   policy-lifecycle-log-gossip-minimum-organizations:
     description: Minimum distinct organizations required by the public-log gossip quorum.
     required: false
@@ -1010,6 +1034,12 @@ outputs:
   policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum-met:
     description: Whether the configured registry-history checkpoint witness threshold was met.
     value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-quorum-met }}
+  policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witnesses:
+    description: Directory containing verified remote registry-history checkpoint witnesses.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witnesses }}
+  policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-receipts:
+    description: Directory containing hash-bound remote registry-history witness transport receipts.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-receipts }}
   policy-lifecycle-log-remote-gossip-observations:
     description: Directory containing verified remote gossip observation envelopes.
     value: ${{ steps.analyze.outputs.policy-lifecycle-log-remote-gossip-observations }}
@@ -1225,6 +1255,12 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness-trust-state-files }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_MINIMUM_WITNESSES: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-minimum-witnesses }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_ENDPOINTS: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-endpoints }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_IDS: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-ids }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-public-key-files }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_TRUST_STATE_FILES: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-trust-state-files }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_BEARER_TOKEN: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-bearer-token }}
+        PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_TIMEOUT_SECONDS: ${{ inputs.policy-lifecycle-log-gossip-organization-registry-history-checkpoint-remote-witness-timeout-seconds }}
         PCBEX_POLICY_LIFECYCLE_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.policy-lifecycle-log-gossip-minimum-organizations }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.policy-lifecycle-log-remote-gossip-endpoints }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.policy-lifecycle-log-remote-gossip-organization-ids }}

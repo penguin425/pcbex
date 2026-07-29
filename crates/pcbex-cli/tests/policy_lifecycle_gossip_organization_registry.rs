@@ -1,8 +1,11 @@
 use serde_json::{Value, json};
 use std::{
     fs,
+    io::{Read, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Command, Output},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -26,6 +29,61 @@ fn temp_dir() -> PathBuf {
     let path = std::env::temp_dir().join(format!("pcbex-gossip-org-registry-{suffix}"));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn remote_registry_history_witness_server(witness: Value) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!(
+        "http://{}/v1/registry-history-checkpoint",
+        listener.local_addr().unwrap()
+    );
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+        assert!(headers.starts_with("POST /v1/registry-history-checkpoint HTTP/1.1\r\n"));
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length: ")
+                    .map(|value| value.parse::<usize>().unwrap())
+            })
+            .unwrap();
+        while request.len() - header_end < content_length {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        let body: Value =
+            serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+        assert_eq!(
+            body["protocol"],
+            "pcbex-policy-lifecycle-public-log-gossip-organization-registry-history-checkpoint-witness-v1"
+        );
+        assert_eq!(
+            body["checkpoint_trust_state"]["checkpoint_sha256"],
+            witness["checkpoint_sha256"]
+        );
+        let response = serde_json::to_vec(&witness).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response.len()
+        )
+        .unwrap();
+        stream.write_all(&response).unwrap();
+    });
+    (endpoint, handle)
 }
 
 #[test]
@@ -755,6 +813,67 @@ fn governs_observer_admission_suspension_and_permanent_revocation() {
             .success()
         );
     }
+    let (remote_endpoint, remote_server) =
+        remote_registry_history_witness_server(read_json(&witness_a));
+    let remote_witness = directory.join("registry.history.checkpoint.remote-witness.json");
+    let remote_receipt = directory.join("registry.history.checkpoint.remote-receipt.json");
+    assert!(
+        run(&[
+            "request-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness",
+            path(&checkpoint_trust),
+            "--endpoint",
+            &remote_endpoint,
+            "--witness-key-trust-state",
+            path(&witness_trust_a_rotated),
+            "--evaluated-at-unix",
+            "3400",
+            "--output",
+            path(&remote_witness),
+            "--receipt-output",
+            path(&remote_receipt),
+            "--allow-http-loopback",
+        ])
+        .status
+        .success()
+    );
+    remote_server.join().unwrap();
+    assert_eq!(read_json(&remote_witness), read_json(&witness_a));
+    let remote_receipt_value = read_json(&remote_receipt);
+    assert_eq!(remote_receipt_value["verified"], true);
+    assert_eq!(remote_receipt_value["witness_key_generation"], 1);
+    assert_eq!(
+        remote_receipt_value["checkpoint_sha256"],
+        checkpoint_trust_value["checkpoint_sha256"]
+    );
+    let (untrusted_endpoint, untrusted_server) =
+        remote_registry_history_witness_server(read_json(&witness_a));
+    let rejected_remote_witness =
+        directory.join("registry.history.checkpoint.rejected-remote-witness.json");
+    let rejected_remote_receipt =
+        directory.join("registry.history.checkpoint.rejected-remote-receipt.json");
+    assert!(
+        !run(&[
+            "request-policy-lifecycle-log-gossip-organization-registry-history-checkpoint-witness",
+            path(&checkpoint_trust),
+            "--endpoint",
+            &untrusted_endpoint,
+            "--witness-key-trust-state",
+            path(&witness_trust_b),
+            "--evaluated-at-unix",
+            "3400",
+            "--output",
+            path(&rejected_remote_witness),
+            "--receipt-output",
+            path(&rejected_remote_receipt),
+            "--allow-http-loopback",
+        ])
+        .status
+        .success()
+    );
+    untrusted_server.join().unwrap();
+    assert!(!rejected_remote_witness.exists());
+    assert!(!rejected_remote_receipt.exists());
+
     let witness_quorum = directory.join("registry.history.checkpoint.quorum.json");
     assert!(
         run(&[

@@ -96,6 +96,7 @@ mod policy_rollout_approval;
 mod policy_suspension;
 mod remote_policy;
 mod remote_policy_lifecycle_gossip;
+mod remote_policy_lifecycle_gossip_registry_checkpoint_witness;
 mod remote_policy_lifecycle_witness;
 mod remote_witness;
 
@@ -300,6 +301,10 @@ use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_sc
 use remote_policy_lifecycle_gossip::{
     remote_policy_lifecycle_log_gossip_receipt_json_schema,
     request_remote_policy_lifecycle_log_gossip,
+};
+use remote_policy_lifecycle_gossip_registry_checkpoint_witness::{
+    remote_registry_history_checkpoint_witness_receipt_json_schema,
+    request_remote_registry_history_checkpoint_witness,
 };
 use remote_policy_lifecycle_witness::{
     remote_policy_lifecycle_witness_receipt_json_schema, request_remote_policy_lifecycle_witness,
@@ -1286,6 +1291,11 @@ enum Command {
     /// Validate and normalize a registry-history checkpoint witness quorum.
     ValidatePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorum {
         input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed remote registry-history witness transport receipt JSON Schema.
+    RemotePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessReceiptSchema {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -2360,6 +2370,38 @@ enum Command {
         require_quorum: bool,
         #[arg(short, long)]
         output: PathBuf,
+    },
+    /// Acquire and immediately verify one registry-history witness from bounded HTTPS.
+    RequestPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness {
+        checkpoint_trust_state: PathBuf,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(
+            long,
+            required_unless_present = "witness_key_trust_state",
+            conflicts_with = "witness_key_trust_state"
+        )]
+        public_key: Option<PathBuf>,
+        #[arg(
+            long,
+            required_unless_present = "public_key",
+            conflicts_with = "public_key"
+        )]
+        witness_key_trust_state: Option<PathBuf>,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+        timeout_seconds: u64,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long)]
+        receipt_output: PathBuf,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
     },
     /// Verify fresh observations from distinct organizations as one gossip quorum.
     VerifyPolicyLifecycleLogGossipQuorum {
@@ -4591,6 +4633,14 @@ fn run_cli() -> Result<()> {
                 )
                 .map_err(anyhow::Error::msg)?;
             write_or_print_json(&serde_json::to_value(report)?, output.as_ref())?;
+        }
+        Command::RemotePolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitnessReceiptSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &remote_registry_history_checkpoint_witness_receipt_json_schema(),
+                output.as_ref(),
+            )?;
         }
         Command::SignedPolicyLifecycleLogGossipOrganizationRegistryThresholdTransitionSchema {
             output,
@@ -8090,6 +8140,94 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "lifecycle gossip registry history checkpoint witness quorum: {}/{}",
                 report.valid_witnesses, report.minimum_witnesses
+            );
+        }
+        Command::RequestPolicyLifecycleLogGossipOrganizationRegistryHistoryCheckpointWitness {
+            checkpoint_trust_state,
+            endpoint,
+            public_key,
+            witness_key_trust_state,
+            bearer_token_env,
+            timeout_seconds,
+            evaluated_at_unix,
+            output,
+            receipt_output,
+            allow_http_loopback,
+        } => {
+            let key_evidence_path = public_key
+                .as_deref()
+                .or(witness_key_trust_state.as_deref())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("remote registry history witness key evidence is absent")
+                })?;
+            require_distinct_outputs(
+                [
+                    Some(checkpoint_trust_state.as_path()),
+                    Some(key_evidence_path),
+                    Some(output.as_path()),
+                    Some(receipt_output.as_path()),
+                ],
+                "remote registry history checkpoint witness",
+            )?;
+            let source = fs::read_to_string(&checkpoint_trust_state)
+                .with_context(|| format!("reading {}", checkpoint_trust_state.display()))?;
+            let checkpoint_state =
+                parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_trust_state(
+                    &source,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let witness_key_state = witness_key_trust_state
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                        &source,
+                    )
+                    .map_err(anyhow::Error::msg)
+                })
+                .transpose()?;
+            let trusted = if let Some(state) = &witness_key_state {
+                policy_lifecycle_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+                    state,
+                )
+                .map_err(anyhow::Error::msg)?
+            } else {
+                read_hex_key(
+                    public_key
+                        .as_ref()
+                        .expect("clap requires one remote registry history witness key source"),
+                    "trusted remote registry history witness public key",
+                )?
+            };
+            let (witness, mut receipt) =
+                request_remote_registry_history_checkpoint_witness(
+                    &checkpoint_state,
+                    &endpoint,
+                    &trusted,
+                    bearer_token_env.as_deref(),
+                    timeout_seconds,
+                    evaluated_at_unix,
+                    allow_http_loopback,
+                )
+                .map_err(anyhow::Error::msg)?;
+            if let Some(state) = &witness_key_state {
+                if witness.witness_id != state.witness_id {
+                    bail!("remote registry history witness identity does not match trust state");
+                }
+                receipt.witness_key_trust_state_sha256 =
+                    Some(normalized_json_sha256(state)?);
+                receipt.witness_key_generation = Some(state.generation);
+            }
+            let witness_document = serde_json::to_string_pretty(&witness)? + "\n";
+            let receipt_document = serde_json::to_string_pretty(&receipt)? + "\n";
+            write_new_file_set(&[
+                (output.as_path(), witness_document.as_str()),
+                (receipt_output.as_path(), receipt_document.as_str()),
+            ])?;
+            eprintln!(
+                "verified remote registry history checkpoint witness {} for generation {}",
+                witness.witness_id, witness.generation
             );
         }
         Command::VerifyPolicyLifecycleLogGossipQuorum {
