@@ -474,6 +474,22 @@ inputs:
     description: Fail unless the independent lifecycle checkpoint witness quorum is met.
     required: false
     default: "false"
+  policy-lifecycle-log-anchor-proof:
+    description: Signed Merkle inclusion proof for the configured lifecycle checkpoint.
+    required: false
+    default: ""
+  policy-lifecycle-log-anchor-id:
+    description: Separately trusted lifecycle public-log identity.
+    required: false
+    default: ""
+  policy-lifecycle-log-anchor-public-key:
+    description: Trusted Ed25519 public-key file for the lifecycle public-log tree head.
+    required: false
+    default: ""
+  fail-on-policy-lifecycle-log-anchor:
+    description: Fail unless the configured lifecycle checkpoint has a valid public-log anchor.
+    required: false
+    default: "false"
   ai-review-request:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
@@ -791,6 +807,12 @@ outputs:
   policy-lifecycle-remote-witness-receipts:
     description: Directory containing hash-bound remote lifecycle-witness transport receipts.
     value: ${{ steps.analyze.outputs.policy-lifecycle-remote-witness-receipts }}
+  policy-lifecycle-log-anchor-verification:
+    description: Verified lifecycle public-log anchor report path, when configured.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-anchor-verification }}
+  policy-lifecycle-log-anchored:
+    description: Whether the lifecycle checkpoint is included under the trusted signed tree head.
+    value: ${{ steps.analyze.outputs.policy-lifecycle-log-anchored }}
   schematic-diff:
     description: Schematic semantic-diff JSON path, when both schematics are supplied.
     value: ${{ steps.analyze.outputs.schematic-diff }}
@@ -967,6 +989,9 @@ runs:
         PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_KEY_TRUST_STATE_FILES: ${{ inputs.policy-lifecycle-remote-witness-key-trust-state-files }}
         PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_BEARER_TOKEN: ${{ inputs.policy-lifecycle-remote-witness-bearer-token }}
         PCBEX_POLICY_LIFECYCLE_REMOTE_WITNESS_TIMEOUT_SECONDS: ${{ inputs.policy-lifecycle-remote-witness-timeout-seconds }}
+        PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PROOF: ${{ inputs.policy-lifecycle-log-anchor-proof }}
+        PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_ID: ${{ inputs.policy-lifecycle-log-anchor-id }}
+        PCBEX_POLICY_LIFECYCLE_LOG_ANCHOR_PUBLIC_KEY: ${{ inputs.policy-lifecycle-log-anchor-public-key }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
@@ -1051,6 +1076,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_AWAITING_REMEDIATION: ${{ steps.analyze.outputs.policy-lifecycle-awaiting-remediation }}
         PCBEX_POLICY_LIFECYCLE_CHECKPOINT_ACCEPTED: ${{ steps.analyze.outputs.policy-lifecycle-checkpoint-accepted }}
         PCBEX_POLICY_LIFECYCLE_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.policy-lifecycle-witness-quorum-met }}
+        PCBEX_POLICY_LIFECYCLE_LOG_ANCHORED: ${{ steps.analyze.outputs.policy-lifecycle-log-anchored }}
         PCBEX_FAIL_ON_VIOLATIONS: ${{ inputs.fail-on-violations }}
         PCBEX_FAIL_ON_REGRESSIONS: ${{ inputs.fail-on-regressions }}
         PCBEX_FAIL_ON_MANUFACTURING_FEEDBACK: ${{ inputs.fail-on-manufacturing-feedback }}
@@ -1075,6 +1101,7 @@ runs:
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_PENDING: ${{ inputs.fail-on-policy-lifecycle-pending }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_CHECKPOINT: ${{ inputs.fail-on-policy-lifecycle-checkpoint }}
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_WITNESS_QUORUM: ${{ inputs.fail-on-policy-lifecycle-witness-quorum }}
+        PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_ANCHOR: ${{ inputs.fail-on-policy-lifecycle-log-anchor }}
       run: |
         set -euo pipefail
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
@@ -1175,5 +1202,9 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_WITNESS_QUORUM" == "true" && "$PCBEX_POLICY_LIFECYCLE_WITNESS_QUORUM_MET" != "true" ]]; then
           echo "::error::pcbex policy lifecycle checkpoint lacks a fresh independent witness quorum"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_ANCHOR" == "true" && "$PCBEX_POLICY_LIFECYCLE_LOG_ANCHORED" != "true" ]]; then
+          echo "::error::pcbex policy lifecycle checkpoint lacks a valid trusted public-log anchor"
           exit 1
         fi

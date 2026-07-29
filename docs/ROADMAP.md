@@ -64,6 +64,7 @@ auditable release.
 | v1.352.0 | Independent lifecycle checkpoint witnesses | Require a fresh quorum of distinct externally trusted observers over one exact lifecycle head |
 | v1.353.0 | Remote lifecycle checkpoint witnesses | Acquire and immediately verify lifecycle observations from bounded HTTPS services with hash-bound transport receipts |
 | v1.354.0 | Lifecycle witness key rotation | Advance identity-bound witness trust through dual-signed, generation- and digest-chained key transitions |
+| v1.355.0 | Lifecycle public-log anchoring | Verify lifecycle-checkpoint inclusion under a separately trusted signed Merkle tree head |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -72,6 +73,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should anchor lifecycle checkpoints in a separately trusted
-signed Merkle log so independent consumers can verify inclusion under one
-publicly auditable tree head.
+The next roadmap should retain and verify signed public-log consistency proofs
+so independent consumers can reject tree-head rollback, equivocation, and
+split-view histories across successive lifecycle anchors.

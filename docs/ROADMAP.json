@@ -289,6 +289,11 @@
     {
       "id": "lifecycle-witness-key-rotation",
       "release": "v1.354.0",
+      "status": "released"
+    },
+    {
+      "id": "lifecycle-public-log-anchoring",
+      "release": "v1.355.0",
       "status": "current"
     }
   ]

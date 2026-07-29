@@ -1691,6 +1691,58 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "create_policy_lifecycle_public_anchor",
+            "Create policy lifecycle public-log anchor",
+            "Build and sign an RFC 6962-style Merkle inclusion proof over an ordered lifecycle-checkpoint snapshot.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "checkpoint", "log_checkpoints", "leaf_index", "log_id",
+                    "private_key", "output"
+                ],
+                "properties": {
+                    "checkpoint": {"type": "string"},
+                    "log_checkpoints": {
+                        "type": "array", "minItems": 1, "maxItems": 100000,
+                        "items": {"type": "string"}
+                    },
+                    "leaf_index": {"type": "integer", "minimum": 0},
+                    "log_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+                    },
+                    "private_key": {"type": "string"},
+                    "observed_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_policy_lifecycle_public_anchor",
+            "Verify policy lifecycle public-log anchor",
+            "Verify exact lifecycle-checkpoint inclusion, the reconstructed Merkle root, and a separately trusted signed tree head.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["checkpoint", "proof", "log_id", "public_key", "output"],
+                "properties": {
+                    "checkpoint": {"type": "string"},
+                    "proof": {"type": "string"},
+                    "log_id": {
+                        "type": "string", "minLength": 1, "maxLength": 128,
+                        "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"
+                    },
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
             "compare_schematics",
             "Compare KiCad schematics",
             "Compare two .kicad_sch files by symbols, pins, attributes, and electrical connectivity while ignoring drawing-only changes.",
@@ -2348,6 +2400,12 @@ fn call_tool(
         }
         "request_remote_policy_lifecycle_checkpoint_witness" => {
             request_remote_policy_lifecycle_checkpoint_witness(arguments, cancellation)?
+        }
+        "create_policy_lifecycle_public_anchor" => {
+            create_policy_lifecycle_public_anchor(arguments, cancellation)?
+        }
+        "verify_policy_lifecycle_public_anchor" => {
+            verify_policy_lifecycle_public_anchor(arguments, cancellation)?
         }
         "compare_schematics" => compare_schematics(arguments, cancellation)?,
         "route_schematic_reviewers" => route_schematic_reviewers(arguments, cancellation)?,
@@ -4601,6 +4659,92 @@ fn request_remote_policy_lifecycle_checkpoint_witness(
     ))
 }
 
+fn create_policy_lifecycle_public_anchor(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "checkpoint",
+            "log_checkpoints",
+            "leaf_index",
+            "log_id",
+            "private_key",
+            "observed_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let leaf_index = arguments
+        .get("leaf_index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"detail": "leaf_index must be a non-negative integer"}))?;
+    let mut command = vec![
+        "create-policy-lifecycle-log-anchor".into(),
+        required_string(&arguments, "checkpoint")?,
+    ];
+    let log_checkpoints = required_string_array(&arguments, "log_checkpoints", false)?;
+    if log_checkpoints.len() > 100_000 {
+        return Err(json!({
+            "detail": "log_checkpoints cannot exceed 100000 entries"
+        }));
+    }
+    for checkpoint in log_checkpoints {
+        command.extend(["--log-checkpoint".into(), checkpoint]);
+    }
+    command.extend([
+        "--leaf-index".into(),
+        leaf_index.to_string(),
+        "--log-id".into(),
+        required_string(&arguments, "log_id")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+    ]);
+    optional_nonnegative_integer(
+        &arguments,
+        "observed_at_unix",
+        "--observed-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let proof = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "proof": proof}),
+    ))
+}
+
+fn verify_policy_lifecycle_public_anchor(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["checkpoint", "proof", "log_id", "public_key", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "verify-policy-lifecycle-log-anchor".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--proof".into(),
+        required_string(&arguments, "proof")?,
+        "--log-id".into(),
+        required_string(&arguments, "log_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 fn compare_schematics(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -5810,7 +5954,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 61);
+        assert_eq!(tools.len(), 63);
         let named = |name: &str| {
             tools
                 .iter()
@@ -6046,6 +6190,19 @@ mod tests {
         assert_eq!(
             named("request_remote_policy_lifecycle_checkpoint_witness")["execution"]["taskSupport"],
             "forbidden"
+        );
+        assert_eq!(
+            named("create_policy_lifecycle_public_anchor")["inputSchema"]["properties"]["log_checkpoints"]
+                ["maxItems"],
+            100000
+        );
+        assert_eq!(
+            named("create_policy_lifecycle_public_anchor")["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named("verify_policy_lifecycle_public_anchor")["execution"]["taskSupport"],
+            "optional"
         );
         assert_eq!(
             named("verify_policy_lifecycle_checkpoint")["inputSchema"]["properties"]["accepted_at_unix"]

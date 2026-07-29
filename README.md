@@ -1346,6 +1346,47 @@ exclusive with its legacy public-key input. Remote receipts additionally bind
 the exact trust-state SHA-256 and key generation when this mode is used; both
 fields are `null` for the legacy raw-key path.
 
+Anchor an accepted lifecycle checkpoint in a separately operated public
+Merkle log:
+
+```sh
+pcbex create-policy-lifecycle-log-anchor \
+  policy-lifecycle.checkpoint.json \
+  --log-checkpoint policy-lifecycle.previous.checkpoint.json \
+  --log-checkpoint policy-lifecycle.checkpoint.json \
+  --leaf-index 1 \
+  --log-id organization-lifecycle-log \
+  --private-key lifecycle-public-log.key \
+  --observed-at-unix 1785301500 \
+  --output policy-lifecycle.anchor.json
+
+pcbex verify-policy-lifecycle-log-anchor \
+  policy-lifecycle.checkpoint.json \
+  --proof policy-lifecycle.anchor.json \
+  --log-id organization-lifecycle-log \
+  --public-key lifecycle-public-log.pub \
+  --output policy-lifecycle.anchor-verification.json
+```
+
+Checkpoint digests are domain-separated leaves in an RFC 6962-style tree.
+The signed tree head binds the public-log identity, exact tree size, root
+digest, and observation time under a key that is independent from both the
+lifecycle signer and its witnesses. Verification reconstructs the exact root
+from a bounded audit path and rejects a different checkpoint, leaf index,
+sibling, root, signature, trusted key, malformed proof, oversized tree, or
+trusted log identity, or tree head that predates the checkpoint.
+
+Closed contracts are available from
+`policy-lifecycle-log-anchor-proof-schema` and
+`policy-lifecycle-log-anchor-verification-report-schema`. MCP exposes
+`create_policy_lifecycle_public_anchor` and
+`verify_policy_lifecycle_public_anchor`. The Action accepts
+`policy-lifecycle-log-anchor-proof` with
+`policy-lifecycle-log-anchor-id` and
+`policy-lifecycle-log-anchor-public-key`, publishes the verification report
+and boolean result, and can fail closed with
+`fail-on-policy-lifecycle-log-anchor: "true"`.
+
 ### GitHub Actions hardware CI
 
 The repository is also a composite GitHub Action. It builds the engine from the
@@ -1373,7 +1414,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.354.0
+    uses: penguin425/pcbex@v1.355.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2610,7 +2651,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.354.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.355.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
