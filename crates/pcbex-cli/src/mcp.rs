@@ -3153,6 +3153,74 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "verify_approval_transparency_public_log_gossip_quorum",
+            "Verify approval public-log gossip quorum",
+            "Freshly verify paired observations from distinct trusted organizations and enforce a bounded organization threshold.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "local_anchor", "observations", "organization_ids", "observer_ids",
+                    "observer_public_keys", "log_public_key", "evaluated_at_unix", "output"
+                ],
+                "properties": {
+                    "local_anchor": {"type": "string"},
+                    "observations": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "organization_ids": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"}
+                    },
+                    "observer_ids": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"}
+                    },
+                    "observer_public_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string"}
+                    },
+                    "minimum_organizations": {"type": "integer", "minimum": 2, "maximum": 100},
+                    "log_public_key": {"type": "string"},
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "require_quorum": {"type": "boolean"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        open_world_tool(
+            "request_remote_approval_transparency_public_log_gossip",
+            "Request remote approval public-log gossip",
+            "Acquire one bounded HTTPS observation, verify both signatures and append-only consistency, and retain hash-bound transport evidence.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "local_anchor", "endpoint", "log_public_key", "organization_id",
+                    "observer_id", "observer_public_key", "evaluated_at_unix",
+                    "output", "receipt_output"
+                ],
+                "properties": {
+                    "local_anchor": {"type": "string"},
+                    "endpoint": {"type": "string", "pattern": "^https://"},
+                    "log_public_key": {"type": "string"},
+                    "organization_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                    "observer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                    "observer_public_key": {"type": "string"},
+                    "bearer_token_env": {"type": "string"},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 600},
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "receipt_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -3577,6 +3645,12 @@ fn call_tool(
         }
         "verify_approval_transparency_public_log_gossip_receipt" => {
             verify_approval_transparency_public_log_gossip_receipt(arguments, cancellation)?
+        }
+        "verify_approval_transparency_public_log_gossip_quorum" => {
+            verify_approval_transparency_public_log_gossip_quorum(arguments, cancellation)?
+        }
+        "request_remote_approval_transparency_public_log_gossip" => {
+            request_remote_approval_transparency_public_log_gossip(arguments, cancellation)?
         }
         "verify_approval_transparency_witnesses" => {
             verify_approval_transparency_witnesses(arguments, cancellation)?
@@ -8401,6 +8475,167 @@ fn verify_approval_transparency_public_log_gossip_receipt(
     ))
 }
 
+fn verify_approval_transparency_public_log_gossip_quorum(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "local_anchor",
+            "observations",
+            "organization_ids",
+            "observer_ids",
+            "observer_public_keys",
+            "minimum_organizations",
+            "log_public_key",
+            "evaluated_at_unix",
+            "output",
+            "require_quorum",
+        ],
+    )?;
+    let observations = required_string_array(&arguments, "observations", false)?;
+    let organization_ids = required_string_array(&arguments, "organization_ids", false)?;
+    let observer_ids = required_string_array(&arguments, "observer_ids", false)?;
+    let observer_keys = required_string_array(&arguments, "observer_public_keys", false)?;
+    if observations.len() > 100
+        || observations.len() != organization_ids.len()
+        || observations.len() != observer_ids.len()
+        || observations.len() != observer_keys.len()
+    {
+        return Err(json!({
+            "detail": "observations require positionally paired organization, observer, and key arrays with at most 100 entries"
+        }));
+    }
+    let minimum = match arguments.get("minimum_organizations") {
+        Some(value) => value.as_u64().ok_or_else(
+            || json!({"detail": "minimum_organizations must be an integer from 2 to 100"}),
+        )?,
+        None => 2,
+    };
+    if !(2..=100).contains(&minimum) {
+        return Err(json!({"detail": "minimum_organizations must be an integer from 2 to 100"}));
+    }
+    let evaluated_at_unix = required_nonnegative_integer(&arguments, "evaluated_at_unix")?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-approval-log-gossip-quorum".into(),
+        "--local-anchor".into(),
+        required_string(&arguments, "local_anchor")?,
+    ];
+    for observation in observations {
+        command.extend(["--observation".into(), observation]);
+    }
+    for organization in organization_ids {
+        command.extend(["--organization-id".into(), organization]);
+    }
+    for observer in observer_ids {
+        command.extend(["--observer-id".into(), observer]);
+    }
+    for key in observer_keys {
+        command.extend(["--observer-public-key".into(), key]);
+    }
+    command.extend([
+        "--minimum-organizations".into(),
+        minimum.to_string(),
+        "--log-public-key".into(),
+        required_string(&arguments, "log_public_key")?,
+        "--evaluated-at-unix".into(),
+        evaluated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_flag(
+        &arguments,
+        "require_quorum",
+        "--require-quorum",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
+fn request_remote_approval_transparency_public_log_gossip(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "local_anchor",
+            "endpoint",
+            "log_public_key",
+            "organization_id",
+            "observer_id",
+            "observer_public_key",
+            "bearer_token_env",
+            "timeout_seconds",
+            "evaluated_at_unix",
+            "output",
+            "receipt_output",
+        ],
+    )?;
+    let timeout = match arguments.get("timeout_seconds") {
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| json!({"detail": "timeout_seconds must be an integer from 1 to 600"}))?,
+        None => 30,
+    };
+    if !(1..=600).contains(&timeout) {
+        return Err(json!({"detail": "timeout_seconds must be an integer from 1 to 600"}));
+    }
+    let evaluated_at_unix = required_nonnegative_integer(&arguments, "evaluated_at_unix")?;
+    let output = required_string(&arguments, "output")?;
+    let receipt_output = required_string(&arguments, "receipt_output")?;
+    let mut command = vec![
+        "request-approval-log-gossip-observation".into(),
+        "--local-anchor".into(),
+        required_string(&arguments, "local_anchor")?,
+        "--endpoint".into(),
+        required_string(&arguments, "endpoint")?,
+        "--log-public-key".into(),
+        required_string(&arguments, "log_public_key")?,
+        "--organization-id".into(),
+        required_string(&arguments, "organization_id")?,
+        "--observer-id".into(),
+        required_string(&arguments, "observer_id")?,
+        "--observer-public-key".into(),
+        required_string(&arguments, "observer_public_key")?,
+    ];
+    optional_option(
+        &arguments,
+        "bearer_token_env",
+        "--bearer-token-env",
+        &mut command,
+    )?;
+    command.extend([
+        "--timeout-seconds".into(),
+        timeout.to_string(),
+        "--evaluated-at-unix".into(),
+        evaluated_at_unix.to_string(),
+        "--output".into(),
+        output.clone(),
+        "--receipt-output".into(),
+        receipt_output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let observation = read_json_if_present(Path::new(&output));
+    let receipt = read_json_if_present(Path::new(&receipt_output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "receipt_output": receipt_output,
+            "observation": observation,
+            "receipt": receipt
+        }),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -8778,7 +9013,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 100);
+        assert_eq!(tools.len(), 102);
         let named = |name: &str| {
             tools
                 .iter()
@@ -9332,6 +9567,20 @@ mod tests {
             named("verify_approval_transparency_public_log_gossip_receipt")["inputSchema"]["properties"]
                 ["consistency_proof"]["type"],
             "string"
+        );
+        assert_eq!(
+            named("verify_approval_transparency_public_log_gossip_quorum")["inputSchema"]["properties"]
+                ["observations"]["maxItems"],
+            100
+        );
+        assert_eq!(
+            named("request_remote_approval_transparency_public_log_gossip")["inputSchema"]["properties"]
+                ["endpoint"]["pattern"],
+            "^https://"
+        );
+        assert_eq!(
+            named("request_remote_approval_transparency_public_log_gossip")["annotations"]["openWorldHint"],
+            true
         );
         assert_eq!(
             named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],

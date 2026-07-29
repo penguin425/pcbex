@@ -27,6 +27,13 @@ pub use approval_gossip::{
     signed_approval_log_gossip_receipt_json_schema, validate_approval_log_gossip_receipt,
     verify_approval_log_gossip_receipt,
 };
+mod approval_gossip_quorum;
+pub use approval_gossip_quorum::{
+    ApprovalLogGossipObservation, ApprovalLogGossipQuorumMember, ApprovalLogGossipQuorumReport,
+    approval_log_gossip_observation_json_schema, approval_log_gossip_quorum_report_json_schema,
+    validate_approval_log_gossip_observation, validate_approval_log_gossip_quorum_report,
+    verify_approval_log_gossip_quorum,
+};
 mod approval;
 pub use approval::{
     AiApprovalPolicy, AiModelIdentity, AiRequirement, AiRequirementAssessment, AiRequirementStatus,

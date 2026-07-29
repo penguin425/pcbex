@@ -90,6 +90,52 @@ fn remote_witness_server(
     (endpoint, handle)
 }
 
+fn remote_gossip_server(observation: Value) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("http://{}/v1/gossip", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+            if let Some(index) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                break index + 4;
+            }
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).unwrap();
+        assert!(headers.starts_with("POST /v1/gossip HTTP/1.1\r\n"));
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                line.to_ascii_lowercase()
+                    .strip_prefix("content-length: ")
+                    .map(|value| value.parse::<usize>().unwrap())
+            })
+            .unwrap();
+        while request.len() - header_end < content_length {
+            let read = stream.read(&mut buffer).unwrap();
+            assert!(read > 0);
+            request.extend_from_slice(&buffer[..read]);
+        }
+        let body: Value =
+            serde_json::from_slice(&request[header_end..header_end + content_length]).unwrap();
+        assert_eq!(body["protocol"], "pcbex-approval-public-log-gossip-v1");
+        assert_eq!(body["log_id"], "public-approvals");
+        let response = serde_json::to_vec(&observation).unwrap();
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            response.len()
+        )
+        .unwrap();
+        stream.write_all(&response).unwrap();
+    });
+    (endpoint, handle)
+}
+
 #[test]
 fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     let directory = temp_dir();
@@ -691,6 +737,185 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .success()
     );
     assert!(!rejected_gossip.exists());
+
+    let gossip_private_b = directory.join("gossip-observer-b.key");
+    let gossip_public_b = directory.join("gossip-observer-b.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&gossip_private_b),
+            "--public-key",
+            path(&gossip_public_b),
+        ])
+        .status
+        .success()
+    );
+    let gossip_receipt_b = directory.join("checkpoint.gossip-b.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-receipt",
+            "--anchor",
+            path(&anchor),
+            "--log-public-key",
+            path(&anchor_public),
+            "--observer-id",
+            "independent-observer-b",
+            "--observer-private-key",
+            path(&gossip_private_b),
+            "--received-at-unix",
+            "108",
+            "--expires-at-unix",
+            "200",
+            "--output",
+            path(&gossip_receipt_b),
+        ])
+        .status
+        .success()
+    );
+    let observation_a = directory.join("checkpoint.observation-a.json");
+    let observation_b = directory.join("checkpoint.observation-b.json");
+    let consistency_value: Value =
+        serde_json::from_slice(&fs::read(&consistency).unwrap()).unwrap();
+    for (receipt, output) in [
+        (&gossip_receipt, &observation_a),
+        (&gossip_receipt_b, &observation_b),
+    ] {
+        let receipt_value: Value = serde_json::from_slice(&fs::read(receipt).unwrap()).unwrap();
+        fs::write(
+            output,
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "receipt": receipt_value,
+                "consistency_proof": consistency_value
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    let gossip_quorum = directory.join("checkpoint.gossip-quorum.json");
+    assert!(
+        run(&[
+            "verify-approval-log-gossip-quorum",
+            "--local-anchor",
+            path(&old_anchor),
+            "--observation",
+            path(&observation_a),
+            "--observation",
+            path(&observation_b),
+            "--organization-id",
+            "independent-lab",
+            "--organization-id",
+            "security-partner",
+            "--observer-id",
+            "independent-observer",
+            "--observer-id",
+            "independent-observer-b",
+            "--observer-public-key",
+            path(&gossip_public),
+            "--observer-public-key",
+            path(&gossip_public_b),
+            "--minimum-organizations",
+            "2",
+            "--log-public-key",
+            path(&anchor_public),
+            "--evaluated-at-unix",
+            "150",
+            "--output",
+            path(&gossip_quorum),
+            "--require-quorum",
+        ])
+        .status
+        .success()
+    );
+    let gossip_quorum: Value = serde_json::from_slice(&fs::read(&gossip_quorum).unwrap()).unwrap();
+    assert_eq!(gossip_quorum["quorum_met"], true);
+    assert_eq!(gossip_quorum["distinct_organizations"], 2);
+    assert_eq!(
+        gossip_quorum["members"][0]["organization_id"],
+        "independent-lab"
+    );
+
+    let rejected_duplicate = directory.join("checkpoint.rejected-gossip-quorum.json");
+    assert!(
+        !run(&[
+            "verify-approval-log-gossip-quorum",
+            "--local-anchor",
+            path(&old_anchor),
+            "--observation",
+            path(&observation_a),
+            "--observation",
+            path(&observation_b),
+            "--organization-id",
+            "independent-lab",
+            "--organization-id",
+            "independent-lab",
+            "--observer-id",
+            "independent-observer",
+            "--observer-id",
+            "independent-observer-b",
+            "--observer-public-key",
+            path(&gossip_public),
+            "--observer-public-key",
+            path(&gossip_public_b),
+            "--log-public-key",
+            path(&anchor_public),
+            "--evaluated-at-unix",
+            "150",
+            "--output",
+            path(&rejected_duplicate),
+            "--require-quorum",
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_duplicate.exists());
+
+    let observation_value: Value =
+        serde_json::from_slice(&fs::read(&observation_a).unwrap()).unwrap();
+    let (gossip_endpoint, gossip_server) = remote_gossip_server(observation_value);
+    let remote_gossip = directory.join("remote-gossip-observation.json");
+    let remote_gossip_receipt = directory.join("remote-gossip-receipt.json");
+    let remote_gossip_result = run(&[
+        "request-approval-log-gossip-observation",
+        "--local-anchor",
+        path(&old_anchor),
+        "--endpoint",
+        &gossip_endpoint,
+        "--log-public-key",
+        path(&anchor_public),
+        "--organization-id",
+        "independent-lab",
+        "--observer-id",
+        "independent-observer",
+        "--observer-public-key",
+        path(&gossip_public),
+        "--timeout-seconds",
+        "5",
+        "--evaluated-at-unix",
+        "150",
+        "--output",
+        path(&remote_gossip),
+        "--receipt-output",
+        path(&remote_gossip_receipt),
+        "--allow-http-loopback",
+    ]);
+    assert!(
+        remote_gossip_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&remote_gossip_result.stderr)
+    );
+    gossip_server.join().unwrap();
+    let remote_gossip_receipt: Value =
+        serde_json::from_slice(&fs::read(&remote_gossip_receipt).unwrap()).unwrap();
+    assert_eq!(remote_gossip_receipt["verified"], true);
+    assert_eq!(remote_gossip_receipt["organization_id"], "independent-lab");
+    assert!(remote_gossip_receipt["response_bytes"].as_u64().unwrap() > 0);
+    let remote_gossip_value: Value =
+        serde_json::from_slice(&fs::read(&remote_gossip).unwrap()).unwrap();
+    let local_gossip_value: Value =
+        serde_json::from_slice(&fs::read(&observation_a).unwrap()).unwrap();
+    assert_eq!(remote_gossip_value, local_gossip_value);
 
     let checkpoint_value: SignedApprovalLogCheckpoint =
         serde_json::from_slice(&fs::read(&checkpoint).unwrap()).unwrap();

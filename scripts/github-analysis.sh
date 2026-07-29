@@ -2165,6 +2165,156 @@ if ((approval_log_gossip_inputs == 4)); then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+approval_log_gossip_quorum=""
+approval_log_gossip_quorum_met=""
+approval_log_remote_gossip_observations=""
+approval_log_remote_gossip_receipts=""
+approval_local_quorum_inputs=0
+for value in \
+  "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVATION_FILES:-}" \
+  "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_IDS:-}" \
+  "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_IDS:-}" \
+  "${PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES:-}"; do
+  if [[ -n "$value" ]]; then ((approval_local_quorum_inputs += 1)); fi
+done
+if ((approval_local_quorum_inputs != 0 && approval_local_quorum_inputs != 4)); then
+  echo "approval gossip local observations, organizations, observers, and keys must be supplied together" >&2
+  exit 2
+fi
+approval_remote_quorum_inputs=0
+for value in \
+  "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS:-}" \
+  "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS:-}" \
+  "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_OBSERVER_IDS:-}" \
+  "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES:-}"; do
+  if [[ -n "$value" ]]; then ((approval_remote_quorum_inputs += 1)); fi
+done
+if ((approval_remote_quorum_inputs != 0 && approval_remote_quorum_inputs != 4)); then
+  echo "approval gossip remote endpoints, organizations, observers, and keys must be supplied together" >&2
+  exit 2
+fi
+if ((approval_local_quorum_inputs == 4 || approval_remote_quorum_inputs == 4)); then
+  if ((approval_log_anchor_inputs != 2)) \
+    || [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX:-}" ]]; then
+    echo "approval gossip quorum requires local anchor proof/key and evaluation time" >&2
+    exit 2
+  fi
+  approval_log_gossip_quorum="${artifact_dir}/approval-log-gossip-quorum.json"
+  approval_quorum_arguments=(
+    verify-approval-log-gossip-quorum
+    --local-anchor "$PCBEX_APPROVAL_LOG_ANCHOR_PROOF"
+    --minimum-organizations "${PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS:-2}"
+    --log-public-key "$PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY"
+    --evaluated-at-unix "$PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX"
+    --output "$approval_log_gossip_quorum"
+  )
+  if ((approval_local_quorum_inputs == 4)); then
+    mapfile -t approval_local_observations < <(
+      printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVATION_FILES" | sed '/^[[:space:]]*$/d'
+    )
+    mapfile -t approval_local_organizations < <(
+      printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_IDS" | sed '/^[[:space:]]*$/d'
+    )
+    mapfile -t approval_local_observers < <(
+      printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_IDS" | sed '/^[[:space:]]*$/d'
+    )
+    mapfile -t approval_local_keys < <(
+      printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
+    )
+    if ((${#approval_local_observations[@]} == 0 \
+      || ${#approval_local_observations[@]} != ${#approval_local_organizations[@]} \
+      || ${#approval_local_observations[@]} != ${#approval_local_observers[@]} \
+      || ${#approval_local_observations[@]} != ${#approval_local_keys[@]} \
+      || ${#approval_local_observations[@]} > 100)); then
+      echo "approval gossip local configuration must form 1 to 100 complete tuples" >&2
+      exit 2
+    fi
+    for index in "${!approval_local_observations[@]}"; do
+      approval_quorum_arguments+=(
+        --observation "${approval_local_observations[$index]}"
+        --organization-id "${approval_local_organizations[$index]}"
+        --observer-id "${approval_local_observers[$index]}"
+        --observer-public-key "${approval_local_keys[$index]}"
+      )
+    done
+  fi
+  if ((approval_remote_quorum_inputs == 4)); then
+    mapfile -t approval_remote_endpoints < <(
+      printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS" | sed '/^[[:space:]]*$/d'
+    )
+    mapfile -t approval_remote_organizations < <(
+      printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS" | sed '/^[[:space:]]*$/d'
+    )
+    mapfile -t approval_remote_observers < <(
+      printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_OBSERVER_IDS" | sed '/^[[:space:]]*$/d'
+    )
+    mapfile -t approval_remote_keys < <(
+      printf '%s\n' "$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES" | sed '/^[[:space:]]*$/d'
+    )
+    if ((${#approval_remote_endpoints[@]} == 0 \
+      || ${#approval_remote_endpoints[@]} != ${#approval_remote_organizations[@]} \
+      || ${#approval_remote_endpoints[@]} != ${#approval_remote_observers[@]} \
+      || ${#approval_remote_endpoints[@]} != ${#approval_remote_keys[@]} \
+      || ${#approval_remote_endpoints[@]} > 10)); then
+      echo "approval gossip remote configuration must form 1 to 10 complete tuples" >&2
+      exit 2
+    fi
+    approval_log_remote_gossip_observations="${artifact_dir}/approval-log-remote-gossip-observations"
+    approval_log_remote_gossip_receipts="${artifact_dir}/approval-log-remote-gossip-receipts"
+    mkdir -p \
+      "$approval_log_remote_gossip_observations" \
+      "$approval_log_remote_gossip_receipts"
+    if [[ -n "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_BEARER_TOKEN:-}" ]]; then
+      export PCBEX_APPROVAL_REMOTE_GOSSIP_TOKEN="$PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_BEARER_TOKEN"
+    fi
+    for index in "${!approval_remote_endpoints[@]}"; do
+      observation="${approval_log_remote_gossip_observations}/$((index + 1)).json"
+      receipt="${approval_log_remote_gossip_receipts}/$((index + 1)).json"
+      remote_arguments=(
+        request-approval-log-gossip-observation
+        --local-anchor "$PCBEX_APPROVAL_LOG_ANCHOR_PROOF"
+        --endpoint "${approval_remote_endpoints[$index]}"
+        --log-public-key "$PCBEX_APPROVAL_LOG_ANCHOR_PUBLIC_KEY"
+        --organization-id "${approval_remote_organizations[$index]}"
+        --observer-id "${approval_remote_observers[$index]}"
+        --observer-public-key "${approval_remote_keys[$index]}"
+        --timeout-seconds "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS:-30}"
+        --evaluated-at-unix "$PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX"
+        --output "$observation"
+        --receipt-output "$receipt"
+      )
+      if [[ -n "${PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_BEARER_TOKEN:-}" ]]; then
+        remote_arguments+=(--bearer-token-env PCBEX_APPROVAL_REMOTE_GOSSIP_TOKEN)
+      fi
+      "$PCBEX_BINARY" "${remote_arguments[@]}"
+      approval_quorum_arguments+=(
+        --observation "$observation"
+        --organization-id "${approval_remote_organizations[$index]}"
+        --observer-id "${approval_remote_observers[$index]}"
+        --observer-public-key "${approval_remote_keys[$index]}"
+      )
+    done
+    unset PCBEX_APPROVAL_REMOTE_GOSSIP_TOKEN
+  fi
+  "$PCBEX_BINARY" "${approval_quorum_arguments[@]}"
+  approval_log_gossip_quorum_met="$(
+    python3 -c \
+      'import json,sys; print(str(json.load(open(sys.argv[1], encoding="utf-8"))["quorum_met"]).lower())' \
+      "$approval_log_gossip_quorum"
+  )"
+  {
+    printf '\n# Approval public-log gossip quorum\n\n'
+    printf -- '- Quorum met: `%s`\n' "$approval_log_gossip_quorum_met"
+    printf -- '- Organizations: `%s/%s`\n' \
+      "$(
+        python3 -c \
+          'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["distinct_organizations"])' \
+          "$approval_log_gossip_quorum"
+      )" \
+      "${PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS:-2}"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 remote_witness=""
 remote_witness_receipt=""
 remote_witness_public_key=""
@@ -2384,6 +2534,10 @@ write_output approval-log-consistency-verification "$approval_log_consistency_ve
 write_output approval-log-consistent "$approval_log_consistent"
 write_output approval-log-gossip-verification "$approval_log_gossip_verification"
 write_output approval-log-gossip-verified "$approval_log_gossip_verified"
+write_output approval-log-gossip-quorum "$approval_log_gossip_quorum"
+write_output approval-log-gossip-quorum-met "$approval_log_gossip_quorum_met"
+write_output approval-log-remote-gossip-observations "$approval_log_remote_gossip_observations"
+write_output approval-log-remote-gossip-receipts "$approval_log_remote_gossip_receipts"
 write_output approval-log-witness-quorum "$approval_log_witness_quorum"
 write_output approval-log-witness-quorum-met "$approval_log_witness_quorum_met"
 write_output remote-witness "$remote_witness"

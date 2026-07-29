@@ -766,6 +766,50 @@ inputs:
     description: Explicit verification time for the bounded gossip receipt.
     required: false
     default: ""
+  approval-log-gossip-observation-files:
+    description: Newline-separated signed gossip observation envelopes from local observers.
+    required: false
+    default: ""
+  approval-log-gossip-organization-ids:
+    description: Newline-separated trusted organization identities paired with local observations.
+    required: false
+    default: ""
+  approval-log-gossip-observer-ids:
+    description: Newline-separated trusted observer identities paired with local observations.
+    required: false
+    default: ""
+  approval-log-gossip-observer-public-key-files:
+    description: Newline-separated trusted observer keys paired with local observations.
+    required: false
+    default: ""
+  approval-log-gossip-minimum-organizations:
+    description: Minimum number of fresh, distinct organizations required.
+    required: false
+    default: "2"
+  approval-log-remote-gossip-endpoints:
+    description: Newline-separated HTTPS observer endpoints, limited to ten.
+    required: false
+    default: ""
+  approval-log-remote-gossip-organization-ids:
+    description: Newline-separated organization identities paired with remote endpoints.
+    required: false
+    default: ""
+  approval-log-remote-gossip-observer-ids:
+    description: Newline-separated observer identities paired with remote endpoints.
+    required: false
+    default: ""
+  approval-log-remote-gossip-public-key-files:
+    description: Newline-separated trusted observer keys paired with remote endpoints.
+    required: false
+    default: ""
+  approval-log-remote-gossip-bearer-token:
+    description: Optional shared Bearer token passed only through process environment.
+    required: false
+    default: ""
+  approval-log-remote-gossip-timeout-seconds:
+    description: Per-observer HTTPS timeout from 1 to 600 seconds.
+    required: false
+    default: "30"
   approval-log-witness-files:
     description: Newline-separated independent witness signatures over the checkpoint.
     required: false
@@ -844,6 +888,10 @@ inputs:
     default: "false"
   fail-on-approval-log-gossip:
     description: Fail unless the independent public-log observation is fresh and consistent.
+    required: false
+    default: "false"
+  fail-on-approval-log-gossip-quorum:
+    description: Fail unless fresh consistent observations meet the organization threshold.
     required: false
     default: "false"
   fail-on-approval-log-witnesses:
@@ -1133,6 +1181,18 @@ outputs:
   approval-log-gossip-verified:
     description: Whether the independent observation is fresh and consistent with the local anchor.
     value: ${{ steps.analyze.outputs.approval-log-gossip-verified }}
+  approval-log-gossip-quorum:
+    description: Verified distinct-organization approval public-log gossip quorum report.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-quorum }}
+  approval-log-gossip-quorum-met:
+    description: Whether fresh consistent gossip observations meet the organization threshold.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-quorum-met }}
+  approval-log-remote-gossip-observations:
+    description: Directory containing verified remote gossip observation envelopes.
+    value: ${{ steps.analyze.outputs.approval-log-remote-gossip-observations }}
+  approval-log-remote-gossip-receipts:
+    description: Directory containing hash-bound remote gossip transport receipts.
+    value: ${{ steps.analyze.outputs.approval-log-remote-gossip-receipts }}
   approval-log-witness-quorum:
     description: Verified approval-log witness quorum report path, when supplied.
     value: ${{ steps.analyze.outputs.approval-log-witness-quorum }}
@@ -1339,6 +1399,17 @@ runs:
         PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_ID: ${{ inputs.approval-log-gossip-observer-id }}
         PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY: ${{ inputs.approval-log-gossip-observer-public-key }}
         PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX: ${{ inputs.approval-log-gossip-evaluated-at-unix }}
+        PCBEX_APPROVAL_LOG_GOSSIP_OBSERVATION_FILES: ${{ inputs.approval-log-gossip-observation-files }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-gossip-organization-ids }}
+        PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_IDS: ${{ inputs.approval-log-gossip-observer-ids }}
+        PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES: ${{ inputs.approval-log-gossip-observer-public-key-files }}
+        PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.approval-log-gossip-minimum-organizations }}
+        PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.approval-log-remote-gossip-endpoints }}
+        PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-remote-gossip-organization-ids }}
+        PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_OBSERVER_IDS: ${{ inputs.approval-log-remote-gossip-observer-ids }}
+        PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_PUBLIC_KEY_FILES: ${{ inputs.approval-log-remote-gossip-public-key-files }}
+        PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_BEARER_TOKEN: ${{ inputs.approval-log-remote-gossip-bearer-token }}
+        PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS: ${{ inputs.approval-log-remote-gossip-timeout-seconds }}
         PCBEX_APPROVAL_LOG_WITNESS_FILES: ${{ inputs.approval-log-witness-files }}
         PCBEX_APPROVAL_LOG_WITNESS_PUBLIC_KEYS: ${{ inputs.approval-log-witness-public-keys }}
         PCBEX_APPROVAL_LOG_MINIMUM_WITNESSES: ${{ inputs.approval-log-minimum-witnesses }}
@@ -1395,6 +1466,7 @@ runs:
         PCBEX_APPROVAL_LOG_ANCHORED: ${{ steps.analyze.outputs.approval-log-anchored }}
         PCBEX_APPROVAL_LOG_CONSISTENT: ${{ steps.analyze.outputs.approval-log-consistent }}
         PCBEX_APPROVAL_LOG_GOSSIP_VERIFIED: ${{ steps.analyze.outputs.approval-log-gossip-verified }}
+        PCBEX_APPROVAL_LOG_GOSSIP_QUORUM_MET: ${{ steps.analyze.outputs.approval-log-gossip-quorum-met }}
         PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.analyze.outputs.approval-log-witness-quorum-met }}
         PCBEX_CANARY_ROLLOUT_AUTHORIZED: ${{ steps.analyze.outputs.canary-rollout-authorized }}
         PCBEX_CANARY_MONITORING_PASSED: ${{ steps.analyze.outputs.canary-monitoring-passed }}
@@ -1425,6 +1497,7 @@ runs:
         PCBEX_FAIL_ON_APPROVAL_LOG_ANCHOR: ${{ inputs.fail-on-approval-log-anchor }}
         PCBEX_FAIL_ON_APPROVAL_LOG_CONSISTENCY: ${{ inputs.fail-on-approval-log-consistency }}
         PCBEX_FAIL_ON_APPROVAL_LOG_GOSSIP: ${{ inputs.fail-on-approval-log-gossip }}
+        PCBEX_FAIL_ON_APPROVAL_LOG_GOSSIP_QUORUM: ${{ inputs.fail-on-approval-log-gossip-quorum }}
         PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES: ${{ inputs.fail-on-approval-log-witnesses }}
         PCBEX_FAIL_ON_CANARY_ROLLOUT_AUTHORIZATION: ${{ inputs.fail-on-canary-rollout-authorization }}
         PCBEX_FAIL_ON_CANARY_MONITORING: ${{ inputs.fail-on-canary-monitoring }}
@@ -1492,6 +1565,10 @@ runs:
         fi
         if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_GOSSIP" == "true" && "$PCBEX_APPROVAL_LOG_GOSSIP_VERIFIED" != "true" ]]; then
           echo "::error::pcbex approval public-log gossip observation is absent or inconsistent"
+          exit 1
+        fi
+        if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_GOSSIP_QUORUM" == "true" && "$PCBEX_APPROVAL_LOG_GOSSIP_QUORUM_MET" != "true" ]]; then
+          echo "::error::pcbex approval public-log gossip organization quorum is absent or invalid"
           exit 1
         fi
         if [[ "$PCBEX_FAIL_ON_APPROVAL_LOG_WITNESSES" == "true" && "$PCBEX_APPROVAL_LOG_WITNESS_QUORUM_MET" != "true" ]]; then
