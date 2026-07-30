@@ -1841,6 +1841,99 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     let remote_history_receipt_value = read_value(&remote_history_receipt);
     assert_eq!(remote_history_receipt_value["verified"], true);
     assert_eq!(remote_history_receipt_value["witness_key_generation"], 1);
+    let (remote_history_b_endpoint, remote_history_b_server) =
+        remote_registry_history_witness_server(read_value(&witness_b));
+    let remote_history_b_witness = directory.join("gossip-registry.history.remote-witness-b.json");
+    let remote_history_b_receipt =
+        directory.join("gossip-registry.history.remote-witness-b.receipt.json");
+    assert!(
+        run(&[
+            "request-approval-log-gossip-organization-registry-history-checkpoint-witness",
+            path(&registry_history_trust),
+            "--endpoint",
+            &remote_history_b_endpoint,
+            "--witness-key-trust-state",
+            path(&witness_b_trust),
+            "--evaluated-at-unix",
+            "129",
+            "--output",
+            path(&remote_history_b_witness),
+            "--receipt-output",
+            path(&remote_history_b_receipt),
+            "--allow-http-loopback",
+        ])
+        .status
+        .success()
+    );
+    remote_history_b_server.join().unwrap();
+    assert_eq!(
+        read_value(&remote_history_b_witness),
+        read_value(&witness_b)
+    );
+    assert_eq!(
+        read_value(&remote_history_b_receipt)["witness_key_generation"],
+        0
+    );
+    let (remote_history_direct_a_endpoint, remote_history_direct_a_server) =
+        remote_registry_history_witness_server(read_value(&witness_a_rotated));
+    let remote_history_direct_a_witness =
+        directory.join("gossip-registry.history.remote-witness-direct-a.json");
+    let remote_history_direct_a_receipt =
+        directory.join("gossip-registry.history.remote-witness-direct-a.receipt.json");
+    assert!(
+        run(&[
+            "request-approval-log-gossip-organization-registry-history-checkpoint-witness",
+            path(&registry_history_trust),
+            "--endpoint",
+            &remote_history_direct_a_endpoint,
+            "--public-key",
+            path(&witness_a_rotated_public),
+            "--evaluated-at-unix",
+            "129",
+            "--output",
+            path(&remote_history_direct_a_witness),
+            "--receipt-output",
+            path(&remote_history_direct_a_receipt),
+            "--allow-http-loopback",
+        ])
+        .status
+        .success()
+    );
+    remote_history_direct_a_server.join().unwrap();
+    let (remote_history_direct_b_endpoint, remote_history_direct_b_server) =
+        remote_registry_history_witness_server(read_value(&witness_b));
+    let remote_history_direct_b_witness =
+        directory.join("gossip-registry.history.remote-witness-direct-b.json");
+    let remote_history_direct_b_receipt =
+        directory.join("gossip-registry.history.remote-witness-direct-b.receipt.json");
+    assert!(
+        run(&[
+            "request-approval-log-gossip-organization-registry-history-checkpoint-witness",
+            path(&registry_history_trust),
+            "--endpoint",
+            &remote_history_direct_b_endpoint,
+            "--public-key",
+            path(&witness_b_public),
+            "--evaluated-at-unix",
+            "129",
+            "--output",
+            path(&remote_history_direct_b_witness),
+            "--receipt-output",
+            path(&remote_history_direct_b_receipt),
+            "--allow-http-loopback",
+        ])
+        .status
+        .success()
+    );
+    remote_history_direct_b_server.join().unwrap();
+    assert_eq!(
+        read_value(&remote_history_direct_a_receipt)["witness_key_generation"],
+        Value::Null
+    );
+    assert_eq!(
+        read_value(&remote_history_direct_b_receipt)["witness_key_generation"],
+        Value::Null
+    );
     let normalized_remote_history_receipt =
         directory.join("gossip-registry.history.remote-witness.receipt.normalized.json");
     assert!(
@@ -1872,6 +1965,170 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .status
         .success()
     );
+    let remote_history_receipt_quorum_log =
+        directory.join("gossip-registry.history.remote-receipts.quorum-log.json");
+    let remote_history_receipt_quorum_report =
+        directory.join("gossip-registry.history.remote-receipts.quorum-report.json");
+    assert!(
+        run(&[
+            "append-verified-remote-approval-registry-history-checkpoint-witness-receipt-quorum",
+            path(&remote_history_receipt_log_empty),
+            "--receipt",
+            path(&remote_history_b_receipt),
+            "--receipt",
+            path(&remote_history_receipt),
+            "--checkpoint-trust-state",
+            path(&registry_history_trust),
+            "--response",
+            path(&remote_history_b_witness),
+            "--response",
+            path(&remote_history_witness),
+            "--witness-key-trust-state",
+            path(&witness_a_rotated_trust),
+            "--witness-key-trust-state",
+            path(&witness_b_trust),
+            "--minimum-witnesses",
+            "2",
+            "--evaluated-at-unix",
+            "130",
+            "--recorded-at-unix",
+            "130",
+            "--output",
+            path(&remote_history_receipt_quorum_log),
+            "--report-output",
+            path(&remote_history_receipt_quorum_report),
+        ])
+        .status
+        .success()
+    );
+    let receipt_quorum_log = read_value(&remote_history_receipt_quorum_log);
+    assert_eq!(receipt_quorum_log["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        receipt_quorum_log["entries"][0]["event"]["outcome"],
+        "verified-witness:witness-a"
+    );
+    assert_eq!(
+        receipt_quorum_log["entries"][1]["event"]["outcome"],
+        "verified-witness:witness-b"
+    );
+    let receipt_quorum_report = read_value(&remote_history_receipt_quorum_report);
+    assert_eq!(receipt_quorum_report["quorum_met"], true);
+    assert_eq!(receipt_quorum_report["valid_witnesses"], 2);
+    assert_eq!(
+        receipt_quorum_report["members"][0]["witness_id"],
+        "witness-a"
+    );
+    assert_eq!(
+        receipt_quorum_report["members"][1]["witness_id"],
+        "witness-b"
+    );
+    let remote_history_direct_receipt_quorum_log =
+        directory.join("gossip-registry.history.remote-receipts.direct-quorum-log.json");
+    let remote_history_direct_receipt_quorum_report =
+        directory.join("gossip-registry.history.remote-receipts.direct-quorum-report.json");
+    assert!(
+        run(&[
+            "append-verified-remote-approval-registry-history-checkpoint-witness-receipt-quorum",
+            path(&remote_history_receipt_log_empty),
+            "--receipt",
+            path(&remote_history_direct_b_receipt),
+            "--receipt",
+            path(&remote_history_direct_a_receipt),
+            "--checkpoint-trust-state",
+            path(&registry_history_trust),
+            "--response",
+            path(&remote_history_direct_b_witness),
+            "--response",
+            path(&remote_history_direct_a_witness),
+            "--trusted-witness-id",
+            "witness-b",
+            "--trusted-witness-public-key",
+            path(&witness_b_public),
+            "--trusted-witness-id",
+            "witness-a",
+            "--trusted-witness-public-key",
+            path(&witness_a_rotated_public),
+            "--minimum-witnesses",
+            "2",
+            "--evaluated-at-unix",
+            "130",
+            "--recorded-at-unix",
+            "130",
+            "--output",
+            path(&remote_history_direct_receipt_quorum_log),
+            "--report-output",
+            path(&remote_history_direct_receipt_quorum_report),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        read_value(&remote_history_direct_receipt_quorum_report)["quorum_met"],
+        true
+    );
+    assert_eq!(
+        read_value(&remote_history_direct_receipt_quorum_log)["entries"][0]["event"]["outcome"],
+        "verified-witness:witness-a"
+    );
+    let receipt_quorum_schema =
+        directory.join("gossip-registry.history.remote-receipts.quorum.schema.json");
+    assert!(
+        run(&[
+            "remote-approval-log-gossip-organization-registry-history-checkpoint-witness-receipt-quorum-report-schema",
+            "--output",
+            path(&receipt_quorum_schema),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        read_value(&receipt_quorum_schema)["properties"]["members"]["items"]["additionalProperties"],
+        false
+    );
+    let normalized_receipt_quorum_report =
+        directory.join("gossip-registry.history.remote-receipts.quorum.normalized.json");
+    assert!(
+        run(&[
+            "validate-remote-approval-log-gossip-organization-registry-history-checkpoint-witness-receipt-quorum-report",
+            path(&remote_history_receipt_quorum_report),
+            "--output",
+            path(&normalized_receipt_quorum_report),
+        ])
+        .status
+        .success()
+    );
+    let insufficient_receipt_quorum_log =
+        directory.join("gossip-registry.history.remote-receipts.insufficient-log.json");
+    let insufficient_receipt_quorum_report =
+        directory.join("gossip-registry.history.remote-receipts.insufficient-report.json");
+    assert!(
+        !run(&[
+            "append-verified-remote-approval-registry-history-checkpoint-witness-receipt-quorum",
+            path(&remote_history_receipt_log_empty),
+            "--receipt",
+            path(&remote_history_receipt),
+            "--checkpoint-trust-state",
+            path(&registry_history_trust),
+            "--response",
+            path(&remote_history_witness),
+            "--witness-key-trust-state",
+            path(&witness_a_rotated_trust),
+            "--minimum-witnesses",
+            "2",
+            "--evaluated-at-unix",
+            "130",
+            "--recorded-at-unix",
+            "130",
+            "--output",
+            path(&insufficient_receipt_quorum_log),
+            "--report-output",
+            path(&insufficient_receipt_quorum_report),
+        ])
+        .status
+        .success()
+    );
+    assert!(!insufficient_receipt_quorum_log.exists());
+    assert!(!insufficient_receipt_quorum_report.exists());
     assert!(
         run(&[
             "append-verified-remote-approval-registry-history-checkpoint-witness-receipt",

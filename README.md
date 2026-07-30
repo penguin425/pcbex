@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.385.0
+  uses: penguin425/pcbex@v1.386.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3671,6 +3671,38 @@ key, or signature substitution fails before the new log snapshot is written.
 MCP exposes the same dedicated verifier-bound append tool; the generic append
 tool remains available for already trusted artifacts.
 
+For a multi-witness admission boundary, verify every independently retained
+receipt and response in one transaction:
+
+```sh
+pcbex append-verified-remote-approval-registry-history-checkpoint-witness-receipt-quorum \
+  receipt-log.0.json \
+  --receipt witness-b.remote.receipt.json \
+  --receipt witness-a.remote.receipt.json \
+  --checkpoint-trust-state registry-history.checkpoint.trust.json \
+  --response witness-b.remote.json \
+  --response witness-a.remote.json \
+  --witness-key-trust-state witness-a.trust.json \
+  --witness-key-trust-state witness-b.trust.json \
+  --minimum-witnesses 2 \
+  --evaluated-at-unix 1785400030 \
+  --recorded-at-unix 1785400030 \
+  --output receipt-log.quorum.json \
+  --report-output receipt-log.quorum-report.json
+```
+
+Receipts and responses remain positional pairs, while witness trust states are
+matched by identity and may be supplied in any order. The verifier rejects
+duplicate witness identities, public keys, receipt digests, or response
+digests, then orders admitted members by witness identity. A threshold miss
+writes neither output. On success, the updated log and closed quorum report are
+created atomically. Paired `--trusted-witness-id` and
+`--trusted-witness-public-key` values provide the mutually exclusive direct-key
+mode. The report contract is available from
+`remote-approval-log-gossip-organization-registry-history-checkpoint-witness-receipt-quorum-report-schema`
+and its matching `validate-...` command. MCP exposes the same verifier-bound
+quorum transaction.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3738,7 +3770,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.385.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.386.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
