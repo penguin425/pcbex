@@ -127,6 +127,7 @@ pub use approval_gossip_registry_checkpoint::{
     validate_signed_approval_log_gossip_organization_registry_history_checkpoint,
     validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness,
     validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation,
+    verify_approval_log_gossip_organization_registry_history_checkpoint_witness_for_trust_state,
     verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses,
     verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states,
 };

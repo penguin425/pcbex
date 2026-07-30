@@ -178,6 +178,7 @@ mod policy_rollout;
 mod policy_rollout_approval;
 mod policy_suspension;
 mod remote_approval_gossip;
+mod remote_approval_gossip_registry_checkpoint_witness;
 mod remote_policy;
 mod remote_policy_lifecycle_gossip;
 mod remote_policy_lifecycle_gossip_registry_checkpoint_witness;
@@ -383,6 +384,13 @@ use policy_suspension::{
 };
 use remote_approval_gossip::{
     remote_approval_log_gossip_receipt_json_schema, request_remote_approval_log_gossip,
+};
+use remote_approval_gossip_registry_checkpoint_witness::{
+    RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+    remote_approval_registry_history_checkpoint_witness_receipt_json_schema,
+    request_remote_approval_registry_history_checkpoint_witness,
+    request_remote_approval_registry_history_checkpoint_witness_with_trust_state,
+    validate_remote_approval_registry_history_checkpoint_witness_receipt,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_policy_lifecycle_gossip::{
@@ -2821,6 +2829,17 @@ enum Command {
         #[arg(short, long)]
         output: CompactPath,
     },
+    /// Print the closed remote approval registry-history witness receipt JSON Schema.
+    RemoteApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessReceiptSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a remote approval registry-history witness receipt.
+    ValidateRemoteApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessReceipt {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
     /// Print the closed registry-history checkpoint witness-quorum JSON Schema.
     ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
         #[arg(short, long)]
@@ -3413,6 +3432,36 @@ enum Command {
         require_quorum: bool,
         #[arg(short, long)]
         output: CompactPath,
+    },
+    /// Acquire and immediately verify one registry-history witness over bounded HTTPS.
+    RequestApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness {
+        checkpoint_trust_state: CompactPath,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(
+            long,
+            required_unless_present = "witness_key_trust_state",
+            conflicts_with = "witness_key_trust_state"
+        )]
+        public_key: Option<CompactPath>,
+        #[arg(
+            long,
+            required_unless_present = "public_key",
+            conflicts_with = "public_key"
+        )]
+        witness_key_trust_state: Option<CompactPath>,
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+        timeout_seconds: u64,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        receipt_output: CompactPath,
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
     },
     /// Initialize an empty authority-trusted approval gossip organization registry.
     InitApprovalLogGossipOrganizationRegistry {
@@ -9511,6 +9560,26 @@ fn run_cli() -> Result<()> {
             .map_err(anyhow::Error::msg)?;
             write_new_file(&output, &serde_json::to_string_pretty(&rotation)?, false)?;
         }
+        Command::RemoteApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessReceiptSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &remote_approval_registry_history_checkpoint_witness_receipt_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidateRemoteApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessReceipt {
+            input,
+            output,
+        } => {
+            let (receipt, _) =
+                read_described_json::<RemoteApprovalRegistryHistoryCheckpointWitnessReceipt>(
+                    &input,
+                )?;
+            validate_remote_approval_registry_history_checkpoint_witness_receipt(&receipt)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&receipt)?, false)?;
+        }
         Command::ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
             output,
         } => {
@@ -11231,6 +11300,76 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "approval gossip registry history checkpoint witness quorum: {}/{}",
                 report.valid_witnesses, report.minimum_witnesses
+            );
+        }
+        Command::RequestApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness {
+            checkpoint_trust_state,
+            endpoint,
+            public_key,
+            witness_key_trust_state,
+            bearer_token_env,
+            timeout_seconds,
+            evaluated_at_unix,
+            output,
+            receipt_output,
+            allow_http_loopback,
+        } => {
+            let key_evidence_path = public_key
+                .as_ref()
+                .or(witness_key_trust_state.as_ref())
+                .ok_or_else(|| anyhow::anyhow!("remote approval history witness key is absent"))?;
+            require_distinct_outputs(
+                [
+                    Some(checkpoint_trust_state.0.as_ref()),
+                    Some(key_evidence_path.0.as_ref()),
+                    Some(output.0.as_ref()),
+                    Some(receipt_output.0.as_ref()),
+                ],
+                "remote approval registry history checkpoint witness",
+            )?;
+            let (checkpoint_state, _) = read_described_json::<
+                ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+            >(&checkpoint_trust_state)?;
+            let result = if let Some(path) = witness_key_trust_state.as_ref() {
+                let (state, _) = read_described_json::<
+                    ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+                >(path)?;
+                request_remote_approval_registry_history_checkpoint_witness_with_trust_state(
+                    &checkpoint_state,
+                    &endpoint,
+                    &state,
+                    bearer_token_env.as_deref(),
+                    timeout_seconds,
+                    evaluated_at_unix,
+                    allow_http_loopback,
+                )
+            } else {
+                let key = read_hex_key(
+                    public_key
+                        .as_ref()
+                        .expect("clap requires one remote approval history witness key"),
+                    "trusted remote approval history witness public key",
+                )?;
+                request_remote_approval_registry_history_checkpoint_witness(
+                    &checkpoint_state,
+                    &endpoint,
+                    &key,
+                    bearer_token_env.as_deref(),
+                    timeout_seconds,
+                    evaluated_at_unix,
+                    allow_http_loopback,
+                )
+            }
+            .map_err(anyhow::Error::msg)?;
+            let witness_document = serde_json::to_string_pretty(&result.0)? + "\n";
+            let receipt_document = serde_json::to_string_pretty(&result.1)? + "\n";
+            write_new_file_set(&[
+                (output.0.as_ref(), witness_document.as_str()),
+                (receipt_output.0.as_ref(), receipt_document.as_str()),
+            ])?;
+            eprintln!(
+                "verified remote approval history checkpoint witness {} generation {}",
+                result.0.witness_id, result.0.generation
             );
         }
         Command::InitApprovalLogGossipOrganizationRegistry {

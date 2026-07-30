@@ -854,6 +854,30 @@ inputs:
     description: Explicit witness-quorum evaluation time.
     required: false
     default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-remote-witness-endpoints:
+    description: Newline-separated bounded HTTPS witness endpoints.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-remote-witness-ids:
+    description: Newline-separated direct-trust witness identities paired with remote endpoints.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-remote-witness-public-key-files:
+    description: Newline-separated direct-trust public-key files paired with remote endpoints.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-remote-witness-trust-state-files:
+    description: Newline-separated rotatable witness trust states paired with remote endpoints.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-remote-witness-bearer-token:
+    description: Optional shared Bearer token passed only through process environment.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-remote-witness-timeout-seconds:
+    description: Per-witness HTTPS timeout from 1 to 600 seconds.
+    required: false
+    default: "30"
   approval-log-gossip-minimum-organizations:
     description: Minimum number of fresh, distinct organizations required.
     required: false
@@ -1278,6 +1302,12 @@ outputs:
   approval-log-gossip-organization-registry-history-checkpoint-witness-quorum-met:
     description: Whether the registry-history checkpoint witness threshold passed.
     value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-checkpoint-witness-quorum-met }}
+  approval-log-gossip-organization-registry-history-checkpoint-remote-witnesses:
+    description: Directory containing immediately verified remote registry-history witnesses.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witnesses }}
+  approval-log-gossip-organization-registry-history-checkpoint-remote-witness-receipts:
+    description: Directory containing hash-bound remote registry-history transport receipts.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witness-receipts }}
   approval-log-remote-gossip-observations:
     description: Directory containing verified remote gossip observation envelopes.
     value: ${{ steps.analyze.outputs.approval-log-remote-gossip-observations }}
@@ -1512,6 +1542,12 @@ runs:
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-witness-trust-state-files }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_MINIMUM_WITNESSES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-minimum-witnesses }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_ENDPOINTS: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witness-endpoints }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_IDS: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witness-ids }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witness-public-key-files }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_TRUST_STATE_FILES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witness-trust-state-files }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_BEARER_TOKEN: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witness-bearer-token }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESS_TIMEOUT_SECONDS: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witness-timeout-seconds }}
         PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.approval-log-gossip-minimum-organizations }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.approval-log-remote-gossip-endpoints }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-remote-gossip-organization-ids }}
