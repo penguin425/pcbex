@@ -2022,6 +2022,44 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         receipt_quorum_report["members"][1]["witness_id"],
         "witness-b"
     );
+    let quorum_bound_checkpoint =
+        directory.join("gossip-registry.history.remote-receipts.quorum-bound-checkpoint.json");
+    assert!(
+        run(&[
+            "sign-approval-log-with-remote-approval-registry-history-checkpoint-witness-receipt-quorum",
+            path(&remote_history_receipt_quorum_log),
+            "--quorum-report",
+            path(&remote_history_receipt_quorum_report),
+            "--private-key",
+            path(&private_key),
+            "--signer-id",
+            "approval-registry-receipt-log",
+            "--output",
+            path(&quorum_bound_checkpoint),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(read_value(&quorum_bound_checkpoint)["entry_count"], 2);
+    let mismatched_quorum_checkpoint =
+        directory.join("gossip-registry.history.remote-receipts.mismatched-checkpoint.json");
+    assert!(
+        !run(&[
+            "sign-approval-log-with-remote-approval-registry-history-checkpoint-witness-receipt-quorum",
+            path(&remote_history_receipt_log_empty),
+            "--quorum-report",
+            path(&remote_history_receipt_quorum_report),
+            "--private-key",
+            path(&private_key),
+            "--signer-id",
+            "approval-registry-receipt-log",
+            "--output",
+            path(&mismatched_quorum_checkpoint),
+        ])
+        .status
+        .success()
+    );
+    assert!(!mismatched_quorum_checkpoint.exists());
     let remote_history_direct_receipt_quorum_log =
         directory.join("gossip-registry.history.remote-receipts.direct-quorum-log.json");
     let remote_history_direct_receipt_quorum_report =

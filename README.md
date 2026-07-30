@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.386.0
+  uses: penguin425/pcbex@v1.387.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3703,6 +3703,25 @@ mode. The report contract is available from
 and its matching `validate-...` command. MCP exposes the same verifier-bound
 quorum transaction.
 
+The successful report also binds the exact resulting log identity, entry
+count, head, complete digest, and each admitted request/response/receipt
+member. Use the quorum-gated checkpoint signer to prevent a partial, extended,
+or unrelated log from being signed:
+
+```sh
+pcbex sign-approval-log-with-remote-approval-registry-history-checkpoint-witness-receipt-quorum \
+  receipt-log.quorum.json \
+  --quorum-report receipt-log.quorum-report.json \
+  --private-key receipt-log.key \
+  --signer-id approval-registry-receipt-log \
+  --output receipt-log.checkpoint.json
+```
+
+MCP exposes the same gate as
+`sign_quorum_bound_approval_transparency_log`. The generic signer remains
+available for approval logs whose artifacts do not use this receipt-quorum
+policy.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3770,7 +3789,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.386.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.387.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

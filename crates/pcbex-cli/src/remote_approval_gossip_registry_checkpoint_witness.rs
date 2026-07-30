@@ -1,9 +1,10 @@
 use ed25519_dalek::VerifyingKey;
 use pcbex_kicad::{
-    ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+    ApprovalArtifactKind, ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
     ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
-    SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
+    ApprovalTransparencyLog, SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
     approval_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key,
+    approval_transparency_log_sha256,
     validate_approval_log_gossip_organization_registry_history_checkpoint_trust_state,
     validate_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     verify_approval_log_gossip_organization_registry_history_checkpoint_witness_for_trust_state,
@@ -60,6 +61,8 @@ pub struct RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumMember {
     pub witness_key_trust_state_sha256: Option<String>,
     pub witness_key_generation: Option<u64>,
     pub receipt_sha256: String,
+    #[serde(default)]
+    pub request_sha256: Option<String>,
     pub response_sha256: String,
     pub witnessed_at_unix: u64,
 }
@@ -77,6 +80,14 @@ pub struct RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport {
     pub valid_witnesses: u32,
     pub members: Vec<RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumMember>,
     pub quorum_met: bool,
+    #[serde(default)]
+    pub approval_log_id: Option<String>,
+    #[serde(default)]
+    pub approval_log_entry_count: Option<u64>,
+    #[serde(default)]
+    pub approval_log_head_sha256: Option<String>,
+    #[serde(default)]
+    pub approval_log_sha256: Option<String>,
 }
 
 pub fn remote_approval_registry_history_checkpoint_witness_receipt_json_schema() -> Value {
@@ -171,12 +182,25 @@ pub fn remote_approval_registry_history_checkpoint_witness_receipt_quorum_report
                             ]
                         },
                         "receipt_sha256": digest_schema(),
+                        "request_sha256": {
+                            "oneOf": [{"type": "null"}, digest_schema()]
+                        },
                         "response_sha256": digest_schema(),
                         "witnessed_at_unix": {"type": "integer", "minimum": 0}
                     }
                 }
             },
-            "quorum_met": {"type": "boolean"}
+            "quorum_met": {"type": "boolean"},
+            "approval_log_id": {"oneOf": [{"type": "null"}, slug_schema()]},
+            "approval_log_entry_count": {
+                "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]
+            },
+            "approval_log_head_sha256": {
+                "oneOf": [{"type": "null"}, digest_schema()]
+            },
+            "approval_log_sha256": {
+                "oneOf": [{"type": "null"}, digest_schema()]
+            }
         }
     })
 }
@@ -259,6 +283,20 @@ pub fn validate_remote_approval_registry_history_checkpoint_witness_receipt_quor
         &report.checkpoint_trust_state_sha256,
         "checkpoint trust-state SHA-256",
     )?;
+    match (
+        &report.approval_log_id,
+        report.approval_log_entry_count,
+        &report.approval_log_head_sha256,
+        &report.approval_log_sha256,
+    ) {
+        (None, None, None, None) => {}
+        (Some(log_id), Some(_), Some(head), Some(log_digest)) => {
+            validate_slug(log_id, "approval transparency log id")?;
+            validate_digest(head, "approval transparency log head SHA-256")?;
+            validate_digest(log_digest, "approval transparency log SHA-256")?;
+        }
+        _ => return Err("remote approval receipt quorum log binding is incomplete".into()),
+    }
     let mut previous_id: Option<&str> = None;
     let mut ids = BTreeSet::new();
     let mut keys = BTreeSet::new();
@@ -289,9 +327,55 @@ pub fn validate_remote_approval_registry_history_checkpoint_witness_receipt_quor
             _ => return Err("remote approval receipt quorum trust binding is incomplete".into()),
         }
         validate_digest(&member.receipt_sha256, "receipt SHA-256")?;
+        if let Some(request) = &member.request_sha256 {
+            validate_digest(request, "request SHA-256")?;
+        }
         validate_digest(&member.response_sha256, "response SHA-256")?;
         if member.witnessed_at_unix > report.evaluated_at_unix {
             return Err("remote approval receipt quorum member is future-dated".into());
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_for_log(
+    report: &RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    log: &ApprovalTransparencyLog,
+) -> Result<(), String> {
+    validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_report(report)?;
+    approval_transparency_log_sha256(log)?;
+    if !report.quorum_met {
+        return Err("remote approval receipt quorum was not met".into());
+    }
+    let expected_log_sha256 = report
+        .approval_log_sha256
+        .as_deref()
+        .ok_or_else(|| "receipt quorum report is not bound to an approval log".to_string())?;
+    if report.approval_log_id.as_deref() != Some(log.log_id.as_str())
+        || report.approval_log_entry_count != Some(log.entries.len() as u64)
+        || report.approval_log_head_sha256 != log.head_sha256
+        || approval_transparency_log_sha256(log)? != expected_log_sha256
+    {
+        return Err("approval log does not match the receipt quorum log binding".into());
+    }
+    let suffix_start = log
+        .entries
+        .len()
+        .checked_sub(report.members.len())
+        .ok_or_else(|| "approval log has fewer entries than the receipt quorum".to_string())?;
+    for (entry, member) in log.entries[suffix_start..].iter().zip(&report.members) {
+        if entry.event.artifact_kind
+            != ApprovalArtifactKind::RemoteApprovalRegistryHistoryCheckpointWitnessReceipt
+            || entry.event.artifact_sha256 != member.receipt_sha256
+            || entry.event.subject_id != report.checkpoint_sha256
+            || entry.event.request_sha256.as_deref() != member.request_sha256.as_deref()
+            || entry.event.session_sha256.as_deref() != Some(member.response_sha256.as_str())
+            || entry.event.signer_id.is_some()
+            || entry.event.outcome != format!("verified-witness:{}", member.witness_id)
+        {
+            return Err(
+                "approval log suffix does not exactly match the admitted receipt quorum".into(),
+            );
         }
     }
     Ok(())
@@ -564,6 +648,7 @@ fn verify_remote_receipt_quorum(
                 witness_key_trust_state_sha256: receipt.witness_key_trust_state_sha256.clone(),
                 witness_key_generation: receipt.witness_key_generation,
                 receipt_sha256: sha256(&receipt_bytes),
+                request_sha256: Some(receipt.request_sha256.clone()),
                 response_sha256: receipt.response_sha256.clone(),
                 witnessed_at_unix: receipt.witnessed_at_unix,
             },
@@ -587,6 +672,10 @@ fn verify_remote_receipt_quorum(
         valid_witnesses,
         members,
         quorum_met: valid_witnesses >= minimum_witnesses,
+        approval_log_id: None,
+        approval_log_entry_count: None,
+        approval_log_head_sha256: None,
+        approval_log_sha256: None,
     };
     validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_report(&report)?;
     Ok((

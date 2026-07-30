@@ -76,7 +76,7 @@ use pcbex_kicad::{
     approval_log_gossip_verification_report_json_schema,
     approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
-    approval_public_key, approval_transparency_log_json_schema,
+    approval_public_key, approval_transparency_log_json_schema, approval_transparency_log_sha256,
     audit_approval_log_gossip_organization_registry_history, build_ai_review_request,
     build_ai_review_session, check_schematic, compare_electrical_reviews, compare_schematics,
     create_approval_log_anchor_proof, create_approval_log_consistency_proof,
@@ -387,6 +387,7 @@ use remote_approval_gossip::{
 };
 use remote_approval_gossip_registry_checkpoint_witness::{
     RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+    RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
     parse_remote_approval_registry_history_checkpoint_witness_receipt,
     parse_remote_approval_registry_history_checkpoint_witness_receipt_quorum_report,
     remote_approval_registry_history_checkpoint_witness_receipt_json_schema,
@@ -394,6 +395,7 @@ use remote_approval_gossip_registry_checkpoint_witness::{
     request_remote_approval_registry_history_checkpoint_witness,
     request_remote_approval_registry_history_checkpoint_witness_with_trust_state,
     validate_remote_approval_registry_history_checkpoint_witness_receipt,
+    validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_for_log,
     validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_report,
     verify_remote_approval_registry_history_checkpoint_witness_receipt,
     verify_remote_approval_registry_history_checkpoint_witness_receipt_quorum,
@@ -3162,6 +3164,18 @@ enum Command {
     /// Sign the exact head and complete digest of an approval log.
     SignApprovalLog {
         log: CompactPath,
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Sign an approval log only when its exact suffix is the admitted remote receipt quorum.
+    SignApprovalLogWithRemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorum {
+        log: CompactPath,
+        #[arg(long)]
+        quorum_report: CompactPath,
         #[arg(long)]
         private_key: CompactPath,
         #[arg(long)]
@@ -10514,7 +10528,7 @@ fn run_cli() -> Result<()> {
                 .collect::<Result<Vec<_>>>()?;
             let now = current_unix_seconds()?;
             let evaluated_at_unix = evaluated_at_unix.unwrap_or(now);
-            let (verified_receipts, report) = if !witness_key_trust_states.is_empty() {
+            let (verified_receipts, mut report) = if !witness_key_trust_states.is_empty() {
                 let trust_states = witness_key_trust_states
                     .iter()
                     .map(|path| {
@@ -10579,6 +10593,15 @@ fn run_cli() -> Result<()> {
                 )
                 .map_err(anyhow::Error::msg)?;
             }
+            report.approval_log_id = Some(log_value.log_id.clone());
+            report.approval_log_entry_count = Some(log_value.entries.len() as u64);
+            report.approval_log_head_sha256 = log_value.head_sha256.clone();
+            report.approval_log_sha256 =
+                Some(approval_transparency_log_sha256(&log_value).map_err(anyhow::Error::msg)?);
+            validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_report(
+                &report,
+            )
+            .map_err(anyhow::Error::msg)?;
             let log_document = serde_json::to_string_pretty(&log_value)? + "\n";
             let report_document = serde_json::to_string_pretty(&report)? + "\n";
             write_new_file_set(&[
@@ -10613,6 +10636,38 @@ fn run_cli() -> Result<()> {
                 } else {
                     "ies"
                 }
+            );
+        }
+        Command::SignApprovalLogWithRemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorum {
+            log,
+            quorum_report,
+            private_key,
+            signer_id,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(log.0.as_ref()),
+                    Some(quorum_report.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "quorum-bound approval checkpoint",
+            )?;
+            let (log, _) = read_described_json::<ApprovalTransparencyLog>(&log)?;
+            let (report, _) = read_described_json::<
+                RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+            >(&quorum_report)?;
+            validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_for_log(
+                &report, &log,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let secret = read_hex_key(&private_key, "approval checkpoint private key")?;
+            let checkpoint = sign_approval_log_checkpoint(&log, &signer_id, &secret)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&checkpoint)?, false)?;
+            eprintln!(
+                "signed quorum-bound approval log {} at {} entries",
+                checkpoint.log_id, checkpoint.entry_count
             );
         }
         Command::VerifyApprovalLog {
