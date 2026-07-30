@@ -2253,6 +2253,20 @@ if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATI
   echo "approval gossip registry authority rotation requires a retained registry" >&2
   exit 2
 fi
+approval_registry_governance_inputs=0
+[[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]] \
+  && ((approval_registry_governance_inputs += 1))
+[[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]] \
+  && ((approval_registry_governance_inputs += 1))
+if ((approval_registry_governance_inputs != 0 && approval_registry_governance_inputs != 2)); then
+  echo "approval gossip registry threshold transition requires governance and transition" >&2
+  exit 2
+fi
+if ((approval_registry_governance_inputs == 2)) \
+  && [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]]; then
+  echo "approval gossip registry threshold transition requires a retained registry" >&2
+  exit 2
+fi
 if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" == "true" ]]; then
   if ((approval_log_anchor_inputs != 2)) \
     || [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX:-}" ]]; then
@@ -2271,6 +2285,16 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
       --output "$rotated_approval_gossip_registry" \
       --public-key-output "$rotated_approval_gossip_registry_key"
     approval_log_gossip_organization_registry="$rotated_approval_gossip_registry"
+  fi
+  if ((approval_registry_governance_inputs == 2)); then
+    governed_approval_gossip_registry="${artifact_dir}/approval-log-gossip-organization-registry-governed.json"
+    "$PCBEX_BINARY" \
+      apply-approval-log-gossip-organization-registry-threshold-transition \
+      "$approval_log_gossip_organization_registry" \
+      "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE" \
+      "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION" \
+      --output "$governed_approval_gossip_registry"
+    approval_log_gossip_organization_registry="$governed_approval_gossip_registry"
   fi
   approval_quorum_arguments=(
     verify-approval-log-gossip-quorum

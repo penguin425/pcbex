@@ -431,6 +431,45 @@ jobs:
             --new-private-key build/action-quorum/gossip-registry.next.key \
             --rotated-at-unix 8 \
             --output build/action-quorum/gossip-registry.rotation.json
+          target/release/pcbex apply-approval-log-gossip-organization-registry-authority-key-rotation \
+            build/action-quorum/gossip-registry.json \
+            build/action-quorum/gossip-registry.rotation.json \
+            --output build/action-quorum/gossip-registry.rotated.json \
+            --public-key-output build/action-quorum/gossip-registry.rotated.pub
+          for reviewer in a b; do
+            target/release/pcbex approval-keygen \
+              --private-key "build/action-quorum/gossip-governance-$reviewer.key" \
+              --public-key "build/action-quorum/gossip-governance-$reviewer.pub"
+          done
+          target/release/pcbex sign-approval-log-gossip-organization-registry-governance \
+            build/action-quorum/gossip-registry.rotated.json \
+            --registry-authority-private-key build/action-quorum/gossip-registry.next.key \
+            --minimum-approvals 2 \
+            --authority-id reviewer-a \
+            --authority-public-key build/action-quorum/gossip-governance-a.pub \
+            --authority-id reviewer-b \
+            --authority-public-key build/action-quorum/gossip-governance-b.pub \
+            --issued-at-unix 9 \
+            --output build/action-quorum/gossip-registry.governance.json
+          target/release/pcbex init-approval-log-gossip-observer-trust \
+            --organization-id independent-lab \
+            --observer-id audit-observer \
+            --public-key build/action-quorum/gossip-observer.pub \
+            --output build/action-quorum/gossip-audit-observer.trust.json
+          governance_reason="$(printf '33%.0s' {1..32})"
+          target/release/pcbex sign-approval-log-gossip-organization-registry-threshold-transition \
+            build/action-quorum/gossip-registry.rotated.json \
+            build/action-quorum/gossip-registry.governance.json \
+            --authority-id reviewer-a \
+            --authority-private-key build/action-quorum/gossip-governance-a.key \
+            --authority-id reviewer-b \
+            --authority-private-key build/action-quorum/gossip-governance-b.key \
+            --action admit-observer \
+            --organization-id independent-lab \
+            --observer-trust-state build/action-quorum/gossip-audit-observer.trust.json \
+            --reason-sha256 "$governance_reason" \
+            --effective-at-unix 10 \
+            --output build/action-quorum/gossip-registry.threshold-transition.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -513,6 +552,8 @@ jobs:
             build/action-quorum/gossip-observer-b.trust.json
           approval-log-gossip-organization-registry: build/action-quorum/gossip-registry.json
           approval-log-gossip-organization-registry-authority-key-rotation: build/action-quorum/gossip-registry.rotation.json
+          approval-log-gossip-organization-registry-governance: build/action-quorum/gossip-registry.governance.json
+          approval-log-gossip-organization-registry-threshold-transition: build/action-quorum/gossip-registry.threshold-transition.json
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
           approval-log-witness-files: |
@@ -647,7 +688,7 @@ jobs:
           test "$(jq -r '.relationship' "$APPROVAL_LOG_GOSSIP_VERIFICATION")" = "same_tree"
           test "$APPROVAL_LOG_GOSSIP_QUORUM_MET" = "true"
           test "$(jq -r '.registry_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
-          test "$(jq -r '.registry_generation' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "3"
+          test "$(jq -r '.registry_generation' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "4"
           test "$(jq -r '.trust_quorum.trust_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
           test "$(jq -r '.trust_quorum.quorum.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
