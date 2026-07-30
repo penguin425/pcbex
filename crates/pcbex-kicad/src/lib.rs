@@ -34,6 +34,25 @@ pub use approval_gossip_quorum::{
     validate_approval_log_gossip_observation, validate_approval_log_gossip_quorum_report,
     verify_approval_log_gossip_quorum,
 };
+mod approval_gossip_registry;
+pub use approval_gossip_registry::{
+    ApprovalLogGossipObserverAdmission, ApprovalLogGossipOrganizationRegistry,
+    ApprovalLogGossipOrganizationRegistryAction, ApprovalLogGossipOrganizationRegistryEntry,
+    ApprovalLogGossipOrganizationStatus, ApprovalLogGossipRegistryBoundQuorumReport,
+    SignedApprovalLogGossipOrganizationRegistryTransition,
+    apply_approval_log_gossip_organization_registry_transition,
+    approval_log_gossip_organization_registry_json_schema,
+    approval_log_gossip_organization_registry_sha256,
+    approval_log_gossip_registry_bound_quorum_report_json_schema,
+    new_approval_log_gossip_organization_registry,
+    sign_approval_log_gossip_organization_registry_transition,
+    signed_approval_log_gossip_organization_registry_transition_json_schema,
+    signed_approval_log_gossip_organization_registry_transition_sha256,
+    validate_approval_log_gossip_organization_registry,
+    validate_approval_log_gossip_registry_bound_quorum_report,
+    validate_signed_approval_log_gossip_organization_registry_transition,
+    verify_approval_log_gossip_quorum_with_organization_registry,
+};
 mod approval_gossip_trust;
 pub use approval_gossip_trust::{
     ApprovalLogGossipObserverTrustReference, ApprovalLogGossipObserverTrustState,

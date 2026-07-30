@@ -985,6 +985,214 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     assert_eq!(trust_bound_quorum["quorum"]["quorum_met"], true);
     assert_eq!(trust_bound_quorum["observer_trust"][0]["generation"], 1);
 
+    let registry_private = directory.join("gossip-registry.key");
+    let registry_public = directory.join("gossip-registry.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&registry_private),
+            "--public-key",
+            path(&registry_public),
+        ])
+        .status
+        .success()
+    );
+    let registry_initial = directory.join("gossip-registry.initial.json");
+    assert!(
+        run(&[
+            "init-approval-log-gossip-organization-registry",
+            "--registry-id",
+            "production-approvals",
+            "--authority-public-key",
+            path(&registry_public),
+            "--output",
+            path(&registry_initial),
+        ])
+        .status
+        .success()
+    );
+    let registry_reason_a = "11".repeat(32);
+    let registry_admission_a = directory.join("gossip-registry.admit-a.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-transition",
+            path(&registry_initial),
+            "--authority-private-key",
+            path(&registry_private),
+            "--action",
+            "admit-observer",
+            "--organization-id",
+            "independent-lab",
+            "--observer-trust-state",
+            path(&observer_trust_a_rotated),
+            "--reason-sha256",
+            &registry_reason_a,
+            "--effective-at-unix",
+            "111",
+            "--output",
+            path(&registry_admission_a),
+        ])
+        .status
+        .success()
+    );
+    let registry_a = directory.join("gossip-registry.a.json");
+    assert!(
+        run(&[
+            "apply-approval-log-gossip-organization-registry-transition",
+            path(&registry_initial),
+            path(&registry_admission_a),
+            "--output",
+            path(&registry_a),
+        ])
+        .status
+        .success()
+    );
+    let registry_reason_b = "22".repeat(32);
+    let registry_admission_b = directory.join("gossip-registry.admit-b.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-transition",
+            path(&registry_a),
+            "--authority-private-key",
+            path(&registry_private),
+            "--action",
+            "admit-observer",
+            "--organization-id",
+            "security-partner",
+            "--observer-trust-state",
+            path(&observer_trust_b),
+            "--reason-sha256",
+            &registry_reason_b,
+            "--effective-at-unix",
+            "112",
+            "--output",
+            path(&registry_admission_b),
+        ])
+        .status
+        .success()
+    );
+    let registry = directory.join("gossip-registry.json");
+    assert!(
+        run(&[
+            "apply-approval-log-gossip-organization-registry-transition",
+            path(&registry_a),
+            path(&registry_admission_b),
+            "--output",
+            path(&registry),
+        ])
+        .status
+        .success()
+    );
+    let registry_bound_quorum = directory.join("checkpoint.registry-bound-gossip-quorum.json");
+    assert!(
+        run(&[
+            "verify-approval-log-gossip-quorum",
+            "--local-anchor",
+            path(&old_anchor),
+            "--observation",
+            path(&rotated_observation),
+            "--observation",
+            path(&observation_b),
+            "--observer-trust-state",
+            path(&observer_trust_a_rotated),
+            "--observer-trust-state",
+            path(&observer_trust_b),
+            "--organization-registry",
+            path(&registry),
+            "--minimum-organizations",
+            "2",
+            "--log-public-key",
+            path(&anchor_public),
+            "--evaluated-at-unix",
+            "150",
+            "--output",
+            path(&registry_bound_quorum),
+            "--require-quorum",
+        ])
+        .status
+        .success()
+    );
+    let registry_bound_quorum: Value =
+        serde_json::from_slice(&fs::read(&registry_bound_quorum).unwrap()).unwrap();
+    assert_eq!(registry_bound_quorum["registry_bound"], true);
+    assert_eq!(registry_bound_quorum["registry_generation"], 2);
+    assert_eq!(
+        registry_bound_quorum["trust_quorum"]["quorum"]["quorum_met"],
+        true
+    );
+    assert_eq!(
+        registry_bound_quorum["registry_sha256"]
+            .as_str()
+            .unwrap()
+            .len(),
+        64
+    );
+
+    let suspension_reason = "33".repeat(32);
+    let registry_suspension = directory.join("gossip-registry.suspend-a.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-transition",
+            path(&registry),
+            "--authority-private-key",
+            path(&registry_private),
+            "--action",
+            "suspend-organization",
+            "--organization-id",
+            "independent-lab",
+            "--reason-sha256",
+            &suspension_reason,
+            "--effective-at-unix",
+            "113",
+            "--output",
+            path(&registry_suspension),
+        ])
+        .status
+        .success()
+    );
+    let suspended_registry = directory.join("gossip-registry.suspended.json");
+    assert!(
+        run(&[
+            "apply-approval-log-gossip-organization-registry-transition",
+            path(&registry),
+            path(&registry_suspension),
+            "--output",
+            path(&suspended_registry),
+        ])
+        .status
+        .success()
+    );
+    let rejected_suspended = directory.join("checkpoint.rejected-suspended-registry-quorum.json");
+    assert!(
+        !run(&[
+            "verify-approval-log-gossip-quorum",
+            "--local-anchor",
+            path(&old_anchor),
+            "--observation",
+            path(&rotated_observation),
+            "--observation",
+            path(&observation_b),
+            "--observer-trust-state",
+            path(&observer_trust_a_rotated),
+            "--observer-trust-state",
+            path(&observer_trust_b),
+            "--organization-registry",
+            path(&suspended_registry),
+            "--minimum-organizations",
+            "2",
+            "--log-public-key",
+            path(&anchor_public),
+            "--evaluated-at-unix",
+            "150",
+            "--output",
+            path(&rejected_suspended),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_suspended.exists());
+
     let rejected_duplicate = directory.join("checkpoint.rejected-gossip-quorum.json");
     assert!(
         !run(&[
