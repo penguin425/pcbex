@@ -582,8 +582,7 @@ jobs:
           approval-log-gossip-observer-trust-state-files: |
             build/action-quorum/gossip-observer.trust.json
             build/action-quorum/gossip-observer-b.trust.json
-          approval-log-gossip-organization-registry: build/action-quorum/gossip-registry.json
-          approval-log-gossip-organization-registry-authority-key-rotation: build/action-quorum/gossip-registry.rotation.json
+          approval-log-gossip-organization-registry: build/action-quorum/gossip-registry.rotated.json
           approval-log-gossip-organization-registry-governance: build/action-quorum/gossip-registry.governance.json
           approval-log-gossip-organization-registry-threshold-transition: build/action-quorum/gossip-registry.threshold-transition.json
           approval-log-gossip-organization-registry-governance-rotation-new: build/action-quorum/gossip-registry.governance.next.json
