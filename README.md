@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.382.0
+  uses: penguin425/pcbex@v1.383.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3584,12 +3584,50 @@ Each exact one-generation transition is signed by both old and new keys and
 binds the witness identity, previous rotation digest, keys, and monotonic
 time. Replay, forks, key substitution, same-key rotation, and time reversal
 fail closed. Quorum verification accepts either direct identity/key pairs or
-rotatable trust states, never both. The closed contracts are emitted by
+rotatable trust states, never both.
+
+Accepted checkpoint trust can also be sent to independently operated witness
+services and combined with local evidence:
+
+```sh
+export PCBEX_APPROVAL_HISTORY_WITNESS_TOKEN='...'
+pcbex request-approval-log-gossip-organization-registry-history-checkpoint-witness \
+  gossip-registry.history.trust.json \
+  --endpoint https://witness.example/v1/approval-registry-history-checkpoint \
+  --witness-key-trust-state witness-a.next.trust.json \
+  --bearer-token-env PCBEX_APPROVAL_HISTORY_WITNESS_TOKEN \
+  --timeout-seconds 30 \
+  --evaluated-at-unix 1785400020 \
+  --output witness-a.remote.json \
+  --receipt-output witness-a.remote.receipt.json
+```
+
+The client sends one closed request, forbids redirects, userinfo, and query
+credentials, accepts at most 1 MiB of JSON, and verifies freshness, registry,
+generation, checkpoint, identity, trusted key, and Ed25519 signature before
+atomically retaining either artifact. The receipt binds the accepted
+checkpoint trust-state digest, request and response digests, endpoint,
+evaluation time, and—when used—the witness trust-state digest and generation.
+Bearer values are read only from the named environment variable and are never
+written to argv or evidence. Production endpoints require HTTPS; loopback HTTP
+exists only behind the hidden test flag.
+
+The Action accepts newline-aligned
+`approval-log-gossip-organization-registry-history-checkpoint-remote-witness-*`
+inputs, permits at most ten endpoints, requires local and remote evidence to
+use the same direct-key or trust-state mode, and folds every verified response
+into the same quorum. It publishes separate witness and receipt directories.
+MCP exposes one open-world, task-forbidden request tool. Receipt schema and
+normalization are available through
+`remote-approval-log-gossip-organization-registry-history-checkpoint-witness-receipt-schema`
+and
+`validate-remote-approval-log-gossip-organization-registry-history-checkpoint-witness-receipt`.
+The remaining closed contracts are emitted by
 `approval-log-gossip-organization-registry-history-schema` and
 `approval-log-gossip-organization-registry-history-audit-schema`, plus the
 checkpoint, trust-state, witness-trust, rotation, and quorum schema commands.
-MCP exposes the same workflow. The Action accepts only pre-signed trust and
-witness evidence, never private keys.
+The Action accepts only pre-signed trust and witness evidence, never private
+keys.
 
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
@@ -3658,7 +3696,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.382.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.383.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

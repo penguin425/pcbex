@@ -92,6 +92,7 @@ auditable release.
 | v1.380.0 | Complete approval gossip registry history audit | Replay mixed root, threshold, governance, and governed-root events from genesis without trusting copied snapshots |
 | v1.381.0 | Witnessed approval gossip registry history checkpoints | Pin retained-root signed complete-history heads and require fresh distinct witnesses over one exact audited generation |
 | v1.382.0 | Approval registry history witness key rotation | Advance identity-bound checkpoint-witness trust through dual-signed generation- and digest-chained key transitions |
+| v1.383.0 | Remote approval registry history checkpoint witnesses | Acquire and immediately verify independent checkpoint witnesses from bounded HTTPS services with hash-bound receipts |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -100,6 +101,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should add remote approval registry history checkpoint
-witnesses, so accepted heads can collect immediately verified evidence from
-bounded HTTPS services.
+The next roadmap should append verified remote approval registry-history
+witness receipts to signed, anchored, independently witnessed transparency
+logs, so transport evidence gains the same durable anti-truncation controls.

@@ -573,6 +573,19 @@ jobs:
             --witness-private-key build/action-quorum/gossip-history-witness-b.key \
             --witnessed-at-unix 16 \
             --output build/action-quorum/gossip-history-witness-b.json
+          RUNNER_TRACKING_ID="" nohup python3 \
+            scripts/tests/remote_approval_registry_history_witness_server.py \
+            --witness build/action-quorum/gossip-history-witness-a.json \
+            --endpoint-output build/action-quorum/gossip-history-witness.endpoint \
+            > build/action-quorum/gossip-history-witness.server.log 2>&1 </dev/null &
+          for attempt in {1..50}; do
+            [[ -s build/action-quorum/gossip-history-witness.endpoint ]] && break
+            sleep 0.1
+          done
+          test -s build/action-quorum/gossip-history-witness.endpoint
+          printf 'gossip-history-witness-endpoint=%s\n' \
+            "$(tr -d '\n' < build/action-quorum/gossip-history-witness.endpoint)" \
+            >> "$GITHUB_OUTPUT"
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -610,6 +623,7 @@ jobs:
         uses: ./
         env:
           PCBEX_REMOTE_WITNESS_ALLOW_HTTP_LOOPBACK: "true"
+          PCBEX_TEST_ALLOW_HTTP_LOOPBACK: "true"
         with:
           board: examples/simple.kicad_pcb
           baseline-board: examples/simple.kicad_pcb
@@ -657,11 +671,11 @@ jobs:
           approval-log-gossip-organization-registry-history-checkpoint: build/action-quorum/gossip-registry.history.checkpoint.json
           approval-log-gossip-organization-registry-history-checkpoint-accepted-at-unix: "17"
           approval-log-gossip-organization-registry-history-checkpoint-witness-files: |
-            build/action-quorum/gossip-history-witness-a.json
             build/action-quorum/gossip-history-witness-b.json
           approval-log-gossip-organization-registry-history-checkpoint-witness-trust-state-files: |
-            build/action-quorum/gossip-history-witness-a.rotated.trust.json
             build/action-quorum/gossip-history-witness-b.trust.json
+          approval-log-gossip-organization-registry-history-checkpoint-remote-witness-endpoints: ${{ steps.approval-fixture.outputs.gossip-history-witness-endpoint }}
+          approval-log-gossip-organization-registry-history-checkpoint-remote-witness-trust-state-files: build/action-quorum/gossip-history-witness-a.rotated.trust.json
           approval-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix: "18"
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
@@ -762,6 +776,8 @@ jobs:
           APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_TRUST: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-checkpoint-trust-state }}
           APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-checkpoint-witness-quorum }}
           APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-checkpoint-witness-quorum-met }}
+          APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESSES: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witnesses }}
+          APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_REMOTE_RECEIPTS: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-checkpoint-remote-witness-receipts }}
           REMOTE_WITNESS: ${{ steps.pcbex.outputs.remote-witness }}
           REMOTE_WITNESS_RECEIPT: ${{ steps.pcbex.outputs.remote-witness-receipt }}
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
@@ -809,6 +825,11 @@ jobs:
           test "$(jq -r '.accepted_generation' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_TRUST")" = "5"
           test "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM_MET" = "true"
           test "$(jq -r '.valid_witnesses' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM")" = "2"
+          test -s "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESSES/witness-0.json"
+          test "$(jq -r '.witness_id' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_REMOTE_WITNESSES/witness-0.json")" = "history-witness-a"
+          test -s "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_REMOTE_RECEIPTS/receipt-0.json"
+          test "$(jq -r '.verified' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_REMOTE_RECEIPTS/receipt-0.json")" = "true"
+          test "$(jq -r '.witness_key_generation' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_REMOTE_RECEIPTS/receipt-0.json")" = "1"
           test "$(jq -r '.trust_quorum.trust_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
           test "$(jq -r '.trust_quorum.quorum.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"

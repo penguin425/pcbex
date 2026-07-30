@@ -3776,6 +3776,40 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             true,
             tasks_supported.then_some("forbidden"),
         ),
+        open_world_tool(
+            "request_remote_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness",
+            "Request remote approval registry history witness",
+            "POST one accepted history checkpoint to bounded HTTPS and immediately verify the response against a direct or rotatable witness key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "checkpoint_trust_state", "endpoint", "evaluated_at_unix",
+                    "output", "receipt_output"
+                ],
+                "oneOf": [
+                    {"required": ["public_key"]},
+                    {"required": ["witness_key_trust_state"]}
+                ],
+                "properties": {
+                    "checkpoint_trust_state": {"type": "string"},
+                    "endpoint": {"type": "string", "pattern": "^https://"},
+                    "public_key": {"type": "string"},
+                    "witness_key_trust_state": {"type": "string"},
+                    "bearer_token_env": {
+                        "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "timeout_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 600, "default": 30
+                    },
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"},
+                    "receipt_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
         tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
@@ -4354,6 +4388,12 @@ fn call_tool(
         }
         "verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses" => {
             verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses(
+                arguments,
+                cancellation,
+            )?
+        }
+        "request_remote_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness" => {
+            request_remote_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness(
                 arguments,
                 cancellation,
             )?
@@ -10407,6 +10447,79 @@ fn verify_approval_transparency_public_log_gossip_organization_registry_history_
     ))
 }
 
+fn request_remote_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "checkpoint_trust_state",
+            "endpoint",
+            "public_key",
+            "witness_key_trust_state",
+            "bearer_token_env",
+            "timeout_seconds",
+            "evaluated_at_unix",
+            "output",
+            "receipt_output",
+        ],
+    )?;
+    let public_key = optional_string(&arguments, "public_key")?;
+    let trust_state = optional_string(&arguments, "witness_key_trust_state")?;
+    if public_key.is_some() == trust_state.is_some() {
+        return Err(json!({
+            "detail": "exactly one of public_key or witness_key_trust_state is required"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let receipt_output = required_string(&arguments, "receipt_output")?;
+    let mut command = vec![
+        "request-approval-log-gossip-organization-registry-history-checkpoint-witness".into(),
+        required_string(&arguments, "checkpoint_trust_state")?,
+        "--endpoint".into(),
+        required_string(&arguments, "endpoint")?,
+    ];
+    if let Some(key) = public_key {
+        command.extend(["--public-key".into(), key]);
+    }
+    if let Some(state) = trust_state {
+        command.extend(["--witness-key-trust-state".into(), state]);
+    }
+    optional_option(
+        &arguments,
+        "bearer_token_env",
+        "--bearer-token-env",
+        &mut command,
+    )?;
+    optional_positive_integer(
+        &arguments,
+        "timeout_seconds",
+        "--timeout-seconds",
+        &mut command,
+    )?;
+    command.extend([
+        "--evaluated-at-unix".into(),
+        required_nonnegative_integer(&arguments, "evaluated_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+        "--receipt-output".into(),
+        receipt_output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let witness = read_json_if_present(Path::new(&output));
+    let receipt = read_json_if_present(Path::new(&receipt_output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "receipt_output": receipt_output,
+            "witness": witness,
+            "receipt": receipt
+        }),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -10784,7 +10897,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 128);
+        assert_eq!(tools.len(), 129);
         let named = |name: &str| {
             tools
                 .iter()
@@ -10796,6 +10909,12 @@ mod tests {
                 "verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses"
             )["inputSchema"]["properties"]["minimum_witnesses"]["minimum"],
             2
+        );
+        assert_eq!(
+            named(
+                "request_remote_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness"
+            )["execution"]["taskSupport"],
+            "forbidden"
         );
         assert_eq!(
             named("list_dfm_profiles")["annotations"]["readOnlyHint"],
