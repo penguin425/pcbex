@@ -1531,6 +1531,117 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .status
         .success()
     );
+    let registry_history_checkpoint = directory.join("gossip-registry.history.checkpoint.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-history-checkpoint",
+            path(&normalized_history),
+            "--authority-private-key",
+            path(&successor_registry_private),
+            "--issued-at-unix",
+            "121",
+            "--output",
+            path(&registry_history_checkpoint),
+        ])
+        .status
+        .success()
+    );
+    let registry_history_trust = directory.join("gossip-registry.history.trust.json");
+    assert!(
+        run(&[
+            "accept-approval-log-gossip-organization-registry-history-checkpoint",
+            path(&normalized_history),
+            path(&registry_history_checkpoint),
+            "--accepted-at-unix",
+            "122",
+            "--output",
+            path(&registry_history_trust),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        read_value(&registry_history_trust)["accepted_generation"],
+        6
+    );
+    let witness_a_private = directory.join("gossip-history-witness-a.key");
+    let witness_a_public = directory.join("gossip-history-witness-a.pub");
+    let witness_b_private = directory.join("gossip-history-witness-b.key");
+    let witness_b_public = directory.join("gossip-history-witness-b.pub");
+    for (private_key, public_key) in [
+        (&witness_a_private, &witness_a_public),
+        (&witness_b_private, &witness_b_public),
+    ] {
+        assert!(
+            run(&[
+                "approval-keygen",
+                "--private-key",
+                path(private_key),
+                "--public-key",
+                path(public_key),
+            ])
+            .status
+            .success()
+        );
+    }
+    let witness_a = directory.join("gossip-history-witness-a.json");
+    let witness_b = directory.join("gossip-history-witness-b.json");
+    for (id, private_key, witnessed_at, output) in [
+        ("witness-a", &witness_a_private, "123", &witness_a),
+        ("witness-b", &witness_b_private, "124", &witness_b),
+    ] {
+        assert!(
+            run(&[
+                "sign-approval-log-gossip-organization-registry-history-checkpoint-witness",
+                path(&normalized_history),
+                path(&registry_history_checkpoint),
+                "--witness-id",
+                id,
+                "--witness-private-key",
+                path(private_key),
+                "--witnessed-at-unix",
+                witnessed_at,
+                "--output",
+                path(output),
+            ])
+            .status
+            .success()
+        );
+    }
+    let registry_history_witness_quorum =
+        directory.join("gossip-registry.history.witness-quorum.json");
+    assert!(
+        run(&[
+            "verify-approval-log-gossip-organization-registry-history-checkpoint-witnesses",
+            path(&normalized_history),
+            path(&registry_history_checkpoint),
+            "--witness",
+            path(&witness_b),
+            "--witness",
+            path(&witness_a),
+            "--trusted-witness-id",
+            "witness-a",
+            "--trusted-witness-public-key",
+            path(&witness_a_public),
+            "--trusted-witness-id",
+            "witness-b",
+            "--trusted-witness-public-key",
+            path(&witness_b_public),
+            "--minimum-witnesses",
+            "2",
+            "--evaluated-at-unix",
+            "125",
+            "--require-quorum",
+            "--output",
+            path(&registry_history_witness_quorum),
+        ])
+        .status
+        .success()
+    );
+    let witness_quorum = read_value(&registry_history_witness_quorum);
+    assert_eq!(witness_quorum["quorum_met"], true);
+    assert_eq!(witness_quorum["members"][0]["witness_id"], "witness-a");
+    assert_eq!(witness_quorum["members"][1]["witness_id"], "witness-b");
     let mut omitted_history = read_value(&registry_history);
     omitted_history["events"].as_array_mut().unwrap().remove(2);
     let omitted_history_path = directory.join("gossip-registry.history.omitted.json");
@@ -1555,6 +1666,23 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     );
     assert!(!rejected_history_audit.exists());
     assert!(!rejected_history_final.exists());
+    let rejected_checkpoint_state = directory.join("gossip-registry.history.rejected-trust.json");
+    assert!(
+        !run(&[
+            "accept-approval-log-gossip-organization-registry-history-checkpoint",
+            path(&omitted_history_path),
+            path(&registry_history_checkpoint),
+            "--baseline",
+            path(&registry_history_trust),
+            "--accepted-at-unix",
+            "126",
+            "--output",
+            path(&rejected_checkpoint_state),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_checkpoint_state.exists());
     let revocation_reason = "44".repeat(32);
     let rejected_old_governance = directory.join("gossip-registry.old-governance-revoke.json");
     assert!(

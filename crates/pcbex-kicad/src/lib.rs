@@ -59,6 +59,7 @@ pub use approval_gossip_registry::{
     apply_approval_log_gossip_organization_registry_threshold_transition,
     apply_approval_log_gossip_organization_registry_transition,
     approval_log_gossip_organization_registry_history_audit_report_json_schema,
+    approval_log_gossip_organization_registry_history_audit_report_sha256,
     approval_log_gossip_organization_registry_history_json_schema,
     approval_log_gossip_organization_registry_json_schema,
     approval_log_gossip_organization_registry_sha256,
@@ -95,6 +96,28 @@ pub use approval_gossip_registry::{
     validate_signed_approval_log_gossip_organization_registry_threshold_transition,
     validate_signed_approval_log_gossip_organization_registry_transition,
     verify_approval_log_gossip_quorum_with_organization_registry,
+};
+mod approval_gossip_registry_checkpoint;
+pub use approval_gossip_registry_checkpoint::{
+    ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+    ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessMember,
+    ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport,
+    SignedApprovalLogGossipOrganizationRegistryHistoryCheckpoint,
+    SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
+    accept_approval_log_gossip_organization_registry_history_checkpoint,
+    approval_log_gossip_organization_registry_history_checkpoint_trust_state_json_schema,
+    approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema,
+    sign_approval_log_gossip_organization_registry_history_checkpoint,
+    sign_approval_log_gossip_organization_registry_history_checkpoint_witness,
+    signed_approval_log_gossip_organization_registry_history_checkpoint_json_schema,
+    signed_approval_log_gossip_organization_registry_history_checkpoint_sha256,
+    signed_approval_log_gossip_organization_registry_history_checkpoint_witness_json_schema,
+    signed_approval_log_gossip_organization_registry_history_checkpoint_witness_sha256,
+    validate_approval_log_gossip_organization_registry_history_checkpoint_trust_state,
+    validate_approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_report,
+    validate_signed_approval_log_gossip_organization_registry_history_checkpoint,
+    validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness,
+    verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses,
 };
 mod approval_gossip_trust;
 pub use approval_gossip_trust::{

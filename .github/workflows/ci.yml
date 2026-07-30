@@ -531,6 +531,25 @@ jobs:
                 }
               ]
             }' > build/action-quorum/gossip-registry.history.json
+          target/release/pcbex sign-approval-log-gossip-organization-registry-history-checkpoint \
+            build/action-quorum/gossip-registry.history.json \
+            --authority-private-key build/action-quorum/gossip-registry.successor.key \
+            --issued-at-unix 13 \
+            --output build/action-quorum/gossip-registry.history.checkpoint.json
+          for witness in a b; do
+            witnessed_at=14
+            [[ "$witness" == "b" ]] && witnessed_at=15
+            target/release/pcbex approval-keygen \
+              --private-key "build/action-quorum/gossip-history-witness-$witness.key" \
+              --public-key "build/action-quorum/gossip-history-witness-$witness.pub"
+            target/release/pcbex sign-approval-log-gossip-organization-registry-history-checkpoint-witness \
+              build/action-quorum/gossip-registry.history.json \
+              build/action-quorum/gossip-registry.history.checkpoint.json \
+              --witness-id "history-witness-$witness" \
+              --witness-private-key "build/action-quorum/gossip-history-witness-$witness.key" \
+              --witnessed-at-unix "$witnessed_at" \
+              --output "build/action-quorum/gossip-history-witness-$witness.json"
+          done
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -612,6 +631,18 @@ jobs:
             build/action-quorum/gossip-observer.trust.json
             build/action-quorum/gossip-observer-b.trust.json
           approval-log-gossip-organization-registry-history: build/action-quorum/gossip-registry.history.json
+          approval-log-gossip-organization-registry-history-checkpoint: build/action-quorum/gossip-registry.history.checkpoint.json
+          approval-log-gossip-organization-registry-history-checkpoint-accepted-at-unix: "16"
+          approval-log-gossip-organization-registry-history-checkpoint-witness-files: |
+            build/action-quorum/gossip-history-witness-a.json
+            build/action-quorum/gossip-history-witness-b.json
+          approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-ids: |
+            history-witness-a
+            history-witness-b
+          approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-public-key-files: |
+            build/action-quorum/gossip-history-witness-a.pub
+            build/action-quorum/gossip-history-witness-b.pub
+          approval-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix: "17"
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
           approval-log-witness-files: |
@@ -708,6 +739,9 @@ jobs:
           APPROVAL_LOG_GOSSIP_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-gossip-quorum-met }}
           APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_AUDIT: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-audit }}
           APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_FINAL: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-final }}
+          APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_TRUST: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-checkpoint-trust-state }}
+          APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-checkpoint-witness-quorum }}
+          APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-checkpoint-witness-quorum-met }}
           REMOTE_WITNESS: ${{ steps.pcbex.outputs.remote-witness }}
           REMOTE_WITNESS_RECEIPT: ${{ steps.pcbex.outputs.remote-witness-receipt }}
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
@@ -752,6 +786,9 @@ jobs:
           test "$(jq -r '.event_count' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_AUDIT")" = "5"
           test "$(jq -r '.chain_valid' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_AUDIT")" = "true"
           test "$(jq -r '.generation' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_FINAL")" = "5"
+          test "$(jq -r '.accepted_generation' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_TRUST")" = "5"
+          test "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM_MET" = "true"
+          test "$(jq -r '.valid_witnesses' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_CHECKPOINT_WITNESS_QUORUM")" = "2"
           test "$(jq -r '.trust_quorum.trust_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
           test "$(jq -r '.trust_quorum.quorum.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"

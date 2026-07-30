@@ -3620,6 +3620,89 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint",
+            "Sign approval gossip registry history checkpoint",
+            "Replay a complete history and sign its exact final state with the retained registry root.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["history", "authority_private_key", "issued_at_unix", "output"],
+                "properties": {
+                    "history": {"type": "string"},
+                    "authority_private_key": {"type": "string"},
+                    "issued_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "accept_approval_transparency_public_log_gossip_organization_registry_history_checkpoint",
+            "Accept approval gossip registry history checkpoint",
+            "Verify from genesis and pin or monotonically advance local checkpoint trust.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["history", "checkpoint", "accepted_at_unix", "output"],
+                "properties": {
+                    "history": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "baseline": {"type": "string"},
+                    "accepted_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness",
+            "Witness approval gossip registry history checkpoint",
+            "Independently replay the history and sign one exact retained-root checkpoint.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["history", "checkpoint", "witness_id", "witness_private_key", "witnessed_at_unix", "output"],
+                "properties": {
+                    "history": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "witness_id": {"type": "string"},
+                    "witness_private_key": {"type": "string"},
+                    "witnessed_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses",
+            "Verify approval gossip registry history checkpoint witnesses",
+            "Verify fresh, distinct, directly trusted witnesses for one exact history checkpoint.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "history", "checkpoint", "witnesses", "trusted_witness_ids",
+                    "trusted_witness_public_keys", "evaluated_at_unix", "output"
+                ],
+                "properties": {
+                    "history": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "witnesses": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}},
+                    "trusted_witness_ids": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}},
+                    "trusted_witness_public_keys": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}},
+                    "minimum_witnesses": {"type": "integer", "minimum": 2, "maximum": 100, "default": 2},
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "require_quorum": {"type": "boolean", "default": false},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -4149,6 +4232,30 @@ fn call_tool(
         }
         "audit_approval_transparency_public_log_gossip_organization_registry_history" => {
             audit_approval_transparency_public_log_gossip_organization_registry_history(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint" => {
+            sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint(
+                arguments,
+                cancellation,
+            )?
+        }
+        "accept_approval_transparency_public_log_gossip_organization_registry_history_checkpoint" => {
+            accept_approval_transparency_public_log_gossip_organization_registry_history_checkpoint(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness" => {
+            sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness(
+                arguments,
+                cancellation,
+            )?
+        }
+        "verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses" => {
+            verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses(
                 arguments,
                 cancellation,
             )?
@@ -9917,6 +10024,173 @@ fn audit_approval_transparency_public_log_gossip_organization_registry_history(
     ))
 }
 
+fn sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "history",
+            "authority_private_key",
+            "issued_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-approval-log-gossip-organization-registry-history-checkpoint".into(),
+        required_string(&arguments, "history")?,
+        "--authority-private-key".into(),
+        required_string(&arguments, "authority_private_key")?,
+        "--issued-at-unix".into(),
+        required_nonnegative_integer(&arguments, "issued_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let checkpoint = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "checkpoint": checkpoint}),
+    ))
+}
+
+fn accept_approval_transparency_public_log_gossip_organization_registry_history_checkpoint(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "history",
+            "checkpoint",
+            "baseline",
+            "accepted_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "accept-approval-log-gossip-organization-registry-history-checkpoint".into(),
+        required_string(&arguments, "history")?,
+        required_string(&arguments, "checkpoint")?,
+        "--accepted-at-unix".into(),
+        required_nonnegative_integer(&arguments, "accepted_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_option(&arguments, "baseline", "--baseline", &mut command)?;
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": trust_state}),
+    ))
+}
+
+fn sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "history",
+            "checkpoint",
+            "witness_id",
+            "witness_private_key",
+            "witnessed_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-approval-log-gossip-organization-registry-history-checkpoint-witness".into(),
+        required_string(&arguments, "history")?,
+        required_string(&arguments, "checkpoint")?,
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+        "--witness-private-key".into(),
+        required_string(&arguments, "witness_private_key")?,
+        "--witnessed-at-unix".into(),
+        required_nonnegative_integer(&arguments, "witnessed_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let witness = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "witness": witness}),
+    ))
+}
+
+fn verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "history",
+            "checkpoint",
+            "witnesses",
+            "trusted_witness_ids",
+            "trusted_witness_public_keys",
+            "minimum_witnesses",
+            "evaluated_at_unix",
+            "require_quorum",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let witnesses = required_string_array(&arguments, "witnesses", false)?;
+    let ids = required_string_array(&arguments, "trusted_witness_ids", false)?;
+    let keys = required_string_array(&arguments, "trusted_witness_public_keys", false)?;
+    if ids.len() != keys.len() {
+        return Err(json!({"detail": "trusted witness id and public key counts must match"}));
+    }
+    let mut command = vec![
+        "verify-approval-log-gossip-organization-registry-history-checkpoint-witnesses".into(),
+        required_string(&arguments, "history")?,
+        required_string(&arguments, "checkpoint")?,
+    ];
+    for witness in witnesses {
+        command.extend(["--witness".into(), witness]);
+    }
+    for id in ids {
+        command.extend(["--trusted-witness-id".into(), id]);
+    }
+    for key in keys {
+        command.extend(["--trusted-witness-public-key".into(), key]);
+    }
+    optional_positive_integer(
+        &arguments,
+        "minimum_witnesses",
+        "--minimum-witnesses",
+        &mut command,
+    )?;
+    command.extend([
+        "--evaluated-at-unix".into(),
+        required_nonnegative_integer(&arguments, "evaluated_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    optional_flag(
+        &arguments,
+        "require_quorum",
+        "--require-quorum",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -10294,13 +10568,19 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 120);
+        assert_eq!(tools.len(), 124);
         let named = |name: &str| {
             tools
                 .iter()
                 .find(|tool| tool["name"] == name)
                 .unwrap_or_else(|| panic!("missing MCP tool {name}"))
         };
+        assert_eq!(
+            named(
+                "verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses"
+            )["inputSchema"]["properties"]["minimum_witnesses"]["minimum"],
+            2
+        );
         assert_eq!(
             named("list_dfm_profiles")["annotations"]["readOnlyHint"],
             true

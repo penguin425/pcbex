@@ -2169,6 +2169,9 @@ approval_log_gossip_quorum=""
 approval_log_gossip_quorum_met=""
 approval_log_gossip_organization_registry_history_audit=""
 approval_log_gossip_organization_registry_history_final=""
+approval_log_gossip_organization_registry_history_checkpoint_trust_state=""
+approval_log_gossip_organization_registry_history_checkpoint_witness_quorum=""
+approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_met=""
 approval_log_remote_gossip_observations=""
 approval_log_remote_gossip_receipts=""
 approval_local_direct_inputs=0
@@ -2259,6 +2262,97 @@ if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
     --output "$approval_log_gossip_organization_registry_history_audit" \
     --registry-output "$approval_log_gossip_organization_registry_history_final"
   approval_log_gossip_organization_registry="$approval_log_gossip_organization_registry_history_final"
+fi
+approval_registry_history_checkpoint="${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT:-}"
+approval_registry_history_checkpoint_baseline="${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BASELINE:-}"
+if [[ -n "$approval_registry_history_checkpoint" ]]; then
+  if [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
+    echo "approval registry-history checkpoint requires a complete registry history" >&2
+    exit 2
+  fi
+  if [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_ACCEPTED_AT_UNIX:-}" ]]; then
+    echo "approval registry-history checkpoint requires an explicit acceptance time" >&2
+    exit 2
+  fi
+  approval_log_gossip_organization_registry_history_checkpoint_trust_state="${artifact_dir}/approval-log-gossip-organization-registry-history-checkpoint-trust-state.json"
+  approval_registry_checkpoint_arguments=(
+    accept-approval-log-gossip-organization-registry-history-checkpoint
+    "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY"
+    "$approval_registry_history_checkpoint"
+    --accepted-at-unix
+    "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_ACCEPTED_AT_UNIX"
+    --output
+    "$approval_log_gossip_organization_registry_history_checkpoint_trust_state"
+  )
+  if [[ -n "$approval_registry_history_checkpoint_baseline" ]]; then
+    approval_registry_checkpoint_arguments+=(--baseline "$approval_registry_history_checkpoint_baseline")
+  fi
+  "$PCBEX_BINARY" "${approval_registry_checkpoint_arguments[@]}"
+elif [[ -n "$approval_registry_history_checkpoint_baseline" ]] \
+  || [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_ACCEPTED_AT_UNIX:-}" ]]; then
+  echo "approval registry-history checkpoint baseline and acceptance time require a checkpoint" >&2
+  exit 2
+fi
+
+mapfile -t approval_registry_checkpoint_witnesses < <(
+  printf '%s\n' "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t approval_registry_checkpoint_witness_ids < <(
+  printf '%s\n' "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+mapfile -t approval_registry_checkpoint_witness_keys < <(
+  printf '%s\n' "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES:-}" |
+    sed '/^[[:space:]]*$/d'
+)
+if ((${#approval_registry_checkpoint_witness_ids[@]} != ${#approval_registry_checkpoint_witness_keys[@]})); then
+  echo "approval registry-history checkpoint witness IDs and keys must have matching counts" >&2
+  exit 2
+fi
+if ((${#approval_registry_checkpoint_witnesses[@]} > 0)); then
+  if [[ -z "$approval_registry_history_checkpoint" ]]; then
+    echo "approval registry-history checkpoint witnesses require a checkpoint" >&2
+    exit 2
+  fi
+  if [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX:-}" ]]; then
+    echo "approval registry-history checkpoint witnesses require an explicit evaluation time" >&2
+    exit 2
+  fi
+  if ((${#approval_registry_checkpoint_witness_ids[@]} == 0)); then
+    echo "approval registry-history checkpoint witnesses require directly trusted keys" >&2
+    exit 2
+  fi
+  approval_log_gossip_organization_registry_history_checkpoint_witness_quorum="${artifact_dir}/approval-log-gossip-organization-registry-history-checkpoint-witness-quorum.json"
+  approval_registry_witness_arguments=(
+    verify-approval-log-gossip-organization-registry-history-checkpoint-witnesses
+    "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY"
+    "$approval_registry_history_checkpoint"
+  )
+  for witness in "${approval_registry_checkpoint_witnesses[@]}"; do
+    approval_registry_witness_arguments+=(--witness "$witness")
+  done
+  for witness_id in "${approval_registry_checkpoint_witness_ids[@]}"; do
+    approval_registry_witness_arguments+=(--trusted-witness-id "$witness_id")
+  done
+  for witness_key in "${approval_registry_checkpoint_witness_keys[@]}"; do
+    approval_registry_witness_arguments+=(--trusted-witness-public-key "$witness_key")
+  done
+  approval_registry_witness_arguments+=(
+    --minimum-witnesses
+    "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_MINIMUM_WITNESSES:-2}"
+    --evaluated-at-unix
+    "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX"
+    --require-quorum
+    --output
+    "$approval_log_gossip_organization_registry_history_checkpoint_witness_quorum"
+  )
+  "$PCBEX_BINARY" "${approval_registry_witness_arguments[@]}"
+  approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_met=true
+elif ((${#approval_registry_checkpoint_witness_ids[@]} > 0)) \
+  || [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX:-}" ]]; then
+  echo "approval registry-history checkpoint witness trust and evaluation time require witnesses" >&2
+  exit 2
 fi
 if [[ -n "$approval_log_gossip_organization_registry" ]] \
   && [[ "$approval_trust_mode" != "trust-state" ]]; then
@@ -2774,6 +2868,9 @@ write_output approval-log-gossip-quorum "$approval_log_gossip_quorum"
 write_output approval-log-gossip-quorum-met "$approval_log_gossip_quorum_met"
 write_output approval-log-gossip-organization-registry-history-audit "$approval_log_gossip_organization_registry_history_audit"
 write_output approval-log-gossip-organization-registry-history-final "$approval_log_gossip_organization_registry_history_final"
+write_output approval-log-gossip-organization-registry-history-checkpoint-trust-state "$approval_log_gossip_organization_registry_history_checkpoint_trust_state"
+write_output approval-log-gossip-organization-registry-history-checkpoint-witness-quorum "$approval_log_gossip_organization_registry_history_checkpoint_witness_quorum"
+write_output approval-log-gossip-organization-registry-history-checkpoint-witness-quorum-met "$approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_met"
 write_output approval-log-remote-gossip-observations "$approval_log_remote_gossip_observations"
 write_output approval-log-remote-gossip-receipts "$approval_log_remote_gossip_receipts"
 write_output approval-log-witness-quorum "$approval_log_witness_quorum"

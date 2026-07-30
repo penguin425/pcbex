@@ -90,6 +90,7 @@ auditable release.
 | v1.378.0 | Approval gossip registry governance rotation | Require independent retained and successor quorums before changing authority membership, keys, or threshold |
 | v1.379.0 | Governed approval gossip registry root rotation | Replace the registry root and active governance atomically under retained and successor quorums |
 | v1.380.0 | Complete approval gossip registry history audit | Replay mixed root, threshold, governance, and governed-root events from genesis without trusting copied snapshots |
+| v1.381.0 | Witnessed approval gossip registry history checkpoints | Pin retained-root signed complete-history heads and require fresh distinct witnesses over one exact audited generation |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -98,7 +99,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should add witnessed approval-gossip registry history
-checkpoints, so independent retained-root and witness evidence can pin one
-exact audited head and reject rollback, truncation, or same-generation
-equivocation.
+The next roadmap should add approval-gossip registry history checkpoint
+witness key rotation, so identity-bound witness trust can advance without
+silently replacing a pinned public key.

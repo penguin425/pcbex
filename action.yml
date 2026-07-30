@@ -818,6 +818,38 @@ inputs:
     description: Complete typed approval gossip registry event history replayed from genesis; mutually exclusive with copied registry state and follow-up registry mutations.
     required: false
     default: ""
+  approval-log-gossip-organization-registry-history-checkpoint:
+    description: Retained-root signed checkpoint for the exact complete registry history.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-baseline:
+    description: Previously accepted checkpoint trust state used to reject rollback, truncation, and equivocation.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-accepted-at-unix:
+    description: Explicit checkpoint acceptance time.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-witness-files:
+    description: Newline-separated independently signed checkpoint witness files.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-ids:
+    description: Newline-separated trusted witness identities paired with public-key files.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-public-key-files:
+    description: Newline-separated trusted witness public-key files.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-minimum-witnesses:
+    description: Minimum number of fresh, distinct registry-history checkpoint witnesses.
+    required: false
+    default: "2"
+  approval-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix:
+    description: Explicit witness-quorum evaluation time.
+    required: false
+    default: ""
   approval-log-gossip-minimum-organizations:
     description: Minimum number of fresh, distinct organizations required.
     required: false
@@ -1233,6 +1265,15 @@ outputs:
   approval-log-gossip-organization-registry-history-final:
     description: Final approval gossip registry computed exclusively by replaying the supplied history.
     value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-final }}
+  approval-log-gossip-organization-registry-history-checkpoint-trust-state:
+    description: Monotonic locally accepted registry-history checkpoint trust state.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-checkpoint-trust-state }}
+  approval-log-gossip-organization-registry-history-checkpoint-witness-quorum:
+    description: Verified fresh and distinct registry-history checkpoint witness quorum.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-checkpoint-witness-quorum }}
+  approval-log-gossip-organization-registry-history-checkpoint-witness-quorum-met:
+    description: Whether the registry-history checkpoint witness threshold passed.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-checkpoint-witness-quorum-met }}
   approval-log-remote-gossip-observations:
     description: Directory containing verified remote gossip observation envelopes.
     value: ${{ steps.analyze.outputs.approval-log-remote-gossip-observations }}
@@ -1458,6 +1499,14 @@ runs:
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION: ${{ inputs.approval-log-gossip-organization-registry-governance-rotation }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNED_AUTHORITY_KEY_ROTATION: ${{ inputs.approval-log-gossip-organization-registry-governed-authority-key-rotation }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY: ${{ inputs.approval-log-gossip-organization-registry-history }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_BASELINE: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-baseline }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_ACCEPTED_AT_UNIX: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-accepted-at-unix }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-witness-files }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-ids }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-public-key-files }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_MINIMUM_WITNESSES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-minimum-witnesses }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix }}
         PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.approval-log-gossip-minimum-organizations }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.approval-log-remote-gossip-endpoints }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-remote-gossip-organization-ids }}
