@@ -24,6 +24,8 @@ use pcbex_kicad::{
     ApprovalLogGossipOrganizationRegistry, ApprovalLogGossipOrganizationRegistryAction,
     ApprovalLogGossipOrganizationRegistryHistory,
     ApprovalLogGossipOrganizationRegistryHistoryAuditReport,
+    ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+    ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport,
     ApprovalLogGossipRegistryGovernanceAuthority, ApprovalLogWitnessTrustState,
     ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet,
     HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
@@ -34,12 +36,16 @@ use pcbex_kicad::{
     SignedApprovalLogGossipOrganizationRegistryGovernance,
     SignedApprovalLogGossipOrganizationRegistryGovernanceRotation,
     SignedApprovalLogGossipOrganizationRegistryGovernedAuthorityKeyRotation,
+    SignedApprovalLogGossipOrganizationRegistryHistoryCheckpoint,
+    SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
     SignedApprovalLogGossipOrganizationRegistryThresholdTransition,
     SignedApprovalLogGossipOrganizationRegistryTransition, SignedApprovalLogGossipReceipt,
     SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation,
-    SimulationArtifact, SimulationEvidence, ai_approval_quorum_report_json_schema,
-    ai_review_request_json_schema, ai_review_response_json_schema,
-    append_approval_transparency_event, apply_approval_log_gossip_observer_key_rotation,
+    SimulationArtifact, SimulationEvidence,
+    accept_approval_log_gossip_organization_registry_history_checkpoint,
+    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
+    ai_review_response_json_schema, append_approval_transparency_event,
+    apply_approval_log_gossip_observer_key_rotation,
     apply_approval_log_gossip_organization_registry_authority_key_rotation,
     apply_approval_log_gossip_organization_registry_governance_rotation,
     apply_approval_log_gossip_organization_registry_governed_authority_key_rotation,
@@ -55,6 +61,8 @@ use pcbex_kicad::{
     approval_log_gossip_observer_trust_state_sha256,
     approval_log_gossip_observer_trusted_public_key,
     approval_log_gossip_organization_registry_history_audit_report_json_schema,
+    approval_log_gossip_organization_registry_history_checkpoint_trust_state_json_schema,
+    approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema,
     approval_log_gossip_organization_registry_history_json_schema,
     approval_log_gossip_organization_registry_json_schema,
     approval_log_gossip_quorum_report_json_schema,
@@ -87,6 +95,8 @@ use pcbex_kicad::{
     sign_approval_log_gossip_organization_registry_governance,
     sign_approval_log_gossip_organization_registry_governance_rotation,
     sign_approval_log_gossip_organization_registry_governed_authority_key_rotation,
+    sign_approval_log_gossip_organization_registry_history_checkpoint,
+    sign_approval_log_gossip_organization_registry_history_checkpoint_witness,
     sign_approval_log_gossip_organization_registry_successor_governance,
     sign_approval_log_gossip_organization_registry_threshold_transition,
     sign_approval_log_gossip_organization_registry_transition, sign_approval_log_gossip_receipt,
@@ -98,6 +108,8 @@ use pcbex_kicad::{
     signed_approval_log_gossip_organization_registry_governance_json_schema,
     signed_approval_log_gossip_organization_registry_governance_rotation_json_schema,
     signed_approval_log_gossip_organization_registry_governed_authority_key_rotation_json_schema,
+    signed_approval_log_gossip_organization_registry_history_checkpoint_json_schema,
+    signed_approval_log_gossip_organization_registry_history_checkpoint_witness_json_schema,
     signed_approval_log_gossip_organization_registry_threshold_transition_json_schema,
     signed_approval_log_gossip_organization_registry_transition_json_schema,
     signed_approval_log_gossip_receipt_json_schema, signed_approval_log_witness_json_schema,
@@ -105,8 +117,14 @@ use pcbex_kicad::{
     simulation_declaration_json_schema, simulation_evidence_json_schema,
     validate_approval_log_gossip_organization_registry_history,
     validate_approval_log_gossip_organization_registry_history_audit_report,
+    validate_approval_log_gossip_organization_registry_history_checkpoint_trust_state,
+    validate_approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_report,
+    validate_signed_approval_log_gossip_organization_registry_history_checkpoint,
+    validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness,
     verify_ai_approval_quorum, verify_approval_log_anchor_proof, verify_approval_log_checkpoint,
-    verify_approval_log_consistency_proof, verify_approval_log_gossip_quorum,
+    verify_approval_log_consistency_proof,
+    verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses,
+    verify_approval_log_gossip_quorum,
     verify_approval_log_gossip_quorum_with_observer_trust_states,
     verify_approval_log_gossip_quorum_with_organization_registry,
     verify_approval_log_gossip_receipt, verify_approval_log_witness_quorum,
@@ -2737,6 +2755,50 @@ enum Command {
         #[arg(short, long)]
         output: CompactPath,
     },
+    /// Print the closed retained-root registry-history checkpoint JSON Schema.
+    SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a retained-root registry-history checkpoint.
+    ValidateApprovalLogGossipOrganizationRegistryHistoryCheckpoint {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Print the closed registry-history checkpoint trust-state JSON Schema.
+    ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustStateSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a registry-history checkpoint trust state.
+    ValidateApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Print the closed signed registry-history checkpoint witness JSON Schema.
+    SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed registry-history checkpoint witness.
+    ValidateApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Print the closed registry-history checkpoint witness-quorum JSON Schema.
+    ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a registry-history checkpoint witness quorum.
+    ValidateApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorum {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
     /// Print the closed signed approval gossip registry transition JSON Schema.
     SignedApprovalLogGossipOrganizationRegistryTransitionSchema {
         #[arg(short, long)]
@@ -3224,6 +3286,59 @@ enum Command {
         output: CompactPath,
         #[arg(long)]
         registry_output: CompactPath,
+    },
+    /// Audit a complete history and sign its exact final state with the retained root.
+    SignApprovalLogGossipOrganizationRegistryHistoryCheckpoint {
+        history: CompactPath,
+        #[arg(long)]
+        authority_private_key: CompactPath,
+        #[arg(long)]
+        issued_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify a checkpoint from genesis and pin or monotonically advance local trust.
+    AcceptApprovalLogGossipOrganizationRegistryHistoryCheckpoint {
+        history: CompactPath,
+        checkpoint: CompactPath,
+        #[arg(long)]
+        baseline: Option<CompactPath>,
+        #[arg(long)]
+        accepted_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Independently audit and witness one exact registry-history checkpoint.
+    SignApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness {
+        history: CompactPath,
+        checkpoint: CompactPath,
+        #[arg(long)]
+        witness_id: String,
+        #[arg(long)]
+        witness_private_key: CompactPath,
+        #[arg(long)]
+        witnessed_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify fresh, distinct, directly trusted witnesses for one exact checkpoint.
+    VerifyApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnesses {
+        history: CompactPath,
+        checkpoint: CompactPath,
+        #[arg(long = "witness", required = true)]
+        witnesses: Vec<CompactPath>,
+        #[arg(long = "trusted-witness-id", required = true)]
+        trusted_witness_ids: Vec<String>,
+        #[arg(long = "trusted-witness-public-key", required = true)]
+        trusted_witness_public_keys: Vec<CompactPath>,
+        #[arg(long, default_value_t = 2)]
+        minimum_witnesses: u32,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(long)]
+        require_quorum: bool,
+        #[arg(short, long)]
+        output: CompactPath,
     },
     /// Initialize an empty authority-trusted approval gossip organization registry.
     InitApprovalLogGossipOrganizationRegistry {
@@ -9219,6 +9334,88 @@ fn run_cli() -> Result<()> {
                 .map_err(anyhow::Error::msg)?;
             write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
         }
+        Command::SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointSchema { output } => {
+            write_or_print_json(
+                &signed_approval_log_gossip_organization_registry_history_checkpoint_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidateApprovalLogGossipOrganizationRegistryHistoryCheckpoint {
+            input,
+            output,
+        } => {
+            let (checkpoint, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryHistoryCheckpoint,
+            >(&input)?;
+            validate_signed_approval_log_gossip_organization_registry_history_checkpoint(
+                &checkpoint,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&checkpoint)?, false)?;
+        }
+        Command::ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustStateSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &approval_log_gossip_organization_registry_history_checkpoint_trust_state_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidateApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState {
+            input,
+            output,
+        } => {
+            let (state, _) = read_described_json::<
+                ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+            >(&input)?;
+            validate_approval_log_gossip_organization_registry_history_checkpoint_trust_state(
+                &state,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&state)?, false)?;
+        }
+        Command::SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &signed_approval_log_gossip_organization_registry_history_checkpoint_witness_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidateApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness {
+            input,
+            output,
+        } => {
+            let (witness, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
+            >(&input)?;
+            validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness(
+                &witness,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&witness)?, false)?;
+        }
+        Command::ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidateApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorum {
+            input,
+            output,
+        } => {
+            let (report, _) = read_described_json::<
+                ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport,
+            >(&input)?;
+            validate_approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_report(
+                &report,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+        }
         Command::SignedApprovalLogGossipOrganizationRegistryTransitionSchema { output } => {
             write_or_print_json(
                 &signed_approval_log_gossip_organization_registry_transition_json_schema(),
@@ -10626,6 +10823,175 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "verified {} approval gossip registry event(s) through generation {}",
                 report.event_count, report.final_registry.generation
+            );
+        }
+        Command::SignApprovalLogGossipOrganizationRegistryHistoryCheckpoint {
+            history,
+            authority_private_key,
+            issued_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [Some(history.0.as_ref()), Some(output.0.as_ref())],
+                "approval gossip registry history checkpoint signing",
+            )?;
+            let (history, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistryHistory>(&history)?;
+            let private_key =
+                read_hex_key(&authority_private_key, "approval gossip registry root private key")?;
+            let checkpoint =
+                sign_approval_log_gossip_organization_registry_history_checkpoint(
+                    &history,
+                    &private_key,
+                    issued_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(
+                &output,
+                &serde_json::to_string_pretty(&checkpoint)?,
+                false,
+            )?;
+            eprintln!(
+                "signed approval gossip registry history checkpoint at generation {}",
+                checkpoint.generation
+            );
+        }
+        Command::AcceptApprovalLogGossipOrganizationRegistryHistoryCheckpoint {
+            history,
+            checkpoint,
+            baseline,
+            accepted_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(history.0.as_ref()),
+                    Some(checkpoint.0.as_ref()),
+                    baseline.as_ref().map(|path| path.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval gossip registry history checkpoint acceptance",
+            )?;
+            let (history, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistryHistory>(&history)?;
+            let (checkpoint, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryHistoryCheckpoint,
+            >(&checkpoint)?;
+            let baseline = baseline
+                .as_ref()
+                .map(|path| {
+                    read_described_json::<
+                        ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+                    >(path)
+                    .map(|(state, _)| state)
+                })
+                .transpose()?;
+            let state = accept_approval_log_gossip_organization_registry_history_checkpoint(
+                &history,
+                &checkpoint,
+                baseline.as_ref(),
+                accepted_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&state)?, false)?;
+            eprintln!(
+                "accepted approval gossip registry history checkpoint at generation {}",
+                state.accepted_generation
+            );
+        }
+        Command::SignApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness {
+            history,
+            checkpoint,
+            witness_id,
+            witness_private_key,
+            witnessed_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(history.0.as_ref()),
+                    Some(checkpoint.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval gossip registry history checkpoint witness signing",
+            )?;
+            let (history, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistryHistory>(&history)?;
+            let (checkpoint, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryHistoryCheckpoint,
+            >(&checkpoint)?;
+            let private_key =
+                read_hex_key(&witness_private_key, "approval gossip history witness private key")?;
+            let witness =
+                sign_approval_log_gossip_organization_registry_history_checkpoint_witness(
+                    &history,
+                    &checkpoint,
+                    &witness_id,
+                    &private_key,
+                    witnessed_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&witness)?, false)?;
+            eprintln!(
+                "witnessed approval gossip registry history checkpoint as {}",
+                witness.witness_id
+            );
+        }
+        Command::VerifyApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnesses {
+            history,
+            checkpoint,
+            witnesses,
+            trusted_witness_ids,
+            trusted_witness_public_keys,
+            minimum_witnesses,
+            evaluated_at_unix,
+            require_quorum,
+            output,
+        } => {
+            if trusted_witness_ids.len() != trusted_witness_public_keys.len() {
+                bail!(
+                    "--trusted-witness-id and --trusted-witness-public-key counts must match"
+                );
+            }
+            let (history, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistryHistory>(&history)?;
+            let (checkpoint, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryHistoryCheckpoint,
+            >(&checkpoint)?;
+            let witnesses = witnesses
+                .iter()
+                .map(|path| {
+                    read_described_json::<
+                        SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
+                    >(path)
+                    .map(|(witness, _)| witness)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let trusted_witnesses = trusted_witness_ids
+                .into_iter()
+                .zip(trusted_witness_public_keys.iter())
+                .map(|(id, path)| {
+                    read_hex_key(path, "trusted approval gossip history witness public key")
+                        .map(|key| (id, key))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let report =
+                verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses(
+                    &history,
+                    &checkpoint,
+                    &witnesses,
+                    &trusted_witnesses,
+                    minimum_witnesses,
+                    evaluated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            if require_quorum && !report.quorum_met {
+                bail!("approval gossip registry history checkpoint witness quorum was not met");
+            }
+            write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
+            eprintln!(
+                "approval gossip registry history checkpoint witness quorum: {}/{}",
+                report.valid_witnesses, report.minimum_witnesses
             );
         }
         Command::InitApprovalLogGossipOrganizationRegistry {

@@ -419,6 +419,11 @@
     {
       "id": "approval-transparency-gossip-registry-history-audit",
       "release": "v1.380.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-gossip-registry-history-witness-checkpoint",
+      "release": "v1.381.0",
       "status": "current"
     }
   ]

@@ -1473,6 +1473,16 @@ pub fn approval_log_gossip_organization_registry_sha256(
     normalized_sha256(registry, "approval gossip organization registry")
 }
 
+pub fn approval_log_gossip_organization_registry_history_audit_report_sha256(
+    report: &ApprovalLogGossipOrganizationRegistryHistoryAuditReport,
+) -> Result<String, String> {
+    validate_approval_log_gossip_organization_registry_history_audit_report(report)?;
+    normalized_sha256(
+        report,
+        "approval gossip organization registry history audit",
+    )
+}
+
 pub fn signed_approval_log_gossip_organization_registry_transition_sha256(
     transition: &SignedApprovalLogGossipOrganizationRegistryTransition,
 ) -> Result<String, String> {

@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.380.0
+  uses: penguin425/pcbex@v1.381.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3529,13 +3529,45 @@ one exact chain. The audit binds each event and resulting state digest and
 emits the only registry eligible for downstream quorum verification.
 Reordering, replay, omission, forks, non-genesis starts, stale governance,
 signature mutation, and copied-registry substitution fail closed without
-partial outputs. This proves genesis-to-supplied-head integrity, but does not
-prove that a newer valid head does not exist; witnessed head checkpoints are
-the next trust layer. The closed contracts are emitted by
+partial outputs. This proves genesis-to-supplied-head integrity.
+
+Pin that supplied head with the retained root, advance local trust
+monotonically, and require independent witnesses:
+
+```sh
+pcbex sign-approval-log-gossip-organization-registry-history-checkpoint \
+  gossip-registry.history.normalized.json \
+  --authority-private-key gossip-registry.root.key \
+  --issued-at-unix 1785400000 \
+  --output gossip-registry.history.checkpoint.json
+
+pcbex accept-approval-log-gossip-organization-registry-history-checkpoint \
+  gossip-registry.history.normalized.json \
+  gossip-registry.history.checkpoint.json \
+  --accepted-at-unix 1785400001 \
+  --output gossip-registry.history.trust.json
+
+pcbex verify-approval-log-gossip-organization-registry-history-checkpoint-witnesses \
+  gossip-registry.history.normalized.json \
+  gossip-registry.history.checkpoint.json \
+  --witness witness-a.json --witness witness-b.json \
+  --trusted-witness-id witness-a --trusted-witness-public-key witness-a.pub \
+  --trusted-witness-id witness-b --trusted-witness-public-key witness-b.pub \
+  --evaluated-at-unix 1785400002 --require-quorum \
+  --output gossip-registry.history.witness-quorum.json
+```
+
+The checkpoint binds the exact audit, computed final registry, retained root,
+last transition, active governance, generation, and issuance time. A prior
+trust state rejects rollback, truncation, time reversal, and same-generation
+equivocation. Witness verification requires fresh, distinct identities and
+keys over that exact checkpoint; key rotation is intentionally a separate
+next trust layer. The closed contracts are emitted by
 `approval-log-gossip-organization-registry-history-schema` and
-`approval-log-gossip-organization-registry-history-audit-schema`. MCP exposes
-the same atomic audit, and the Action accepts
-`approval-log-gossip-organization-registry-history`.
+`approval-log-gossip-organization-registry-history-audit-schema`, plus the
+checkpoint, trust-state, witness, and quorum schema commands. MCP exposes the
+same signing and verification workflow. The Action accepts only pre-signed
+checkpoint and witness evidence, never private keys.
 
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
@@ -3604,7 +3636,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.380.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.381.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
