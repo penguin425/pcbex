@@ -130,6 +130,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "verify-human-escalation",
         "init-approval-log",
         "append-approval-log",
+        "append-verified-remote-approval-registry-history-checkpoint-witness-receipt",
         "sign-approval-log",
         "verify-approval-log",
         "witness-approval-log",

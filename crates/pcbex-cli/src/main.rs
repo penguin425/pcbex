@@ -392,6 +392,8 @@ use remote_approval_gossip_registry_checkpoint_witness::{
     request_remote_approval_registry_history_checkpoint_witness,
     request_remote_approval_registry_history_checkpoint_witness_with_trust_state,
     validate_remote_approval_registry_history_checkpoint_witness_receipt,
+    verify_remote_approval_registry_history_checkpoint_witness_receipt,
+    verify_remote_approval_registry_history_checkpoint_witness_receipt_with_trust_state,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_policy_lifecycle_gossip::{
@@ -3068,6 +3070,36 @@ enum Command {
         artifact: CompactPath,
         #[arg(long, value_enum)]
         kind: ApprovalArtifactKindArg,
+        /// Explicit event time for reproducible imports; defaults to the current clock.
+        #[arg(long)]
+        recorded_at_unix: Option<u64>,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Re-verify a remote registry-history witness receipt before immutable admission.
+    AppendVerifiedRemoteApprovalRegistryHistoryCheckpointWitnessReceipt {
+        log: CompactPath,
+        #[arg(long)]
+        receipt: CompactPath,
+        #[arg(long)]
+        checkpoint_trust_state: CompactPath,
+        #[arg(long)]
+        response: CompactPath,
+        #[arg(
+            long,
+            required_unless_present = "witness_key_trust_state",
+            conflicts_with = "witness_key_trust_state"
+        )]
+        public_key: Option<CompactPath>,
+        #[arg(
+            long,
+            required_unless_present = "public_key",
+            conflicts_with = "public_key"
+        )]
+        witness_key_trust_state: Option<CompactPath>,
+        /// Independent admission time for freshness verification; defaults to the current clock.
+        #[arg(long)]
+        evaluated_at_unix: Option<u64>,
         /// Explicit event time for reproducible imports; defaults to the current clock.
         #[arg(long)]
         recorded_at_unix: Option<u64>,
@@ -10253,6 +10285,91 @@ fn run_cli() -> Result<()> {
                 log.entries.len() - 1
             );
         }
+        Command::AppendVerifiedRemoteApprovalRegistryHistoryCheckpointWitnessReceipt {
+            log,
+            receipt,
+            checkpoint_trust_state,
+            response,
+            public_key,
+            witness_key_trust_state,
+            evaluated_at_unix,
+            recorded_at_unix,
+            output,
+        } => {
+            let key_evidence_path = public_key
+                .as_ref()
+                .or(witness_key_trust_state.as_ref())
+                .ok_or_else(|| anyhow::anyhow!("remote approval history witness key is absent"))?;
+            require_distinct_outputs(
+                [
+                    Some(log.0.as_ref()),
+                    Some(receipt.0.as_ref()),
+                    Some(checkpoint_trust_state.0.as_ref()),
+                    Some(response.0.as_ref()),
+                    Some(key_evidence_path.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "verified remote approval registry history witness receipt",
+            )?;
+            let (mut log, _) = read_described_json::<ApprovalTransparencyLog>(&log)?;
+            let (receipt_value, _) = read_described_json::<
+                RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+            >(&receipt)?;
+            let (checkpoint_state, _) = read_described_json::<
+                ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+            >(&checkpoint_trust_state)?;
+            let response_bytes = fs::read(response.0.as_ref()).with_context(|| {
+                format!(
+                    "reading retained remote approval history response {}",
+                    response.0.display()
+                )
+            })?;
+            let evaluated_at_unix = evaluated_at_unix.unwrap_or(current_unix_seconds()?);
+            let witness = if let Some(path) = witness_key_trust_state.as_ref() {
+                let (trust_state, _) = read_described_json::<
+                    ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+                >(path)?;
+                verify_remote_approval_registry_history_checkpoint_witness_receipt_with_trust_state(
+                    &receipt_value,
+                    &checkpoint_state,
+                    &response_bytes,
+                    &trust_state,
+                    evaluated_at_unix,
+                )
+            } else {
+                let trusted_public_key = read_hex_key(
+                    public_key
+                        .as_ref()
+                        .expect("clap requires one remote approval history witness key"),
+                    "trusted remote approval history witness public key",
+                )?;
+                verify_remote_approval_registry_history_checkpoint_witness_receipt(
+                    &receipt_value,
+                    &checkpoint_state,
+                    &response_bytes,
+                    &trusted_public_key,
+                    evaluated_at_unix,
+                )
+            }
+            .map_err(anyhow::Error::msg)?;
+            let event = approval_event_descriptor(
+                ApprovalArtifactKindArg::RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+                &receipt,
+            )?;
+            let digest = append_approval_transparency_event(
+                &mut log,
+                event,
+                recorded_at_unix.unwrap_or(current_unix_seconds()?),
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&log)?, false)?;
+            eprintln!(
+                "verified witness {} and appended approval transparency entry {} at sequence {}",
+                witness.witness_id,
+                digest,
+                log.entries.len() - 1
+            );
+        }
         Command::SignApprovalLog {
             log,
             private_key,
@@ -11366,7 +11483,8 @@ fn run_cli() -> Result<()> {
                 )
             }
             .map_err(anyhow::Error::msg)?;
-            let witness_document = serde_json::to_string_pretty(&result.0)? + "\n";
+            let witness_document = String::from_utf8(result.2)
+                .map_err(|_| anyhow::anyhow!("remote approval history response is not UTF-8"))?;
             let receipt_document = serde_json::to_string_pretty(&result.1)? + "\n";
             write_new_file_set(&[
                 (output.0.as_ref(), witness_document.as_str()),

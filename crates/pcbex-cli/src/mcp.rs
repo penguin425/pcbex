@@ -2895,6 +2895,35 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "append_verified_remote_approval_registry_history_witness_receipt",
+            "Verify and append approval registry witness receipt",
+            "Rebind a transport receipt to retained checkpoint, witness trust, exact response bytes, and an Ed25519 signature before appending it.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "log", "receipt", "checkpoint_trust_state", "response", "output"
+                ],
+                "properties": {
+                    "log": {"type": "string"},
+                    "receipt": {"type": "string"},
+                    "checkpoint_trust_state": {"type": "string"},
+                    "response": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "witness_key_trust_state": {"type": "string"},
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "recorded_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                },
+                "oneOf": [
+                    {"required": ["public_key"], "not": {"required": ["witness_key_trust_state"]}},
+                    {"required": ["witness_key_trust_state"], "not": {"required": ["public_key"]}}
+                ]
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "sign_approval_transparency_log",
             "Sign approval-log checkpoint",
             "Create an Ed25519 checkpoint for the exact approval log head and complete log digest.",
@@ -4197,6 +4226,12 @@ fn call_tool(
         }
         "append_approval_transparency_log" => {
             append_approval_transparency_log(arguments, cancellation)?
+        }
+        "append_verified_remote_approval_registry_history_witness_receipt" => {
+            append_verified_remote_approval_registry_history_witness_receipt(
+                arguments,
+                cancellation,
+            )?
         }
         "sign_approval_transparency_log" => {
             sign_approval_transparency_log(arguments, cancellation)?
@@ -8806,6 +8841,69 @@ fn append_approval_transparency_log(
     ))
 }
 
+fn append_verified_remote_approval_registry_history_witness_receipt(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "log",
+            "receipt",
+            "checkpoint_trust_state",
+            "response",
+            "public_key",
+            "witness_key_trust_state",
+            "evaluated_at_unix",
+            "recorded_at_unix",
+            "output",
+        ],
+    )?;
+    let public_key = optional_string(&arguments, "public_key")?;
+    let witness_trust_state = optional_string(&arguments, "witness_key_trust_state")?;
+    if public_key.is_some() == witness_trust_state.is_some() {
+        return Err(json!({
+            "detail": "exactly one of public_key or witness_key_trust_state is required"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "append-verified-remote-approval-registry-history-checkpoint-witness-receipt".into(),
+        required_string(&arguments, "log")?,
+        "--receipt".into(),
+        required_string(&arguments, "receipt")?,
+        "--checkpoint-trust-state".into(),
+        required_string(&arguments, "checkpoint_trust_state")?,
+        "--response".into(),
+        required_string(&arguments, "response")?,
+    ];
+    if let Some(path) = public_key {
+        command.extend(["--public-key".into(), path]);
+    }
+    if let Some(path) = witness_trust_state {
+        command.extend(["--witness-key-trust-state".into(), path]);
+    }
+    optional_nonnegative_integer(
+        &arguments,
+        "evaluated_at_unix",
+        "--evaluated-at-unix",
+        &mut command,
+    )?;
+    optional_nonnegative_integer(
+        &arguments,
+        "recorded_at_unix",
+        "--recorded-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let log = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "log": log}),
+    ))
+}
+
 fn sign_approval_transparency_log(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -10898,7 +10996,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 129);
+        assert_eq!(tools.len(), 130);
         let named = |name: &str| {
             tools
                 .iter()
@@ -11427,6 +11525,16 @@ mod tests {
             named("append_approval_transparency_log")["inputSchema"]["properties"]["kind"]["enum"]
                 [6],
             "remote-approval-registry-history-checkpoint-witness-receipt"
+        );
+        assert_eq!(
+            named("append_verified_remote_approval_registry_history_witness_receipt")["inputSchema"]
+                ["oneOf"][1]["required"][0],
+            "witness_key_trust_state"
+        );
+        assert_eq!(
+            named("append_verified_remote_approval_registry_history_witness_receipt")["annotations"]
+                ["destructiveHint"],
+            true
         );
         assert_eq!(
             named("verify_approval_transparency_log")["annotations"]["destructiveHint"],

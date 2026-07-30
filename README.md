@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.384.0
+  uses: penguin425/pcbex@v1.385.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3636,9 +3636,13 @@ the signed approval transparency chain:
 pcbex init-approval-log \
   --log-id approval-registry-history-witness-receipts \
   --output receipt-log.0.json
-pcbex append-approval-log receipt-log.0.json \
-  --artifact witness-a.remote.receipt.json \
-  --kind remote-approval-registry-history-checkpoint-witness-receipt \
+pcbex append-verified-remote-approval-registry-history-checkpoint-witness-receipt \
+  receipt-log.0.json \
+  --receipt witness-a.remote.receipt.json \
+  --checkpoint-trust-state registry-history.checkpoint.trust.json \
+  --response witness-a.remote.json \
+  --witness-key-trust-state witness-a.trust.json \
+  --evaluated-at-unix 1785400030 \
   --recorded-at-unix 1785400030 \
   --output receipt-log.1.json
 pcbex sign-approval-log receipt-log.1.json \
@@ -3647,23 +3651,25 @@ pcbex sign-approval-log receipt-log.1.json \
   --output receipt-log.checkpoint.json
 ```
 
-Append first parses and validates the complete closed receipt, including its
-transport adapter, endpoint policy, true verification decision, response
-bound, checkpoint/trust-state digests, request/response digests, witness key
-and identity, and optional trust-generation binding. The normalized event
-retains the exact receipt digest, checkpoint digest, request digest, response
-digest, and witness identity. The existing approval-log signature, public
-anchor, consistency proof, gossip, remote witness, witness quorum, and witness
-key-rotation controls then protect the receipt history without another trust
-format. Mutation after append, deletion, reordering, replay that breaks the
-sequence, truncation, and a false verification decision fail closed.
+Admission reconstructs the exact HTTPS request from the retained checkpoint
+trust state, hashes the exact retained response bytes, and checks every receipt
+binding. It then parses the response witness, rebinds its registry, generation,
+checkpoint, identity, time, public key, witness trust-state digest and
+generation, independently rechecks witness freshness at admission time, and
+verifies the Ed25519 signature before appending anything. A
+direct trusted public key may be supplied instead of a witness trust state, but
+the two trust modes are mutually exclusive and must exactly match how the
+receipt was acquired. The request command now preserves the exact response
+document so offline admission can reproduce its byte digest.
 
-The admitting signer remains responsible for accepting only receipts produced
-by its trusted acquisition boundary; structural normalization does not turn an
-untrusted receipt document into proof. MCP's existing append tool exposes the
-new artifact kind, and the Action's existing approval transparency log,
-anchor, gossip, and witness gates consume the resulting chain without new
-private-key inputs.
+The normalized event retains the exact receipt digest, checkpoint digest,
+request digest, response digest, and witness identity. The existing
+approval-log signature, public anchor, consistency proof, gossip, remote
+witness, witness quorum, and witness key-rotation controls then protect the
+receipt history. Receipt, trust-state, response-byte, witness-time, identity,
+key, or signature substitution fails before the new log snapshot is written.
+MCP exposes the same dedicated verifier-bound append tool; the generic append
+tool remains available for already trusted artifacts.
 
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
@@ -3732,7 +3738,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.384.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.385.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

@@ -439,6 +439,11 @@
     {
       "id": "approval-transparency-gossip-registry-history-witness-receipt-transparency",
       "release": "v1.384.0",
+      "status": "released"
+    },
+    {
+      "id": "verifier-bound-approval-registry-witness-receipt-admission",
+      "release": "v1.385.0",
       "status": "current"
     }
   ]
