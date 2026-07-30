@@ -2253,18 +2253,40 @@ if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATI
   echo "approval gossip registry authority rotation requires a retained registry" >&2
   exit 2
 fi
-approval_registry_governance_inputs=0
-[[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]] \
-  && ((approval_registry_governance_inputs += 1))
-[[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]] \
-  && ((approval_registry_governance_inputs += 1))
-if ((approval_registry_governance_inputs != 0 && approval_registry_governance_inputs != 2)); then
-  echo "approval gossip registry threshold transition requires governance and transition" >&2
+approval_registry_threshold_transition_configured=false
+if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" ]]; then
+  approval_registry_threshold_transition_configured=true
+fi
+if [[ "$approval_registry_threshold_transition_configured" == "true" ]] \
+  && [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]]; then
+  echo "approval gossip registry threshold transition requires governance" >&2
   exit 2
 fi
-if ((approval_registry_governance_inputs == 2)) \
+approval_registry_governance_rotation_inputs=0
+[[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW:-}" ]] \
+  && ((approval_registry_governance_rotation_inputs += 1))
+[[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION:-}" ]] \
+  && ((approval_registry_governance_rotation_inputs += 1))
+if ((approval_registry_governance_rotation_inputs != 0 \
+  && approval_registry_governance_rotation_inputs != 2)); then
+  echo "approval gossip registry governance rotation requires new governance and rotation" >&2
+  exit 2
+fi
+if ((approval_registry_governance_rotation_inputs == 2)) \
+  && [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]]; then
+  echo "approval gossip registry governance rotation requires current governance" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]] \
+  && [[ "$approval_registry_threshold_transition_configured" == "false" ]] \
+  && ((approval_registry_governance_rotation_inputs == 0)); then
+  echo "approval gossip registry governance requires a threshold transition or governance rotation" >&2
+  exit 2
+fi
+if { [[ "$approval_registry_threshold_transition_configured" == "true" ]] \
+    || ((approval_registry_governance_rotation_inputs == 2)); } \
   && [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]]; then
-  echo "approval gossip registry threshold transition requires a retained registry" >&2
+  echo "approval gossip registry governance operations require a retained registry" >&2
   exit 2
 fi
 if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" == "true" ]]; then
@@ -2286,7 +2308,7 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
       --public-key-output "$rotated_approval_gossip_registry_key"
     approval_log_gossip_organization_registry="$rotated_approval_gossip_registry"
   fi
-  if ((approval_registry_governance_inputs == 2)); then
+  if [[ "$approval_registry_threshold_transition_configured" == "true" ]]; then
     governed_approval_gossip_registry="${artifact_dir}/approval-log-gossip-organization-registry-governed.json"
     "$PCBEX_BINARY" \
       apply-approval-log-gossip-organization-registry-threshold-transition \
@@ -2295,6 +2317,17 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
       "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION" \
       --output "$governed_approval_gossip_registry"
     approval_log_gossip_organization_registry="$governed_approval_gossip_registry"
+  fi
+  if ((approval_registry_governance_rotation_inputs == 2)); then
+    governance_rotated_approval_gossip_registry="${artifact_dir}/approval-log-gossip-organization-registry-governance-rotated.json"
+    "$PCBEX_BINARY" \
+      apply-approval-log-gossip-organization-registry-governance-rotation \
+      "$approval_log_gossip_organization_registry" \
+      "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE" \
+      "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW" \
+      "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION" \
+      --output "$governance_rotated_approval_gossip_registry"
+    approval_log_gossip_organization_registry="$governance_rotated_approval_gossip_registry"
   fi
   approval_quorum_arguments=(
     verify-approval-log-gossip-quorum

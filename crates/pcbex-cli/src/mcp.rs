@@ -3478,6 +3478,55 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "sign_approval_transparency_public_log_gossip_organization_registry_governance_rotation",
+            "Sign approval gossip governance rotation",
+            "Require retained and successor governance quorums to approve one exact policy replacement.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "registry", "old_governance", "new_governance",
+                    "old_authority_ids", "old_authority_private_keys",
+                    "new_authority_ids", "new_authority_private_keys",
+                    "rotated_at_unix", "output"
+                ],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "old_governance": {"type": "string"},
+                    "new_governance": {"type": "string"},
+                    "old_authority_ids": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "old_authority_private_keys": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "new_authority_ids": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "new_authority_private_keys": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_approval_transparency_public_log_gossip_organization_registry_governance_rotation",
+            "Apply approval gossip governance rotation",
+            "Verify both distinct-key quorums and atomically replace retained governance while preserving organization state.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "registry", "old_governance", "new_governance", "rotation", "output"
+                ],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "old_governance": {"type": "string"},
+                    "new_governance": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -3971,6 +4020,18 @@ fn call_tool(
         }
         "apply_approval_transparency_public_log_gossip_organization_registry_threshold_transition" => {
             apply_approval_transparency_public_log_gossip_organization_registry_threshold_transition(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_approval_transparency_public_log_gossip_organization_registry_governance_rotation" => {
+            sign_approval_transparency_public_log_gossip_organization_registry_governance_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "apply_approval_transparency_public_log_gossip_organization_registry_governance_rotation" => {
+            apply_approval_transparency_public_log_gossip_organization_registry_governance_rotation(
                 arguments,
                 cancellation,
             )?
@@ -9454,6 +9515,102 @@ fn apply_approval_transparency_public_log_gossip_organization_registry_threshold
     ))
 }
 
+fn sign_approval_transparency_public_log_gossip_organization_registry_governance_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "registry",
+            "old_governance",
+            "new_governance",
+            "old_authority_ids",
+            "old_authority_private_keys",
+            "new_authority_ids",
+            "new_authority_private_keys",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let old_ids = required_string_array(&arguments, "old_authority_ids", false)?;
+    let old_keys = required_string_array(&arguments, "old_authority_private_keys", false)?;
+    let new_ids = required_string_array(&arguments, "new_authority_ids", false)?;
+    let new_keys = required_string_array(&arguments, "new_authority_private_keys", false)?;
+    if old_ids.len() != old_keys.len() || new_ids.len() != new_keys.len() {
+        return Err(json!({
+            "detail": "each old/new authority id requires one paired private key"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-approval-log-gossip-organization-registry-governance-rotation".into(),
+        required_string(&arguments, "registry")?,
+        required_string(&arguments, "old_governance")?,
+        required_string(&arguments, "new_governance")?,
+    ];
+    for (authority_id, key) in old_ids.into_iter().zip(old_keys) {
+        command.extend([
+            "--old-authority-id".into(),
+            authority_id,
+            "--old-authority-private-key".into(),
+            key,
+        ]);
+    }
+    for (authority_id, key) in new_ids.into_iter().zip(new_keys) {
+        command.extend([
+            "--new-authority-id".into(),
+            authority_id,
+            "--new-authority-private-key".into(),
+            key,
+        ]);
+    }
+    command.extend([
+        "--rotated-at-unix".into(),
+        required_nonnegative_integer(&arguments, "rotated_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_approval_transparency_public_log_gossip_organization_registry_governance_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "registry",
+            "old_governance",
+            "new_governance",
+            "rotation",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "apply-approval-log-gossip-organization-registry-governance-rotation".into(),
+        required_string(&arguments, "registry")?,
+        required_string(&arguments, "old_governance")?,
+        required_string(&arguments, "new_governance")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let registry = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "registry": registry}),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -9831,7 +9988,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 114);
+        assert_eq!(tools.len(), 116);
         let named = |name: &str| {
             tools
                 .iter()
@@ -10430,6 +10587,12 @@ mod tests {
             named("sign_approval_transparency_public_log_gossip_organization_registry_governance")
                 ["inputSchema"]["properties"]["minimum_approvals"]["minimum"],
             2
+        );
+        assert_eq!(
+            named(
+                "apply_approval_transparency_public_log_gossip_organization_registry_governance_rotation"
+            )["inputSchema"]["required"][4],
+            "output"
         );
         assert_eq!(
             named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],

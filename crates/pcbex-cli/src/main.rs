@@ -30,6 +30,7 @@ use pcbex_kicad::{
     SignedApprovalLogCheckpoint, SignedApprovalLogGossipObserverKeyRotation,
     SignedApprovalLogGossipOrganizationRegistryAuthorityKeyRotation,
     SignedApprovalLogGossipOrganizationRegistryGovernance,
+    SignedApprovalLogGossipOrganizationRegistryGovernanceRotation,
     SignedApprovalLogGossipOrganizationRegistryThresholdTransition,
     SignedApprovalLogGossipOrganizationRegistryTransition, SignedApprovalLogGossipReceipt,
     SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation,
@@ -37,6 +38,7 @@ use pcbex_kicad::{
     ai_review_request_json_schema, ai_review_response_json_schema,
     append_approval_transparency_event, apply_approval_log_gossip_observer_key_rotation,
     apply_approval_log_gossip_organization_registry_authority_key_rotation,
+    apply_approval_log_gossip_organization_registry_governance_rotation,
     apply_approval_log_gossip_organization_registry_threshold_transition,
     apply_approval_log_gossip_organization_registry_transition,
     apply_approval_log_witness_key_rotation, apply_custom_design_rules, apply_electrical_waivers,
@@ -76,6 +78,7 @@ use pcbex_kicad::{
     sign_approval_log_gossip_observer_key_rotation,
     sign_approval_log_gossip_organization_registry_authority_key_rotation,
     sign_approval_log_gossip_organization_registry_governance,
+    sign_approval_log_gossip_organization_registry_governance_rotation,
     sign_approval_log_gossip_organization_registry_threshold_transition,
     sign_approval_log_gossip_organization_registry_transition, sign_approval_log_gossip_receipt,
     sign_approval_log_witness, sign_approval_log_witness_key_rotation, sign_human_escalation,
@@ -84,6 +87,7 @@ use pcbex_kicad::{
     signed_approval_log_gossip_observer_key_rotation_json_schema,
     signed_approval_log_gossip_organization_registry_authority_key_rotation_json_schema,
     signed_approval_log_gossip_organization_registry_governance_json_schema,
+    signed_approval_log_gossip_organization_registry_governance_rotation_json_schema,
     signed_approval_log_gossip_organization_registry_threshold_transition_json_schema,
     signed_approval_log_gossip_organization_registry_transition_json_schema,
     signed_approval_log_gossip_receipt_json_schema, signed_approval_log_witness_json_schema,
@@ -2719,6 +2723,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed dual-quorum approval gossip governance rotation JSON Schema.
+    SignedApprovalLogGossipOrganizationRegistryGovernanceRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed registry-bound approval gossip quorum JSON Schema.
     ApprovalLogGossipRegistryBoundQuorumReportSchema {
         #[arg(short, long)]
@@ -3267,6 +3276,33 @@ enum Command {
         registry: CompactPath,
         governance: CompactPath,
         transition: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Have both retained and successor authority quorums approve governance replacement.
+    SignApprovalLogGossipOrganizationRegistryGovernanceRotation {
+        registry: CompactPath,
+        old_governance: CompactPath,
+        new_governance: CompactPath,
+        #[arg(long = "old-authority-id", required = true)]
+        old_authority_ids: Vec<String>,
+        #[arg(long = "old-authority-private-key", required = true)]
+        old_authority_private_keys: Vec<CompactPath>,
+        #[arg(long = "new-authority-id", required = true)]
+        new_authority_ids: Vec<String>,
+        #[arg(long = "new-authority-private-key", required = true)]
+        new_authority_private_keys: Vec<CompactPath>,
+        #[arg(long)]
+        rotated_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify both quorums and atomically replace retained registry governance.
+    ApplyApprovalLogGossipOrganizationRegistryGovernanceRotation {
+        registry: CompactPath,
+        old_governance: CompactPath,
+        new_governance: CompactPath,
+        rotation: CompactPath,
         #[arg(short, long)]
         output: CompactPath,
     },
@@ -9089,6 +9125,14 @@ fn run_cli() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::SignedApprovalLogGossipOrganizationRegistryGovernanceRotationSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &signed_approval_log_gossip_organization_registry_governance_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ApprovalLogGossipRegistryBoundQuorumReportSchema { output } => {
             write_or_print_json(
                 &approval_log_gossip_registry_bound_quorum_report_json_schema(),
@@ -10770,6 +10814,116 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "trusted threshold-governed approval gossip registry {} at generation {}",
                 next.registry_id, next.generation
+            );
+        }
+        Command::SignApprovalLogGossipOrganizationRegistryGovernanceRotation {
+            registry,
+            old_governance,
+            new_governance,
+            old_authority_ids,
+            old_authority_private_keys,
+            new_authority_ids,
+            new_authority_private_keys,
+            rotated_at_unix,
+            output,
+        } => {
+            if old_authority_ids.len() != old_authority_private_keys.len()
+                || new_authority_ids.len() != new_authority_private_keys.len()
+            {
+                bail!("each old/new authority id requires a paired private key");
+            }
+            let (registry, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistry>(&registry)?;
+            let (old_governance, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryGovernance,
+            >(&old_governance)?;
+            let (new_governance, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryGovernance,
+            >(&new_governance)?;
+            let old_signers = old_authority_ids
+                .into_iter()
+                .zip(&old_authority_private_keys)
+                .map(|(authority_id, path)| {
+                    Ok((
+                        authority_id,
+                        read_hex_key(
+                            path,
+                            "old approval gossip governance authority private key",
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let new_signers = new_authority_ids
+                .into_iter()
+                .zip(&new_authority_private_keys)
+                .map(|(authority_id, path)| {
+                    Ok((
+                        authority_id,
+                        read_hex_key(
+                            path,
+                            "new approval gossip governance authority private key",
+                        )?,
+                    ))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let rotation = sign_approval_log_gossip_organization_registry_governance_rotation(
+                &registry,
+                &old_governance,
+                &new_governance,
+                &old_signers,
+                &new_signers,
+                rotated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(
+                &output,
+                &serde_json::to_string_pretty(&rotation)?,
+                false,
+            )?;
+            eprintln!(
+                "dual-quorum approved approval gossip governance rotation {} -> {}",
+                rotation.from_generation, rotation.to_generation
+            );
+        }
+        Command::ApplyApprovalLogGossipOrganizationRegistryGovernanceRotation {
+            registry,
+            old_governance,
+            new_governance,
+            rotation,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.0.as_ref()),
+                    Some(old_governance.0.as_ref()),
+                    Some(new_governance.0.as_ref()),
+                    Some(rotation.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval gossip registry governance rotation",
+            )?;
+            let (registry, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistry>(&registry)?;
+            let (old_governance, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryGovernance,
+            >(&old_governance)?;
+            let (new_governance, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryGovernance,
+            >(&new_governance)?;
+            let (rotation, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryGovernanceRotation,
+            >(&rotation)?;
+            let next = apply_approval_log_gossip_organization_registry_governance_rotation(
+                &registry,
+                &old_governance,
+                &new_governance,
+                &rotation,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&next)?, false)?;
+            eprintln!(
+                "rotated approval gossip registry governance at generation {}",
+                next.generation
             );
         }
         Command::VerifyApprovalLogWitnesses {

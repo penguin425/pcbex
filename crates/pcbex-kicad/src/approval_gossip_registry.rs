@@ -20,6 +20,8 @@ const GOVERNANCE_DOMAIN: &str =
     "pcbex-approval-public-log-gossip-organization-registry-governance-v1";
 const THRESHOLD_TRANSITION_DOMAIN: &str =
     "pcbex-approval-public-log-gossip-organization-registry-threshold-transition-v1";
+const GOVERNANCE_ROTATION_DOMAIN: &str =
+    "pcbex-approval-public-log-gossip-organization-registry-governance-rotation-v1";
 const MAXIMUM_GOVERNANCE_AUTHORITIES: usize = 100;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -154,6 +156,22 @@ pub struct SignedApprovalLogGossipOrganizationRegistryThresholdTransition {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct SignedApprovalLogGossipOrganizationRegistryGovernanceRotation {
+    pub schema_version: u32,
+    pub registry_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_transition_sha256: Option<String>,
+    pub old_governance_sha256: String,
+    pub new_governance_sha256: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_approvals: Vec<ApprovalLogGossipRegistryThresholdApproval>,
+    pub new_approvals: Vec<ApprovalLogGossipRegistryThresholdApproval>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApprovalLogGossipRegistryBoundQuorumReport {
     pub schema_version: u32,
     pub trust_quorum: ApprovalLogGossipTrustBoundQuorumReport,
@@ -215,6 +233,18 @@ struct ThresholdTransitionPayload<'a> {
     observer_trust_state_sha256: Option<&'a str>,
     reason_sha256: &'a str,
     effective_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct GovernanceRotationPayload<'a> {
+    domain: &'static str,
+    registry_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_transition_sha256: Option<&'a str>,
+    old_governance_sha256: &'a str,
+    new_governance_sha256: &'a str,
+    rotated_at_unix: u64,
 }
 
 pub fn new_approval_log_gossip_organization_registry(
@@ -825,6 +855,138 @@ pub fn apply_approval_log_gossip_organization_registry_threshold_transition(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn sign_approval_log_gossip_organization_registry_governance_rotation(
+    registry: &ApprovalLogGossipOrganizationRegistry,
+    old_governance: &SignedApprovalLogGossipOrganizationRegistryGovernance,
+    new_governance: &SignedApprovalLogGossipOrganizationRegistryGovernance,
+    old_signers: &[(String, [u8; 32])],
+    new_signers: &[(String, [u8; 32])],
+    rotated_at_unix: u64,
+) -> Result<SignedApprovalLogGossipOrganizationRegistryGovernanceRotation, String> {
+    validate_governance_for_registry(registry, old_governance)?;
+    validate_governance_for_registry(registry, new_governance)?;
+    let old_governance_sha256 =
+        signed_approval_log_gossip_organization_registry_governance_sha256(old_governance)?;
+    let new_governance_sha256 =
+        signed_approval_log_gossip_organization_registry_governance_sha256(new_governance)?;
+    if registry.active_governance_sha256.as_deref() != Some(old_governance_sha256.as_str()) {
+        return Err(
+            "old approval gossip governance does not match retained active governance".into(),
+        );
+    }
+    if old_governance_sha256 == new_governance_sha256 {
+        return Err("successor approval gossip registry governance must differ".into());
+    }
+    if new_governance.issued_at_unix < old_governance.issued_at_unix
+        || rotated_at_unix < new_governance.issued_at_unix
+        || registry
+            .last_updated_at_unix
+            .is_some_and(|last| new_governance.issued_at_unix < last || rotated_at_unix < last)
+    {
+        return Err(
+            "approval gossip registry governance rotation timestamps must be monotonic".into(),
+        );
+    }
+    let to_generation = registry
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "approval gossip organization registry generation overflow".to_string())?;
+    let payload = governance_rotation_payload(
+        &registry.registry_id,
+        registry.generation,
+        to_generation,
+        registry.last_transition_sha256.as_deref(),
+        &old_governance_sha256,
+        &new_governance_sha256,
+        rotated_at_unix,
+    )?;
+    let rotation = SignedApprovalLogGossipOrganizationRegistryGovernanceRotation {
+        schema_version: 1,
+        registry_id: registry.registry_id.clone(),
+        from_generation: registry.generation,
+        to_generation,
+        previous_transition_sha256: registry.last_transition_sha256.clone(),
+        old_governance_sha256,
+        new_governance_sha256,
+        rotated_at_unix,
+        algorithm: "ed25519".into(),
+        old_approvals: sign_governance_approvals(old_governance, old_signers, &payload, "old")?,
+        new_approvals: sign_governance_approvals(new_governance, new_signers, &payload, "new")?,
+    };
+    validate_signed_approval_log_gossip_organization_registry_governance_rotation(&rotation)?;
+    Ok(rotation)
+}
+
+pub fn apply_approval_log_gossip_organization_registry_governance_rotation(
+    registry: &ApprovalLogGossipOrganizationRegistry,
+    old_governance: &SignedApprovalLogGossipOrganizationRegistryGovernance,
+    new_governance: &SignedApprovalLogGossipOrganizationRegistryGovernance,
+    rotation: &SignedApprovalLogGossipOrganizationRegistryGovernanceRotation,
+) -> Result<ApprovalLogGossipOrganizationRegistry, String> {
+    validate_governance_for_registry(registry, old_governance)?;
+    validate_governance_for_registry(registry, new_governance)?;
+    validate_signed_approval_log_gossip_organization_registry_governance_rotation(rotation)?;
+    let old_sha256 =
+        signed_approval_log_gossip_organization_registry_governance_sha256(old_governance)?;
+    let new_sha256 =
+        signed_approval_log_gossip_organization_registry_governance_sha256(new_governance)?;
+    if registry.active_governance_sha256.as_deref() != Some(old_sha256.as_str()) {
+        return Err(
+            "old approval gossip governance does not match retained active governance".into(),
+        );
+    }
+    if rotation.registry_id != registry.registry_id
+        || rotation.from_generation != registry.generation
+        || rotation.to_generation
+            != registry.generation.checked_add(1).ok_or_else(|| {
+                "approval gossip organization registry generation overflow".to_string()
+            })?
+        || rotation.previous_transition_sha256 != registry.last_transition_sha256
+        || rotation.old_governance_sha256 != old_sha256
+        || rotation.new_governance_sha256 != new_sha256
+    {
+        return Err(
+            "approval gossip registry governance rotation does not extend retained state".into(),
+        );
+    }
+    if new_governance.issued_at_unix < old_governance.issued_at_unix
+        || rotation.rotated_at_unix < new_governance.issued_at_unix
+        || registry.last_updated_at_unix.is_some_and(|last| {
+            new_governance.issued_at_unix < last || rotation.rotated_at_unix < last
+        })
+    {
+        return Err(
+            "approval gossip registry governance rotation timestamps must be monotonic".into(),
+        );
+    }
+    let payload = governance_rotation_payload(
+        &rotation.registry_id,
+        rotation.from_generation,
+        rotation.to_generation,
+        rotation.previous_transition_sha256.as_deref(),
+        &rotation.old_governance_sha256,
+        &rotation.new_governance_sha256,
+        rotation.rotated_at_unix,
+    )?;
+    verify_governance_approvals(old_governance, &rotation.old_approvals, &payload, "old")?;
+    verify_governance_approvals(new_governance, &rotation.new_approvals, &payload, "new")?;
+    let next = ApprovalLogGossipOrganizationRegistry {
+        schema_version: 1,
+        registry_id: registry.registry_id.clone(),
+        generation: rotation.to_generation,
+        authority_public_key: registry.authority_public_key.clone(),
+        active_governance_sha256: Some(new_sha256),
+        last_transition_sha256: Some(
+            signed_approval_log_gossip_organization_registry_governance_rotation_sha256(rotation)?,
+        ),
+        last_updated_at_unix: Some(rotation.rotated_at_unix),
+        organizations: registry.organizations.clone(),
+    };
+    validate_approval_log_gossip_organization_registry(&next)?;
+    Ok(next)
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn verify_approval_log_gossip_quorum_with_organization_registry(
     local_anchor: &ApprovalLogAnchorProof,
     observations: &[ApprovalLogGossipObservation],
@@ -929,6 +1091,16 @@ pub fn signed_approval_log_gossip_organization_registry_threshold_transition_sha
     normalized_sha256(
         transition,
         "signed approval gossip organization registry threshold transition",
+    )
+}
+
+pub fn signed_approval_log_gossip_organization_registry_governance_rotation_sha256(
+    rotation: &SignedApprovalLogGossipOrganizationRegistryGovernanceRotation,
+) -> Result<String, String> {
+    validate_signed_approval_log_gossip_organization_registry_governance_rotation(rotation)?;
+    normalized_sha256(
+        rotation,
+        "signed approval gossip organization registry governance rotation",
     )
 }
 
@@ -1269,6 +1441,53 @@ pub fn validate_signed_approval_log_gossip_organization_registry_threshold_trans
     Ok(())
 }
 
+pub fn validate_signed_approval_log_gossip_organization_registry_governance_rotation(
+    rotation: &SignedApprovalLogGossipOrganizationRegistryGovernanceRotation,
+) -> Result<(), String> {
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.from_generation.checked_add(1) != Some(rotation.to_generation)
+        || rotation.old_governance_sha256 == rotation.new_governance_sha256
+    {
+        return Err("invalid approval gossip registry governance rotation invariants".into());
+    }
+    validate_slug(
+        &rotation.registry_id,
+        "approval gossip organization registry id",
+    )?;
+    match (
+        rotation.from_generation,
+        &rotation.previous_transition_sha256,
+    ) {
+        (0, None) => {}
+        (0, Some(_)) => {
+            return Err(
+                "initial approval gossip governance rotation cannot reference history".into(),
+            );
+        }
+        (_, Some(digest)) => validate_sha256(
+            digest,
+            "previous approval gossip governance rotation SHA-256",
+        )?,
+        (_, None) => {
+            return Err(
+                "advanced approval gossip governance rotation requires chain evidence".into(),
+            );
+        }
+    }
+    validate_sha256(
+        &rotation.old_governance_sha256,
+        "old approval gossip registry governance SHA-256",
+    )?;
+    validate_sha256(
+        &rotation.new_governance_sha256,
+        "new approval gossip registry governance SHA-256",
+    )?;
+    validate_approval_shape(&rotation.old_approvals, "old")?;
+    validate_approval_shape(&rotation.new_approvals, "new")?;
+    Ok(())
+}
+
 pub fn validate_approval_log_gossip_registry_bound_quorum_report(
     report: &ApprovalLogGossipRegistryBoundQuorumReport,
 ) -> Result<(), String> {
@@ -1477,6 +1696,49 @@ pub fn signed_approval_log_gossip_organization_registry_threshold_transition_jso
                         "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
                     }
                 }
+            }
+        }
+    })
+}
+
+pub fn signed_approval_log_gossip_organization_registry_governance_rotation_json_schema() -> Value {
+    let approval = json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["authority_id", "public_key", "signature"],
+        "properties": {
+            "authority_id": slug_schema(),
+            "public_key": key_schema(),
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    });
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-approval-log-gossip-organization-registry-governance-rotation-v1.json",
+        "title": "Old-and-new quorum approved approval gossip registry governance rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "registry_id", "from_generation", "to_generation",
+            "previous_transition_sha256", "old_governance_sha256",
+            "new_governance_sha256", "rotated_at_unix", "algorithm",
+            "old_approvals", "new_approvals"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "registry_id": slug_schema(),
+            "from_generation": {"type": "integer", "minimum": 0},
+            "to_generation": {"type": "integer", "minimum": 1},
+            "previous_transition_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "old_governance_sha256": digest_schema(),
+            "new_governance_sha256": digest_schema(),
+            "rotated_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "old_approvals": {
+                "type": "array", "minItems": 2, "maxItems": 100,
+                "items": approval.clone()
+            },
+            "new_approvals": {
+                "type": "array", "minItems": 2, "maxItems": 100,
+                "items": approval
             }
         }
     })
@@ -1720,6 +1982,159 @@ fn threshold_transition_payload(
         effective_at_unix,
     })
     .map_err(|error| format!("serializing governed approval gossip registry transition: {error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn governance_rotation_payload(
+    registry_id: &str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_transition_sha256: Option<&str>,
+    old_governance_sha256: &str,
+    new_governance_sha256: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&GovernanceRotationPayload {
+        domain: GOVERNANCE_ROTATION_DOMAIN,
+        registry_id,
+        from_generation,
+        to_generation,
+        previous_transition_sha256,
+        old_governance_sha256,
+        new_governance_sha256,
+        rotated_at_unix,
+    })
+    .map_err(|error| format!("serializing approval gossip registry governance rotation: {error}"))
+}
+
+fn sign_governance_approvals(
+    governance: &SignedApprovalLogGossipOrganizationRegistryGovernance,
+    signers: &[(String, [u8; 32])],
+    payload: &[u8],
+    label: &str,
+) -> Result<Vec<ApprovalLogGossipRegistryThresholdApproval>, String> {
+    if signers.len() < governance.minimum_approvals as usize
+        || signers.len() > governance.authorities.len()
+    {
+        return Err(format!(
+            "{label} approval gossip governance rotation quorum is insufficient"
+        ));
+    }
+    let mut ids = HashSet::new();
+    let mut keys = HashSet::new();
+    let mut approvals = Vec::with_capacity(signers.len());
+    for (authority_id, secret) in signers {
+        if !ids.insert(authority_id.as_str()) {
+            return Err(format!(
+                "duplicate {label} approval gossip governance authority identity"
+            ));
+        }
+        let key = SigningKey::from_bytes(secret);
+        let public_key = hex_encode(&key.verifying_key().to_bytes());
+        if !keys.insert(public_key.clone()) {
+            return Err(format!(
+                "duplicate {label} approval gossip governance authority key"
+            ));
+        }
+        let trusted = governance
+            .authorities
+            .binary_search_by(|entry| entry.authority_id.as_str().cmp(authority_id))
+            .ok()
+            .map(|index| &governance.authorities[index])
+            .ok_or_else(|| {
+                format!("untrusted {label} approval gossip authority {authority_id:?}")
+            })?;
+        if trusted.public_key != public_key {
+            return Err(format!(
+                "{label} approval gossip governance authority key substitution"
+            ));
+        }
+        approvals.push(ApprovalLogGossipRegistryThresholdApproval {
+            authority_id: authority_id.clone(),
+            public_key,
+            signature: hex_encode(&key.sign(payload).to_bytes()),
+        });
+    }
+    approvals.sort_by(|left, right| left.authority_id.cmp(&right.authority_id));
+    Ok(approvals)
+}
+
+fn verify_governance_approvals(
+    governance: &SignedApprovalLogGossipOrganizationRegistryGovernance,
+    approvals: &[ApprovalLogGossipRegistryThresholdApproval],
+    payload: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    if approvals.len() < governance.minimum_approvals as usize {
+        return Err(format!(
+            "{label} approval gossip governance rotation quorum is insufficient"
+        ));
+    }
+    validate_approval_shape(approvals, label)?;
+    for approval in approvals {
+        let trusted = governance
+            .authorities
+            .binary_search_by(|entry| entry.authority_id.cmp(&approval.authority_id))
+            .ok()
+            .map(|index| &governance.authorities[index])
+            .ok_or_else(|| {
+                format!("untrusted {label} approval gossip governance rotation approval")
+            })?;
+        if trusted.public_key != approval.public_key {
+            return Err(format!(
+                "{label} approval gossip governance rotation key substitution"
+            ));
+        }
+        let key = hex_decode::<32>(
+            &approval.public_key,
+            "approval gossip governance rotation public key",
+        )?;
+        let signature = Signature::from_bytes(&hex_decode::<64>(
+            &approval.signature,
+            "approval gossip governance rotation signature",
+        )?);
+        VerifyingKey::from_bytes(&key)
+            .map_err(|error| format!("invalid governance rotation public key: {error}"))?
+            .verify_strict(payload, &signature)
+            .map_err(|_| format!("{label} approval gossip governance rotation approval failed"))?;
+    }
+    Ok(())
+}
+
+fn validate_approval_shape(
+    approvals: &[ApprovalLogGossipRegistryThresholdApproval],
+    label: &str,
+) -> Result<(), String> {
+    if approvals.len() < 2 || approvals.len() > MAXIMUM_GOVERNANCE_AUTHORITIES {
+        return Err(format!(
+            "{label} approval gossip governance set must contain 2 to 100 members"
+        ));
+    }
+    let mut previous = None;
+    let mut keys = HashSet::new();
+    for approval in approvals {
+        validate_slug(
+            &approval.authority_id,
+            "approval gossip governance rotation authority id",
+        )?;
+        validate_public_key(
+            &approval.public_key,
+            "approval gossip governance rotation public key",
+        )?;
+        hex_decode::<64>(
+            &approval.signature,
+            "approval gossip governance rotation signature",
+        )?;
+        if previous.is_some_and(|id: &String| id >= &approval.authority_id)
+            || !keys.insert(approval.public_key.as_str())
+        {
+            return Err(format!(
+                "{label} approval gossip governance approvals require ordered distinct identities and keys"
+            ));
+        }
+        previous = Some(&approval.authority_id);
+    }
+    Ok(())
 }
 
 fn validate_governance_authorities(
@@ -1988,6 +2403,9 @@ mod tests {
         assert_closed(&signed_approval_log_gossip_organization_registry_governance_json_schema());
         assert_closed(
             &signed_approval_log_gossip_organization_registry_threshold_transition_json_schema(),
+        );
+        assert_closed(
+            &signed_approval_log_gossip_organization_registry_governance_rotation_json_schema(),
         );
         assert_closed(&approval_log_gossip_registry_bound_quorum_report_json_schema());
         let authority = key(99);
@@ -2259,6 +2677,109 @@ mod tests {
                 &governed,
                 &governance,
                 &transition,
+            )
+            .is_err()
+        );
+        let new_governance = sign_approval_log_gossip_organization_registry_governance(
+            &suspended,
+            &root.to_bytes(),
+            2,
+            vec![
+                ApprovalLogGossipRegistryGovernanceAuthority {
+                    authority_id: "reviewer-b".into(),
+                    public_key: hex_encode(&authority_b.verifying_key().to_bytes()),
+                },
+                ApprovalLogGossipRegistryGovernanceAuthority {
+                    authority_id: "reviewer-c".into(),
+                    public_key: hex_encode(&authority_c.verifying_key().to_bytes()),
+                },
+            ],
+            103,
+        )
+        .unwrap();
+        let rotation = sign_approval_log_gossip_organization_registry_governance_rotation(
+            &suspended,
+            &governance,
+            &new_governance,
+            &[
+                ("reviewer-a".into(), authority_a.to_bytes()),
+                ("reviewer-b".into(), authority_b.to_bytes()),
+            ],
+            &[
+                ("reviewer-c".into(), authority_c.to_bytes()),
+                ("reviewer-b".into(), authority_b.to_bytes()),
+            ],
+            104,
+        )
+        .unwrap();
+        let rotated = apply_approval_log_gossip_organization_registry_governance_rotation(
+            &suspended,
+            &governance,
+            &new_governance,
+            &rotation,
+        )
+        .unwrap();
+        assert_eq!(rotated.organizations, suspended.organizations);
+        assert_eq!(
+            rotated.active_governance_sha256,
+            Some(
+                signed_approval_log_gossip_organization_registry_governance_sha256(
+                    &new_governance,
+                )
+                .unwrap()
+            )
+        );
+        assert!(
+            sign_approval_log_gossip_organization_registry_threshold_transition(
+                &rotated,
+                &governance,
+                &[
+                    ("reviewer-a".into(), authority_a.to_bytes()),
+                    ("reviewer-b".into(), authority_b.to_bytes()),
+                ],
+                ApprovalLogGossipOrganizationRegistryAction::RevokeOrganization,
+                "org-a",
+                None,
+                &reason(18),
+                105,
+            )
+            .is_err()
+        );
+        let revocation = sign_approval_log_gossip_organization_registry_threshold_transition(
+            &rotated,
+            &new_governance,
+            &[
+                ("reviewer-b".into(), authority_b.to_bytes()),
+                ("reviewer-c".into(), authority_c.to_bytes()),
+            ],
+            ApprovalLogGossipOrganizationRegistryAction::RevokeOrganization,
+            "org-a",
+            None,
+            &reason(18),
+            105,
+        )
+        .unwrap();
+        assert_eq!(
+            apply_approval_log_gossip_organization_registry_threshold_transition(
+                &rotated,
+                &new_governance,
+                &revocation,
+            )
+            .unwrap()
+            .organizations[0]
+                .status,
+            ApprovalLogGossipOrganizationStatus::Revoked
+        );
+        let mut tampered_rotation = rotation.clone();
+        tampered_rotation.new_approvals[0]
+            .signature
+            .replace_range(0..2, "00");
+        assert!(
+            apply_approval_log_gossip_organization_registry_governance_rotation(
+                &suspended,
+                &governance,
+                &new_governance,
+                &tampered_rotation,
             )
             .is_err()
         );
