@@ -475,9 +475,12 @@ jobs:
             build/action-quorum/gossip-registry.governance.json \
             build/action-quorum/gossip-registry.threshold-transition.json \
             --output build/action-quorum/gossip-registry.governed.json
-          target/release/pcbex sign-approval-log-gossip-organization-registry-governance \
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/gossip-registry.successor.key \
+            --public-key build/action-quorum/gossip-registry.successor.pub
+          target/release/pcbex sign-approval-log-gossip-organization-registry-successor-governance \
             build/action-quorum/gossip-registry.governed.json \
-            --registry-authority-private-key build/action-quorum/gossip-registry.next.key \
+            --successor-registry-authority-private-key build/action-quorum/gossip-registry.successor.key \
             --minimum-approvals 2 \
             --authority-id reviewer-b \
             --authority-public-key build/action-quorum/gossip-governance-b.pub \
@@ -485,7 +488,7 @@ jobs:
             --authority-public-key build/action-quorum/gossip-governance-c.pub \
             --issued-at-unix 11 \
             --output build/action-quorum/gossip-registry.governance.next.json
-          target/release/pcbex sign-approval-log-gossip-organization-registry-governance-rotation \
+          target/release/pcbex sign-approval-log-gossip-organization-registry-governed-authority-key-rotation \
             build/action-quorum/gossip-registry.governed.json \
             build/action-quorum/gossip-registry.governance.json \
             build/action-quorum/gossip-registry.governance.next.json \
@@ -498,7 +501,7 @@ jobs:
             --new-authority-id reviewer-c \
             --new-authority-private-key build/action-quorum/gossip-governance-c.key \
             --rotated-at-unix 12 \
-            --output build/action-quorum/gossip-registry.governance.rotation.json
+            --output build/action-quorum/gossip-registry.governed-authority.rotation.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -579,12 +582,11 @@ jobs:
           approval-log-gossip-observer-trust-state-files: |
             build/action-quorum/gossip-observer.trust.json
             build/action-quorum/gossip-observer-b.trust.json
-          approval-log-gossip-organization-registry: build/action-quorum/gossip-registry.json
-          approval-log-gossip-organization-registry-authority-key-rotation: build/action-quorum/gossip-registry.rotation.json
+          approval-log-gossip-organization-registry: build/action-quorum/gossip-registry.rotated.json
           approval-log-gossip-organization-registry-governance: build/action-quorum/gossip-registry.governance.json
           approval-log-gossip-organization-registry-threshold-transition: build/action-quorum/gossip-registry.threshold-transition.json
           approval-log-gossip-organization-registry-governance-rotation-new: build/action-quorum/gossip-registry.governance.next.json
-          approval-log-gossip-organization-registry-governance-rotation: build/action-quorum/gossip-registry.governance.rotation.json
+          approval-log-gossip-organization-registry-governed-authority-key-rotation: build/action-quorum/gossip-registry.governed-authority.rotation.json
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
           approval-log-witness-files: |
