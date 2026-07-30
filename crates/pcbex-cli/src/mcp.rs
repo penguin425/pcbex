@@ -3409,6 +3409,75 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "sign_approval_transparency_public_log_gossip_organization_registry_governance",
+            "Sign approval gossip registry governance",
+            "Root-sign an exact threshold over ordered distinct approval registry authority identities and keys.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "registry", "registry_authority_private_key", "minimum_approvals",
+                    "authority_ids", "authority_public_keys", "issued_at_unix", "output"
+                ],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "registry_authority_private_key": {"type": "string"},
+                    "minimum_approvals": {"type": "integer", "minimum": 2, "maximum": 100},
+                    "authority_ids": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "authority_public_keys": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "issued_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_approval_transparency_public_log_gossip_organization_registry_threshold_transition",
+            "Sign governed approval gossip registry transition",
+            "Create a generation- and digest-chained registry operation approved by a distinct-key authority quorum.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "registry", "governance", "authority_ids", "authority_private_keys",
+                    "action", "organization_id", "reason_sha256", "effective_at_unix", "output"
+                ],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "governance": {"type": "string"},
+                    "authority_ids": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "authority_private_keys": {"type": "array", "minItems": 2, "maxItems": 100, "items": {"type": "string"}},
+                    "action": {"enum": ["admit-observer", "suspend-organization", "revoke-organization"]},
+                    "organization_id": {"type": "string"},
+                    "observer_trust_state": {"type": "string"},
+                    "reason_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "effective_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_approval_transparency_public_log_gossip_organization_registry_threshold_transition",
+            "Apply governed approval gossip registry transition",
+            "Verify root governance, distinct trusted quorum signatures, and retained chain continuity before atomically advancing registry state.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["registry", "governance", "transition", "output"],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "governance": {"type": "string"},
+                    "transition": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -3884,6 +3953,24 @@ fn call_tool(
         }
         "apply_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation" => {
             apply_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_approval_transparency_public_log_gossip_organization_registry_governance" => {
+            sign_approval_transparency_public_log_gossip_organization_registry_governance(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_approval_transparency_public_log_gossip_organization_registry_threshold_transition" => {
+            sign_approval_transparency_public_log_gossip_organization_registry_threshold_transition(
+                arguments,
+                cancellation,
+            )?
+        }
+        "apply_approval_transparency_public_log_gossip_organization_registry_threshold_transition" => {
+            apply_approval_transparency_public_log_gossip_organization_registry_threshold_transition(
                 arguments,
                 cancellation,
             )?
@@ -9206,6 +9293,167 @@ fn apply_approval_transparency_public_log_gossip_organization_registry_authority
     ))
 }
 
+fn sign_approval_transparency_public_log_gossip_organization_registry_governance(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "registry",
+            "registry_authority_private_key",
+            "minimum_approvals",
+            "authority_ids",
+            "authority_public_keys",
+            "issued_at_unix",
+            "output",
+        ],
+    )?;
+    let authority_ids = required_string_array(&arguments, "authority_ids", false)?;
+    let authority_keys = required_string_array(&arguments, "authority_public_keys", false)?;
+    if authority_ids.len() != authority_keys.len() {
+        return Err(json!({"detail": "authority_ids and authority_public_keys counts must match"}));
+    }
+    let minimum_approvals = required_nonnegative_integer(&arguments, "minimum_approvals")?;
+    if !(2..=100).contains(&minimum_approvals) {
+        return Err(json!({"detail": "minimum_approvals must be an integer from 2 to 100"}));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-approval-log-gossip-organization-registry-governance".into(),
+        required_string(&arguments, "registry")?,
+        "--registry-authority-private-key".into(),
+        required_string(&arguments, "registry_authority_private_key")?,
+        "--minimum-approvals".into(),
+        minimum_approvals.to_string(),
+    ];
+    for (authority_id, key) in authority_ids.into_iter().zip(authority_keys) {
+        command.extend([
+            "--authority-id".into(),
+            authority_id,
+            "--authority-public-key".into(),
+            key,
+        ]);
+    }
+    command.extend([
+        "--issued-at-unix".into(),
+        required_nonnegative_integer(&arguments, "issued_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let governance = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "governance": governance}),
+    ))
+}
+
+fn sign_approval_transparency_public_log_gossip_organization_registry_threshold_transition(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "registry",
+            "governance",
+            "authority_ids",
+            "authority_private_keys",
+            "action",
+            "organization_id",
+            "observer_trust_state",
+            "reason_sha256",
+            "effective_at_unix",
+            "output",
+        ],
+    )?;
+    let authority_ids = required_string_array(&arguments, "authority_ids", false)?;
+    let authority_keys = required_string_array(&arguments, "authority_private_keys", false)?;
+    if authority_ids.len() != authority_keys.len() {
+        return Err(
+            json!({"detail": "authority_ids and authority_private_keys counts must match"}),
+        );
+    }
+    let action = required_string(&arguments, "action")?;
+    if !matches!(
+        action.as_str(),
+        "admit-observer" | "suspend-organization" | "revoke-organization"
+    ) {
+        return Err(json!({"detail": "unsupported approval gossip registry action"}));
+    }
+    if (action == "admit-observer") != arguments.contains_key("observer_trust_state") {
+        return Err(json!({
+            "detail": "observer_trust_state is required only for admit-observer"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "sign-approval-log-gossip-organization-registry-threshold-transition".into(),
+        required_string(&arguments, "registry")?,
+        required_string(&arguments, "governance")?,
+    ];
+    for (authority_id, key) in authority_ids.into_iter().zip(authority_keys) {
+        command.extend([
+            "--authority-id".into(),
+            authority_id,
+            "--authority-private-key".into(),
+            key,
+        ]);
+    }
+    command.extend([
+        "--action".into(),
+        action,
+        "--organization-id".into(),
+        required_string(&arguments, "organization_id")?,
+    ]);
+    optional_option(
+        &arguments,
+        "observer_trust_state",
+        "--observer-trust-state",
+        &mut command,
+    )?;
+    command.extend([
+        "--reason-sha256".into(),
+        required_string(&arguments, "reason_sha256")?,
+        "--effective-at-unix".into(),
+        required_nonnegative_integer(&arguments, "effective_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ]);
+    let execution = execute(&command, cancellation)?;
+    let transition = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "transition": transition}),
+    ))
+}
+
+fn apply_approval_transparency_public_log_gossip_organization_registry_threshold_transition(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["registry", "governance", "transition", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "apply-approval-log-gossip-organization-registry-threshold-transition".into(),
+        required_string(&arguments, "registry")?,
+        required_string(&arguments, "governance")?,
+        required_string(&arguments, "transition")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let registry = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "registry": registry}),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -9583,7 +9831,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 111);
+        assert_eq!(tools.len(), 114);
         let named = |name: &str| {
             tools
                 .iter()
@@ -10177,6 +10425,11 @@ mod tests {
                 "apply_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation"
             )["inputSchema"]["required"][3],
             "public_key_output"
+        );
+        assert_eq!(
+            named("sign_approval_transparency_public_log_gossip_organization_registry_governance")
+                ["inputSchema"]["properties"]["minimum_approvals"]["minimum"],
+            2
         );
         assert_eq!(
             named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],

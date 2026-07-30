@@ -1188,15 +1188,67 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
             .len(),
         2
     );
+    let governance_a_private = directory.join("gossip-governance-a.key");
+    let governance_a_public = directory.join("gossip-governance-a.pub");
+    let governance_b_private = directory.join("gossip-governance-b.key");
+    let governance_b_public = directory.join("gossip-governance-b.pub");
+    for (private, public) in [
+        (&governance_a_private, &governance_a_public),
+        (&governance_b_private, &governance_b_public),
+    ] {
+        assert!(
+            run(&[
+                "approval-keygen",
+                "--private-key",
+                path(private),
+                "--public-key",
+                path(public),
+            ])
+            .status
+            .success()
+        );
+    }
+    let registry_governance = directory.join("gossip-registry.governance.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-governance",
+            path(&rotated_registry),
+            "--registry-authority-private-key",
+            path(&next_registry_private),
+            "--minimum-approvals",
+            "2",
+            "--authority-id",
+            "reviewer-a",
+            "--authority-public-key",
+            path(&governance_a_public),
+            "--authority-id",
+            "reviewer-b",
+            "--authority-public-key",
+            path(&governance_b_public),
+            "--issued-at-unix",
+            "114",
+            "--output",
+            path(&registry_governance),
+        ])
+        .status
+        .success()
+    );
 
     let suspension_reason = "33".repeat(32);
     let registry_suspension = directory.join("gossip-registry.suspend-a.json");
     assert!(
         run(&[
-            "sign-approval-log-gossip-organization-registry-transition",
+            "sign-approval-log-gossip-organization-registry-threshold-transition",
             path(&rotated_registry),
+            path(&registry_governance),
+            "--authority-id",
+            "reviewer-b",
             "--authority-private-key",
-            path(&next_registry_private),
+            path(&governance_b_private),
+            "--authority-id",
+            "reviewer-a",
+            "--authority-private-key",
+            path(&governance_a_private),
             "--action",
             "suspend-organization",
             "--organization-id",
@@ -1204,7 +1256,7 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
             "--reason-sha256",
             &suspension_reason,
             "--effective-at-unix",
-            "114",
+            "115",
             "--output",
             path(&registry_suspension),
         ])
@@ -1214,8 +1266,9 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     let suspended_registry = directory.join("gossip-registry.suspended.json");
     assert!(
         run(&[
-            "apply-approval-log-gossip-organization-registry-transition",
+            "apply-approval-log-gossip-organization-registry-threshold-transition",
             path(&rotated_registry),
+            path(&registry_governance),
             path(&registry_suspension),
             "--output",
             path(&suspended_registry),

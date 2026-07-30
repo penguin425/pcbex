@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.376.0
+  uses: penguin425/pcbex@v1.377.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3371,6 +3371,53 @@ quorum verification; MCP exposes matching sign/apply tools. The closed
 rotation contract comes from
 `signed-approval-log-gossip-organization-registry-authority-key-rotation-schema`.
 
+Require multiple independent authorities for every registry decision:
+
+```sh
+pcbex sign-approval-log-gossip-organization-registry-governance \
+  gossip-registry.json \
+  --registry-authority-private-key .secrets/gossip-registry.key \
+  --minimum-approvals 2 \
+  --authority-id security \
+  --authority-public-key security.pub \
+  --authority-id hardware \
+  --authority-public-key hardware.pub \
+  --issued-at-unix 1770000600 \
+  --output gossip-registry.governance.json
+
+pcbex sign-approval-log-gossip-organization-registry-threshold-transition \
+  gossip-registry.json gossip-registry.governance.json \
+  --authority-id security \
+  --authority-private-key .secrets/security.key \
+  --authority-id hardware \
+  --authority-private-key .secrets/hardware.key \
+  --action suspend-organization \
+  --organization-id compromised-lab \
+  --reason-sha256 "$INCIDENT_SHA256" \
+  --effective-at-unix 1770000700 \
+  --output gossip-registry.suspend.json
+
+pcbex apply-approval-log-gossip-organization-registry-threshold-transition \
+  gossip-registry.json gossip-registry.governance.json \
+  gossip-registry.suspend.json \
+  --output gossip-registry.next.json
+```
+
+The retained root signs the exact threshold, ordered authority identities,
+and distinct Ed25519 keys. Each admission, suspension, or revocation then
+binds that governance digest into the existing generation and transition
+chain. Duplicate identities or keys, insufficient or untrusted signers,
+policy/key substitution, signature mutation, replay, forks, and timestamp
+rollback fail closed. The first successful quorum transition retains its
+governance digest; root-only registry operations and root-only key rotation
+are locked out afterward. The Action accepts paired
+`approval-log-gossip-organization-registry-governance` and
+`approval-log-gossip-organization-registry-threshold-transition` inputs. MCP
+exposes governance signing and threshold sign/apply tools. Closed contracts
+are emitted by
+`signed-approval-log-gossip-organization-registry-governance-schema` and
+`signed-approval-log-gossip-organization-registry-threshold-transition-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3438,7 +3485,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.376.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.377.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
