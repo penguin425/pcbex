@@ -3025,6 +3025,65 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "witness_remote_approval_registry_history_receipt_quorum_log_checkpoint",
+            "Witness dedicated receipt-quorum checkpoint",
+            "Re-verify the exact quorum report, approval log, and trusted checkpoint signature before independently signing its digest.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "log", "quorum_report", "checkpoint", "checkpoint_public_key",
+                    "private_key", "witness_id", "output"
+                ],
+                "properties": {
+                    "log": {"type": "string"},
+                    "quorum_report": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "checkpoint_public_key": {"type": "string"},
+                    "private_key": {"type": "string"},
+                    "witness_id": {"type": "string"},
+                    "witnessed_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses",
+            "Verify receipt-quorum checkpoint witnesses",
+            "Re-verify the exact checkpoint evidence and require a fresh quorum of distinct trusted witness identities and keys.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "log", "quorum_report", "checkpoint", "checkpoint_public_key",
+                    "witnesses", "witness_public_keys", "minimum_witnesses", "output"
+                ],
+                "properties": {
+                    "log": {"type": "string"},
+                    "quorum_report": {"type": "string"},
+                    "checkpoint": {"type": "string"},
+                    "checkpoint_public_key": {"type": "string"},
+                    "witnesses": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "witness_public_keys": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1}
+                    },
+                    "minimum_witnesses": {
+                        "type": "integer", "minimum": 2, "maximum": 100
+                    },
+                    "evaluated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "sign_quorum_bound_approval_transparency_log",
             "Sign quorum-bound approval-log checkpoint",
             "Create an Ed25519 checkpoint only when the exact log suffix matches a successful verifier-bound remote receipt quorum report.",
@@ -4370,6 +4429,18 @@ fn call_tool(
         }
         "verify_remote_approval_registry_history_receipt_quorum_log_checkpoint" => {
             verify_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+                arguments,
+                cancellation,
+            )?
+        }
+        "witness_remote_approval_registry_history_receipt_quorum_log_checkpoint" => {
+            witness_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+                arguments,
+                cancellation,
+            )?
+        }
+        "verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses" => {
+            verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses(
                 arguments,
                 cancellation,
             )?
@@ -9201,6 +9272,116 @@ fn verify_remote_approval_registry_history_receipt_quorum_log_checkpoint(
     ))
 }
 
+fn witness_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "log",
+            "quorum_report",
+            "checkpoint",
+            "checkpoint_public_key",
+            "private_key",
+            "witness_id",
+            "witnessed_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "witness-remote-approval-registry-history-receipt-quorum-log-checkpoint".into(),
+        required_string(&arguments, "log")?,
+        "--quorum-report".into(),
+        required_string(&arguments, "quorum_report")?,
+        "--checkpoint".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--checkpoint-public-key".into(),
+        required_string(&arguments, "checkpoint_public_key")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+    ];
+    optional_nonnegative_integer(
+        &arguments,
+        "witnessed_at_unix",
+        "--witnessed-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let witness = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "witness": witness}),
+    ))
+}
+
+fn verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "log",
+            "quorum_report",
+            "checkpoint",
+            "checkpoint_public_key",
+            "witnesses",
+            "witness_public_keys",
+            "minimum_witnesses",
+            "evaluated_at_unix",
+            "output",
+        ],
+    )?;
+    let witnesses = required_string_array(&arguments, "witnesses", false)?;
+    let public_keys = required_string_array(&arguments, "witness_public_keys", false)?;
+    if witnesses.len() != public_keys.len() {
+        return Err(json!({
+            "detail": "receipt quorum checkpoint witnesses and public keys must be paired"
+        }));
+    }
+    let output = required_string(&arguments, "output")?;
+    let mut command = vec![
+        "verify-remote-approval-registry-history-receipt-quorum-log-checkpoint-witnesses".into(),
+        required_string(&arguments, "log")?,
+        "--quorum-report".into(),
+        required_string(&arguments, "quorum_report")?,
+        "--checkpoint".into(),
+        required_string(&arguments, "checkpoint")?,
+        "--checkpoint-public-key".into(),
+        required_string(&arguments, "checkpoint_public_key")?,
+    ];
+    for witness in witnesses {
+        command.extend(["--witnesses".into(), witness]);
+    }
+    for public_key in public_keys {
+        command.extend(["--witness-public-keys".into(), public_key]);
+    }
+    optional_positive_integer(
+        &arguments,
+        "minimum_witnesses",
+        "--minimum-witnesses",
+        &mut command,
+    )?;
+    optional_nonnegative_integer(
+        &arguments,
+        "evaluated_at_unix",
+        "--evaluated-at-unix",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
 fn sign_quorum_bound_approval_transparency_log(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -11323,7 +11504,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 134);
+        assert_eq!(tools.len(), 136);
         let named = |name: &str| {
             tools
                 .iter()
@@ -11340,6 +11521,17 @@ mod tests {
             named(
                 "request_remote_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness"
             )["execution"]["taskSupport"],
+            "forbidden"
+        );
+        assert_eq!(
+            named(
+                "verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses"
+            )["inputSchema"]["properties"]["minimum_witnesses"]["minimum"],
+            2
+        );
+        assert_eq!(
+            named("witness_remote_approval_registry_history_receipt_quorum_log_checkpoint")["execution"]
+                ["taskSupport"],
             "forbidden"
         );
         assert_eq!(

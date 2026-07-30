@@ -459,6 +459,11 @@
     {
       "id": "domain-separated-signed-approval-receipt-quorum-checkpoints",
       "release": "v1.388.0",
+      "status": "released"
+    },
+    {
+      "id": "independent-approval-receipt-quorum-checkpoint-witnesses",
+      "release": "v1.389.0",
       "status": "current"
     }
   ]
