@@ -2081,6 +2081,145 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .success()
     );
     assert_eq!(read_value(&dedicated_quorum_verification)["verified"], true);
+    let dedicated_witness_a =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness-a.json");
+    let dedicated_witness_b =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness-b.json");
+    for (private, witness_id, output) in [
+        (
+            &witness_a_private,
+            "checkpoint-witness-a",
+            &dedicated_witness_a,
+        ),
+        (
+            &witness_b_private,
+            "checkpoint-witness-b",
+            &dedicated_witness_b,
+        ),
+    ] {
+        assert!(
+            run(&[
+                "witness-remote-approval-registry-history-receipt-quorum-log-checkpoint",
+                path(&remote_history_receipt_quorum_log),
+                "--quorum-report",
+                path(&remote_history_receipt_quorum_report),
+                "--checkpoint",
+                path(&dedicated_quorum_checkpoint),
+                "--checkpoint-public-key",
+                path(&public_key),
+                "--private-key",
+                path(private),
+                "--witness-id",
+                witness_id,
+                "--witnessed-at-unix",
+                "130",
+                "--output",
+                path(output),
+            ])
+            .status
+            .success()
+        );
+    }
+    let dedicated_witness_quorum =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness-quorum.json");
+    assert!(
+        run(&[
+            "verify-remote-approval-registry-history-receipt-quorum-log-checkpoint-witnesses",
+            path(&remote_history_receipt_quorum_log),
+            "--quorum-report",
+            path(&remote_history_receipt_quorum_report),
+            "--checkpoint",
+            path(&dedicated_quorum_checkpoint),
+            "--checkpoint-public-key",
+            path(&public_key),
+            "--witnesses",
+            path(&dedicated_witness_a),
+            "--witnesses",
+            path(&dedicated_witness_b),
+            "--witness-public-keys",
+            path(&witness_a_public),
+            "--witness-public-keys",
+            path(&witness_b_public),
+            "--minimum-witnesses",
+            "2",
+            "--evaluated-at-unix",
+            "131",
+            "--output",
+            path(&dedicated_witness_quorum),
+        ])
+        .status
+        .success()
+    );
+    let dedicated_witness_quorum_value = read_value(&dedicated_witness_quorum);
+    assert_eq!(dedicated_witness_quorum_value["quorum_met"], true);
+    assert_eq!(dedicated_witness_quorum_value["valid_witnesses"], 2);
+    let dedicated_witness_schema =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness.schema.json");
+    assert!(
+        run(&[
+            "signed-remote-approval-registry-history-receipt-quorum-log-checkpoint-witness-schema",
+            "--output",
+            path(&dedicated_witness_schema),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        read_value(&dedicated_witness_schema)["additionalProperties"],
+        false
+    );
+    let normalized_dedicated_witness =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness.normalized.json");
+    assert!(
+        run(&[
+            "validate-signed-remote-approval-registry-history-receipt-quorum-log-checkpoint-witness",
+            path(&dedicated_witness_a),
+            "--output",
+            path(&normalized_dedicated_witness),
+        ])
+        .status
+        .success()
+    );
+    let tampered_dedicated_witness =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness.tampered.json");
+    let mut tampered_witness_value = read_value(&dedicated_witness_a);
+    tampered_witness_value["approval_log_entry_count"] = json!(3);
+    fs::write(
+        &tampered_dedicated_witness,
+        serde_json::to_vec_pretty(&tampered_witness_value).unwrap(),
+    )
+    .unwrap();
+    let tampered_dedicated_witness_quorum = directory
+        .join("gossip-registry.history.remote-receipts.dedicated.witness.tampered-quorum.json");
+    assert!(
+        !run(&[
+            "verify-remote-approval-registry-history-receipt-quorum-log-checkpoint-witnesses",
+            path(&remote_history_receipt_quorum_log),
+            "--quorum-report",
+            path(&remote_history_receipt_quorum_report),
+            "--checkpoint",
+            path(&dedicated_quorum_checkpoint),
+            "--checkpoint-public-key",
+            path(&public_key),
+            "--witnesses",
+            path(&tampered_dedicated_witness),
+            "--witnesses",
+            path(&dedicated_witness_b),
+            "--witness-public-keys",
+            path(&witness_a_public),
+            "--witness-public-keys",
+            path(&witness_b_public),
+            "--minimum-witnesses",
+            "2",
+            "--evaluated-at-unix",
+            "131",
+            "--output",
+            path(&tampered_dedicated_witness_quorum),
+        ])
+        .status
+        .success()
+    );
+    assert!(!tampered_dedicated_witness_quorum.exists());
     let dedicated_checkpoint_schema =
         directory.join("gossip-registry.history.remote-receipts.dedicated.schema.json");
     assert!(
