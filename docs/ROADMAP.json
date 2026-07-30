@@ -394,6 +394,11 @@
     {
       "id": "approval-transparency-gossip-organization-trust-registry",
       "release": "v1.375.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-gossip-registry-authority-key-rotation",
+      "release": "v1.376.0",
       "status": "current"
     }
   ]

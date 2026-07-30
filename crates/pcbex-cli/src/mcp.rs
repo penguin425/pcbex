@@ -3369,6 +3369,46 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "sign_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation",
+            "Sign approval gossip registry authority rotation",
+            "Require the retained authority and successor authority to dual-sign one exact generation- and digest-chained trust-root transition.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "registry", "old_private_key", "new_private_key",
+                    "rotated_at_unix", "output"
+                ],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation",
+            "Apply approval gossip registry authority rotation",
+            "Verify old-key authorization, new-key possession, and exact chain continuity while preserving every organization admission and status.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["registry", "rotation", "output", "public_key_output"],
+                "properties": {
+                    "registry": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "public_key_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -3832,6 +3872,18 @@ fn call_tool(
         }
         "apply_approval_transparency_public_log_gossip_organization_registry_transition" => {
             apply_approval_transparency_public_log_gossip_organization_registry_transition(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation" => {
+            sign_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "apply_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation" => {
+            apply_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation(
                 arguments,
                 cancellation,
             )?
@@ -9088,6 +9140,72 @@ fn apply_approval_transparency_public_log_gossip_organization_registry_transitio
     ))
 }
 
+fn sign_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "registry",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-approval-log-gossip-organization-registry-authority-key-rotation".into(),
+        required_string(&arguments, "registry")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+        "--rotated-at-unix".into(),
+        required_nonnegative_integer(&arguments, "rotated_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["registry", "rotation", "output", "public_key_output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let public_key_output = required_string(&arguments, "public_key_output")?;
+    let command = vec![
+        "apply-approval-log-gossip-organization-registry-authority-key-rotation".into(),
+        required_string(&arguments, "registry")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+        "--public-key-output".into(),
+        public_key_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let registry = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "public_key_output": public_key_output,
+            "registry": registry
+        }),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -9465,7 +9583,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 109);
+        assert_eq!(tools.len(), 111);
         let named = |name: &str| {
             tools
                 .iter()
@@ -10053,6 +10171,12 @@ mod tests {
             named("sign_approval_transparency_public_log_gossip_organization_registry_transition")
                 ["inputSchema"]["properties"]["action"]["enum"][2],
             "revoke-organization"
+        );
+        assert_eq!(
+            named(
+                "apply_approval_transparency_public_log_gossip_organization_registry_authority_key_rotation"
+            )["inputSchema"]["required"][3],
+            "public_key_output"
         );
         assert_eq!(
             named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],

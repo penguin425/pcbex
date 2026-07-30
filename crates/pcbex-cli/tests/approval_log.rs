@@ -1129,14 +1129,74 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         64
     );
 
+    let next_registry_private = directory.join("gossip-registry.next.key");
+    let next_registry_public = directory.join("gossip-registry.next.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&next_registry_private),
+            "--public-key",
+            path(&next_registry_public),
+        ])
+        .status
+        .success()
+    );
+    let registry_rotation = directory.join("gossip-registry-authority.rotation.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-authority-key-rotation",
+            path(&registry),
+            "--old-private-key",
+            path(&registry_private),
+            "--new-private-key",
+            path(&next_registry_private),
+            "--rotated-at-unix",
+            "113",
+            "--output",
+            path(&registry_rotation),
+        ])
+        .status
+        .success()
+    );
+    let rotated_registry = directory.join("gossip-registry.rotated.json");
+    let exported_registry_key = directory.join("gossip-registry.rotated.pub");
+    assert!(
+        run(&[
+            "apply-approval-log-gossip-organization-registry-authority-key-rotation",
+            path(&registry),
+            path(&registry_rotation),
+            "--output",
+            path(&rotated_registry),
+            "--public-key-output",
+            path(&exported_registry_key),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read_to_string(&exported_registry_key).unwrap().trim(),
+        fs::read_to_string(&next_registry_public).unwrap().trim()
+    );
+    let rotated_registry_value: Value =
+        serde_json::from_slice(&fs::read(&rotated_registry).unwrap()).unwrap();
+    assert_eq!(rotated_registry_value["generation"], 3);
+    assert_eq!(
+        rotated_registry_value["organizations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
     let suspension_reason = "33".repeat(32);
     let registry_suspension = directory.join("gossip-registry.suspend-a.json");
     assert!(
         run(&[
             "sign-approval-log-gossip-organization-registry-transition",
-            path(&registry),
+            path(&rotated_registry),
             "--authority-private-key",
-            path(&registry_private),
+            path(&next_registry_private),
             "--action",
             "suspend-organization",
             "--organization-id",
@@ -1144,7 +1204,7 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
             "--reason-sha256",
             &suspension_reason,
             "--effective-at-unix",
-            "113",
+            "114",
             "--output",
             path(&registry_suspension),
         ])
@@ -1155,7 +1215,7 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     assert!(
         run(&[
             "apply-approval-log-gossip-organization-registry-transition",
-            path(&registry),
+            path(&rotated_registry),
             path(&registry_suspension),
             "--output",
             path(&suspended_registry),

@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.375.0
+  uses: penguin425/pcbex@v1.376.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3342,6 +3342,35 @@ registry-bound quorum verification. Closed contracts come from
 `signed-approval-log-gossip-organization-registry-transition-schema`, and
 `approval-log-gossip-registry-bound-quorum-report-schema`.
 
+Rotate the retained registry authority without discarding any organization
+decision:
+
+```sh
+pcbex sign-approval-log-gossip-organization-registry-authority-key-rotation \
+  gossip-registry.json \
+  --old-private-key .secrets/gossip-registry.key \
+  --new-private-key .secrets/gossip-registry.next.key \
+  --rotated-at-unix 1770000500 \
+  --output gossip-registry-authority.rotation.json
+
+pcbex apply-approval-log-gossip-organization-registry-authority-key-rotation \
+  gossip-registry.json gossip-registry-authority.rotation.json \
+  --output gossip-registry.next.json \
+  --public-key-output gossip-registry.next.pub
+```
+
+The rotation occupies the next generation in the same digest chain and binds
+the registry identity, prior transition, old and new keys, and monotonic
+rotation time. The retained key must authorize the change and the successor
+must prove possession. Applying it atomically preserves every observer
+admission, suspension, and revocation. Replay, forks, skipped generations,
+same-key replacement, key substitution, either invalid signature, and time
+rollback fail before either output is written. The Action optionally applies
+`approval-log-gossip-organization-registry-authority-key-rotation` before
+quorum verification; MCP exposes matching sign/apply tools. The closed
+rotation contract comes from
+`signed-approval-log-gossip-organization-registry-authority-key-rotation-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3409,7 +3438,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.375.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.376.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

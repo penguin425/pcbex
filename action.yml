@@ -790,6 +790,10 @@ inputs:
     description: Authority-signed registry governing which observer trust states remain eligible for quorum.
     required: false
     default: ""
+  approval-log-gossip-organization-registry-authority-key-rotation:
+    description: Optional dual-signed authority-key rotation applied to the retained approval gossip organization registry before quorum verification.
+    required: false
+    default: ""
   approval-log-gossip-minimum-organizations:
     description: Minimum number of fresh, distinct organizations required.
     required: false
@@ -1417,6 +1421,7 @@ runs:
         PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_PUBLIC_KEY_FILES: ${{ inputs.approval-log-gossip-observer-public-key-files }}
         PCBEX_APPROVAL_LOG_GOSSIP_OBSERVER_TRUST_STATE_FILES: ${{ inputs.approval-log-gossip-observer-trust-state-files }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY: ${{ inputs.approval-log-gossip-organization-registry }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION: ${{ inputs.approval-log-gossip-organization-registry-authority-key-rotation }}
         PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.approval-log-gossip-minimum-organizations }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.approval-log-remote-gossip-endpoints }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-remote-gossip-organization-ids }}
