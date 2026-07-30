@@ -2883,7 +2883,8 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "signed-ai-approval", "ai-quorum-report",
                         "signed-human-escalation", "human-escalation-report",
                         "signed-policy-pack",
-                        "remote-registry-history-checkpoint-witness-receipt"
+                        "remote-registry-history-checkpoint-witness-receipt",
+                        "remote-approval-registry-history-checkpoint-witness-receipt"
                     ]},
                     "recorded_at_unix": {"type": "integer", "minimum": 0},
                     "output": {"type": "string"}
@@ -11421,6 +11422,11 @@ mod tests {
             named("append_approval_transparency_log")["inputSchema"]["properties"]["kind"]["enum"]
                 [5],
             "remote-registry-history-checkpoint-witness-receipt"
+        );
+        assert_eq!(
+            named("append_approval_transparency_log")["inputSchema"]["properties"]["kind"]["enum"]
+                [6],
+            "remote-approval-registry-history-checkpoint-witness-receipt"
         );
         assert_eq!(
             named("verify_approval_transparency_log")["annotations"]["destructiveHint"],

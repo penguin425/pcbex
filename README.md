@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.383.0
+  uses: penguin425/pcbex@v1.384.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3629,6 +3629,42 @@ checkpoint, trust-state, witness-trust, rotation, and quorum schema commands.
 The Action accepts only pre-signed trust and witness evidence, never private
 keys.
 
+Verified remote approval registry-history witness receipts can be admitted to
+the signed approval transparency chain:
+
+```sh
+pcbex init-approval-log \
+  --log-id approval-registry-history-witness-receipts \
+  --output receipt-log.0.json
+pcbex append-approval-log receipt-log.0.json \
+  --artifact witness-a.remote.receipt.json \
+  --kind remote-approval-registry-history-checkpoint-witness-receipt \
+  --recorded-at-unix 1785400030 \
+  --output receipt-log.1.json
+pcbex sign-approval-log receipt-log.1.json \
+  --private-key receipt-log.key \
+  --signer-id approval-registry-receipt-log \
+  --output receipt-log.checkpoint.json
+```
+
+Append first parses and validates the complete closed receipt, including its
+transport adapter, endpoint policy, true verification decision, response
+bound, checkpoint/trust-state digests, request/response digests, witness key
+and identity, and optional trust-generation binding. The normalized event
+retains the exact receipt digest, checkpoint digest, request digest, response
+digest, and witness identity. The existing approval-log signature, public
+anchor, consistency proof, gossip, remote witness, witness quorum, and witness
+key-rotation controls then protect the receipt history without another trust
+format. Mutation after append, deletion, reordering, replay that breaks the
+sequence, truncation, and a false verification decision fail closed.
+
+The admitting signer remains responsible for accepting only receipts produced
+by its trusted acquisition boundary; structural normalization does not turn an
+untrusted receipt document into proof. MCP's existing append tool exposes the
+new artifact kind, and the Action's existing approval transparency log,
+anchor, gossip, and witness gates consume the resulting chain without new
+private-key inputs.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3696,7 +3732,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.383.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.384.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

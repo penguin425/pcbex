@@ -18,6 +18,7 @@ pub enum ApprovalArtifactKind {
     HumanEscalationReport,
     SignedPolicyPack,
     RemoteRegistryHistoryCheckpointWitnessReceipt,
+    RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -849,7 +850,8 @@ pub fn approval_transparency_log_json_schema() -> Value {
                                     "signed_ai_approval", "ai_quorum_report",
                                     "signed_human_escalation", "human_escalation_report",
                                     "signed_policy_pack",
-                                    "remote_registry_history_checkpoint_witness_receipt"
+                                    "remote_registry_history_checkpoint_witness_receipt",
+                                    "remote_approval_registry_history_checkpoint_witness_receipt"
                                 ]},
                                 "artifact_sha256": digest,
                                 "subject_id": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_BYTES},

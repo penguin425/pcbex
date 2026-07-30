@@ -434,6 +434,11 @@
     {
       "id": "remote-approval-transparency-gossip-registry-history-checkpoint-witnesses",
       "release": "v1.383.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-gossip-registry-history-witness-receipt-transparency",
+      "release": "v1.384.0",
       "status": "current"
     }
   ]
