@@ -388,19 +388,25 @@ use remote_approval_gossip::{
 use remote_approval_gossip_registry_checkpoint_witness::{
     RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
     RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint,
     parse_remote_approval_registry_history_checkpoint_witness_receipt,
     parse_remote_approval_registry_history_checkpoint_witness_receipt_quorum_report,
     remote_approval_registry_history_checkpoint_witness_receipt_json_schema,
     remote_approval_registry_history_checkpoint_witness_receipt_quorum_report_json_schema,
+    remote_approval_registry_history_receipt_quorum_log_checkpoint_verification_json_schema,
     request_remote_approval_registry_history_checkpoint_witness,
     request_remote_approval_registry_history_checkpoint_witness_with_trust_state,
+    sign_remote_approval_registry_history_receipt_quorum_log_checkpoint,
+    signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_json_schema,
     validate_remote_approval_registry_history_checkpoint_witness_receipt,
     validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_for_log,
     validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_report,
+    validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint,
     verify_remote_approval_registry_history_checkpoint_witness_receipt,
     verify_remote_approval_registry_history_checkpoint_witness_receipt_quorum,
     verify_remote_approval_registry_history_checkpoint_witness_receipt_quorum_with_trust_states,
     verify_remote_approval_registry_history_checkpoint_witness_receipt_with_trust_state,
+    verify_remote_approval_registry_history_receipt_quorum_log_checkpoint,
 };
 use remote_policy::{fetch_remote_policy_pack, remote_policy_pack_receipt_json_schema};
 use remote_policy_lifecycle_gossip::{
@@ -2865,6 +2871,22 @@ enum Command {
         #[arg(short, long)]
         output: CompactPath,
     },
+    /// Print the closed signed verifier-bound receipt-quorum log checkpoint schema.
+    SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed verifier-bound receipt-quorum checkpoint verification schema.
+    RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointVerificationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a signed verifier-bound receipt-quorum log checkpoint.
+    ValidateSignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint {
+        input: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
     /// Print the closed registry-history checkpoint witness-quorum JSON Schema.
     ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
         #[arg(short, long)]
@@ -3180,6 +3202,30 @@ enum Command {
         private_key: CompactPath,
         #[arg(long)]
         signer_id: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Sign the exact receipt-quorum report and approval log under a dedicated domain.
+    SignRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint {
+        log: CompactPath,
+        #[arg(long)]
+        quorum_report: CompactPath,
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify a dedicated receipt-quorum checkpoint against exact report, log, and trusted key.
+    VerifyRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint {
+        log: CompactPath,
+        #[arg(long)]
+        quorum_report: CompactPath,
+        #[arg(long)]
+        checkpoint: CompactPath,
+        #[arg(long)]
+        public_key: CompactPath,
         #[arg(short, long)]
         output: CompactPath,
     },
@@ -9713,6 +9759,33 @@ fn run_cli() -> Result<()> {
             .map_err(anyhow::Error::msg)?;
             write_new_file(&output, &serde_json::to_string_pretty(&report)?, false)?;
         }
+        Command::SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointSchema { output } => {
+            write_or_print_json(
+                &signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointVerificationSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &remote_approval_registry_history_receipt_quorum_log_checkpoint_verification_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ValidateSignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint {
+            input,
+            output,
+        } => {
+            let (checkpoint, _) = read_described_json::<
+                SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint,
+            >(&input)?;
+            validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+                &checkpoint,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&checkpoint)?, false)?;
+        }
         Command::ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumSchema {
             output,
         } => {
@@ -10668,6 +10741,79 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "signed quorum-bound approval log {} at {} entries",
                 checkpoint.log_id, checkpoint.entry_count
+            );
+        }
+        Command::SignRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint {
+            log,
+            quorum_report,
+            private_key,
+            signer_id,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(log.0.as_ref()),
+                    Some(quorum_report.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "signed receipt quorum checkpoint",
+            )?;
+            let (log, _) = read_described_json::<ApprovalTransparencyLog>(&log)?;
+            let (report, _) = read_described_json::<
+                RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+            >(&quorum_report)?;
+            let secret = read_hex_key(&private_key, "receipt quorum checkpoint private key")?;
+            let checkpoint =
+                sign_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+                    &report, &log, &signer_id, &secret,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&checkpoint)?, false)?;
+            eprintln!(
+                "signed dedicated receipt quorum checkpoint for {} at {} entries",
+                checkpoint.approval_log_id, checkpoint.approval_log_entry_count
+            );
+        }
+        Command::VerifyRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint {
+            log,
+            quorum_report,
+            checkpoint,
+            public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(log.0.as_ref()),
+                    Some(quorum_report.0.as_ref()),
+                    Some(checkpoint.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "receipt quorum checkpoint verification",
+            )?;
+            let (log, _) = read_described_json::<ApprovalTransparencyLog>(&log)?;
+            let (report, _) = read_described_json::<
+                RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+            >(&quorum_report)?;
+            let (checkpoint, _) = read_described_json::<
+                SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint,
+            >(&checkpoint)?;
+            let trusted = read_hex_key(&public_key, "trusted receipt quorum checkpoint key")?;
+            let verification =
+                verify_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+                    &report,
+                    &log,
+                    &checkpoint,
+                    &trusted,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(
+                &output,
+                &serde_json::to_string_pretty(&verification)?,
+                false,
+            )?;
+            eprintln!(
+                "verified dedicated receipt quorum checkpoint for {}",
+                verification.approval_log_id
             );
         }
         Command::VerifyApprovalLog {

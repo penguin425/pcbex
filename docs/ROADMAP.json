@@ -454,6 +454,11 @@
     {
       "id": "quorum-bound-approval-registry-receipt-log-signing",
       "release": "v1.387.0",
+      "status": "released"
+    },
+    {
+      "id": "domain-separated-signed-approval-receipt-quorum-checkpoints",
+      "release": "v1.388.0",
       "status": "current"
     }
   ]
