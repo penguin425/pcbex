@@ -424,6 +424,11 @@
     {
       "id": "approval-transparency-gossip-registry-history-witness-checkpoint",
       "release": "v1.381.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-gossip-registry-history-witness-key-rotation",
+      "release": "v1.382.0",
       "status": "current"
     }
   ]

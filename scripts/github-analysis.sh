@@ -2306,8 +2306,25 @@ mapfile -t approval_registry_checkpoint_witness_keys < <(
   printf '%s\n' "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES:-}" |
     sed '/^[[:space:]]*$/d'
 )
+mapfile -t approval_registry_checkpoint_witness_trust_states < <(
+  printf '%s\n' "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES:-}" |
+    sed '/^[[:space:]]*$/d'
+)
 if ((${#approval_registry_checkpoint_witness_ids[@]} != ${#approval_registry_checkpoint_witness_keys[@]})); then
   echo "approval registry-history checkpoint witness IDs and keys must have matching counts" >&2
+  exit 2
+fi
+approval_registry_checkpoint_direct_trust=false
+if ((${#approval_registry_checkpoint_witness_ids[@]} > 0)); then
+  approval_registry_checkpoint_direct_trust=true
+fi
+approval_registry_checkpoint_state_trust=false
+if ((${#approval_registry_checkpoint_witness_trust_states[@]} > 0)); then
+  approval_registry_checkpoint_state_trust=true
+fi
+if [[ "$approval_registry_checkpoint_direct_trust" == "true" \
+  && "$approval_registry_checkpoint_state_trust" == "true" ]]; then
+  echo "approval registry-history checkpoint direct trust and trust states are mutually exclusive" >&2
   exit 2
 fi
 if ((${#approval_registry_checkpoint_witnesses[@]} > 0)); then
@@ -2319,8 +2336,9 @@ if ((${#approval_registry_checkpoint_witnesses[@]} > 0)); then
     echo "approval registry-history checkpoint witnesses require an explicit evaluation time" >&2
     exit 2
   fi
-  if ((${#approval_registry_checkpoint_witness_ids[@]} == 0)); then
-    echo "approval registry-history checkpoint witnesses require directly trusted keys" >&2
+  if [[ "$approval_registry_checkpoint_direct_trust" == "false" \
+    && "$approval_registry_checkpoint_state_trust" == "false" ]]; then
+    echo "approval registry-history checkpoint witnesses require direct trust or trust states" >&2
     exit 2
   fi
   approval_log_gossip_organization_registry_history_checkpoint_witness_quorum="${artifact_dir}/approval-log-gossip-organization-registry-history-checkpoint-witness-quorum.json"
@@ -2338,6 +2356,9 @@ if ((${#approval_registry_checkpoint_witnesses[@]} > 0)); then
   for witness_key in "${approval_registry_checkpoint_witness_keys[@]}"; do
     approval_registry_witness_arguments+=(--trusted-witness-public-key "$witness_key")
   done
+  for trust_state in "${approval_registry_checkpoint_witness_trust_states[@]}"; do
+    approval_registry_witness_arguments+=(--witness-trust-state "$trust_state")
+  done
   approval_registry_witness_arguments+=(
     --minimum-witnesses
     "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_MINIMUM_WITNESSES:-2}"
@@ -2350,6 +2371,7 @@ if ((${#approval_registry_checkpoint_witnesses[@]} > 0)); then
   "$PCBEX_BINARY" "${approval_registry_witness_arguments[@]}"
   approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_met=true
 elif ((${#approval_registry_checkpoint_witness_ids[@]} > 0)) \
+  || ((${#approval_registry_checkpoint_witness_trust_states[@]} > 0)) \
   || [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX:-}" ]]; then
   echo "approval registry-history checkpoint witness trust and evaluation time require witnesses" >&2
   exit 2

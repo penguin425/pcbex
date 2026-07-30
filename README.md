@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.381.0
+  uses: penguin425/pcbex@v1.382.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3561,13 +3561,35 @@ The checkpoint binds the exact audit, computed final registry, retained root,
 last transition, active governance, generation, and issuance time. A prior
 trust state rejects rollback, truncation, time reversal, and same-generation
 equivocation. Witness verification requires fresh, distinct identities and
-keys over that exact checkpoint; key rotation is intentionally a separate
-next trust layer. The closed contracts are emitted by
+keys over that exact checkpoint. Long-lived witness trust can rotate without
+silent key replacement:
+
+```sh
+pcbex init-approval-log-gossip-organization-registry-history-checkpoint-witness-trust \
+  --witness-id witness-a --public-key witness-a.pub \
+  --output witness-a.trust.json
+
+pcbex sign-approval-log-gossip-organization-registry-history-checkpoint-witness-key-rotation \
+  witness-a.trust.json \
+  --old-private-key witness-a.key --new-private-key witness-a.next.key \
+  --rotated-at-unix 1785400010 --output witness-a.rotation.json
+
+pcbex apply-approval-log-gossip-organization-registry-history-checkpoint-witness-key-rotation \
+  witness-a.trust.json witness-a.rotation.json \
+  --output witness-a.next.trust.json \
+  --public-key-output witness-a.next.pub
+```
+
+Each exact one-generation transition is signed by both old and new keys and
+binds the witness identity, previous rotation digest, keys, and monotonic
+time. Replay, forks, key substitution, same-key rotation, and time reversal
+fail closed. Quorum verification accepts either direct identity/key pairs or
+rotatable trust states, never both. The closed contracts are emitted by
 `approval-log-gossip-organization-registry-history-schema` and
 `approval-log-gossip-organization-registry-history-audit-schema`, plus the
-checkpoint, trust-state, witness, and quorum schema commands. MCP exposes the
-same signing and verification workflow. The Action accepts only pre-signed
-checkpoint and witness evidence, never private keys.
+checkpoint, trust-state, witness-trust, rotation, and quorum schema commands.
+MCP exposes the same workflow. The Action accepts only pre-signed trust and
+witness evidence, never private keys.
 
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
@@ -3636,7 +3658,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.381.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.382.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

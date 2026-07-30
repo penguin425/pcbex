@@ -537,19 +537,42 @@ jobs:
             --issued-at-unix 13 \
             --output build/action-quorum/gossip-registry.history.checkpoint.json
           for witness in a b; do
-            witnessed_at=14
-            [[ "$witness" == "b" ]] && witnessed_at=15
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/gossip-history-witness-$witness.key" \
               --public-key "build/action-quorum/gossip-history-witness-$witness.pub"
-            target/release/pcbex sign-approval-log-gossip-organization-registry-history-checkpoint-witness \
-              build/action-quorum/gossip-registry.history.json \
-              build/action-quorum/gossip-registry.history.checkpoint.json \
+            target/release/pcbex init-approval-log-gossip-organization-registry-history-checkpoint-witness-trust \
               --witness-id "history-witness-$witness" \
-              --witness-private-key "build/action-quorum/gossip-history-witness-$witness.key" \
-              --witnessed-at-unix "$witnessed_at" \
-              --output "build/action-quorum/gossip-history-witness-$witness.json"
+              --public-key "build/action-quorum/gossip-history-witness-$witness.pub" \
+              --output "build/action-quorum/gossip-history-witness-$witness.trust.json"
           done
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/gossip-history-witness-a.next.key \
+            --public-key build/action-quorum/gossip-history-witness-a.next.pub
+          target/release/pcbex sign-approval-log-gossip-organization-registry-history-checkpoint-witness-key-rotation \
+            build/action-quorum/gossip-history-witness-a.trust.json \
+            --old-private-key build/action-quorum/gossip-history-witness-a.key \
+            --new-private-key build/action-quorum/gossip-history-witness-a.next.key \
+            --rotated-at-unix 14 \
+            --output build/action-quorum/gossip-history-witness-a.rotation.json
+          target/release/pcbex apply-approval-log-gossip-organization-registry-history-checkpoint-witness-key-rotation \
+            build/action-quorum/gossip-history-witness-a.trust.json \
+            build/action-quorum/gossip-history-witness-a.rotation.json \
+            --output build/action-quorum/gossip-history-witness-a.rotated.trust.json \
+            --public-key-output build/action-quorum/gossip-history-witness-a.rotated.pub
+          target/release/pcbex sign-approval-log-gossip-organization-registry-history-checkpoint-witness \
+            build/action-quorum/gossip-registry.history.json \
+            build/action-quorum/gossip-registry.history.checkpoint.json \
+            --witness-id history-witness-a \
+            --witness-private-key build/action-quorum/gossip-history-witness-a.next.key \
+            --witnessed-at-unix 15 \
+            --output build/action-quorum/gossip-history-witness-a.json
+          target/release/pcbex sign-approval-log-gossip-organization-registry-history-checkpoint-witness \
+            build/action-quorum/gossip-registry.history.json \
+            build/action-quorum/gossip-registry.history.checkpoint.json \
+            --witness-id history-witness-b \
+            --witness-private-key build/action-quorum/gossip-history-witness-b.key \
+            --witnessed-at-unix 16 \
+            --output build/action-quorum/gossip-history-witness-b.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -632,17 +655,14 @@ jobs:
             build/action-quorum/gossip-observer-b.trust.json
           approval-log-gossip-organization-registry-history: build/action-quorum/gossip-registry.history.json
           approval-log-gossip-organization-registry-history-checkpoint: build/action-quorum/gossip-registry.history.checkpoint.json
-          approval-log-gossip-organization-registry-history-checkpoint-accepted-at-unix: "16"
+          approval-log-gossip-organization-registry-history-checkpoint-accepted-at-unix: "17"
           approval-log-gossip-organization-registry-history-checkpoint-witness-files: |
             build/action-quorum/gossip-history-witness-a.json
             build/action-quorum/gossip-history-witness-b.json
-          approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-ids: |
-            history-witness-a
-            history-witness-b
-          approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-public-key-files: |
-            build/action-quorum/gossip-history-witness-a.pub
-            build/action-quorum/gossip-history-witness-b.pub
-          approval-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix: "17"
+          approval-log-gossip-organization-registry-history-checkpoint-witness-trust-state-files: |
+            build/action-quorum/gossip-history-witness-a.rotated.trust.json
+            build/action-quorum/gossip-history-witness-b.trust.json
+          approval-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix: "18"
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
           approval-log-witness-files: |

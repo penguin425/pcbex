@@ -842,6 +842,10 @@ inputs:
     description: Newline-separated trusted witness public-key files.
     required: false
     default: ""
+  approval-log-gossip-organization-registry-history-checkpoint-witness-trust-state-files:
+    description: Newline-separated rotatable witness trust states; replaces direct witness identity/key inputs.
+    required: false
+    default: ""
   approval-log-gossip-organization-registry-history-checkpoint-minimum-witnesses:
     description: Minimum number of fresh, distinct registry-history checkpoint witnesses.
     required: false
@@ -1505,6 +1509,7 @@ runs:
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_FILES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-witness-files }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_IDS: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-ids }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_TRUSTED_WITNESS_PUBLIC_KEY_FILES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-trusted-witness-public-key-files }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_WITNESS_TRUST_STATE_FILES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-witness-trust-state-files }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_MINIMUM_WITNESSES: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-minimum-witnesses }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY_CHECKPOINT_EVALUATED_AT_UNIX: ${{ inputs.approval-log-gossip-organization-registry-history-checkpoint-evaluated-at-unix }}
         PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.approval-log-gossip-minimum-organizations }}
