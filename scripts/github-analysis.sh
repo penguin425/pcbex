@@ -2167,6 +2167,8 @@ fi
 
 approval_log_gossip_quorum=""
 approval_log_gossip_quorum_met=""
+approval_log_gossip_organization_registry_history_audit=""
+approval_log_gossip_organization_registry_history_final=""
 approval_log_remote_gossip_observations=""
 approval_log_remote_gossip_receipts=""
 approval_local_direct_inputs=0
@@ -2243,13 +2245,30 @@ fi
 if [[ "$approval_local_configured" == "false" ]]; then
   approval_trust_mode="$approval_remote_trust_mode"
 fi
-if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]] \
+approval_log_gossip_organization_registry="${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}"
+if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
+  if [[ -n "$approval_log_gossip_organization_registry" ]]; then
+    echo "approval gossip registry history and copied retained registry are mutually exclusive" >&2
+    exit 2
+  fi
+  approval_log_gossip_organization_registry_history_audit="${artifact_dir}/approval-log-gossip-organization-registry-history-audit.json"
+  approval_log_gossip_organization_registry_history_final="${artifact_dir}/approval-log-gossip-organization-registry-history-final.json"
+  "$PCBEX_BINARY" \
+    audit-approval-log-gossip-organization-registry-history \
+    "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY" \
+    --output "$approval_log_gossip_organization_registry_history_audit" \
+    --registry-output "$approval_log_gossip_organization_registry_history_final"
+  approval_log_gossip_organization_registry="$approval_log_gossip_organization_registry_history_final"
+fi
+if [[ -n "$approval_log_gossip_organization_registry" ]] \
   && [[ "$approval_trust_mode" != "trust-state" ]]; then
-  echo "approval gossip organization registry requires trust-state mode" >&2
-  exit 2
+  if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" == "true" ]]; then
+    echo "approval gossip organization registry requires trust-state mode" >&2
+    exit 2
+  fi
 fi
 if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]] \
-  && [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]]; then
+  && [[ -z "$approval_log_gossip_organization_registry" ]]; then
   echo "approval gossip registry authority rotation requires a retained registry" >&2
   exit 2
 fi
@@ -2299,7 +2318,7 @@ if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" ]] \
 fi
 if { [[ "$approval_registry_threshold_transition_configured" == "true" ]] \
     || [[ "$approval_registry_rotation_configured" == "true" ]]; } \
-  && [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]]; then
+  && [[ -z "$approval_log_gossip_organization_registry" ]]; then
   echo "approval gossip registry governance operations require a retained registry" >&2
   exit 2
 fi
@@ -2308,6 +2327,24 @@ if [[ "$approval_registry_governed_authority_rotation_configured" == "true" \
   echo "root-only and governed approval gossip authority rotations are mutually exclusive" >&2
   exit 2
 fi
+if [[ -n "$approval_log_gossip_organization_registry" ]] \
+  && [[ "$approval_local_configured" != "true" && "$approval_remote_configured" != "true" ]]; then
+  if [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY:-}" ]]; then
+    echo "approval gossip organization registry requires configured observations" >&2
+    exit 2
+  fi
+  for followup in \
+    "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" \
+    "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE:-}" \
+    "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION:-}" \
+    "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION:-}" \
+    "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNED_AUTHORITY_KEY_ROTATION:-}"; do
+    if [[ -n "$followup" ]]; then
+      echo "standalone approval gossip registry history audit cannot ignore follow-up registry changes" >&2
+      exit 2
+    fi
+  done
+fi
 if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" == "true" ]]; then
   if ((approval_log_anchor_inputs != 2)) \
     || [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX:-}" ]]; then
@@ -2315,7 +2352,6 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
     exit 2
   fi
   approval_log_gossip_quorum="${artifact_dir}/approval-log-gossip-quorum.json"
-  approval_log_gossip_organization_registry="${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}"
   if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]]; then
     rotated_approval_gossip_registry="${artifact_dir}/approval-log-gossip-organization-registry.json"
     rotated_approval_gossip_registry_key="${artifact_dir}/approval-log-gossip-organization-registry-authority.pub"
@@ -2736,6 +2772,8 @@ write_output approval-log-gossip-verification "$approval_log_gossip_verification
 write_output approval-log-gossip-verified "$approval_log_gossip_verified"
 write_output approval-log-gossip-quorum "$approval_log_gossip_quorum"
 write_output approval-log-gossip-quorum-met "$approval_log_gossip_quorum_met"
+write_output approval-log-gossip-organization-registry-history-audit "$approval_log_gossip_organization_registry_history_audit"
+write_output approval-log-gossip-organization-registry-history-final "$approval_log_gossip_organization_registry_history_final"
 write_output approval-log-remote-gossip-observations "$approval_log_remote_gossip_observations"
 write_output approval-log-remote-gossip-receipts "$approval_log_remote_gossip_receipts"
 write_output approval-log-witness-quorum "$approval_log_witness_quorum"

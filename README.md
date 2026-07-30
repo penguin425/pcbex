@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.379.0
+  uses: penguin425/pcbex@v1.380.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3506,6 +3506,37 @@ Action; MCP exposes successor-policy and governed sign/apply tools. The closed
 transition contract is emitted by
 `signed-approval-log-gossip-organization-registry-governed-authority-key-rotation-schema`.
 
+Audit the complete approval gossip registry history instead of trusting a
+copied head snapshot:
+
+```sh
+pcbex validate-approval-log-gossip-organization-registry-history \
+  gossip-registry.history.json \
+  --output gossip-registry.history.normalized.json
+
+pcbex audit-approval-log-gossip-organization-registry-history \
+  gossip-registry.history.normalized.json \
+  --output gossip-registry.history-audit.json \
+  --registry-output gossip-registry.computed.json
+```
+
+The bounded history begins with a generation-zero empty registry and contains
+typed root transitions, dual-signed root rotations, threshold transitions,
+governance rotations, and governed root rotations. Every event is replayed
+through its production verifier; generations, prior digests, timestamps,
+signatures, root keys, governance digests, and distinct-key quorums must form
+one exact chain. The audit binds each event and resulting state digest and
+emits the only registry eligible for downstream quorum verification.
+Reordering, replay, omission, forks, non-genesis starts, stale governance,
+signature mutation, and copied-registry substitution fail closed without
+partial outputs. This proves genesis-to-supplied-head integrity, but does not
+prove that a newer valid head does not exist; witnessed head checkpoints are
+the next trust layer. The closed contracts are emitted by
+`approval-log-gossip-organization-registry-history-schema` and
+`approval-log-gossip-organization-registry-history-audit-schema`. MCP exposes
+the same atomic audit, and the Action accepts
+`approval-log-gossip-organization-registry-history`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3573,7 +3604,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.379.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.380.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

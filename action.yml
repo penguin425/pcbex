@@ -814,6 +814,10 @@ inputs:
     description: Dual-quorum root and active-governance rotation applied after an optional threshold transition.
     required: false
     default: ""
+  approval-log-gossip-organization-registry-history:
+    description: Complete typed approval gossip registry event history replayed from genesis; mutually exclusive with copied registry state and follow-up registry mutations.
+    required: false
+    default: ""
   approval-log-gossip-minimum-organizations:
     description: Minimum number of fresh, distinct organizations required.
     required: false
@@ -1223,6 +1227,12 @@ outputs:
   approval-log-gossip-quorum-met:
     description: Whether fresh consistent gossip observations meet the organization threshold.
     value: ${{ steps.analyze.outputs.approval-log-gossip-quorum-met }}
+  approval-log-gossip-organization-registry-history-audit:
+    description: Deterministic genesis-to-head approval gossip registry history audit path.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-audit }}
+  approval-log-gossip-organization-registry-history-final:
+    description: Final approval gossip registry computed exclusively by replaying the supplied history.
+    value: ${{ steps.analyze.outputs.approval-log-gossip-organization-registry-history-final }}
   approval-log-remote-gossip-observations:
     description: Directory containing verified remote gossip observation envelopes.
     value: ${{ steps.analyze.outputs.approval-log-remote-gossip-observations }}
@@ -1447,6 +1457,7 @@ runs:
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW: ${{ inputs.approval-log-gossip-organization-registry-governance-rotation-new }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION: ${{ inputs.approval-log-gossip-organization-registry-governance-rotation }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNED_AUTHORITY_KEY_ROTATION: ${{ inputs.approval-log-gossip-organization-registry-governed-authority-key-rotation }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_HISTORY: ${{ inputs.approval-log-gossip-organization-registry-history }}
         PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.approval-log-gossip-minimum-organizations }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.approval-log-remote-gossip-endpoints }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-remote-gossip-organization-ids }}

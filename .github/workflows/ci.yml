@@ -502,6 +502,35 @@ jobs:
             --new-authority-private-key build/action-quorum/gossip-governance-c.key \
             --rotated-at-unix 12 \
             --output build/action-quorum/gossip-registry.governed-authority.rotation.json
+          jq -n \
+            --slurpfile initial build/action-quorum/gossip-registry.initial.json \
+            --slurpfile admission_a build/action-quorum/gossip-registry.admit-a.json \
+            --slurpfile admission_b build/action-quorum/gossip-registry.admit-b.json \
+            --slurpfile root_rotation build/action-quorum/gossip-registry.rotation.json \
+            --slurpfile governance build/action-quorum/gossip-registry.governance.json \
+            --slurpfile threshold build/action-quorum/gossip-registry.threshold-transition.json \
+            --slurpfile successor_governance build/action-quorum/gossip-registry.governance.next.json \
+            --slurpfile governed_root build/action-quorum/gossip-registry.governed-authority.rotation.json \
+            '{
+              schema_version: 1,
+              initial_registry: $initial[0],
+              events: [
+                {kind: "root_transition", transition: $admission_a[0]},
+                {kind: "root_transition", transition: $admission_b[0]},
+                {kind: "root_authority_key_rotation", rotation: $root_rotation[0]},
+                {
+                  kind: "threshold_transition",
+                  governance: $governance[0],
+                  transition: $threshold[0]
+                },
+                {
+                  kind: "governed_authority_key_rotation",
+                  old_governance: $governance[0],
+                  new_governance: $successor_governance[0],
+                  rotation: $governed_root[0]
+                }
+              ]
+            }' > build/action-quorum/gossip-registry.history.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -582,11 +611,7 @@ jobs:
           approval-log-gossip-observer-trust-state-files: |
             build/action-quorum/gossip-observer.trust.json
             build/action-quorum/gossip-observer-b.trust.json
-          approval-log-gossip-organization-registry: build/action-quorum/gossip-registry.rotated.json
-          approval-log-gossip-organization-registry-governance: build/action-quorum/gossip-registry.governance.json
-          approval-log-gossip-organization-registry-threshold-transition: build/action-quorum/gossip-registry.threshold-transition.json
-          approval-log-gossip-organization-registry-governance-rotation-new: build/action-quorum/gossip-registry.governance.next.json
-          approval-log-gossip-organization-registry-governed-authority-key-rotation: build/action-quorum/gossip-registry.governed-authority.rotation.json
+          approval-log-gossip-organization-registry-history: build/action-quorum/gossip-registry.history.json
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
           approval-log-witness-files: |
@@ -681,6 +706,8 @@ jobs:
           APPROVAL_LOG_GOSSIP_VERIFIED: ${{ steps.pcbex.outputs.approval-log-gossip-verified }}
           APPROVAL_LOG_GOSSIP_QUORUM: ${{ steps.pcbex.outputs.approval-log-gossip-quorum }}
           APPROVAL_LOG_GOSSIP_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-gossip-quorum-met }}
+          APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_AUDIT: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-audit }}
+          APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_FINAL: ${{ steps.pcbex.outputs.approval-log-gossip-organization-registry-history-final }}
           REMOTE_WITNESS: ${{ steps.pcbex.outputs.remote-witness }}
           REMOTE_WITNESS_RECEIPT: ${{ steps.pcbex.outputs.remote-witness-receipt }}
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
@@ -722,6 +749,9 @@ jobs:
           test "$APPROVAL_LOG_GOSSIP_QUORUM_MET" = "true"
           test "$(jq -r '.registry_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
           test "$(jq -r '.registry_generation' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "5"
+          test "$(jq -r '.event_count' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_AUDIT")" = "5"
+          test "$(jq -r '.chain_valid' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_AUDIT")" = "true"
+          test "$(jq -r '.generation' "$APPROVAL_LOG_GOSSIP_REGISTRY_HISTORY_FINAL")" = "5"
           test "$(jq -r '.trust_quorum.trust_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
           test "$(jq -r '.trust_quorum.quorum.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"

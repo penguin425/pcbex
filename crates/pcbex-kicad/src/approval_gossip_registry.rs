@@ -25,6 +25,7 @@ const GOVERNANCE_ROTATION_DOMAIN: &str =
 const GOVERNED_AUTHORITY_ROTATION_DOMAIN: &str =
     "pcbex-approval-public-log-gossip-organization-registry-governed-authority-key-rotation-v1";
 const MAXIMUM_GOVERNANCE_AUTHORITIES: usize = 100;
+const MAXIMUM_REGISTRY_HISTORY_EVENTS: usize = 10_000;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -188,6 +189,75 @@ pub struct SignedApprovalLogGossipOrganizationRegistryGovernedAuthorityKeyRotati
     pub algorithm: String,
     pub old_approvals: Vec<ApprovalLogGossipRegistryThresholdApproval>,
     pub new_approvals: Vec<ApprovalLogGossipRegistryThresholdApproval>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ApprovalLogGossipOrganizationRegistryHistoryEvent {
+    RootTransition {
+        transition: SignedApprovalLogGossipOrganizationRegistryTransition,
+    },
+    RootAuthorityKeyRotation {
+        rotation: SignedApprovalLogGossipOrganizationRegistryAuthorityKeyRotation,
+    },
+    ThresholdTransition {
+        governance: SignedApprovalLogGossipOrganizationRegistryGovernance,
+        transition: SignedApprovalLogGossipOrganizationRegistryThresholdTransition,
+    },
+    GovernanceRotation {
+        old_governance: SignedApprovalLogGossipOrganizationRegistryGovernance,
+        new_governance: SignedApprovalLogGossipOrganizationRegistryGovernance,
+        rotation: SignedApprovalLogGossipOrganizationRegistryGovernanceRotation,
+    },
+    GovernedAuthorityKeyRotation {
+        old_governance: SignedApprovalLogGossipOrganizationRegistryGovernance,
+        new_governance: SignedApprovalLogGossipOrganizationRegistryGovernance,
+        rotation: SignedApprovalLogGossipOrganizationRegistryGovernedAuthorityKeyRotation,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLogGossipOrganizationRegistryHistory {
+    pub schema_version: u32,
+    pub initial_registry: ApprovalLogGossipOrganizationRegistry,
+    pub events: Vec<ApprovalLogGossipOrganizationRegistryHistoryEvent>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalLogGossipOrganizationRegistryHistoryEventKind {
+    RootTransition,
+    RootAuthorityKeyRotation,
+    ThresholdTransition,
+    GovernanceRotation,
+    GovernedAuthorityKeyRotation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLogGossipOrganizationRegistryHistoryAuditEntry {
+    pub index: u64,
+    pub kind: ApprovalLogGossipOrganizationRegistryHistoryEventKind,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub event_sha256: String,
+    pub resulting_registry_sha256: String,
+    pub authority_public_key: String,
+    pub active_governance_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApprovalLogGossipOrganizationRegistryHistoryAuditReport {
+    pub schema_version: u32,
+    pub registry_id: String,
+    pub initial_registry_sha256: String,
+    pub event_count: u64,
+    pub entries: Vec<ApprovalLogGossipOrganizationRegistryHistoryAuditEntry>,
+    pub final_registry: ApprovalLogGossipOrganizationRegistry,
+    pub final_registry_sha256: String,
+    pub chain_valid: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -1284,6 +1354,118 @@ pub fn verify_approval_log_gossip_quorum_with_organization_registry(
     Ok(report)
 }
 
+pub fn audit_approval_log_gossip_organization_registry_history(
+    history: &ApprovalLogGossipOrganizationRegistryHistory,
+) -> Result<ApprovalLogGossipOrganizationRegistryHistoryAuditReport, String> {
+    validate_approval_log_gossip_organization_registry_history(history)?;
+    let initial_registry_sha256 =
+        approval_log_gossip_organization_registry_sha256(&history.initial_registry)?;
+    let mut registry = history.initial_registry.clone();
+    let mut entries = Vec::with_capacity(history.events.len());
+    for (index, event) in history.events.iter().enumerate() {
+        let from_generation = registry.generation;
+        let (kind, event_sha256, next) = match event {
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::RootTransition {
+                transition,
+            } => (
+                ApprovalLogGossipOrganizationRegistryHistoryEventKind::RootTransition,
+                signed_approval_log_gossip_organization_registry_transition_sha256(transition)?,
+                apply_approval_log_gossip_organization_registry_transition(
+                    &registry, transition,
+                )?,
+            ),
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::RootAuthorityKeyRotation {
+                rotation,
+            } => (
+                ApprovalLogGossipOrganizationRegistryHistoryEventKind::RootAuthorityKeyRotation,
+                signed_approval_log_gossip_organization_registry_authority_key_rotation_sha256(
+                    rotation,
+                )?,
+                apply_approval_log_gossip_organization_registry_authority_key_rotation(
+                    &registry, rotation,
+                )?,
+            ),
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::ThresholdTransition {
+                governance,
+                transition,
+            } => (
+                ApprovalLogGossipOrganizationRegistryHistoryEventKind::ThresholdTransition,
+                signed_approval_log_gossip_organization_registry_threshold_transition_sha256(
+                    transition,
+                )?,
+                apply_approval_log_gossip_organization_registry_threshold_transition(
+                    &registry,
+                    governance,
+                    transition,
+                )?,
+            ),
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::GovernanceRotation {
+                old_governance,
+                new_governance,
+                rotation,
+            } => (
+                ApprovalLogGossipOrganizationRegistryHistoryEventKind::GovernanceRotation,
+                signed_approval_log_gossip_organization_registry_governance_rotation_sha256(
+                    rotation,
+                )?,
+                apply_approval_log_gossip_organization_registry_governance_rotation(
+                    &registry,
+                    old_governance,
+                    new_governance,
+                    rotation,
+                )?,
+            ),
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::GovernedAuthorityKeyRotation {
+                old_governance,
+                new_governance,
+                rotation,
+            } => (
+                ApprovalLogGossipOrganizationRegistryHistoryEventKind::GovernedAuthorityKeyRotation,
+                signed_approval_log_gossip_organization_registry_governed_authority_key_rotation_sha256(
+                    rotation,
+                )?,
+                apply_approval_log_gossip_organization_registry_governed_authority_key_rotation(
+                    &registry,
+                    old_governance,
+                    new_governance,
+                    rotation,
+                )?,
+            ),
+        };
+        if next.last_transition_sha256.as_deref() != Some(event_sha256.as_str()) {
+            return Err(
+                "approval gossip registry history event digest does not bind resulting state"
+                    .into(),
+            );
+        }
+        entries.push(ApprovalLogGossipOrganizationRegistryHistoryAuditEntry {
+            index: u64::try_from(index)
+                .map_err(|_| "approval gossip registry history index overflow".to_string())?,
+            kind,
+            from_generation,
+            to_generation: next.generation,
+            event_sha256,
+            resulting_registry_sha256: approval_log_gossip_organization_registry_sha256(&next)?,
+            authority_public_key: next.authority_public_key.clone(),
+            active_governance_sha256: next.active_governance_sha256.clone(),
+        });
+        registry = next;
+    }
+    let report = ApprovalLogGossipOrganizationRegistryHistoryAuditReport {
+        schema_version: 1,
+        registry_id: registry.registry_id.clone(),
+        initial_registry_sha256,
+        event_count: u64::try_from(entries.len())
+            .map_err(|_| "approval gossip registry history event count overflow".to_string())?,
+        entries,
+        final_registry_sha256: approval_log_gossip_organization_registry_sha256(&registry)?,
+        final_registry: registry,
+        chain_valid: true,
+    };
+    validate_approval_log_gossip_organization_registry_history_audit_report(&report)?;
+    Ok(report)
+}
+
 pub fn approval_log_gossip_organization_registry_sha256(
     registry: &ApprovalLogGossipOrganizationRegistry,
 ) -> Result<String, String> {
@@ -1797,6 +1979,143 @@ pub fn validate_signed_approval_log_gossip_organization_registry_governed_author
     Ok(())
 }
 
+pub fn validate_approval_log_gossip_organization_registry_history(
+    history: &ApprovalLogGossipOrganizationRegistryHistory,
+) -> Result<(), String> {
+    if history.schema_version != 1 || history.events.len() > MAXIMUM_REGISTRY_HISTORY_EVENTS {
+        return Err("invalid approval gossip organization registry history invariants".into());
+    }
+    validate_approval_log_gossip_organization_registry(&history.initial_registry)?;
+    if history.initial_registry.generation != 0 {
+        return Err("approval gossip registry history must begin at genesis".into());
+    }
+    for event in &history.events {
+        match event {
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::RootTransition { transition } => {
+                validate_signed_approval_log_gossip_organization_registry_transition(transition)?
+            }
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::RootAuthorityKeyRotation {
+                rotation,
+            } => validate_signed_approval_log_gossip_organization_registry_authority_key_rotation(
+                rotation,
+            )?,
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::ThresholdTransition {
+                governance,
+                transition,
+            } => {
+                validate_signed_approval_log_gossip_organization_registry_governance(governance)?;
+                validate_signed_approval_log_gossip_organization_registry_threshold_transition(
+                    transition,
+                )?;
+            }
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::GovernanceRotation {
+                old_governance,
+                new_governance,
+                rotation,
+            } => {
+                validate_signed_approval_log_gossip_organization_registry_governance(
+                    old_governance,
+                )?;
+                validate_signed_approval_log_gossip_organization_registry_governance(
+                    new_governance,
+                )?;
+                validate_signed_approval_log_gossip_organization_registry_governance_rotation(
+                    rotation,
+                )?;
+            }
+            ApprovalLogGossipOrganizationRegistryHistoryEvent::GovernedAuthorityKeyRotation {
+                old_governance,
+                new_governance,
+                rotation,
+            } => {
+                validate_signed_approval_log_gossip_organization_registry_governance(
+                    old_governance,
+                )?;
+                validate_signed_approval_log_gossip_organization_registry_governance(
+                    new_governance,
+                )?;
+                validate_signed_approval_log_gossip_organization_registry_governed_authority_key_rotation(
+                    rotation,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn validate_approval_log_gossip_organization_registry_history_audit_report(
+    report: &ApprovalLogGossipOrganizationRegistryHistoryAuditReport,
+) -> Result<(), String> {
+    if report.schema_version != 1
+        || !report.chain_valid
+        || report.entries.len() > MAXIMUM_REGISTRY_HISTORY_EVENTS
+        || report.event_count != report.entries.len() as u64
+    {
+        return Err("invalid approval gossip registry history audit invariants".into());
+    }
+    validate_slug(
+        &report.registry_id,
+        "approval gossip organization registry id",
+    )?;
+    validate_sha256(
+        &report.initial_registry_sha256,
+        "initial approval gossip organization registry SHA-256",
+    )?;
+    validate_approval_log_gossip_organization_registry(&report.final_registry)?;
+    validate_sha256(
+        &report.final_registry_sha256,
+        "final approval gossip organization registry SHA-256",
+    )?;
+    if report.final_registry.registry_id != report.registry_id
+        || approval_log_gossip_organization_registry_sha256(&report.final_registry)?
+            != report.final_registry_sha256
+        || report.final_registry.generation != report.event_count
+    {
+        return Err("approval gossip registry history audit final state is inconsistent".into());
+    }
+    let mut expected_generation = 0;
+    for (index, entry) in report.entries.iter().enumerate() {
+        if entry.index != index as u64
+            || entry.from_generation != expected_generation
+            || entry.to_generation
+                != expected_generation.checked_add(1).ok_or_else(|| {
+                    "approval gossip registry history audit generation overflow".to_string()
+                })?
+        {
+            return Err("approval gossip registry history audit entries are not contiguous".into());
+        }
+        validate_sha256(
+            &entry.event_sha256,
+            "approval gossip registry history event SHA-256",
+        )?;
+        validate_sha256(
+            &entry.resulting_registry_sha256,
+            "resulting approval gossip registry SHA-256",
+        )?;
+        validate_public_key(
+            &entry.authority_public_key,
+            "historical approval gossip registry authority public key",
+        )?;
+        if let Some(digest) = &entry.active_governance_sha256 {
+            validate_sha256(digest, "historical approval active governance SHA-256")?;
+        }
+        expected_generation = entry.to_generation;
+    }
+    if let Some(last) = report.entries.last() {
+        if last.resulting_registry_sha256 != report.final_registry_sha256
+            || last.authority_public_key != report.final_registry.authority_public_key
+            || last.active_governance_sha256 != report.final_registry.active_governance_sha256
+        {
+            return Err(
+                "approval gossip registry history audit head does not match final state".into(),
+            );
+        }
+    } else if report.initial_registry_sha256 != report.final_registry_sha256 {
+        return Err("empty approval gossip registry history changes its genesis state".into());
+    }
+    Ok(())
+}
+
 pub fn validate_approval_log_gossip_registry_bound_quorum_report(
     report: &ApprovalLogGossipRegistryBoundQuorumReport,
 ) -> Result<(), String> {
@@ -2095,6 +2414,149 @@ pub fn signed_approval_log_gossip_organization_registry_governed_authority_key_r
                 "type": "array", "minItems": 2, "maxItems": 100,
                 "items": approval
             }
+        }
+    })
+}
+
+pub fn approval_log_gossip_organization_registry_history_json_schema() -> Value {
+    let registry = embedded_schema(approval_log_gossip_organization_registry_json_schema());
+    let root_transition =
+        embedded_schema(signed_approval_log_gossip_organization_registry_transition_json_schema());
+    let root_rotation = embedded_schema(
+        signed_approval_log_gossip_organization_registry_authority_key_rotation_json_schema(),
+    );
+    let governance =
+        embedded_schema(signed_approval_log_gossip_organization_registry_governance_json_schema());
+    let threshold_transition = embedded_schema(
+        signed_approval_log_gossip_organization_registry_threshold_transition_json_schema(),
+    );
+    let governance_rotation = embedded_schema(
+        signed_approval_log_gossip_organization_registry_governance_rotation_json_schema(),
+    );
+    let governed_root_rotation = embedded_schema(
+        signed_approval_log_gossip_organization_registry_governed_authority_key_rotation_json_schema(
+        ),
+    );
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/approval-log-gossip-organization-registry-history-v1.json",
+        "title": "Complete pcbex approval gossip organization registry transition history",
+        "type": "object", "additionalProperties": false,
+        "required": ["schema_version", "initial_registry", "events"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "initial_registry": registry,
+            "events": {
+                "type": "array", "maxItems": MAXIMUM_REGISTRY_HISTORY_EVENTS,
+                "items": {
+                    "oneOf": [
+                        {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["kind", "transition"],
+                            "properties": {
+                                "kind": {"const": "root_transition"},
+                                "transition": root_transition
+                            }
+                        },
+                        {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["kind", "rotation"],
+                            "properties": {
+                                "kind": {"const": "root_authority_key_rotation"},
+                                "rotation": root_rotation
+                            }
+                        },
+                        {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["kind", "governance", "transition"],
+                            "properties": {
+                                "kind": {"const": "threshold_transition"},
+                                "governance": governance.clone(),
+                                "transition": threshold_transition
+                            }
+                        },
+                        {
+                            "type": "object", "additionalProperties": false,
+                            "required": [
+                                "kind", "old_governance", "new_governance", "rotation"
+                            ],
+                            "properties": {
+                                "kind": {"const": "governance_rotation"},
+                                "old_governance": governance.clone(),
+                                "new_governance": governance.clone(),
+                                "rotation": governance_rotation
+                            }
+                        },
+                        {
+                            "type": "object", "additionalProperties": false,
+                            "required": [
+                                "kind", "old_governance", "new_governance", "rotation"
+                            ],
+                            "properties": {
+                                "kind": {"const": "governed_authority_key_rotation"},
+                                "old_governance": governance.clone(),
+                                "new_governance": governance,
+                                "rotation": governed_root_rotation
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    })
+}
+
+pub fn approval_log_gossip_organization_registry_history_audit_report_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/approval-log-gossip-organization-registry-history-audit-v1.json",
+        "title": "Verified pcbex approval gossip organization registry history audit",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "registry_id", "initial_registry_sha256",
+            "event_count", "entries", "final_registry", "final_registry_sha256",
+            "chain_valid"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "registry_id": slug_schema(),
+            "initial_registry_sha256": digest_schema(),
+            "event_count": {
+                "type": "integer", "minimum": 0,
+                "maximum": MAXIMUM_REGISTRY_HISTORY_EVENTS
+            },
+            "entries": {
+                "type": "array", "maxItems": MAXIMUM_REGISTRY_HISTORY_EVENTS,
+                "items": {
+                    "type": "object", "additionalProperties": false,
+                    "required": [
+                        "index", "kind", "from_generation", "to_generation",
+                        "event_sha256", "resulting_registry_sha256",
+                        "authority_public_key", "active_governance_sha256"
+                    ],
+                    "properties": {
+                        "index": {"type": "integer", "minimum": 0},
+                        "kind": {"enum": [
+                            "root_transition", "root_authority_key_rotation",
+                            "threshold_transition", "governance_rotation",
+                            "governed_authority_key_rotation"
+                        ]},
+                        "from_generation": {"type": "integer", "minimum": 0},
+                        "to_generation": {"type": "integer", "minimum": 1},
+                        "event_sha256": digest_schema(),
+                        "resulting_registry_sha256": digest_schema(),
+                        "authority_public_key": key_schema(),
+                        "active_governance_sha256": {
+                            "oneOf": [{"type": "null"}, digest_schema()]
+                        }
+                    }
+                }
+            },
+            "final_registry": embedded_schema(
+                approval_log_gossip_organization_registry_json_schema()
+            ),
+            "final_registry_sha256": digest_schema(),
+            "chain_valid": {"const": true}
         }
     })
 }
@@ -2694,6 +3156,15 @@ fn digest_schema() -> Value {
 
 fn key_schema() -> Value {
     json!({"type": "string", "pattern": "^[0-9a-f]{64}$"})
+}
+
+fn embedded_schema(mut schema: Value) -> Value {
+    if let Some(object) = schema.as_object_mut() {
+        object.remove("$schema");
+        object.remove("$id");
+        object.remove("title");
+    }
+    schema
 }
 
 #[cfg(test)]
@@ -3337,5 +3808,204 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn complete_history_replays_every_registry_event_from_genesis() {
+        let root_a = key(91);
+        let root_b = key(92);
+        let root_c = key(93);
+        let authority_a = key(94);
+        let authority_b = key(95);
+        let authority_c = key(96);
+        let authorities_ab = vec![
+            ApprovalLogGossipRegistryGovernanceAuthority {
+                authority_id: "reviewer-a".into(),
+                public_key: hex_encode(&authority_a.verifying_key().to_bytes()),
+            },
+            ApprovalLogGossipRegistryGovernanceAuthority {
+                authority_id: "reviewer-b".into(),
+                public_key: hex_encode(&authority_b.verifying_key().to_bytes()),
+            },
+        ];
+        let authorities_bc = vec![
+            ApprovalLogGossipRegistryGovernanceAuthority {
+                authority_id: "reviewer-b".into(),
+                public_key: hex_encode(&authority_b.verifying_key().to_bytes()),
+            },
+            ApprovalLogGossipRegistryGovernanceAuthority {
+                authority_id: "reviewer-c".into(),
+                public_key: hex_encode(&authority_c.verifying_key().to_bytes()),
+            },
+        ];
+        let initial = new_approval_log_gossip_organization_registry(
+            "history",
+            &root_a.verifying_key().to_bytes(),
+        )
+        .unwrap();
+        let admission = sign_approval_log_gossip_organization_registry_transition(
+            &initial,
+            &root_a.to_bytes(),
+            ApprovalLogGossipOrganizationRegistryAction::AdmitObserver,
+            "org-a",
+            Some(&trust("org-a", "observer-a", 97)),
+            &reason(31),
+            100,
+        )
+        .unwrap();
+        let admitted =
+            apply_approval_log_gossip_organization_registry_transition(&initial, &admission)
+                .unwrap();
+        let root_rotation = sign_approval_log_gossip_organization_registry_authority_key_rotation(
+            &admitted,
+            &root_a.to_bytes(),
+            &root_b.to_bytes(),
+            101,
+        )
+        .unwrap();
+        let root_rotated = apply_approval_log_gossip_organization_registry_authority_key_rotation(
+            &admitted,
+            &root_rotation,
+        )
+        .unwrap();
+        let governance_ab = sign_approval_log_gossip_organization_registry_governance(
+            &root_rotated,
+            &root_b.to_bytes(),
+            2,
+            authorities_ab,
+            102,
+        )
+        .unwrap();
+        let suspension = sign_approval_log_gossip_organization_registry_threshold_transition(
+            &root_rotated,
+            &governance_ab,
+            &[
+                ("reviewer-a".into(), authority_a.to_bytes()),
+                ("reviewer-b".into(), authority_b.to_bytes()),
+            ],
+            ApprovalLogGossipOrganizationRegistryAction::SuspendOrganization,
+            "org-a",
+            None,
+            &reason(32),
+            103,
+        )
+        .unwrap();
+        let suspended = apply_approval_log_gossip_organization_registry_threshold_transition(
+            &root_rotated,
+            &governance_ab,
+            &suspension,
+        )
+        .unwrap();
+        let governance_bc = sign_approval_log_gossip_organization_registry_governance(
+            &suspended,
+            &root_b.to_bytes(),
+            2,
+            authorities_bc.clone(),
+            104,
+        )
+        .unwrap();
+        let governance_rotation =
+            sign_approval_log_gossip_organization_registry_governance_rotation(
+                &suspended,
+                &governance_ab,
+                &governance_bc,
+                &[
+                    ("reviewer-a".into(), authority_a.to_bytes()),
+                    ("reviewer-b".into(), authority_b.to_bytes()),
+                ],
+                &[
+                    ("reviewer-b".into(), authority_b.to_bytes()),
+                    ("reviewer-c".into(), authority_c.to_bytes()),
+                ],
+                105,
+            )
+            .unwrap();
+        let governance_rotated =
+            apply_approval_log_gossip_organization_registry_governance_rotation(
+                &suspended,
+                &governance_ab,
+                &governance_bc,
+                &governance_rotation,
+            )
+            .unwrap();
+        let governance_c = sign_approval_log_gossip_organization_registry_successor_governance(
+            &governance_rotated,
+            &root_c.to_bytes(),
+            2,
+            authorities_bc,
+            106,
+        )
+        .unwrap();
+        let governed_root_rotation =
+            sign_approval_log_gossip_organization_registry_governed_authority_key_rotation(
+                &governance_rotated,
+                &governance_bc,
+                &governance_c,
+                &[
+                    ("reviewer-b".into(), authority_b.to_bytes()),
+                    ("reviewer-c".into(), authority_c.to_bytes()),
+                ],
+                &[
+                    ("reviewer-c".into(), authority_c.to_bytes()),
+                    ("reviewer-b".into(), authority_b.to_bytes()),
+                ],
+                107,
+            )
+            .unwrap();
+        let final_registry =
+            apply_approval_log_gossip_organization_registry_governed_authority_key_rotation(
+                &governance_rotated,
+                &governance_bc,
+                &governance_c,
+                &governed_root_rotation,
+            )
+            .unwrap();
+        let history = ApprovalLogGossipOrganizationRegistryHistory {
+            schema_version: 1,
+            initial_registry: initial.clone(),
+            events: vec![
+                ApprovalLogGossipOrganizationRegistryHistoryEvent::RootTransition {
+                    transition: admission,
+                },
+                ApprovalLogGossipOrganizationRegistryHistoryEvent::RootAuthorityKeyRotation {
+                    rotation: root_rotation,
+                },
+                ApprovalLogGossipOrganizationRegistryHistoryEvent::ThresholdTransition {
+                    governance: governance_ab.clone(),
+                    transition: suspension,
+                },
+                ApprovalLogGossipOrganizationRegistryHistoryEvent::GovernanceRotation {
+                    old_governance: governance_ab,
+                    new_governance: governance_bc.clone(),
+                    rotation: governance_rotation,
+                },
+                ApprovalLogGossipOrganizationRegistryHistoryEvent::GovernedAuthorityKeyRotation {
+                    old_governance: governance_bc,
+                    new_governance: governance_c,
+                    rotation: governed_root_rotation,
+                },
+            ],
+        };
+        let audit = audit_approval_log_gossip_organization_registry_history(&history).unwrap();
+        assert_eq!(audit.event_count, 5);
+        assert_eq!(audit.final_registry, final_registry);
+        assert!(audit.chain_valid);
+        assert_closed(&approval_log_gossip_organization_registry_history_json_schema());
+        assert_closed(
+            &approval_log_gossip_organization_registry_history_audit_report_json_schema(),
+        );
+
+        let mut reordered = history.clone();
+        reordered.events.swap(0, 1);
+        assert!(audit_approval_log_gossip_organization_registry_history(&reordered).is_err());
+        let mut replayed = history.clone();
+        replayed.events.push(replayed.events[0].clone());
+        assert!(audit_approval_log_gossip_organization_registry_history(&replayed).is_err());
+        let mut omitted = history.clone();
+        omitted.events.remove(1);
+        assert!(audit_approval_log_gossip_organization_registry_history(&omitted).is_err());
+        let mut non_genesis = history;
+        non_genesis.initial_registry = final_registry;
+        assert!(audit_approval_log_gossip_organization_registry_history(&non_genesis).is_err());
     }
 }
