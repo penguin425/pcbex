@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.387.0
+  uses: penguin425/pcbex@v1.388.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3722,6 +3722,31 @@ MCP exposes the same gate as
 available for approval logs whose artifacts do not use this receipt-quorum
 policy.
 
+For a checkpoint that is cryptographically distinct from the generic approval
+checkpoint, sign the exact quorum report and log under the dedicated domain:
+
+```sh
+pcbex sign-remote-approval-registry-history-receipt-quorum-log-checkpoint \
+  receipt-log.quorum.json \
+  --quorum-report receipt-log.quorum-report.json \
+  --private-key receipt-log.key \
+  --signer-id approval-registry-receipt-log \
+  --output receipt-log.quorum-checkpoint.json
+pcbex verify-remote-approval-registry-history-receipt-quorum-log-checkpoint \
+  receipt-log.quorum.json \
+  --quorum-report receipt-log.quorum-report.json \
+  --checkpoint receipt-log.quorum-checkpoint.json \
+  --public-key receipt-log.pub \
+  --output receipt-log.quorum-checkpoint.verification.json
+```
+
+The signature covers the normalized report digest, registry identity,
+generation and checkpoint, full approval-log state, threshold and valid member
+count, and signer identity. Generic approval checkpoints cannot substitute for
+this closed contract. MCP exposes matching
+`sign_remote_approval_registry_history_receipt_quorum_log_checkpoint` and
+`verify_remote_approval_registry_history_receipt_quorum_log_checkpoint` tools.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3789,7 +3814,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.387.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.388.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

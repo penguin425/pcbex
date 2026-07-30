@@ -1,4 +1,4 @@
-use ed25519_dalek::VerifyingKey;
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use pcbex_kicad::{
     ApprovalArtifactKind, ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
     ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
@@ -21,6 +21,7 @@ use std::{
 const PROTOCOL: &str =
     "pcbex-approval-public-log-gossip-organization-registry-history-checkpoint-witness-v1";
 const ADAPTER: &str = "remote-approval-gossip-registry-history-checkpoint-witness-https-v1";
+const QUORUM_CHECKPOINT_DOMAIN: &str = "pcbex-approval-registry-receipt-quorum-log-checkpoint-v1";
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Serialize)]
@@ -88,6 +89,42 @@ pub struct RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport {
     pub approval_log_head_sha256: Option<String>,
     #[serde(default)]
     pub approval_log_sha256: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint {
+    pub schema_version: u32,
+    pub quorum_report_sha256: String,
+    pub registry_id: String,
+    pub generation: u64,
+    pub registry_checkpoint_sha256: String,
+    pub approval_log_id: String,
+    pub approval_log_entry_count: u64,
+    pub approval_log_head_sha256: String,
+    pub approval_log_sha256: String,
+    pub minimum_witnesses: u32,
+    pub valid_witnesses: u32,
+    pub signer_id: String,
+    pub algorithm: String,
+    pub public_key: String,
+    pub signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointVerification {
+    pub schema_version: u32,
+    pub quorum_report_sha256: String,
+    pub registry_id: String,
+    pub generation: u64,
+    pub approval_log_id: String,
+    pub approval_log_entry_count: u64,
+    pub approval_log_head_sha256: String,
+    pub approval_log_sha256: String,
+    pub signer_id: String,
+    pub public_key: String,
+    pub verified: bool,
 }
 
 pub fn remote_approval_registry_history_checkpoint_witness_receipt_json_schema() -> Value {
@@ -201,6 +238,67 @@ pub fn remote_approval_registry_history_checkpoint_witness_receipt_quorum_report
             "approval_log_sha256": {
                 "oneOf": [{"type": "null"}, digest_schema()]
             }
+        }
+    })
+}
+
+pub fn signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_json_schema() -> Value
+{
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-remote-approval-registry-history-receipt-quorum-log-checkpoint-v1.json",
+        "title": "pcbex signed verifier-bound approval receipt quorum log checkpoint",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "quorum_report_sha256", "registry_id", "generation",
+            "registry_checkpoint_sha256", "approval_log_id", "approval_log_entry_count",
+            "approval_log_head_sha256", "approval_log_sha256", "minimum_witnesses",
+            "valid_witnesses", "signer_id", "algorithm", "public_key", "signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "quorum_report_sha256": digest_schema(),
+            "registry_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 0},
+            "registry_checkpoint_sha256": digest_schema(),
+            "approval_log_id": slug_schema(),
+            "approval_log_entry_count": {"type": "integer", "minimum": 2},
+            "approval_log_head_sha256": digest_schema(),
+            "approval_log_sha256": digest_schema(),
+            "minimum_witnesses": {"type": "integer", "minimum": 2, "maximum": 100},
+            "valid_witnesses": {"type": "integer", "minimum": 2, "maximum": 100},
+            "signer_id": slug_schema(),
+            "algorithm": {"const": "ed25519"},
+            "public_key": key_schema(),
+            "signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
+        }
+    })
+}
+
+pub fn remote_approval_registry_history_receipt_quorum_log_checkpoint_verification_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/remote-approval-registry-history-receipt-quorum-log-checkpoint-verification-v1.json",
+        "title": "pcbex verifier-bound approval receipt quorum log checkpoint verification",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "quorum_report_sha256", "registry_id", "generation",
+            "approval_log_id", "approval_log_entry_count", "approval_log_head_sha256",
+            "approval_log_sha256", "signer_id", "public_key", "verified"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "quorum_report_sha256": digest_schema(),
+            "registry_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 0},
+            "approval_log_id": slug_schema(),
+            "approval_log_entry_count": {"type": "integer", "minimum": 2},
+            "approval_log_head_sha256": digest_schema(),
+            "approval_log_sha256": digest_schema(),
+            "signer_id": slug_schema(),
+            "public_key": key_schema(),
+            "verified": {"const": true}
         }
     })
 }
@@ -379,6 +477,158 @@ pub fn validate_remote_approval_registry_history_checkpoint_witness_receipt_quor
         }
     }
     Ok(())
+}
+
+pub fn sign_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+    report: &RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    log: &ApprovalTransparencyLog,
+    signer_id: &str,
+    secret_key: &[u8; 32],
+) -> Result<SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint, String> {
+    validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_for_log(
+        report, log,
+    )?;
+    validate_slug(signer_id, "receipt quorum checkpoint signer id")?;
+    let report_bytes = serde_json::to_vec(report)
+        .map_err(|error| format!("serializing receipt quorum report: {error}"))?;
+    let signing_key = SigningKey::from_bytes(secret_key);
+    let mut checkpoint = SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint {
+        schema_version: 1,
+        quorum_report_sha256: sha256(&report_bytes),
+        registry_id: report.registry_id.clone(),
+        generation: report.generation,
+        registry_checkpoint_sha256: report.checkpoint_sha256.clone(),
+        approval_log_id: log.log_id.clone(),
+        approval_log_entry_count: log.entries.len() as u64,
+        approval_log_head_sha256: log
+            .head_sha256
+            .clone()
+            .ok_or_else(|| "quorum-bound approval log has no head".to_string())?,
+        approval_log_sha256: approval_transparency_log_sha256(log)?,
+        minimum_witnesses: report.minimum_witnesses,
+        valid_witnesses: report.valid_witnesses,
+        signer_id: signer_id.to_string(),
+        algorithm: "ed25519".into(),
+        public_key: encode_hex(&signing_key.verifying_key().to_bytes()),
+        signature: String::new(),
+    };
+    let payload = quorum_checkpoint_payload(&checkpoint)?;
+    checkpoint.signature = encode_hex(&signing_key.sign(&payload).to_bytes());
+    validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint(&checkpoint)?;
+    Ok(checkpoint)
+}
+
+pub fn verify_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+    report: &RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    log: &ApprovalTransparencyLog,
+    checkpoint: &SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint,
+    trusted_public_key: &[u8; 32],
+) -> Result<RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointVerification, String> {
+    validate_remote_approval_registry_history_checkpoint_witness_receipt_quorum_for_log(
+        report, log,
+    )?;
+    validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint(checkpoint)?;
+    let report_bytes = serde_json::to_vec(report)
+        .map_err(|error| format!("serializing receipt quorum report: {error}"))?;
+    if checkpoint.quorum_report_sha256 != sha256(&report_bytes)
+        || checkpoint.registry_id != report.registry_id
+        || checkpoint.generation != report.generation
+        || checkpoint.registry_checkpoint_sha256 != report.checkpoint_sha256
+        || checkpoint.approval_log_id != log.log_id
+        || checkpoint.approval_log_entry_count != log.entries.len() as u64
+        || Some(checkpoint.approval_log_head_sha256.as_str()) != log.head_sha256.as_deref()
+        || checkpoint.approval_log_sha256 != approval_transparency_log_sha256(log)?
+        || checkpoint.minimum_witnesses != report.minimum_witnesses
+        || checkpoint.valid_witnesses != report.valid_witnesses
+    {
+        return Err("signed receipt quorum checkpoint is bound to different evidence".into());
+    }
+    let public_key = decode_hex::<32>(&checkpoint.public_key, "receipt quorum checkpoint key")?;
+    if &public_key != trusted_public_key {
+        return Err("receipt quorum checkpoint key is not trusted".into());
+    }
+    let signature = decode_hex::<64>(&checkpoint.signature, "receipt quorum checkpoint signature")?;
+    VerifyingKey::from_bytes(&public_key)
+        .map_err(|error| format!("invalid receipt quorum checkpoint public key: {error}"))?
+        .verify_strict(
+            &quorum_checkpoint_payload(checkpoint)?,
+            &Signature::from_bytes(&signature),
+        )
+        .map_err(|error| format!("invalid receipt quorum checkpoint signature: {error}"))?;
+    Ok(
+        RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointVerification {
+            schema_version: 1,
+            quorum_report_sha256: checkpoint.quorum_report_sha256.clone(),
+            registry_id: checkpoint.registry_id.clone(),
+            generation: checkpoint.generation,
+            approval_log_id: checkpoint.approval_log_id.clone(),
+            approval_log_entry_count: checkpoint.approval_log_entry_count,
+            approval_log_head_sha256: checkpoint.approval_log_head_sha256.clone(),
+            approval_log_sha256: checkpoint.approval_log_sha256.clone(),
+            signer_id: checkpoint.signer_id.clone(),
+            public_key: checkpoint.public_key.clone(),
+            verified: true,
+        },
+    )
+}
+
+pub fn validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint(
+    checkpoint: &SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint,
+) -> Result<(), String> {
+    if checkpoint.schema_version != 1
+        || checkpoint.algorithm != "ed25519"
+        || checkpoint.approval_log_entry_count < 2
+        || !(2..=100).contains(&checkpoint.minimum_witnesses)
+        || !(2..=100).contains(&checkpoint.valid_witnesses)
+        || checkpoint.valid_witnesses < checkpoint.minimum_witnesses
+    {
+        return Err("invalid signed receipt quorum checkpoint invariants".into());
+    }
+    validate_slug(&checkpoint.registry_id, "approval registry id")?;
+    validate_slug(&checkpoint.approval_log_id, "approval transparency log id")?;
+    validate_slug(&checkpoint.signer_id, "receipt quorum checkpoint signer id")?;
+    validate_digest(&checkpoint.quorum_report_sha256, "quorum report SHA-256")?;
+    validate_digest(
+        &checkpoint.registry_checkpoint_sha256,
+        "registry checkpoint SHA-256",
+    )?;
+    validate_digest(
+        &checkpoint.approval_log_head_sha256,
+        "approval log head SHA-256",
+    )?;
+    validate_digest(&checkpoint.approval_log_sha256, "approval log SHA-256")?;
+    let key = decode_hex::<32>(&checkpoint.public_key, "receipt quorum checkpoint key")?;
+    VerifyingKey::from_bytes(&key)
+        .map_err(|error| format!("invalid receipt quorum checkpoint public key: {error}"))?;
+    decode_hex::<64>(&checkpoint.signature, "receipt quorum checkpoint signature")?;
+    Ok(())
+}
+
+fn quorum_checkpoint_payload(
+    checkpoint: &SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint,
+) -> Result<Vec<u8>, String> {
+    let body = json!({
+        "schema_version": checkpoint.schema_version,
+        "quorum_report_sha256": checkpoint.quorum_report_sha256,
+        "registry_id": checkpoint.registry_id,
+        "generation": checkpoint.generation,
+        "registry_checkpoint_sha256": checkpoint.registry_checkpoint_sha256,
+        "approval_log_id": checkpoint.approval_log_id,
+        "approval_log_entry_count": checkpoint.approval_log_entry_count,
+        "approval_log_head_sha256": checkpoint.approval_log_head_sha256,
+        "approval_log_sha256": checkpoint.approval_log_sha256,
+        "minimum_witnesses": checkpoint.minimum_witnesses,
+        "valid_witnesses": checkpoint.valid_witnesses,
+        "signer_id": checkpoint.signer_id,
+        "algorithm": checkpoint.algorithm
+    });
+    let mut payload = QUORUM_CHECKPOINT_DOMAIN.as_bytes().to_vec();
+    payload.push(0);
+    payload.extend(
+        serde_json::to_vec(&body)
+            .map_err(|error| format!("serializing receipt quorum checkpoint payload: {error}"))?,
+    );
+    Ok(payload)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -943,6 +1193,10 @@ fn sha256(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
+fn encode_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn slug_schema() -> Value {
     json!({
         "type": "string", "minLength": 1, "maxLength": 128,
@@ -976,6 +1230,15 @@ mod tests {
         assert_eq!(
             remote_approval_registry_history_checkpoint_witness_receipt_quorum_report_json_schema()
                 ["properties"]["members"]["items"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_json_schema()["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            remote_approval_registry_history_receipt_quorum_log_checkpoint_verification_json_schema(
+            )["additionalProperties"],
             false
         );
         assert!(validate_endpoint("https://witness.example/v1/history", false).is_ok());

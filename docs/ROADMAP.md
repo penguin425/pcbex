@@ -97,6 +97,7 @@ auditable release.
 | v1.385.0 | Verifier-bound approval registry receipt admission | Re-verify retained checkpoint, witness trust, exact response bytes, and signature before append |
 | v1.386.0 | Verifier-bound approval registry receipt admission quorum | Require a configurable minimum of distinct independently reverified registry-history witness receipts before atomic append |
 | v1.387.0 | Quorum-bound approval receipt-log signing | Bind the exact resulting approval log to its admission report and refuse checkpoint signing for partial, extended, or unrelated logs |
+| v1.388.0 | Domain-separated signed receipt-quorum checkpoints | Sign the exact quorum-report digest, registry checkpoint, threshold, and approval-log state under a dedicated cryptographic domain |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -105,6 +106,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should make quorum-bound checkpoints independently
-distinguishable from generic approval-log checkpoints by signing the exact
-admission-report digest under a dedicated domain.
+The next roadmap should add independent witness and quorum support for the
+dedicated receipt-quorum checkpoints, so checkpoint publication is not
+controlled by one signing authority.
