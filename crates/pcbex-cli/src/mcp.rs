@@ -2987,6 +2987,25 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "sign_quorum_bound_approval_transparency_log",
+            "Sign quorum-bound approval-log checkpoint",
+            "Create an Ed25519 checkpoint only when the exact log suffix matches a successful verifier-bound remote receipt quorum report.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["log", "quorum_report", "private_key", "signer_id", "output"],
+                "properties": {
+                    "log": {"type": "string"},
+                    "quorum_report": {"type": "string"},
+                    "private_key": {"type": "string"},
+                    "signer_id": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "sign_approval_transparency_log",
             "Sign approval-log checkpoint",
             "Create an Ed25519 checkpoint for the exact approval log head and complete log digest.",
@@ -4301,6 +4320,9 @@ fn call_tool(
                 arguments,
                 cancellation,
             )?
+        }
+        "sign_quorum_bound_approval_transparency_log" => {
+            sign_quorum_bound_approval_transparency_log(arguments, cancellation)?
         }
         "sign_approval_transparency_log" => {
             sign_approval_transparency_log(arguments, cancellation)?
@@ -9071,6 +9093,36 @@ fn append_verified_remote_approval_registry_history_witness_receipt_quorum(
     ))
 }
 
+fn sign_quorum_bound_approval_transparency_log(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["log", "quorum_report", "private_key", "signer_id", "output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-approval-log-with-remote-approval-registry-history-checkpoint-witness-receipt-quorum"
+            .into(),
+        required_string(&arguments, "log")?,
+        "--quorum-report".into(),
+        required_string(&arguments, "quorum_report")?,
+        "--private-key".into(),
+        required_string(&arguments, "private_key")?,
+        "--signer-id".into(),
+        required_string(&arguments, "signer_id")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let checkpoint = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "checkpoint": checkpoint}),
+    ))
+}
+
 fn sign_approval_transparency_log(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -11163,7 +11215,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 131);
+        assert_eq!(tools.len(), 132);
         let named = |name: &str| {
             tools
                 .iter()

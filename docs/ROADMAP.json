@@ -449,6 +449,11 @@
     {
       "id": "verifier-bound-approval-registry-witness-receipt-admission-quorum",
       "release": "v1.386.0",
+      "status": "released"
+    },
+    {
+      "id": "quorum-bound-approval-registry-receipt-log-signing",
+      "release": "v1.387.0",
       "status": "current"
     }
   ]
