@@ -24,6 +24,8 @@ const ADAPTER: &str = "remote-approval-gossip-registry-history-checkpoint-witnes
 const QUORUM_CHECKPOINT_DOMAIN: &str = "pcbex-approval-registry-receipt-quorum-log-checkpoint-v1";
 const QUORUM_CHECKPOINT_WITNESS_DOMAIN: &str =
     "pcbex-approval-registry-receipt-quorum-log-checkpoint-witness-v1";
+const QUORUM_CHECKPOINT_WITNESS_KEY_ROTATION_DOMAIN: &str =
+    "pcbex-approval-registry-receipt-quorum-log-checkpoint-witness-key-rotation-v1";
 const MAXIMUM_QUORUM_CHECKPOINT_WITNESS_AGE_SECONDS: u64 = 86_400;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
@@ -166,6 +168,33 @@ pub struct RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessQuorumR
     pub witness_ids: Vec<String>,
     pub witness_public_keys: Vec<String>,
     pub quorum_met: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub generation: u64,
+    pub current_public_key: String,
+    pub last_rotation_sha256: Option<String>,
+    pub last_rotated_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessKeyRotation {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_rotation_sha256: Option<String>,
+    pub old_public_key: String,
+    pub new_public_key: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_signature: String,
+    pub new_signature: String,
 }
 
 pub fn remote_approval_registry_history_checkpoint_witness_receipt_json_schema() -> Value {
@@ -411,6 +440,62 @@ pub fn remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_qu
                 "items": key_schema()
             },
             "quorum_met": {"type": "boolean"}
+        }
+    })
+}
+
+pub fn remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/remote-approval-registry-history-receipt-quorum-log-checkpoint-witness-trust-state-v1.json",
+        "title": "pcbex receipt-quorum checkpoint witness trust state",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "generation", "current_public_key",
+            "last_rotation_sha256", "last_rotated_at_unix"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 0},
+            "current_public_key": key_schema(),
+            "last_rotation_sha256": {
+                "oneOf": [{"type": "null"}, digest_schema()]
+            },
+            "last_rotated_at_unix": {
+                "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]
+            }
+        }
+    })
+}
+
+pub fn signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-remote-approval-registry-history-receipt-quorum-log-checkpoint-witness-key-rotation-v1.json",
+        "title": "pcbex dual-signed receipt-quorum checkpoint witness key rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "from_generation", "to_generation",
+            "previous_rotation_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "from_generation": {"type": "integer", "minimum": 0},
+            "to_generation": {"type": "integer", "minimum": 1},
+            "previous_rotation_sha256": {
+                "oneOf": [{"type": "null"}, digest_schema()]
+            },
+            "old_public_key": key_schema(),
+            "new_public_key": key_schema(),
+            "rotated_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "old_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"},
+            "new_signature": {"type": "string", "pattern": "^[0-9a-f]{128}$"}
         }
     })
 }
@@ -684,6 +769,239 @@ pub fn verify_remote_approval_registry_history_receipt_quorum_log_checkpoint(
     )
 }
 
+pub fn new_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state(
+    witness_id: &str,
+    public_key: &[u8; 32],
+) -> Result<RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState, String> {
+    validate_slug(witness_id, "receipt quorum checkpoint witness id")?;
+    VerifyingKey::from_bytes(public_key)
+        .map_err(|error| format!("invalid receipt quorum checkpoint witness key: {error}"))?;
+    Ok(
+        RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState {
+            schema_version: 1,
+            witness_id: witness_id.into(),
+            generation: 0,
+            current_public_key: encode_hex(public_key),
+            last_rotation_sha256: None,
+            last_rotated_at_unix: None,
+        },
+    )
+}
+
+pub fn remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trusted_public_key(
+    state: &RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState,
+) -> Result<[u8; 32], String> {
+    validate_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state(
+        state,
+    )?;
+    decode_hex::<32>(
+        &state.current_public_key,
+        "trusted receipt quorum checkpoint witness public key",
+    )
+}
+
+pub fn sign_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+    state: &RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState,
+    old_secret_key: &[u8; 32],
+    new_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessKeyRotation, String>
+{
+    validate_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state(
+        state,
+    )?;
+    let old_key = SigningKey::from_bytes(old_secret_key);
+    let new_key = SigningKey::from_bytes(new_secret_key);
+    let old_public_key = encode_hex(&old_key.verifying_key().to_bytes());
+    let new_public_key = encode_hex(&new_key.verifying_key().to_bytes());
+    if old_public_key != state.current_public_key {
+        return Err("old receipt quorum checkpoint witness key is not currently trusted".into());
+    }
+    if new_public_key == old_public_key {
+        return Err("new receipt quorum checkpoint witness key must differ".into());
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err("receipt quorum checkpoint witness rotation time must be monotonic".into());
+    }
+    let to_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "receipt quorum checkpoint witness generation overflow".to_string())?;
+    let mut rotation =
+        SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessKeyRotation {
+            schema_version: 1,
+            witness_id: state.witness_id.clone(),
+            from_generation: state.generation,
+            to_generation,
+            previous_rotation_sha256: state.last_rotation_sha256.clone(),
+            old_public_key,
+            new_public_key,
+            rotated_at_unix,
+            algorithm: "ed25519".into(),
+            old_signature: String::new(),
+            new_signature: String::new(),
+        };
+    let payload = quorum_checkpoint_witness_key_rotation_payload(&rotation)?;
+    rotation.old_signature = encode_hex(&old_key.sign(&payload).to_bytes());
+    rotation.new_signature = encode_hex(&new_key.sign(&payload).to_bytes());
+    validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub fn apply_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+    state: &RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState,
+    rotation: &SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState, String> {
+    validate_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state(
+        state,
+    )?;
+    validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    if rotation.witness_id != state.witness_id
+        || rotation.from_generation != state.generation
+        || rotation.previous_rotation_sha256 != state.last_rotation_sha256
+        || rotation.old_public_key != state.current_public_key
+        || rotation.to_generation
+            != state.generation.checked_add(1).ok_or_else(|| {
+                "receipt quorum checkpoint witness generation overflow".to_string()
+            })?
+    {
+        return Err(
+            "receipt quorum checkpoint witness rotation does not extend retained trust".into(),
+        );
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err("receipt quorum checkpoint witness rotation time must be monotonic".into());
+    }
+    let payload = quorum_checkpoint_witness_key_rotation_payload(rotation)?;
+    for (public_key, signature, label) in [
+        (
+            &rotation.old_public_key,
+            &rotation.old_signature,
+            "old receipt quorum checkpoint witness rotation",
+        ),
+        (
+            &rotation.new_public_key,
+            &rotation.new_signature,
+            "new receipt quorum checkpoint witness rotation",
+        ),
+    ] {
+        let key = decode_hex::<32>(public_key, label)?;
+        let signature = decode_hex::<64>(signature, label)?;
+        VerifyingKey::from_bytes(&key)
+            .map_err(|error| format!("invalid {label} key: {error}"))?
+            .verify_strict(&payload, &Signature::from_bytes(&signature))
+            .map_err(|_| format!("{label} signature verification failed"))?;
+    }
+    let rotation_sha256 =
+        signed_receipt_quorum_log_checkpoint_witness_key_rotation_sha256(rotation)?;
+    let next = RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        generation: rotation.to_generation,
+        current_public_key: rotation.new_public_key.clone(),
+        last_rotation_sha256: Some(rotation_sha256),
+        last_rotated_at_unix: Some(rotation.rotated_at_unix),
+    };
+    validate_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state(
+        &next,
+    )?;
+    Ok(next)
+}
+
+pub fn validate_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state(
+    state: &RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState,
+) -> Result<(), String> {
+    if state.schema_version != 1 {
+        return Err("invalid receipt quorum checkpoint witness trust-state version".into());
+    }
+    validate_slug(&state.witness_id, "receipt quorum checkpoint witness id")?;
+    let key = decode_hex::<32>(
+        &state.current_public_key,
+        "receipt quorum checkpoint witness trust key",
+    )?;
+    VerifyingKey::from_bytes(&key)
+        .map_err(|error| format!("invalid receipt quorum checkpoint witness trust key: {error}"))?;
+    match (
+        state.generation,
+        &state.last_rotation_sha256,
+        state.last_rotated_at_unix,
+    ) {
+        (0, None, None) => Ok(()),
+        (1.., Some(digest), Some(_)) => {
+            validate_digest(digest, "receipt quorum checkpoint witness rotation SHA-256")
+        }
+        _ => Err("receipt quorum checkpoint witness trust-state chain is incomplete".into()),
+    }
+}
+
+pub fn validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+    rotation: &SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<(), String> {
+    let expected_generation = rotation
+        .from_generation
+        .checked_add(1)
+        .ok_or_else(|| "receipt quorum checkpoint witness generation overflow".to_string())?;
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.to_generation != expected_generation
+        || rotation.old_public_key == rotation.new_public_key
+    {
+        return Err("invalid receipt quorum checkpoint witness rotation invariants".into());
+    }
+    validate_slug(&rotation.witness_id, "receipt quorum checkpoint witness id")?;
+    match (rotation.from_generation, &rotation.previous_rotation_sha256) {
+        (0, None) => {}
+        (1.., Some(digest)) => validate_digest(
+            digest,
+            "previous receipt quorum checkpoint witness rotation SHA-256",
+        )?,
+        _ => return Err("receipt quorum checkpoint witness rotation chain is incomplete".into()),
+    }
+    for (key, label) in [
+        (
+            &rotation.old_public_key,
+            "old receipt quorum checkpoint witness key",
+        ),
+        (
+            &rotation.new_public_key,
+            "new receipt quorum checkpoint witness key",
+        ),
+    ] {
+        let bytes = decode_hex::<32>(key, label)?;
+        VerifyingKey::from_bytes(&bytes).map_err(|error| format!("invalid {label}: {error}"))?;
+    }
+    decode_hex::<64>(
+        &rotation.old_signature,
+        "old receipt quorum checkpoint witness rotation signature",
+    )?;
+    decode_hex::<64>(
+        &rotation.new_signature,
+        "new receipt quorum checkpoint witness rotation signature",
+    )?;
+    Ok(())
+}
+
+fn signed_receipt_quorum_log_checkpoint_witness_key_rotation_sha256(
+    rotation: &SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<String, String> {
+    validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    serde_json::to_vec(rotation)
+        .map(|bytes| sha256(&bytes))
+        .map_err(|error| format!("serializing receipt quorum checkpoint witness rotation: {error}"))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn sign_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness(
     report: &RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
@@ -806,6 +1124,53 @@ pub fn verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_wit
         &quorum,
     )?;
     Ok(quorum)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses_with_trust_states(
+    report: &RemoteApprovalRegistryHistoryCheckpointWitnessReceiptQuorumReport,
+    log: &ApprovalTransparencyLog,
+    checkpoint: &SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpoint,
+    trusted_checkpoint_public_key: &[u8; 32],
+    witnesses: &[SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitness],
+    witness_trust_states: &[
+        RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessTrustState
+    ],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<RemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessQuorumReport, String> {
+    if witnesses.len() != witness_trust_states.len() || witnesses.len() > 100 {
+        return Err(
+            "receipt quorum checkpoint witnesses and trust states must be paired and bounded"
+                .into(),
+        );
+    }
+    for (witness, state) in witnesses.iter().zip(witness_trust_states) {
+        validate_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state(
+            state,
+        )?;
+        if witness.witness_id != state.witness_id {
+            return Err(
+                "receipt quorum checkpoint witness identity does not match retained trust".into(),
+            );
+        }
+    }
+    let trusted_keys = witness_trust_states
+        .iter()
+        .map(
+            remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trusted_public_key,
+        )
+        .collect::<Result<Vec<_>, _>>()?;
+    verify_remote_approval_registry_history_receipt_quorum_log_checkpoint_witnesses(
+        report,
+        log,
+        checkpoint,
+        trusted_checkpoint_public_key,
+        witnesses,
+        &trusted_keys,
+        minimum_witnesses,
+        evaluated_at_unix,
+    )
 }
 
 pub fn validate_signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness(
@@ -1034,6 +1399,31 @@ fn quorum_checkpoint_witness_payload(
     payload.extend(
         serde_json::to_vec(&body)
             .map_err(|error| format!("serializing receipt quorum checkpoint witness: {error}"))?,
+    );
+    Ok(payload)
+}
+
+fn quorum_checkpoint_witness_key_rotation_payload(
+    rotation: &SignedRemoteApprovalRegistryHistoryReceiptQuorumLogCheckpointWitnessKeyRotation,
+) -> Result<Vec<u8>, String> {
+    let body = json!({
+        "schema_version": rotation.schema_version,
+        "witness_id": rotation.witness_id,
+        "from_generation": rotation.from_generation,
+        "to_generation": rotation.to_generation,
+        "previous_rotation_sha256": rotation.previous_rotation_sha256,
+        "old_public_key": rotation.old_public_key,
+        "new_public_key": rotation.new_public_key,
+        "rotated_at_unix": rotation.rotated_at_unix,
+        "algorithm": rotation.algorithm
+    });
+    let mut payload = QUORUM_CHECKPOINT_WITNESS_KEY_ROTATION_DOMAIN
+        .as_bytes()
+        .to_vec();
+    payload.push(0);
+    payload.extend(
+        serde_json::to_vec(&body)
+            .map_err(|error| format!("serializing receipt quorum witness rotation: {error}"))?,
     );
     Ok(payload)
 }
@@ -1658,6 +2048,16 @@ mod tests {
             )["additionalProperties"],
             false
         );
+        assert_eq!(
+            remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state_json_schema(
+            )["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            signed_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation_json_schema(
+            )["additionalProperties"],
+            false
+        );
         assert!(validate_endpoint("https://witness.example/v1/history", false).is_ok());
         assert!(
             validate_endpoint("https://witness.example/v1/history?token=secret", false).is_err()
@@ -1668,5 +2068,61 @@ mod tests {
         assert!(validate_endpoint("http://127.0.0.1:1234/v1/history", true).is_ok());
         assert!(validate_env_name("PCBEX_APPROVAL_HISTORY_WITNESS_TOKEN").is_ok());
         assert!(validate_env_name("BAD-NAME").is_err());
+    }
+
+    #[test]
+    fn rotates_receipt_quorum_checkpoint_witness_trust_with_dual_signatures() {
+        let old_secret = [41_u8; 32];
+        let new_secret = [42_u8; 32];
+        let old_public = SigningKey::from_bytes(&old_secret)
+            .verifying_key()
+            .to_bytes();
+        let new_public = SigningKey::from_bytes(&new_secret)
+            .verifying_key()
+            .to_bytes();
+        let initial =
+            new_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trust_state(
+                "checkpoint-witness-a",
+                &old_public,
+            )
+            .unwrap();
+        let rotation =
+            sign_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &initial,
+                &old_secret,
+                &new_secret,
+                1_000,
+            )
+            .unwrap();
+        let rotated =
+            apply_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &initial,
+                &rotation,
+            )
+            .unwrap();
+        assert_eq!(rotated.generation, 1);
+        assert_eq!(
+            remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_trusted_public_key(
+                &rotated,
+            )
+            .unwrap(),
+            new_public
+        );
+        assert!(
+            apply_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &rotated,
+                &rotation,
+            )
+            .is_err()
+        );
+        let mut tampered = rotation;
+        tampered.rotated_at_unix += 1;
+        assert!(
+            apply_remote_approval_registry_history_receipt_quorum_log_checkpoint_witness_key_rotation(
+                &initial,
+                &tampered,
+            )
+            .is_err()
+        );
     }
 }

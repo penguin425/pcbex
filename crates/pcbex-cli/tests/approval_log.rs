@@ -2153,6 +2153,130 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     let dedicated_witness_quorum_value = read_value(&dedicated_witness_quorum);
     assert_eq!(dedicated_witness_quorum_value["quorum_met"], true);
     assert_eq!(dedicated_witness_quorum_value["valid_witnesses"], 2);
+    let dedicated_witness_a_trust =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness-a.trust.json");
+    let dedicated_witness_b_trust =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness-b.trust.json");
+    for (witness_id, public_key, output) in [
+        (
+            "checkpoint-witness-a",
+            &witness_a_public,
+            &dedicated_witness_a_trust,
+        ),
+        (
+            "checkpoint-witness-b",
+            &witness_b_public,
+            &dedicated_witness_b_trust,
+        ),
+    ] {
+        assert!(
+            run(&[
+                "init-remote-approval-registry-history-receipt-quorum-log-checkpoint-witness-trust",
+                "--witness-id",
+                witness_id,
+                "--public-key",
+                path(public_key),
+                "--output",
+                path(output),
+            ])
+            .status
+            .success()
+        );
+    }
+    let dedicated_witness_a_rotation =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness-a.rotation.json");
+    let dedicated_witness_a_rotated_trust = directory
+        .join("gossip-registry.history.remote-receipts.dedicated.witness-a.rotated-trust.json");
+    assert!(
+        run(&[
+            "sign-remote-approval-registry-history-receipt-quorum-log-checkpoint-witness-key-rotation",
+            path(&dedicated_witness_a_trust),
+            "--old-private-key",
+            path(&witness_a_private),
+            "--new-private-key",
+            path(&witness_a_next_private),
+            "--rotated-at-unix",
+            "131",
+            "--output",
+            path(&dedicated_witness_a_rotation),
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        run(&[
+            "apply-remote-approval-registry-history-receipt-quorum-log-checkpoint-witness-key-rotation",
+            path(&dedicated_witness_a_trust),
+            "--rotation",
+            path(&dedicated_witness_a_rotation),
+            "--output",
+            path(&dedicated_witness_a_rotated_trust),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        read_value(&dedicated_witness_a_rotated_trust)["generation"],
+        1
+    );
+    let dedicated_witness_a_rotated =
+        directory.join("gossip-registry.history.remote-receipts.dedicated.witness-a.rotated.json");
+    assert!(
+        run(&[
+            "witness-remote-approval-registry-history-receipt-quorum-log-checkpoint",
+            path(&remote_history_receipt_quorum_log),
+            "--quorum-report",
+            path(&remote_history_receipt_quorum_report),
+            "--checkpoint",
+            path(&dedicated_quorum_checkpoint),
+            "--checkpoint-public-key",
+            path(&public_key),
+            "--private-key",
+            path(&witness_a_next_private),
+            "--witness-id",
+            "checkpoint-witness-a",
+            "--witnessed-at-unix",
+            "132",
+            "--output",
+            path(&dedicated_witness_a_rotated),
+        ])
+        .status
+        .success()
+    );
+    let dedicated_rotated_witness_quorum = directory
+        .join("gossip-registry.history.remote-receipts.dedicated.rotated-witness-quorum.json");
+    assert!(
+        run(&[
+            "verify-remote-approval-registry-history-receipt-quorum-log-checkpoint-witnesses",
+            path(&remote_history_receipt_quorum_log),
+            "--quorum-report",
+            path(&remote_history_receipt_quorum_report),
+            "--checkpoint",
+            path(&dedicated_quorum_checkpoint),
+            "--checkpoint-public-key",
+            path(&public_key),
+            "--witnesses",
+            path(&dedicated_witness_a_rotated),
+            "--witnesses",
+            path(&dedicated_witness_b),
+            "--witness-trust-states",
+            path(&dedicated_witness_a_rotated_trust),
+            "--witness-trust-states",
+            path(&dedicated_witness_b_trust),
+            "--minimum-witnesses",
+            "2",
+            "--evaluated-at-unix",
+            "133",
+            "--output",
+            path(&dedicated_rotated_witness_quorum),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        read_value(&dedicated_rotated_witness_quorum)["quorum_met"],
+        true
+    );
     let dedicated_witness_schema =
         directory.join("gossip-registry.history.remote-receipts.dedicated.witness.schema.json");
     assert!(
