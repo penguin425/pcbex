@@ -802,6 +802,14 @@ inputs:
     description: Optional distinct-key quorum-approved registry transition applied before approval gossip verification.
     required: false
     default: ""
+  approval-log-gossip-organization-registry-governance-rotation-new:
+    description: Successor root-signed approval gossip registry governance used in a dual-quorum rotation.
+    required: false
+    default: ""
+  approval-log-gossip-organization-registry-governance-rotation:
+    description: Old-and-new quorum-approved governance rotation applied after an optional threshold transition.
+    required: false
+    default: ""
   approval-log-gossip-minimum-organizations:
     description: Minimum number of fresh, distinct organizations required.
     required: false
@@ -1432,6 +1440,8 @@ runs:
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION: ${{ inputs.approval-log-gossip-organization-registry-authority-key-rotation }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE: ${{ inputs.approval-log-gossip-organization-registry-governance }}
         PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_THRESHOLD_TRANSITION: ${{ inputs.approval-log-gossip-organization-registry-threshold-transition }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION_NEW: ${{ inputs.approval-log-gossip-organization-registry-governance-rotation-new }}
+        PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_GOVERNANCE_ROTATION: ${{ inputs.approval-log-gossip-organization-registry-governance-rotation }}
         PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS: ${{ inputs.approval-log-gossip-minimum-organizations }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ENDPOINTS: ${{ inputs.approval-log-remote-gossip-endpoints }}
         PCBEX_APPROVAL_LOG_REMOTE_GOSSIP_ORGANIZATION_IDS: ${{ inputs.approval-log-remote-gossip-organization-ids }}

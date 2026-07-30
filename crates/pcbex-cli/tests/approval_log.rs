@@ -1276,6 +1276,160 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .status
         .success()
     );
+    let governance_c_private = directory.join("gossip-governance-c.key");
+    let governance_c_public = directory.join("gossip-governance-c.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&governance_c_private),
+            "--public-key",
+            path(&governance_c_public),
+        ])
+        .status
+        .success()
+    );
+    let next_registry_governance = directory.join("gossip-registry.next-governance.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-governance",
+            path(&suspended_registry),
+            "--registry-authority-private-key",
+            path(&next_registry_private),
+            "--minimum-approvals",
+            "2",
+            "--authority-id",
+            "reviewer-b",
+            "--authority-public-key",
+            path(&governance_b_public),
+            "--authority-id",
+            "reviewer-c",
+            "--authority-public-key",
+            path(&governance_c_public),
+            "--issued-at-unix",
+            "116",
+            "--output",
+            path(&next_registry_governance),
+        ])
+        .status
+        .success()
+    );
+    let governance_rotation = directory.join("gossip-registry.governance-rotation.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-governance-rotation",
+            path(&suspended_registry),
+            path(&registry_governance),
+            path(&next_registry_governance),
+            "--old-authority-id",
+            "reviewer-a",
+            "--old-authority-private-key",
+            path(&governance_a_private),
+            "--old-authority-id",
+            "reviewer-b",
+            "--old-authority-private-key",
+            path(&governance_b_private),
+            "--new-authority-id",
+            "reviewer-b",
+            "--new-authority-private-key",
+            path(&governance_b_private),
+            "--new-authority-id",
+            "reviewer-c",
+            "--new-authority-private-key",
+            path(&governance_c_private),
+            "--rotated-at-unix",
+            "117",
+            "--output",
+            path(&governance_rotation),
+        ])
+        .status
+        .success()
+    );
+    let governance_rotated_registry = directory.join("gossip-registry.governance-rotated.json");
+    assert!(
+        run(&[
+            "apply-approval-log-gossip-organization-registry-governance-rotation",
+            path(&suspended_registry),
+            path(&registry_governance),
+            path(&next_registry_governance),
+            path(&governance_rotation),
+            "--output",
+            path(&governance_rotated_registry),
+        ])
+        .status
+        .success()
+    );
+    let revocation_reason = "44".repeat(32);
+    let rejected_old_governance = directory.join("gossip-registry.old-governance-revoke.json");
+    assert!(
+        !run(&[
+            "sign-approval-log-gossip-organization-registry-threshold-transition",
+            path(&governance_rotated_registry),
+            path(&registry_governance),
+            "--authority-id",
+            "reviewer-a",
+            "--authority-private-key",
+            path(&governance_a_private),
+            "--authority-id",
+            "reviewer-b",
+            "--authority-private-key",
+            path(&governance_b_private),
+            "--action",
+            "revoke-organization",
+            "--organization-id",
+            "independent-lab",
+            "--reason-sha256",
+            &revocation_reason,
+            "--effective-at-unix",
+            "118",
+            "--output",
+            path(&rejected_old_governance),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_old_governance.exists());
+    let registry_revocation = directory.join("gossip-registry.revoke-a.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-threshold-transition",
+            path(&governance_rotated_registry),
+            path(&next_registry_governance),
+            "--authority-id",
+            "reviewer-c",
+            "--authority-private-key",
+            path(&governance_c_private),
+            "--authority-id",
+            "reviewer-b",
+            "--authority-private-key",
+            path(&governance_b_private),
+            "--action",
+            "revoke-organization",
+            "--organization-id",
+            "independent-lab",
+            "--reason-sha256",
+            &revocation_reason,
+            "--effective-at-unix",
+            "118",
+            "--output",
+            path(&registry_revocation),
+        ])
+        .status
+        .success()
+    );
+    let revoked_registry = directory.join("gossip-registry.revoked.json");
+    assert!(
+        run(&[
+            "apply-approval-log-gossip-organization-registry-threshold-transition",
+            path(&governance_rotated_registry),
+            path(&next_registry_governance),
+            path(&registry_revocation),
+            "--output",
+            path(&revoked_registry),
+        ])
+        .status
+        .success()
+    );
     let rejected_suspended = directory.join("checkpoint.rejected-suspended-registry-quorum.json");
     assert!(
         !run(&[
@@ -1291,7 +1445,7 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
             "--observer-trust-state",
             path(&observer_trust_b),
             "--organization-registry",
-            path(&suspended_registry),
+            path(&revoked_registry),
             "--minimum-organizations",
             "2",
             "--log-public-key",

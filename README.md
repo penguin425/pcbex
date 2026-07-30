@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.377.0
+  uses: penguin425/pcbex@v1.378.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3418,6 +3418,44 @@ are emitted by
 `signed-approval-log-gossip-organization-registry-governance-schema` and
 `signed-approval-log-gossip-organization-registry-threshold-transition-schema`.
 
+Replace an active governance policy only after both authority sets approve:
+
+```sh
+pcbex sign-approval-log-gossip-organization-registry-governance-rotation \
+  gossip-registry.json \
+  gossip-registry.governance.json \
+  gossip-registry.governance.next.json \
+  --old-authority-id security \
+  --old-authority-private-key .secrets/security.key \
+  --old-authority-id hardware \
+  --old-authority-private-key .secrets/hardware.key \
+  --new-authority-id hardware \
+  --new-authority-private-key .secrets/hardware.key \
+  --new-authority-id compliance \
+  --new-authority-private-key .secrets/compliance.key \
+  --rotated-at-unix 1770000800 \
+  --output gossip-registry.governance.rotation.json
+
+pcbex apply-approval-log-gossip-organization-registry-governance-rotation \
+  gossip-registry.json \
+  gossip-registry.governance.json \
+  gossip-registry.governance.next.json \
+  gossip-registry.governance.rotation.json \
+  --output gossip-registry.next.json
+```
+
+The retained and successor root-signed policies must describe the same
+registry and root key, while changing the governance digest. Each policy
+independently enforces its own threshold over distinct authority identities
+and keys. Applying the rotation advances exactly one generation, retains all
+organization decisions, and atomically replaces the active governance digest;
+the old policy cannot authorize later changes. Replay, forks, stale policies,
+signature or key substitution, missing either quorum, and time rollback fail
+closed. The Action applies the optional paired governance-rotation inputs
+after threshold activation, and MCP exposes matching sign/apply tools. The
+closed transition contract is emitted by
+`signed-approval-log-gossip-organization-registry-governance-rotation-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3485,7 +3523,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.377.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.378.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

@@ -404,6 +404,11 @@
     {
       "id": "approval-transparency-gossip-registry-threshold-governance",
       "release": "v1.377.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-gossip-registry-governance-rotation",
+      "release": "v1.378.0",
       "status": "current"
     }
   ]
