@@ -1853,6 +1853,119 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .status
         .success()
     );
+    let remote_history_receipt_log_empty =
+        directory.join("gossip-registry.history.remote-receipts.log.0.json");
+    let remote_history_receipt_log =
+        directory.join("gossip-registry.history.remote-receipts.log.1.json");
+    let remote_history_receipt_log_checkpoint =
+        directory.join("gossip-registry.history.remote-receipts.checkpoint.json");
+    let remote_history_receipt_log_verification =
+        directory.join("gossip-registry.history.remote-receipts.verification.json");
+    assert!(
+        run(&[
+            "init-approval-log",
+            "--log-id",
+            "approval-registry-history-witness-receipts",
+            "--output",
+            path(&remote_history_receipt_log_empty),
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        run(&[
+            "append-approval-log",
+            path(&remote_history_receipt_log_empty),
+            "--artifact",
+            path(&remote_history_receipt),
+            "--kind",
+            "remote-approval-registry-history-checkpoint-witness-receipt",
+            "--recorded-at-unix",
+            "130",
+            "--output",
+            path(&remote_history_receipt_log),
+        ])
+        .status
+        .success()
+    );
+    let remote_history_receipt_log_value = read_value(&remote_history_receipt_log);
+    let remote_history_event = &remote_history_receipt_log_value["entries"][0]["event"];
+    assert_eq!(
+        remote_history_event["artifact_kind"],
+        "remote_approval_registry_history_checkpoint_witness_receipt"
+    );
+    assert_eq!(
+        remote_history_event["subject_id"],
+        remote_history_receipt_value["checkpoint_sha256"]
+    );
+    assert_eq!(
+        remote_history_event["request_sha256"],
+        remote_history_receipt_value["request_sha256"]
+    );
+    assert_eq!(
+        remote_history_event["session_sha256"],
+        remote_history_receipt_value["response_sha256"]
+    );
+    assert!(
+        run(&[
+            "sign-approval-log",
+            path(&remote_history_receipt_log),
+            "--private-key",
+            path(&private_key),
+            "--signer-id",
+            "approval-registry-receipt-log",
+            "--output",
+            path(&remote_history_receipt_log_checkpoint),
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        run(&[
+            "verify-approval-log",
+            path(&remote_history_receipt_log),
+            "--checkpoint",
+            path(&remote_history_receipt_log_checkpoint),
+            "--public-key",
+            path(&public_key),
+            "--output",
+            path(&remote_history_receipt_log_verification),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        read_value(&remote_history_receipt_log_verification)["verified"],
+        true
+    );
+    let mut rejected_remote_history_receipt = remote_history_receipt_value.clone();
+    rejected_remote_history_receipt["verified"] = false.into();
+    let rejected_remote_history_receipt_path =
+        directory.join("gossip-registry.history.remote-receipt.rejected.json");
+    fs::write(
+        &rejected_remote_history_receipt_path,
+        serde_json::to_vec_pretty(&rejected_remote_history_receipt).unwrap(),
+    )
+    .unwrap();
+    let rejected_remote_history_receipt_log =
+        directory.join("gossip-registry.history.remote-receipts.rejected-log.json");
+    assert!(
+        !run(&[
+            "append-approval-log",
+            path(&remote_history_receipt_log),
+            "--artifact",
+            path(&rejected_remote_history_receipt_path),
+            "--kind",
+            "remote-approval-registry-history-checkpoint-witness-receipt",
+            "--recorded-at-unix",
+            "131",
+            "--output",
+            path(&rejected_remote_history_receipt_log),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_remote_history_receipt_log.exists());
     let mut omitted_history = read_value(&registry_history);
     omitted_history["events"].as_array_mut().unwrap().remove(2);
     let omitted_history_path = directory.join("gossip-registry.history.omitted.json");

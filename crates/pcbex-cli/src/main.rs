@@ -387,6 +387,7 @@ use remote_approval_gossip::{
 };
 use remote_approval_gossip_registry_checkpoint_witness::{
     RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+    parse_remote_approval_registry_history_checkpoint_witness_receipt,
     remote_approval_registry_history_checkpoint_witness_receipt_json_schema,
     request_remote_approval_registry_history_checkpoint_witness,
     request_remote_approval_registry_history_checkpoint_witness_with_trust_state,
@@ -518,6 +519,7 @@ enum ApprovalArtifactKindArg {
     HumanEscalationReport,
     SignedPolicyPack,
     RemoteRegistryHistoryCheckpointWitnessReceipt,
+    RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
 }
 
 impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
@@ -530,6 +532,9 @@ impl From<ApprovalArtifactKindArg> for ApprovalArtifactKind {
             ApprovalArtifactKindArg::SignedPolicyPack => Self::SignedPolicyPack,
             ApprovalArtifactKindArg::RemoteRegistryHistoryCheckpointWitnessReceipt => {
                 Self::RemoteRegistryHistoryCheckpointWitnessReceipt
+            }
+            ApprovalArtifactKindArg::RemoteApprovalRegistryHistoryCheckpointWitnessReceipt => {
+                Self::RemoteApprovalRegistryHistoryCheckpointWitnessReceipt
             }
         }
     }
@@ -13656,6 +13661,21 @@ fn approval_event_descriptor(
                 .map_err(anyhow::Error::msg)?;
             Ok(ApprovalEventDescriptor {
                 artifact_kind: ApprovalArtifactKind::RemoteRegistryHistoryCheckpointWitnessReceipt,
+                artifact_sha256: normalized_json_sha256(&artifact)?,
+                subject_id: artifact.checkpoint_sha256,
+                request_sha256: Some(artifact.request_sha256),
+                session_sha256: Some(artifact.response_sha256),
+                signer_id: None,
+                outcome: format!("verified-witness:{}", artifact.witness_id),
+            })
+        }
+        ApprovalArtifactKindArg::RemoteApprovalRegistryHistoryCheckpointWitnessReceipt => {
+            let artifact =
+                parse_remote_approval_registry_history_checkpoint_witness_receipt(&source)
+                    .map_err(anyhow::Error::msg)?;
+            Ok(ApprovalEventDescriptor {
+                artifact_kind:
+                    ApprovalArtifactKind::RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
                 artifact_sha256: normalized_json_sha256(&artifact)?,
                 subject_id: artifact.checkpoint_sha256,
                 request_sha256: Some(artifact.request_sha256),

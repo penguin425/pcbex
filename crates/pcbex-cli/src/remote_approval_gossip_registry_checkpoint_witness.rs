@@ -97,6 +97,16 @@ pub fn remote_approval_registry_history_checkpoint_witness_receipt_json_schema()
     })
 }
 
+pub fn parse_remote_approval_registry_history_checkpoint_witness_receipt(
+    source: &str,
+) -> Result<RemoteApprovalRegistryHistoryCheckpointWitnessReceipt, String> {
+    let receipt: RemoteApprovalRegistryHistoryCheckpointWitnessReceipt =
+        serde_json::from_str(source)
+            .map_err(|error| format!("invalid remote approval history witness receipt: {error}"))?;
+    validate_remote_approval_registry_history_checkpoint_witness_receipt(&receipt)?;
+    Ok(receipt)
+}
+
 pub fn validate_remote_approval_registry_history_checkpoint_witness_receipt(
     receipt: &RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
 ) -> Result<(), String> {
