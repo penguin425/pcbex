@@ -464,6 +464,11 @@
     {
       "id": "independent-approval-receipt-quorum-checkpoint-witnesses",
       "release": "v1.389.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-receipt-quorum-checkpoint-witness-key-rotation",
+      "release": "v1.390.0",
       "status": "current"
     }
   ]
