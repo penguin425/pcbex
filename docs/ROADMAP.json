@@ -414,6 +414,11 @@
     {
       "id": "approval-transparency-gossip-registry-governed-root-rotation",
       "release": "v1.379.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-gossip-registry-history-audit",
+      "release": "v1.380.0",
       "status": "current"
     }
   ]

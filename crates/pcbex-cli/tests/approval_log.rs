@@ -1457,6 +1457,104 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         serde_json::from_slice::<Value>(&fs::read(&governance_rotated_registry).unwrap()).unwrap()
             ["organizations"]
     );
+    let read_value =
+        |path: &Path| -> Value { serde_json::from_slice(&fs::read(path).unwrap()).unwrap() };
+    let registry_history = directory.join("gossip-registry.history.json");
+    fs::write(
+        &registry_history,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "initial_registry": read_value(&registry_initial),
+            "events": [
+                {"kind": "root_transition", "transition": read_value(&registry_admission_a)},
+                {"kind": "root_transition", "transition": read_value(&registry_admission_b)},
+                {"kind": "root_authority_key_rotation", "rotation": read_value(&registry_rotation)},
+                {
+                    "kind": "threshold_transition",
+                    "governance": read_value(&registry_governance),
+                    "transition": read_value(&registry_suspension)
+                },
+                {
+                    "kind": "governance_rotation",
+                    "old_governance": read_value(&registry_governance),
+                    "new_governance": read_value(&next_registry_governance),
+                    "rotation": read_value(&governance_rotation)
+                },
+                {
+                    "kind": "governed_authority_key_rotation",
+                    "old_governance": read_value(&next_registry_governance),
+                    "new_governance": read_value(&successor_registry_governance),
+                    "rotation": read_value(&governed_root_rotation)
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let normalized_history = directory.join("gossip-registry.history.normalized.json");
+    assert!(
+        run(&[
+            "validate-approval-log-gossip-organization-registry-history",
+            path(&registry_history),
+            "--output",
+            path(&normalized_history),
+        ])
+        .status
+        .success()
+    );
+    let registry_history_audit = directory.join("gossip-registry.history-audit.json");
+    let registry_history_final = directory.join("gossip-registry.history-final.json");
+    assert!(
+        run(&[
+            "audit-approval-log-gossip-organization-registry-history",
+            path(&normalized_history),
+            "--output",
+            path(&registry_history_audit),
+            "--registry-output",
+            path(&registry_history_final),
+        ])
+        .status
+        .success()
+    );
+    let history_audit = read_value(&registry_history_audit);
+    assert_eq!(history_audit["event_count"], 6);
+    assert_eq!(history_audit["chain_valid"], true);
+    assert_eq!(read_value(&registry_history_final), governed_root_value);
+    let normalized_audit = directory.join("gossip-registry.history-audit.normalized.json");
+    assert!(
+        run(&[
+            "validate-approval-log-gossip-organization-registry-history-audit",
+            path(&registry_history_audit),
+            "--output",
+            path(&normalized_audit),
+        ])
+        .status
+        .success()
+    );
+    let mut omitted_history = read_value(&registry_history);
+    omitted_history["events"].as_array_mut().unwrap().remove(2);
+    let omitted_history_path = directory.join("gossip-registry.history.omitted.json");
+    fs::write(
+        &omitted_history_path,
+        serde_json::to_vec_pretty(&omitted_history).unwrap(),
+    )
+    .unwrap();
+    let rejected_history_audit = directory.join("gossip-registry.history.rejected.json");
+    let rejected_history_final = directory.join("gossip-registry.history.rejected-final.json");
+    assert!(
+        !run(&[
+            "audit-approval-log-gossip-organization-registry-history",
+            path(&omitted_history_path),
+            "--output",
+            path(&rejected_history_audit),
+            "--registry-output",
+            path(&rejected_history_final),
+        ])
+        .status
+        .success()
+    );
+    assert!(!rejected_history_audit.exists());
+    assert!(!rejected_history_final.exists());
     let revocation_reason = "44".repeat(32);
     let rejected_old_governance = directory.join("gossip-registry.old-governance-revoke.json");
     assert!(

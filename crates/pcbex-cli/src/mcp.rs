@@ -3603,6 +3603,23 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "audit_approval_transparency_public_log_gossip_organization_registry_history",
+            "Audit complete approval gossip registry history",
+            "Replay every typed event from genesis, verify signatures, quorums, generations, time, and digest continuity, then atomically emit the audit and computed final registry.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["history", "output", "registry_output"],
+                "properties": {
+                    "history": {"type": "string"},
+                    "output": {"type": "string"},
+                    "registry_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_witnesses",
             "Verify approval-log witness quorum",
             "Verify distinct trusted witness signatures over one exact checkpoint and enforce a threshold.",
@@ -4126,6 +4143,12 @@ fn call_tool(
         }
         "apply_approval_transparency_public_log_gossip_organization_registry_governed_authority_key_rotation" => {
             apply_approval_transparency_public_log_gossip_organization_registry_governed_authority_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "audit_approval_transparency_public_log_gossip_organization_registry_history" => {
+            audit_approval_transparency_public_log_gossip_organization_registry_history(
                 arguments,
                 cancellation,
             )?
@@ -9865,6 +9888,35 @@ fn apply_approval_transparency_public_log_gossip_organization_registry_governed_
     ))
 }
 
+fn audit_approval_transparency_public_log_gossip_organization_registry_history(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["history", "output", "registry_output"])?;
+    let output = required_string(&arguments, "output")?;
+    let registry_output = required_string(&arguments, "registry_output")?;
+    let command = vec![
+        "audit-approval-log-gossip-organization-registry-history".into(),
+        required_string(&arguments, "history")?,
+        "--output".into(),
+        output.clone(),
+        "--registry-output".into(),
+        registry_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let audit = read_json_if_present(Path::new(&output));
+    let registry = read_json_if_present(Path::new(&registry_output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "registry_output": registry_output,
+            "audit": audit,
+            "registry": registry
+        }),
+    ))
+}
+
 fn verify_approval_transparency_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -10242,7 +10294,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 119);
+        assert_eq!(tools.len(), 120);
         let named = |name: &str| {
             tools
                 .iter()
@@ -10859,6 +10911,11 @@ mod tests {
                 "apply_approval_transparency_public_log_gossip_organization_registry_governed_authority_key_rotation"
             )["inputSchema"]["required"][5],
             "public_key_output"
+        );
+        assert_eq!(
+            named("audit_approval_transparency_public_log_gossip_organization_registry_history")["inputSchema"]
+                ["required"][2],
+            "registry_output"
         );
         assert_eq!(
             named("fetch_policy_pack")["inputSchema"]["properties"]["timeout_seconds"]["maximum"],
