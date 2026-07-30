@@ -1359,21 +1359,119 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
         .status
         .success()
     );
+    let successor_registry_private = directory.join("gossip-registry.successor.key");
+    let successor_registry_public = directory.join("gossip-registry.successor.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&successor_registry_private),
+            "--public-key",
+            path(&successor_registry_public),
+        ])
+        .status
+        .success()
+    );
+    let successor_registry_governance = directory.join("gossip-registry.successor-governance.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-successor-governance",
+            path(&governance_rotated_registry),
+            "--successor-registry-authority-private-key",
+            path(&successor_registry_private),
+            "--minimum-approvals",
+            "2",
+            "--authority-id",
+            "reviewer-b",
+            "--authority-public-key",
+            path(&governance_b_public),
+            "--authority-id",
+            "reviewer-c",
+            "--authority-public-key",
+            path(&governance_c_public),
+            "--issued-at-unix",
+            "118",
+            "--output",
+            path(&successor_registry_governance),
+        ])
+        .status
+        .success()
+    );
+    let governed_root_rotation = directory.join("gossip-registry.governed-root-rotation.json");
+    assert!(
+        run(&[
+            "sign-approval-log-gossip-organization-registry-governed-authority-key-rotation",
+            path(&governance_rotated_registry),
+            path(&next_registry_governance),
+            path(&successor_registry_governance),
+            "--old-authority-id",
+            "reviewer-b",
+            "--old-authority-private-key",
+            path(&governance_b_private),
+            "--old-authority-id",
+            "reviewer-c",
+            "--old-authority-private-key",
+            path(&governance_c_private),
+            "--new-authority-id",
+            "reviewer-c",
+            "--new-authority-private-key",
+            path(&governance_c_private),
+            "--new-authority-id",
+            "reviewer-b",
+            "--new-authority-private-key",
+            path(&governance_b_private),
+            "--rotated-at-unix",
+            "119",
+            "--output",
+            path(&governed_root_rotation),
+        ])
+        .status
+        .success()
+    );
+    let governed_root_registry = directory.join("gossip-registry.governed-root.json");
+    let governed_root_public = directory.join("gossip-registry.governed-root.pub");
+    assert!(
+        run(&[
+            "apply-approval-log-gossip-organization-registry-governed-authority-key-rotation",
+            path(&governance_rotated_registry),
+            path(&next_registry_governance),
+            path(&successor_registry_governance),
+            path(&governed_root_rotation),
+            "--output",
+            path(&governed_root_registry),
+            "--public-key-output",
+            path(&governed_root_public),
+        ])
+        .status
+        .success()
+    );
+    assert_eq!(
+        fs::read_to_string(&governed_root_public).unwrap(),
+        fs::read_to_string(&successor_registry_public).unwrap()
+    );
+    let governed_root_value: Value =
+        serde_json::from_slice(&fs::read(&governed_root_registry).unwrap()).unwrap();
+    assert_eq!(governed_root_value["generation"], 6);
+    assert_eq!(
+        governed_root_value["organizations"],
+        serde_json::from_slice::<Value>(&fs::read(&governance_rotated_registry).unwrap()).unwrap()
+            ["organizations"]
+    );
     let revocation_reason = "44".repeat(32);
     let rejected_old_governance = directory.join("gossip-registry.old-governance-revoke.json");
     assert!(
         !run(&[
             "sign-approval-log-gossip-organization-registry-threshold-transition",
-            path(&governance_rotated_registry),
-            path(&registry_governance),
-            "--authority-id",
-            "reviewer-a",
-            "--authority-private-key",
-            path(&governance_a_private),
+            path(&governed_root_registry),
+            path(&next_registry_governance),
             "--authority-id",
             "reviewer-b",
             "--authority-private-key",
             path(&governance_b_private),
+            "--authority-id",
+            "reviewer-c",
+            "--authority-private-key",
+            path(&governance_c_private),
             "--action",
             "revoke-organization",
             "--organization-id",
@@ -1381,7 +1479,7 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
             "--reason-sha256",
             &revocation_reason,
             "--effective-at-unix",
-            "118",
+            "120",
             "--output",
             path(&rejected_old_governance),
         ])
@@ -1393,8 +1491,8 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     assert!(
         run(&[
             "sign-approval-log-gossip-organization-registry-threshold-transition",
-            path(&governance_rotated_registry),
-            path(&next_registry_governance),
+            path(&governed_root_registry),
+            path(&successor_registry_governance),
             "--authority-id",
             "reviewer-c",
             "--authority-private-key",
@@ -1410,7 +1508,7 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
             "--reason-sha256",
             &revocation_reason,
             "--effective-at-unix",
-            "118",
+            "120",
             "--output",
             path(&registry_revocation),
         ])
@@ -1421,8 +1519,8 @@ fn appends_normalized_artifacts_and_verifies_signed_checkpoints() {
     assert!(
         run(&[
             "apply-approval-log-gossip-organization-registry-threshold-transition",
-            path(&governance_rotated_registry),
-            path(&next_registry_governance),
+            path(&governed_root_registry),
+            path(&successor_registry_governance),
             path(&registry_revocation),
             "--output",
             path(&revoked_registry),

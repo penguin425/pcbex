@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.378.0
+  uses: penguin425/pcbex@v1.379.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3456,6 +3456,56 @@ after threshold activation, and MCP exposes matching sign/apply tools. The
 closed transition contract is emitted by
 `signed-approval-log-gossip-organization-registry-governance-rotation-schema`.
 
+Rotate an active registry root without reopening a root-only bypass:
+
+```sh
+pcbex sign-approval-log-gossip-organization-registry-successor-governance \
+  gossip-registry.json \
+  --successor-registry-authority-private-key .secrets/registry.next.key \
+  --minimum-approvals 2 \
+  --authority-id hardware \
+  --authority-public-key hardware.pub \
+  --authority-id compliance \
+  --authority-public-key compliance.pub \
+  --issued-at-unix 1770000900 \
+  --output gossip-registry.governance.next-root.json
+
+pcbex sign-approval-log-gossip-organization-registry-governed-authority-key-rotation \
+  gossip-registry.json \
+  gossip-registry.governance.json \
+  gossip-registry.governance.next-root.json \
+  --old-authority-id security \
+  --old-authority-private-key .secrets/security.key \
+  --old-authority-id hardware \
+  --old-authority-private-key .secrets/hardware.key \
+  --new-authority-id hardware \
+  --new-authority-private-key .secrets/hardware.key \
+  --new-authority-id compliance \
+  --new-authority-private-key .secrets/compliance.key \
+  --rotated-at-unix 1770001000 \
+  --output gossip-registry.root.rotation.json
+
+pcbex apply-approval-log-gossip-organization-registry-governed-authority-key-rotation \
+  gossip-registry.json \
+  gossip-registry.governance.json \
+  gossip-registry.governance.next-root.json \
+  gossip-registry.root.rotation.json \
+  --output gossip-registry.next.json \
+  --public-key-output gossip-registry.next.pub
+```
+
+The prospective root proves private-key possession by signing the complete
+successor governance policy. Retained and successor authority quorums then
+approve one payload binding both root keys, both governance digests, the exact
+next generation, prior transition digest, and monotonic time. Applying it
+atomically replaces the root and active governance while preserving every
+organization decision. Missing either quorum, root/policy/key substitution,
+same-root rotation, stale policy, replay, forks, and signature mutation fail
+closed. Root-only and governed root rotations are mutually exclusive in the
+Action; MCP exposes successor-policy and governed sign/apply tools. The closed
+transition contract is emitted by
+`signed-approval-log-gossip-organization-registry-governed-authority-key-rotation-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3523,7 +3573,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.378.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.379.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
