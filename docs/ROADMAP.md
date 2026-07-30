@@ -94,6 +94,7 @@ auditable release.
 | v1.382.0 | Approval registry history witness key rotation | Advance identity-bound checkpoint-witness trust through dual-signed generation- and digest-chained key transitions |
 | v1.383.0 | Remote approval registry history checkpoint witnesses | Acquire and immediately verify independent checkpoint witnesses from bounded HTTPS services with hash-bound receipts |
 | v1.384.0 | Approval registry witness receipt transparency | Append verified remote witness receipts to signed, anchored, independently witnessed hash-chain logs |
+| v1.385.0 | Verifier-bound approval registry receipt admission | Re-verify retained checkpoint, witness trust, exact response bytes, and signature before append |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -102,6 +103,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should add verifier-bound receipt admission, so a transparency
-log can rebind each transport receipt to the retained checkpoint trust state,
-witness trust state, and exact response artifact before accepting it.
+The next roadmap should add receipt admission quorum policy, so a log checkpoint
+can require verifier-bound receipts from a configured minimum of distinct
+trusted registry-history witnesses before it is eligible for signing.

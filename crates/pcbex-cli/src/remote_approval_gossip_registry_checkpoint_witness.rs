@@ -160,6 +160,7 @@ pub fn request_remote_approval_registry_history_checkpoint_witness(
     (
         SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
         RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+        Vec<u8>,
     ),
     String,
 > {
@@ -188,6 +189,7 @@ pub fn request_remote_approval_registry_history_checkpoint_witness_with_trust_st
     (
         SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
         RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+        Vec<u8>,
     ),
     String,
 > {
@@ -216,6 +218,123 @@ pub fn request_remote_approval_registry_history_checkpoint_witness_with_trust_st
     Ok(result)
 }
 
+pub fn verify_remote_approval_registry_history_checkpoint_witness_receipt(
+    receipt: &RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+    checkpoint_state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+    response_bytes: &[u8],
+    trusted_public_key: &[u8; 32],
+    evaluated_at_unix: u64,
+) -> Result<SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness, String> {
+    verify_remote_receipt(
+        receipt,
+        checkpoint_state,
+        response_bytes,
+        trusted_public_key,
+        None,
+        evaluated_at_unix,
+    )
+}
+
+pub fn verify_remote_approval_registry_history_checkpoint_witness_receipt_with_trust_state(
+    receipt: &RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+    checkpoint_state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+    response_bytes: &[u8],
+    witness_trust_state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    evaluated_at_unix: u64,
+) -> Result<SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness, String> {
+    validate_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        witness_trust_state,
+    )?;
+    let trusted_public_key =
+        approval_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+            witness_trust_state,
+        )?;
+    let trust_state_bytes = serde_json::to_vec(witness_trust_state)
+        .map_err(|error| format!("serializing approval witness trust state: {error}"))?;
+    let witness = verify_remote_receipt(
+        receipt,
+        checkpoint_state,
+        response_bytes,
+        &trusted_public_key,
+        Some((sha256(&trust_state_bytes), witness_trust_state.generation)),
+        evaluated_at_unix,
+    )?;
+    if witness.witness_id != witness_trust_state.witness_id {
+        return Err("remote approval history witness identity does not match trust state".into());
+    }
+    Ok(witness)
+}
+
+fn verify_remote_receipt(
+    receipt: &RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+    checkpoint_state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
+    response_bytes: &[u8],
+    trusted_public_key: &[u8; 32],
+    witness_trust_binding: Option<(String, u64)>,
+    evaluated_at_unix: u64,
+) -> Result<SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness, String> {
+    validate_remote_approval_registry_history_checkpoint_witness_receipt(receipt)?;
+    validate_approval_log_gossip_organization_registry_history_checkpoint_trust_state(
+        checkpoint_state,
+    )?;
+    let checkpoint_bytes = serde_json::to_vec(checkpoint_state)
+        .map_err(|error| format!("serializing approval checkpoint trust state: {error}"))?;
+    let request_bytes =
+        serde_json::to_vec(&RemoteApprovalRegistryHistoryCheckpointWitnessRequest {
+            schema_version: 1,
+            protocol: PROTOCOL,
+            checkpoint_trust_state: checkpoint_state,
+        })
+        .map_err(|error| format!("serializing remote approval history request: {error}"))?;
+    if receipt.registry_id != checkpoint_state.registry_id
+        || receipt.generation != checkpoint_state.accepted_generation
+        || receipt.checkpoint_sha256 != checkpoint_state.checkpoint_sha256
+        || receipt.checkpoint_trust_state_sha256 != sha256(&checkpoint_bytes)
+        || receipt.request_sha256 != sha256(&request_bytes)
+    {
+        return Err(
+            "remote approval history receipt is bound to different checkpoint evidence".into(),
+        );
+    }
+    if evaluated_at_unix < receipt.evaluated_at_unix {
+        return Err("remote approval history receipt is future-dated at admission".into());
+    }
+    if response_bytes.is_empty()
+        || response_bytes.len() as u64 > MAX_RESPONSE_BYTES
+        || receipt.response_bytes != response_bytes.len() as u64
+        || receipt.response_sha256 != sha256(response_bytes)
+    {
+        return Err("remote approval history receipt response binding is invalid".into());
+    }
+    let witness: SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness =
+        serde_json::from_slice(response_bytes).map_err(|error| {
+            format!("invalid retained remote approval history response: {error}")
+        })?;
+    if receipt.witness_id != witness.witness_id
+        || receipt.witness_public_key != witness.public_key
+        || receipt.witnessed_at_unix != witness.witnessed_at_unix
+    {
+        return Err("remote approval history receipt describes different witness evidence".into());
+    }
+    let expected_binding = witness_trust_binding
+        .map(|(digest, generation)| (Some(digest), Some(generation)))
+        .unwrap_or((None, None));
+    if (
+        receipt.witness_key_trust_state_sha256.clone(),
+        receipt.witness_key_generation,
+    ) != expected_binding
+    {
+        return Err("remote approval history receipt witness trust binding is invalid".into());
+    }
+    verify_approval_log_gossip_organization_registry_history_checkpoint_witness_for_trust_state(
+        checkpoint_state,
+        &witness,
+        trusted_public_key,
+        evaluated_at_unix,
+    )?;
+    Ok(witness)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn request_remote(
     checkpoint_state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointTrustState,
@@ -230,6 +349,7 @@ fn request_remote(
     (
         SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness,
         RemoteApprovalRegistryHistoryCheckpointWitnessReceipt,
+        Vec<u8>,
     ),
     String,
 > {
@@ -320,7 +440,7 @@ fn request_remote(
         verified: true,
     };
     validate_remote_approval_registry_history_checkpoint_witness_receipt(&receipt)?;
-    Ok((witness, receipt))
+    Ok((witness, receipt, response_bytes))
 }
 
 fn validate_endpoint(endpoint: &str, allow_http_loopback: bool) -> Result<(), String> {
