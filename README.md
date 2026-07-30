@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.374.0
+    uses: penguin425/pcbex@v1.375.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3287,6 +3287,61 @@ trust-bound quorum verification. Closed contracts come from
 `signed-approval-log-gossip-observer-key-rotation-schema`, and
 `approval-log-gossip-trust-bound-quorum-report-schema`.
 
+Govern which organization-bound observers are eligible for that quorum:
+
+```sh
+pcbex init-approval-log-gossip-organization-registry \
+  --registry-id production-approvals \
+  --authority-public-key gossip-registry.pub \
+  --output gossip-registry.0.json
+
+pcbex sign-approval-log-gossip-organization-registry-transition \
+  gossip-registry.0.json \
+  --authority-private-key .secrets/gossip-registry.key \
+  --action admit-observer \
+  --organization-id independent-lab \
+  --observer-trust-state lab-observer.trust.json \
+  --reason-sha256 "$ADMISSION_EVIDENCE_SHA256" \
+  --effective-at-unix 1770000300 \
+  --output gossip-registry.admit-lab.json
+
+pcbex apply-approval-log-gossip-organization-registry-transition \
+  gossip-registry.0.json gossip-registry.admit-lab.json \
+  --output gossip-registry.1.json
+
+pcbex verify-approval-log-gossip-quorum \
+  --local-anchor approvals.previous-anchor.json \
+  --observation independent-lab.observation.json \
+  --observation security-partner.observation.json \
+  --observer-trust-state lab-observer.trust.json \
+  --observer-trust-state partner-observer.trust.json \
+  --organization-registry gossip-registry.json \
+  --minimum-organizations 2 \
+  --log-public-key public-log.pub \
+  --evaluated-at-unix 1770000400 \
+  --output approvals.registry-bound-quorum.json \
+  --require-quorum
+```
+
+Every authority signature binds the registry identity, consecutive generation,
+previous transition digest, exact action, reason evidence, effective time, and
+observer trust-state digest. An admitted organization starts active. A
+suspension immediately removes all of its observers from quorum eligibility,
+and revocation is permanent. Re-admitting a rotated observer replaces only
+that observer's pinned trust-state digest and is forbidden while its
+organization is suspended or revoked. Replay, forks, skipped generations,
+wrong-authority signatures, stale trust states, and direct-key mode with a
+registry all fail closed.
+
+The registry-bound report retains the registry ID, generation, and normalized
+digest around the complete trust-bound quorum. The Action accepts
+`approval-log-gossip-organization-registry` only with trust-state mode. MCP
+exposes registry initialization, signed transition creation/application, and
+registry-bound quorum verification. Closed contracts come from
+`approval-log-gossip-organization-registry-schema`,
+`signed-approval-log-gossip-organization-registry-transition-schema`, and
+`approval-log-gossip-registry-bound-quorum-report-schema`.
+
 The request embeds the normalized schematic, effective electrical policy,
 freshly recomputed electrical review, bound simulation evidence, explicit
 requirements, and the complete set of evidence IDs the model may cite. Its
@@ -3354,7 +3409,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.374.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.375.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

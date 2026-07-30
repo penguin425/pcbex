@@ -21,24 +21,30 @@ use pcbex_kicad::{
     AiReviewRequest, AiReviewResponse, AiReviewSession, ApprovalArtifactKind,
     ApprovalEventDescriptor, ApprovalLogAnchorProof, ApprovalLogConsistencyProof,
     ApprovalLogGossipObservation, ApprovalLogGossipObserverTrustState,
+    ApprovalLogGossipOrganizationRegistry, ApprovalLogGossipOrganizationRegistryAction,
     ApprovalLogWitnessTrustState, ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview,
     ElectricalWaiverSet, HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
     HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
     SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
     SignedApprovalLogCheckpoint, SignedApprovalLogGossipObserverKeyRotation,
-    SignedApprovalLogGossipReceipt, SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation,
-    SignedHumanEscalation, SimulationArtifact, SimulationEvidence,
-    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
-    ai_review_response_json_schema, append_approval_transparency_event,
-    apply_approval_log_gossip_observer_key_rotation, apply_approval_log_witness_key_rotation,
-    apply_custom_design_rules, apply_electrical_waivers, apply_project_net_settings,
-    approval_log_anchor_proof_json_schema, approval_log_anchor_verification_report_json_schema,
+    SignedApprovalLogGossipOrganizationRegistryTransition, SignedApprovalLogGossipReceipt,
+    SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation,
+    SimulationArtifact, SimulationEvidence, ai_approval_quorum_report_json_schema,
+    ai_review_request_json_schema, ai_review_response_json_schema,
+    append_approval_transparency_event, apply_approval_log_gossip_observer_key_rotation,
+    apply_approval_log_gossip_organization_registry_transition,
+    apply_approval_log_witness_key_rotation, apply_custom_design_rules, apply_electrical_waivers,
+    apply_project_net_settings, approval_log_anchor_proof_json_schema,
+    approval_log_anchor_verification_report_json_schema,
     approval_log_consistency_proof_json_schema,
     approval_log_consistency_verification_report_json_schema,
     approval_log_gossip_observation_json_schema,
     approval_log_gossip_observer_trust_state_json_schema,
     approval_log_gossip_observer_trust_state_sha256,
-    approval_log_gossip_observer_trusted_public_key, approval_log_gossip_quorum_report_json_schema,
+    approval_log_gossip_observer_trusted_public_key,
+    approval_log_gossip_organization_registry_json_schema,
+    approval_log_gossip_quorum_report_json_schema,
+    approval_log_gossip_registry_bound_quorum_report_json_schema,
     approval_log_gossip_trust_bound_quorum_report_json_schema,
     approval_log_gossip_verification_report_json_schema,
     approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
@@ -51,9 +57,9 @@ use pcbex_kicad::{
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review,
     human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    new_approval_log_gossip_observer_trust_state, new_approval_log_witness_trust_state,
-    new_approval_transparency_log, parse_ai_review_response, parse_electrical_policy,
-    parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
+    new_approval_log_gossip_observer_trust_state, new_approval_log_gossip_organization_registry,
+    new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
+    parse_electrical_policy, parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
     record_simulation_evidence, render_ai_approval_quorum_summary, render_human_escalation_summary,
     render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
     render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
@@ -61,17 +67,20 @@ use pcbex_kicad::{
     schematic_diff_json_schema, schematic_diff_to_sarif, schematic_json_schema,
     schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
     sign_ai_review, sign_ai_review_for_session, sign_approval_log_checkpoint,
-    sign_approval_log_gossip_observer_key_rotation, sign_approval_log_gossip_receipt,
+    sign_approval_log_gossip_observer_key_rotation,
+    sign_approval_log_gossip_organization_registry_transition, sign_approval_log_gossip_receipt,
     sign_approval_log_witness, sign_approval_log_witness_key_rotation, sign_human_escalation,
     signed_ai_approval_json_schema, signed_approval_log_checkpoint_json_schema,
     signed_approval_log_checkpoint_sha256,
     signed_approval_log_gossip_observer_key_rotation_json_schema,
+    signed_approval_log_gossip_organization_registry_transition_json_schema,
     signed_approval_log_gossip_receipt_json_schema, signed_approval_log_witness_json_schema,
     signed_approval_log_witness_key_rotation_json_schema, signed_human_escalation_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema, verify_ai_approval_quorum,
     verify_approval_log_anchor_proof, verify_approval_log_checkpoint,
     verify_approval_log_consistency_proof, verify_approval_log_gossip_quorum,
     verify_approval_log_gossip_quorum_with_observer_trust_states,
+    verify_approval_log_gossip_quorum_with_organization_registry,
     verify_approval_log_gossip_receipt, verify_approval_log_witness_quorum,
     verify_human_escalation, verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
     verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
@@ -381,6 +390,23 @@ enum CanaryCompletionDecisionArg {
 enum PolicySuspensionDecisionArg {
     Suspend,
     Continue,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ApprovalGossipRegistryActionArg {
+    AdmitObserver,
+    SuspendOrganization,
+    RevokeOrganization,
+}
+
+impl From<ApprovalGossipRegistryActionArg> for ApprovalLogGossipOrganizationRegistryAction {
+    fn from(value: ApprovalGossipRegistryActionArg) -> Self {
+        match value {
+            ApprovalGossipRegistryActionArg::AdmitObserver => Self::AdmitObserver,
+            ApprovalGossipRegistryActionArg::SuspendOrganization => Self::SuspendOrganization,
+            ApprovalGossipRegistryActionArg::RevokeOrganization => Self::RevokeOrganization,
+        }
+    }
 }
 
 impl From<PolicySuspensionDecisionArg> for PolicySuspensionDecision {
@@ -2656,6 +2682,21 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed approval gossip organization registry JSON Schema.
+    ApprovalLogGossipOrganizationRegistrySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed signed approval gossip registry transition JSON Schema.
+    SignedApprovalLogGossipOrganizationRegistryTransitionSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed registry-bound approval gossip quorum JSON Schema.
+    ApprovalLogGossipRegistryBoundQuorumReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed approval-log witness quorum report JSON Schema.
     ApprovalLogWitnessQuorumReportSchema {
         #[arg(short, long)]
@@ -3017,6 +3058,9 @@ enum Command {
         /// Rotatable observer trust states; replaces all three direct-trust arrays.
         #[arg(long = "observer-trust-state")]
         observer_trust_states: Vec<PathBuf>,
+        /// Authority-signed registry governing trust-state quorum eligibility.
+        #[arg(long)]
+        organization_registry: Option<CompactPath>,
         #[arg(long, default_value_t = 2)]
         minimum_organizations: u32,
         #[arg(long)]
@@ -3095,6 +3139,41 @@ enum Command {
     /// Export the currently trusted approval gossip observer public key.
     ExportApprovalLogGossipObserverPublicKey {
         trust_state: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Initialize an empty authority-trusted approval gossip organization registry.
+    InitApprovalLogGossipOrganizationRegistry {
+        #[arg(long)]
+        registry_id: String,
+        #[arg(long)]
+        authority_public_key: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Sign an admission, suspension, or permanent revocation transition.
+    SignApprovalLogGossipOrganizationRegistryTransition {
+        registry: CompactPath,
+        #[arg(long)]
+        authority_private_key: CompactPath,
+        #[arg(long, value_enum)]
+        action: ApprovalGossipRegistryActionArg,
+        #[arg(long)]
+        organization_id: String,
+        /// Required only for admit-observer.
+        #[arg(long)]
+        observer_trust_state: Option<CompactPath>,
+        #[arg(long)]
+        reason_sha256: String,
+        #[arg(long)]
+        effective_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify one signed transition and atomically advance registry state.
+    ApplyApprovalLogGossipOrganizationRegistryTransition {
+        registry: CompactPath,
+        transition: CompactPath,
         #[arg(short, long)]
         output: CompactPath,
     },
@@ -8883,6 +8962,24 @@ fn run_cli() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::ApprovalLogGossipOrganizationRegistrySchema { output } => {
+            write_or_print_json(
+                &approval_log_gossip_organization_registry_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::SignedApprovalLogGossipOrganizationRegistryTransitionSchema { output } => {
+            write_or_print_json(
+                &signed_approval_log_gossip_organization_registry_transition_json_schema(),
+                output.as_ref(),
+            )?;
+        }
+        Command::ApprovalLogGossipRegistryBoundQuorumReportSchema { output } => {
+            write_or_print_json(
+                &approval_log_gossip_registry_bound_quorum_report_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ApprovalLogWitnessQuorumReportSchema { output } => {
             write_or_print_json(
                 &approval_log_witness_quorum_report_json_schema(),
@@ -9880,6 +9977,7 @@ fn run_cli() -> Result<()> {
             observer_ids,
             observer_public_keys,
             observer_trust_states,
+            organization_registry,
             minimum_organizations,
             log_public_key,
             evaluated_at_unix,
@@ -9901,6 +9999,9 @@ fn run_cli() -> Result<()> {
                     "observations require exactly one positionally paired direct-trust or observer-trust-state mode"
                 );
             }
+            if organization_registry.is_some() && !trust_bound {
+                bail!("approval gossip organization registry requires observer-trust-state mode");
+            }
             let mut paths = vec![
                 Some(local_anchor.0.as_ref()),
                 Some(log_public_key.0.as_ref()),
@@ -9909,6 +10010,11 @@ fn run_cli() -> Result<()> {
             paths.extend(observations.iter().map(PathBuf::as_path).map(Some));
             paths.extend(observer_public_keys.iter().map(PathBuf::as_path).map(Some));
             paths.extend(observer_trust_states.iter().map(PathBuf::as_path).map(Some));
+            paths.push(
+                organization_registry
+                    .as_ref()
+                    .map(|path| path.0.as_ref()),
+            );
             require_distinct_outputs(paths, "approval-log gossip quorum")?;
             let (local, _) = read_described_json::<ApprovalLogAnchorProof>(&local_anchor)?;
             let observations = observations
@@ -9957,20 +10063,40 @@ fn run_cli() -> Result<()> {
                         .map(|value| value.0)
                     })
                     .collect::<Result<Vec<_>>>()?;
-                let report = verify_approval_log_gossip_quorum_with_observer_trust_states(
-                    &local,
-                    &observations,
-                    &states,
-                    minimum_organizations,
-                    &log_key,
-                    evaluated_at_unix,
-                )
-                .map_err(anyhow::Error::msg)?;
-                (
-                    serde_json::to_string_pretty(&report)?,
-                    report.quorum.distinct_organizations,
-                    report.quorum.quorum_met,
-                )
+                if let Some(path) = &organization_registry {
+                    let (registry, _) =
+                        read_described_json::<ApprovalLogGossipOrganizationRegistry>(path)?;
+                    let report = verify_approval_log_gossip_quorum_with_organization_registry(
+                        &local,
+                        &observations,
+                        &states,
+                        &registry,
+                        minimum_organizations,
+                        &log_key,
+                        evaluated_at_unix,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    (
+                        serde_json::to_string_pretty(&report)?,
+                        report.trust_quorum.quorum.distinct_organizations,
+                        report.trust_quorum.quorum.quorum_met,
+                    )
+                } else {
+                    let report = verify_approval_log_gossip_quorum_with_observer_trust_states(
+                        &local,
+                        &observations,
+                        &states,
+                        minimum_organizations,
+                        &log_key,
+                        evaluated_at_unix,
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    (
+                        serde_json::to_string_pretty(&report)?,
+                        report.quorum.distinct_organizations,
+                        report.quorum.quorum_met,
+                    )
+                }
             };
             write_new_file(&output, &document, false)?;
             eprintln!(
@@ -10183,6 +10309,111 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "exported approval gossip observer key {}/{} generation {}",
                 state.organization_id, state.observer_id, state.generation
+            );
+        }
+        Command::InitApprovalLogGossipOrganizationRegistry {
+            registry_id,
+            authority_public_key,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(authority_public_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval gossip organization registry initialization",
+            )?;
+            let key = read_hex_key(
+                &authority_public_key,
+                "approval gossip registry authority public key",
+            )?;
+            let registry = new_approval_log_gossip_organization_registry(&registry_id, &key)
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&registry)?, false)?;
+            eprintln!(
+                "initialized approval gossip organization registry {} generation 0",
+                registry.registry_id
+            );
+        }
+        Command::SignApprovalLogGossipOrganizationRegistryTransition {
+            registry,
+            authority_private_key,
+            action,
+            organization_id,
+            observer_trust_state,
+            reason_sha256,
+            effective_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.0.as_ref()),
+                    Some(authority_private_key.0.as_ref()),
+                    observer_trust_state
+                        .as_ref()
+                        .map(|path| path.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval gossip organization registry transition signing",
+            )?;
+            let (registry, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistry>(&registry)?;
+            let authority_key = read_hex_key(
+                &authority_private_key,
+                "approval gossip registry authority private key",
+            )?;
+            let observer_state = observer_trust_state
+                .as_ref()
+                .map(|path| read_described_json::<ApprovalLogGossipObserverTrustState>(path))
+                .transpose()?
+                .map(|value| value.0);
+            let transition = sign_approval_log_gossip_organization_registry_transition(
+                &registry,
+                &authority_key,
+                action.into(),
+                &organization_id,
+                observer_state.as_ref(),
+                &reason_sha256,
+                effective_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(
+                &output,
+                &serde_json::to_string_pretty(&transition)?,
+                false,
+            )?;
+            eprintln!(
+                "signed approval gossip registry transition {} -> {}",
+                transition.from_generation, transition.to_generation
+            );
+        }
+        Command::ApplyApprovalLogGossipOrganizationRegistryTransition {
+            registry,
+            transition,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.0.as_ref()),
+                    Some(transition.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval gossip organization registry transition application",
+            )?;
+            let (registry, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistry>(&registry)?;
+            let (transition, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryTransition,
+            >(&transition)?;
+            let next = apply_approval_log_gossip_organization_registry_transition(
+                &registry,
+                &transition,
+            )
+            .map_err(anyhow::Error::msg)?;
+            write_new_file(&output, &serde_json::to_string_pretty(&next)?, false)?;
+            eprintln!(
+                "advanced approval gossip organization registry {} to generation {}",
+                next.registry_id, next.generation
             );
         }
         Command::VerifyApprovalLogWitnesses {

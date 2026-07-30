@@ -387,6 +387,41 @@ jobs:
             --observer-id action-gossip-observer-b \
             --public-key build/action-quorum/gossip-observer-b.pub \
             --output build/action-quorum/gossip-observer-b.trust.json
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/gossip-registry.key \
+            --public-key build/action-quorum/gossip-registry.pub
+          target/release/pcbex init-approval-log-gossip-organization-registry \
+            --registry-id action-approvals \
+            --authority-public-key build/action-quorum/gossip-registry.pub \
+            --output build/action-quorum/gossip-registry.initial.json
+          registry_reason_a="$(printf '11%.0s' {1..32})"
+          target/release/pcbex sign-approval-log-gossip-organization-registry-transition \
+            build/action-quorum/gossip-registry.initial.json \
+            --authority-private-key build/action-quorum/gossip-registry.key \
+            --action admit-observer \
+            --organization-id independent-lab \
+            --observer-trust-state build/action-quorum/gossip-observer.trust.json \
+            --reason-sha256 "$registry_reason_a" \
+            --effective-at-unix 6 \
+            --output build/action-quorum/gossip-registry.admit-a.json
+          target/release/pcbex apply-approval-log-gossip-organization-registry-transition \
+            build/action-quorum/gossip-registry.initial.json \
+            build/action-quorum/gossip-registry.admit-a.json \
+            --output build/action-quorum/gossip-registry.a.json
+          registry_reason_b="$(printf '22%.0s' {1..32})"
+          target/release/pcbex sign-approval-log-gossip-organization-registry-transition \
+            build/action-quorum/gossip-registry.a.json \
+            --authority-private-key build/action-quorum/gossip-registry.key \
+            --action admit-observer \
+            --organization-id security-partner \
+            --observer-trust-state build/action-quorum/gossip-observer-b.trust.json \
+            --reason-sha256 "$registry_reason_b" \
+            --effective-at-unix 7 \
+            --output build/action-quorum/gossip-registry.admit-b.json
+          target/release/pcbex apply-approval-log-gossip-organization-registry-transition \
+            build/action-quorum/gossip-registry.a.json \
+            build/action-quorum/gossip-registry.admit-b.json \
+            --output build/action-quorum/gossip-registry.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -467,6 +502,7 @@ jobs:
           approval-log-gossip-observer-trust-state-files: |
             build/action-quorum/gossip-observer.trust.json
             build/action-quorum/gossip-observer-b.trust.json
+          approval-log-gossip-organization-registry: build/action-quorum/gossip-registry.json
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
           approval-log-witness-files: |
@@ -600,8 +636,10 @@ jobs:
           test "$APPROVAL_LOG_GOSSIP_VERIFIED" = "true"
           test "$(jq -r '.relationship' "$APPROVAL_LOG_GOSSIP_VERIFICATION")" = "same_tree"
           test "$APPROVAL_LOG_GOSSIP_QUORUM_MET" = "true"
-          test "$(jq -r '.trust_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
-          test "$(jq -r '.quorum.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
+          test "$(jq -r '.registry_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
+          test "$(jq -r '.registry_generation' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
+          test "$(jq -r '.trust_quorum.trust_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
+          test "$(jq -r '.trust_quorum.quorum.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"
           test "$(jq -r '.dfm_profile_file' "$ARTIFACT_DIR/current/run.json")" = "null"
           test "$(jq -r '.configuration.organization_policy_pack' "$ARTIFACT_DIR/current/run.json")" = "acme-production-v1"

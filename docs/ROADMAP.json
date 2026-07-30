@@ -389,6 +389,11 @@
     {
       "id": "approval-transparency-gossip-observer-key-rotation",
       "release": "v1.374.0",
+      "status": "released"
+    },
+    {
+      "id": "approval-transparency-gossip-organization-trust-registry",
+      "release": "v1.375.0",
       "status": "current"
     }
   ]

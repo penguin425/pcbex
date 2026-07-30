@@ -2243,6 +2243,11 @@ fi
 if [[ "$approval_local_configured" == "false" ]]; then
   approval_trust_mode="$approval_remote_trust_mode"
 fi
+if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]] \
+  && [[ "$approval_trust_mode" != "trust-state" ]]; then
+  echo "approval gossip organization registry requires trust-state mode" >&2
+  exit 2
+fi
 if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" == "true" ]]; then
   if ((approval_log_anchor_inputs != 2)) \
     || [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX:-}" ]]; then
@@ -2258,6 +2263,11 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
     --evaluated-at-unix "$PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX"
     --output "$approval_log_gossip_quorum"
   )
+  if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]]; then
+    approval_quorum_arguments+=(
+      --organization-registry "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY"
+    )
+  fi
   if [[ "$approval_local_configured" == "true" ]]; then
     mapfile -t approval_local_observations < <(
       printf '%s\n' "$PCBEX_APPROVAL_LOG_GOSSIP_OBSERVATION_FILES" | sed '/^[[:space:]]*$/d'
@@ -2383,7 +2393,7 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
   "$PCBEX_BINARY" "${approval_quorum_arguments[@]}"
   approval_log_gossip_quorum_met="$(
     python3 -c \
-      'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(str(d.get("quorum", d)["quorum_met"]).lower())' \
+      'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); q=d.get("trust_quorum",d); q=q.get("quorum",q); print(str(q["quorum_met"]).lower())' \
       "$approval_log_gossip_quorum"
   )"
   {
@@ -2392,7 +2402,7 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
     printf -- '- Organizations: `%s/%s`\n' \
       "$(
         python3 -c \
-          'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); print(d.get("quorum", d)["distinct_organizations"])' \
+          'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); q=d.get("trust_quorum",d); q=q.get("quorum",q); print(q["distinct_organizations"])' \
           "$approval_log_gossip_quorum"
       )" \
       "${PCBEX_APPROVAL_LOG_GOSSIP_MINIMUM_ORGANIZATIONS:-2}"
