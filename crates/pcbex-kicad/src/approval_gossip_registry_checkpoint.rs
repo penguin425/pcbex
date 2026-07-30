@@ -15,6 +15,7 @@ const CHECKPOINT_DOMAIN: &str =
     "pcbex-approval-public-log-gossip-organization-registry-history-checkpoint-v1";
 const WITNESS_DOMAIN: &str =
     "pcbex-approval-public-log-gossip-organization-registry-history-checkpoint-witness-v1";
+const WITNESS_KEY_ROTATION_DOMAIN: &str = "pcbex-approval-public-log-gossip-organization-registry-history-checkpoint-witness-key-rotation-v1";
 const MAXIMUM_WITNESSES: usize = 100;
 const MAXIMUM_ACCEPTANCE_DELAY_SECONDS: u64 = 86_400;
 const MAXIMUM_WITNESS_AGE_SECONDS: u64 = 86_400;
@@ -68,6 +69,33 @@ pub struct SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub generation: u64,
+    pub current_public_key: String,
+    pub last_rotation_sha256: Option<String>,
+    pub last_rotated_at_unix: Option<u64>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+    pub schema_version: u32,
+    pub witness_id: String,
+    pub from_generation: u64,
+    pub to_generation: u64,
+    pub previous_rotation_sha256: Option<String>,
+    pub old_public_key: String,
+    pub new_public_key: String,
+    pub rotated_at_unix: u64,
+    pub algorithm: String,
+    pub old_signature: String,
+    pub new_signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessMember {
     pub witness_id: String,
     pub public_key: String,
@@ -110,6 +138,18 @@ struct WitnessPayload<'a> {
     checkpoint_sha256: &'a str,
     witness_id: &'a str,
     witnessed_at_unix: u64,
+}
+
+#[derive(Serialize)]
+struct WitnessKeyRotationPayload<'a> {
+    domain: &'static str,
+    witness_id: &'a str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&'a str>,
+    old_public_key: &'a str,
+    new_public_key: &'a str,
+    rotated_at_unix: u64,
 }
 
 pub fn sign_approval_log_gossip_organization_registry_history_checkpoint(
@@ -212,6 +252,166 @@ pub fn accept_approval_log_gossip_organization_registry_history_checkpoint(
     };
     validate_approval_log_gossip_organization_registry_history_checkpoint_trust_state(&state)?;
     Ok(state)
+}
+
+pub fn new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    witness_id: &str,
+    public_key: &[u8; 32],
+) -> Result<ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState, String> {
+    validate_slug(
+        witness_id,
+        "approval registry history checkpoint witness id",
+    )?;
+    VerifyingKey::from_bytes(public_key)
+        .map_err(|error| format!("invalid approval history witness public key: {error}"))?;
+    Ok(
+        ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+            schema_version: 1,
+            witness_id: witness_id.into(),
+            generation: 0,
+            current_public_key: hex_encode(public_key),
+            last_rotation_sha256: None,
+            last_rotated_at_unix: None,
+        },
+    )
+}
+
+pub fn approval_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+    state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+) -> Result<[u8; 32], String> {
+    validate_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    hex_decode::<32>(
+        &state.current_public_key,
+        "current approval history witness public key",
+    )
+}
+
+pub fn sign_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    old_secret_key: &[u8; 32],
+    new_secret_key: &[u8; 32],
+    rotated_at_unix: u64,
+) -> Result<SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation, String>
+{
+    validate_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    let old_key = SigningKey::from_bytes(old_secret_key);
+    let new_key = SigningKey::from_bytes(new_secret_key);
+    let old_public_key = hex_encode(&old_key.verifying_key().to_bytes());
+    let new_public_key = hex_encode(&new_key.verifying_key().to_bytes());
+    if old_public_key != state.current_public_key {
+        return Err("old approval history witness key does not match trust state".into());
+    }
+    if new_public_key == old_public_key {
+        return Err("new approval history witness key must differ".into());
+    }
+    if state
+        .last_rotated_at_unix
+        .is_some_and(|previous| rotated_at_unix < previous)
+    {
+        return Err("approval history witness rotation time moved backwards".into());
+    }
+    let to_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "approval history witness key generation overflow".to_string())?;
+    let payload = witness_key_rotation_payload(
+        &state.witness_id,
+        state.generation,
+        to_generation,
+        state.last_rotation_sha256.as_deref(),
+        &old_public_key,
+        &new_public_key,
+        rotated_at_unix,
+    )?;
+    let rotation = SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        from_generation: state.generation,
+        to_generation,
+        previous_rotation_sha256: state.last_rotation_sha256.clone(),
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+        algorithm: "ed25519".into(),
+        old_signature: hex_encode(&old_key.sign(&payload).to_bytes()),
+        new_signature: hex_encode(&new_key.sign(&payload).to_bytes()),
+    };
+    validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        &rotation,
+    )?;
+    Ok(rotation)
+}
+
+pub fn apply_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+    rotation: &SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+) -> Result<ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState, String> {
+    validate_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        state,
+    )?;
+    validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+        rotation,
+    )?;
+    let expected_generation = state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| "approval history witness key generation overflow".to_string())?;
+    if rotation.witness_id != state.witness_id
+        || rotation.from_generation != state.generation
+        || rotation.previous_rotation_sha256 != state.last_rotation_sha256
+        || rotation.old_public_key != state.current_public_key
+        || rotation.to_generation != expected_generation
+        || state
+            .last_rotated_at_unix
+            .is_some_and(|previous| rotation.rotated_at_unix < previous)
+    {
+        return Err("approval history witness rotation does not extend trust state".into());
+    }
+    let payload = witness_key_rotation_payload(
+        &rotation.witness_id,
+        rotation.from_generation,
+        rotation.to_generation,
+        rotation.previous_rotation_sha256.as_deref(),
+        &rotation.old_public_key,
+        &rotation.new_public_key,
+        rotation.rotated_at_unix,
+    )?;
+    for (key, signature, label) in [
+        (
+            &rotation.old_public_key,
+            &rotation.old_signature,
+            "old approval history witness rotation",
+        ),
+        (
+            &rotation.new_public_key,
+            &rotation.new_signature,
+            "new approval history witness rotation",
+        ),
+    ] {
+        let key = hex_decode::<32>(key, label)?;
+        let signature = Signature::from_bytes(&hex_decode::<64>(signature, label)?);
+        VerifyingKey::from_bytes(&key)
+            .map_err(|error| format!("invalid {label} public key: {error}"))?
+            .verify_strict(&payload, &signature)
+            .map_err(|_| format!("{label} signature verification failed"))?;
+    }
+    let rotation_sha256 = normalized_sha256(rotation, "approval history witness key rotation")?;
+    let next = ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState {
+        schema_version: 1,
+        witness_id: state.witness_id.clone(),
+        generation: rotation.to_generation,
+        current_public_key: rotation.new_public_key.clone(),
+        last_rotation_sha256: Some(rotation_sha256),
+        last_rotated_at_unix: Some(rotation.rotated_at_unix),
+    };
+    validate_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+        &next,
+    )?;
+    Ok(next)
 }
 
 pub fn sign_approval_log_gossip_organization_registry_history_checkpoint_witness(
@@ -358,6 +558,35 @@ pub fn verify_approval_log_gossip_organization_registry_history_checkpoint_witne
     Ok(report)
 }
 
+pub fn verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states(
+    history: &ApprovalLogGossipOrganizationRegistryHistory,
+    checkpoint: &SignedApprovalLogGossipOrganizationRegistryHistoryCheckpoint,
+    witnesses: &[SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitness],
+    trust_states: &[ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState],
+    minimum_witnesses: u32,
+    evaluated_at_unix: u64,
+) -> Result<ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport, String> {
+    let trusted = trust_states
+        .iter()
+        .map(|state| {
+            Ok((
+                state.witness_id.clone(),
+                approval_log_gossip_organization_registry_history_checkpoint_witness_trusted_public_key(
+                    state,
+                )?,
+            ))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses(
+        history,
+        checkpoint,
+        witnesses,
+        &trusted,
+        minimum_witnesses,
+        evaluated_at_unix,
+    )
+}
+
 pub fn signed_approval_log_gossip_organization_registry_history_checkpoint_sha256(
     checkpoint: &SignedApprovalLogGossipOrganizationRegistryHistoryCheckpoint,
 ) -> Result<String, String> {
@@ -444,6 +673,68 @@ pub fn validate_signed_approval_log_gossip_organization_registry_history_checkpo
     hex_decode::<64>(
         &witness.signature,
         "approval gossip history witness signature",
+    )?;
+    Ok(())
+}
+
+pub fn validate_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+    state: &ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
+) -> Result<(), String> {
+    if state.schema_version != 1 {
+        return Err("unsupported approval history witness trust state".into());
+    }
+    validate_slug(&state.witness_id, "approval history witness id")?;
+    validate_key(
+        &state.current_public_key,
+        "current approval history witness public key",
+    )?;
+    match (
+        state.generation,
+        &state.last_rotation_sha256,
+        state.last_rotated_at_unix,
+    ) {
+        (0, None, None) => Ok(()),
+        (0, _, _) => Err("initial approval history witness trust references rotation".into()),
+        (_, Some(digest), Some(_)) => {
+            validate_digest(digest, "approval history witness rotation digest")
+        }
+        _ => Err("rotated approval history witness trust state is incomplete".into()),
+    }
+}
+
+pub fn validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    rotation: &SignedApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessKeyRotation,
+) -> Result<(), String> {
+    let expected_generation = rotation
+        .from_generation
+        .checked_add(1)
+        .ok_or_else(|| "approval history witness key generation overflow".to_string())?;
+    if rotation.schema_version != 1
+        || rotation.algorithm != "ed25519"
+        || rotation.to_generation != expected_generation
+        || rotation.old_public_key == rotation.new_public_key
+    {
+        return Err("invalid approval history witness key rotation invariants".into());
+    }
+    validate_slug(&rotation.witness_id, "approval history witness id")?;
+    if let Some(digest) = &rotation.previous_rotation_sha256 {
+        validate_digest(digest, "previous approval history witness rotation digest")?;
+    }
+    validate_key(
+        &rotation.old_public_key,
+        "old approval history witness public key",
+    )?;
+    validate_key(
+        &rotation.new_public_key,
+        "new approval history witness public key",
+    )?;
+    hex_decode::<64>(
+        &rotation.old_signature,
+        "old approval history witness rotation signature",
+    )?;
+    hex_decode::<64>(
+        &rotation.new_signature,
+        "new approval history witness rotation signature",
     )?;
     Ok(())
 }
@@ -560,6 +851,58 @@ pub fn signed_approval_log_gossip_organization_registry_history_checkpoint_witne
             "algorithm": {"const": "ed25519"},
             "public_key": key_schema(),
             "signature": signature_schema()
+        }
+    })
+}
+
+pub fn approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/approval-log-gossip-organization-registry-history-checkpoint-witness-trust-state-v1.json",
+        "title": "Rotatable approval registry history checkpoint witness trust state",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "generation", "current_public_key",
+            "last_rotation_sha256", "last_rotated_at_unix"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "generation": {"type": "integer", "minimum": 0},
+            "current_public_key": key_schema(),
+            "last_rotation_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "last_rotated_at_unix": {
+                "oneOf": [{"type": "null"}, {"type": "integer", "minimum": 0}]
+            }
+        }
+    })
+}
+
+pub fn signed_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation_json_schema()
+-> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/signed-approval-log-gossip-organization-registry-history-checkpoint-witness-key-rotation-v1.json",
+        "title": "Dual-signed approval registry history checkpoint witness key rotation",
+        "type": "object", "additionalProperties": false,
+        "required": [
+            "schema_version", "witness_id", "from_generation", "to_generation",
+            "previous_rotation_sha256", "old_public_key", "new_public_key",
+            "rotated_at_unix", "algorithm", "old_signature", "new_signature"
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "witness_id": slug_schema(),
+            "from_generation": {"type": "integer", "minimum": 0},
+            "to_generation": {"type": "integer", "minimum": 1},
+            "previous_rotation_sha256": {"oneOf": [{"type": "null"}, digest_schema()]},
+            "old_public_key": key_schema(),
+            "new_public_key": key_schema(),
+            "rotated_at_unix": {"type": "integer", "minimum": 0},
+            "algorithm": {"const": "ed25519"},
+            "old_signature": signature_schema(),
+            "new_signature": signature_schema()
         }
     })
 }
@@ -705,6 +1048,29 @@ fn witness_payload(
         witnessed_at_unix,
     })
     .map_err(|error| format!("serializing approval history witness: {error}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn witness_key_rotation_payload(
+    witness_id: &str,
+    from_generation: u64,
+    to_generation: u64,
+    previous_rotation_sha256: Option<&str>,
+    old_public_key: &str,
+    new_public_key: &str,
+    rotated_at_unix: u64,
+) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(&WitnessKeyRotationPayload {
+        domain: WITNESS_KEY_ROTATION_DOMAIN,
+        witness_id,
+        from_generation,
+        to_generation,
+        previous_rotation_sha256,
+        old_public_key,
+        new_public_key,
+        rotated_at_unix,
+    })
+    .map_err(|error| format!("serializing approval history witness key rotation: {error}"))
 }
 
 fn trusted_witness_map(
@@ -859,6 +1225,8 @@ mod tests {
             approval_log_gossip_organization_registry_history_checkpoint_trust_state_json_schema(),
             signed_approval_log_gossip_organization_registry_history_checkpoint_witness_json_schema(
             ),
+            approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state_json_schema(),
+            signed_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation_json_schema(),
             approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_report_json_schema(),
         ] {
             assert_eq!(schema["additionalProperties"], false);
@@ -1004,6 +1372,60 @@ mod tests {
                 &trusted,
                 2,
                 105,
+            )
+            .unwrap()
+            .quorum_met
+        );
+        let witness_next = key(8);
+        let state_a =
+            new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                "witness-a",
+                &witness_a.verifying_key().to_bytes(),
+            )
+            .unwrap();
+        let rotation =
+            sign_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &state_a,
+                &witness_a.to_bytes(),
+                &witness_next.to_bytes(),
+                105,
+            )
+            .unwrap();
+        let rotated =
+            apply_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &state_a, &rotation,
+            )
+            .unwrap();
+        assert_eq!(rotated.generation, 1);
+        assert!(
+            apply_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                &rotated, &rotation,
+            )
+            .is_err()
+        );
+        let rotated_signed_a =
+            sign_approval_log_gossip_organization_registry_history_checkpoint_witness(
+                &history,
+                &checkpoint,
+                "witness-a",
+                &witness_next.to_bytes(),
+                105,
+            )
+            .unwrap();
+        let state_b =
+            new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state(
+                "witness-b",
+                &witness_b.verifying_key().to_bytes(),
+            )
+            .unwrap();
+        assert!(
+            verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states(
+                &history,
+                &checkpoint,
+                &[rotated_signed_a, signed_b.clone()],
+                &[rotated, state_b],
+                2,
+                106,
             )
             .unwrap()
             .quorum_met

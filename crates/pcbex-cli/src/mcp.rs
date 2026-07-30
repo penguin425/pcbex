@@ -3677,14 +3677,87 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             tasks_supported.then_some("forbidden"),
         ),
         tool(
+            "init_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_trust",
+            "Initialize approval history witness trust",
+            "Pin generation-zero identity-bound public-key trust for one checkpoint witness.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["witness_id", "public_key", "output"],
+                "properties": {
+                    "witness_id": {"type": "string"},
+                    "public_key": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation",
+            "Sign approval history witness key rotation",
+            "Require retained-key authorization and successor-key possession for one exact generation.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "old_private_key", "new_private_key", "rotated_at_unix", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "old_private_key": {"type": "string"},
+                    "new_private_key": {"type": "string"},
+                    "rotated_at_unix": {"type": "integer", "minimum": 0},
+                    "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "apply_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation",
+            "Apply approval history witness key rotation",
+            "Verify both signatures and atomically advance the identity-bound witness trust state.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "rotation", "output", "public_key_output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "rotation": {"type": "string"},
+                    "output": {"type": "string"},
+                    "public_key_output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
+            "export_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key",
+            "Export approval history witness key",
+            "Validate a witness trust state and export its current trusted public key.",
+            json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["trust_state", "output"],
+                "properties": {
+                    "trust_state": {"type": "string"},
+                    "output": {"type": "string"}
+                }
+            }),
+            true,
+            false,
+            tasks_supported.then_some("forbidden"),
+        ),
+        tool(
             "verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses",
             "Verify approval gossip registry history checkpoint witnesses",
-            "Verify fresh, distinct, directly trusted witnesses for one exact history checkpoint.",
+            "Verify fresh, distinct witnesses using either direct keys or rotatable trust states.",
             json!({
                 "type": "object", "additionalProperties": false,
                 "required": [
-                    "history", "checkpoint", "witnesses", "trusted_witness_ids",
-                    "trusted_witness_public_keys", "evaluated_at_unix", "output"
+                    "history", "checkpoint", "witnesses", "evaluated_at_unix", "output"
+                ],
+                "oneOf": [
+                    {"required": ["trusted_witness_ids", "trusted_witness_public_keys"]},
+                    {"required": ["witness_trust_states"]}
                 ],
                 "properties": {
                     "history": {"type": "string"},
@@ -3692,6 +3765,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "witnesses": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}},
                     "trusted_witness_ids": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}},
                     "trusted_witness_public_keys": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}},
+                    "witness_trust_states": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "string"}},
                     "minimum_witnesses": {"type": "integer", "minimum": 2, "maximum": 100, "default": 2},
                     "evaluated_at_unix": {"type": "integer", "minimum": 0},
                     "require_quorum": {"type": "boolean", "default": false},
@@ -4250,6 +4324,30 @@ fn call_tool(
         }
         "sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness" => {
             sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness(
+                arguments,
+                cancellation,
+            )?
+        }
+        "init_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_trust" => {
+            init_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_trust(
+                arguments,
+                cancellation,
+            )?
+        }
+        "sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation" => {
+            sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "apply_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation" => {
+            apply_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+                arguments,
+                cancellation,
+            )?
+        }
+        "export_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key" => {
+            export_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key(
                 arguments,
                 cancellation,
             )?
@@ -7609,6 +7707,7 @@ fn verify_policy_lifecycle_public_log_gossip_organization_registry_history_check
             "trusted_witness_ids",
             "trusted_witness_public_keys",
             "witness_trust_states",
+            "witness_trust_states",
             "minimum_witnesses",
             "evaluated_at_unix",
             "require_quorum",
@@ -10126,6 +10225,113 @@ fn sign_approval_transparency_public_log_gossip_organization_registry_history_ch
     ))
 }
 
+fn init_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_trust(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["witness_id", "public_key", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "init-approval-log-gossip-organization-registry-history-checkpoint-witness-trust".into(),
+        "--witness-id".into(),
+        required_string(&arguments, "witness_id")?,
+        "--public-key".into(),
+        required_string(&arguments, "public_key")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "trust_state": trust_state}),
+    ))
+}
+
+fn sign_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "trust_state",
+            "old_private_key",
+            "new_private_key",
+            "rotated_at_unix",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "sign-approval-log-gossip-organization-registry-history-checkpoint-witness-key-rotation"
+            .into(),
+        required_string(&arguments, "trust_state")?,
+        "--old-private-key".into(),
+        required_string(&arguments, "old_private_key")?,
+        "--new-private-key".into(),
+        required_string(&arguments, "new_private_key")?,
+        "--rotated-at-unix".into(),
+        required_nonnegative_integer(&arguments, "rotated_at_unix")?.to_string(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let rotation = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "rotation": rotation}),
+    ))
+}
+
+fn apply_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key_rotation(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["trust_state", "rotation", "output", "public_key_output"],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    let public_key_output = required_string(&arguments, "public_key_output")?;
+    let command = vec![
+        "apply-approval-log-gossip-organization-registry-history-checkpoint-witness-key-rotation"
+            .into(),
+        required_string(&arguments, "trust_state")?,
+        required_string(&arguments, "rotation")?,
+        "--output".into(),
+        output.clone(),
+        "--public-key-output".into(),
+        public_key_output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let trust_state = read_json_if_present(Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "public_key_output": public_key_output,
+            "trust_state": trust_state
+        }),
+    ))
+}
+
+fn export_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witness_key(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["trust_state", "output"])?;
+    let output = required_string(&arguments, "output")?;
+    let command = vec![
+        "export-approval-log-gossip-organization-registry-history-checkpoint-witness-key".into(),
+        required_string(&arguments, "trust_state")?,
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    Ok(execution_result(execution, json!({"output": output})))
+}
+
 fn verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -10146,8 +10352,15 @@ fn verify_approval_transparency_public_log_gossip_organization_registry_history_
     )?;
     let output = required_string(&arguments, "output")?;
     let witnesses = required_string_array(&arguments, "witnesses", false)?;
-    let ids = required_string_array(&arguments, "trusted_witness_ids", false)?;
-    let keys = required_string_array(&arguments, "trusted_witness_public_keys", false)?;
+    let ids = required_string_array(&arguments, "trusted_witness_ids", true)?;
+    let keys = required_string_array(&arguments, "trusted_witness_public_keys", true)?;
+    let trust_states = required_string_array(&arguments, "witness_trust_states", true)?;
+    let direct_trust = !ids.is_empty() || !keys.is_empty();
+    if direct_trust == !trust_states.is_empty() {
+        return Err(
+            json!({"detail": "supply exactly one direct or trust-state witness key source"}),
+        );
+    }
     if ids.len() != keys.len() {
         return Err(json!({"detail": "trusted witness id and public key counts must match"}));
     }
@@ -10164,6 +10377,9 @@ fn verify_approval_transparency_public_log_gossip_organization_registry_history_
     }
     for key in keys {
         command.extend(["--trusted-witness-public-key".into(), key]);
+    }
+    for trust_state in trust_states {
+        command.extend(["--witness-trust-state".into(), trust_state]);
     }
     optional_positive_integer(
         &arguments,
@@ -10568,7 +10784,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 124);
+        assert_eq!(tools.len(), 128);
         let named = |name: &str| {
             tools
                 .iter()
