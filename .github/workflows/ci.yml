@@ -422,6 +422,15 @@ jobs:
             build/action-quorum/gossip-registry.a.json \
             build/action-quorum/gossip-registry.admit-b.json \
             --output build/action-quorum/gossip-registry.json
+          target/release/pcbex approval-keygen \
+            --private-key build/action-quorum/gossip-registry.next.key \
+            --public-key build/action-quorum/gossip-registry.next.pub
+          target/release/pcbex sign-approval-log-gossip-organization-registry-authority-key-rotation \
+            build/action-quorum/gossip-registry.json \
+            --old-private-key build/action-quorum/gossip-registry.key \
+            --new-private-key build/action-quorum/gossip-registry.next.key \
+            --rotated-at-unix 8 \
+            --output build/action-quorum/gossip-registry.rotation.json
           for witness in a b; do
             target/release/pcbex approval-keygen \
               --private-key "build/action-quorum/witness-$witness.key" \
@@ -503,6 +512,7 @@ jobs:
             build/action-quorum/gossip-observer.trust.json
             build/action-quorum/gossip-observer-b.trust.json
           approval-log-gossip-organization-registry: build/action-quorum/gossip-registry.json
+          approval-log-gossip-organization-registry-authority-key-rotation: build/action-quorum/gossip-registry.rotation.json
           approval-log-gossip-minimum-organizations: "2"
           fail-on-approval-log-gossip-quorum: "true"
           approval-log-witness-files: |
@@ -637,7 +647,7 @@ jobs:
           test "$(jq -r '.relationship' "$APPROVAL_LOG_GOSSIP_VERIFICATION")" = "same_tree"
           test "$APPROVAL_LOG_GOSSIP_QUORUM_MET" = "true"
           test "$(jq -r '.registry_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
-          test "$(jq -r '.registry_generation' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
+          test "$(jq -r '.registry_generation' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "3"
           test "$(jq -r '.trust_quorum.trust_bound' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "true"
           test "$(jq -r '.trust_quorum.quorum.distinct_organizations' "$APPROVAL_LOG_GOSSIP_QUORUM")" = "2"
           test "$(jq -r '.configuration.dfm_profile.id' "$ARTIFACT_DIR/current/run.json")" = "acme-standard-4layer-v1"

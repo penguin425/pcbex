@@ -27,11 +27,13 @@ use pcbex_kicad::{
     HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
     SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
     SignedApprovalLogCheckpoint, SignedApprovalLogGossipObserverKeyRotation,
+    SignedApprovalLogGossipOrganizationRegistryAuthorityKeyRotation,
     SignedApprovalLogGossipOrganizationRegistryTransition, SignedApprovalLogGossipReceipt,
     SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation,
     SimulationArtifact, SimulationEvidence, ai_approval_quorum_report_json_schema,
     ai_review_request_json_schema, ai_review_response_json_schema,
     append_approval_transparency_event, apply_approval_log_gossip_observer_key_rotation,
+    apply_approval_log_gossip_organization_registry_authority_key_rotation,
     apply_approval_log_gossip_organization_registry_transition,
     apply_approval_log_witness_key_rotation, apply_custom_design_rules, apply_electrical_waivers,
     apply_project_net_settings, approval_log_anchor_proof_json_schema,
@@ -68,11 +70,13 @@ use pcbex_kicad::{
     schematic_reviewer_routing_plan_json_schema, schematic_reviewer_routing_policy_json_schema,
     sign_ai_review, sign_ai_review_for_session, sign_approval_log_checkpoint,
     sign_approval_log_gossip_observer_key_rotation,
+    sign_approval_log_gossip_organization_registry_authority_key_rotation,
     sign_approval_log_gossip_organization_registry_transition, sign_approval_log_gossip_receipt,
     sign_approval_log_witness, sign_approval_log_witness_key_rotation, sign_human_escalation,
     signed_ai_approval_json_schema, signed_approval_log_checkpoint_json_schema,
     signed_approval_log_checkpoint_sha256,
     signed_approval_log_gossip_observer_key_rotation_json_schema,
+    signed_approval_log_gossip_organization_registry_authority_key_rotation_json_schema,
     signed_approval_log_gossip_organization_registry_transition_json_schema,
     signed_approval_log_gossip_receipt_json_schema, signed_approval_log_witness_json_schema,
     signed_approval_log_witness_key_rotation_json_schema, signed_human_escalation_json_schema,
@@ -2692,6 +2696,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed dual-signed approval gossip registry authority rotation JSON Schema.
+    SignedApprovalLogGossipOrganizationRegistryAuthorityKeyRotationSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed registry-bound approval gossip quorum JSON Schema.
     ApprovalLogGossipRegistryBoundQuorumReportSchema {
         #[arg(short, long)]
@@ -3176,6 +3185,27 @@ enum Command {
         transition: CompactPath,
         #[arg(short, long)]
         output: CompactPath,
+    },
+    /// Dual-sign a one-generation approval gossip registry authority key transition.
+    SignApprovalLogGossipOrganizationRegistryAuthorityKeyRotation {
+        registry: CompactPath,
+        #[arg(long)]
+        old_private_key: CompactPath,
+        #[arg(long)]
+        new_private_key: CompactPath,
+        #[arg(long)]
+        rotated_at_unix: u64,
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Verify and atomically apply one approval gossip registry authority key transition.
+    ApplyApprovalLogGossipOrganizationRegistryAuthorityKeyRotation {
+        registry: CompactPath,
+        rotation: CompactPath,
+        #[arg(short, long)]
+        output: CompactPath,
+        #[arg(long)]
+        public_key_output: CompactPath,
     },
     /// Verify independent witnesses over one exact approval-log checkpoint.
     VerifyApprovalLogWitnesses {
@@ -8974,6 +9004,14 @@ fn run_cli() -> Result<()> {
                 output.as_ref(),
             )?;
         }
+        Command::SignedApprovalLogGossipOrganizationRegistryAuthorityKeyRotationSchema {
+            output,
+        } => {
+            write_or_print_json(
+                &signed_approval_log_gossip_organization_registry_authority_key_rotation_json_schema(),
+                output.as_ref(),
+            )?;
+        }
         Command::ApprovalLogGossipRegistryBoundQuorumReportSchema { output } => {
             write_or_print_json(
                 &approval_log_gossip_registry_bound_quorum_report_json_schema(),
@@ -10414,6 +10452,86 @@ fn run_cli() -> Result<()> {
             eprintln!(
                 "advanced approval gossip organization registry {} to generation {}",
                 next.registry_id, next.generation
+            );
+        }
+        Command::SignApprovalLogGossipOrganizationRegistryAuthorityKeyRotation {
+            registry,
+            old_private_key,
+            new_private_key,
+            rotated_at_unix,
+            output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.0.as_ref()),
+                    Some(old_private_key.0.as_ref()),
+                    Some(new_private_key.0.as_ref()),
+                    Some(output.0.as_ref()),
+                ],
+                "approval gossip registry authority key rotation signing",
+            )?;
+            let (registry, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistry>(&registry)?;
+            let old_key = read_hex_key(
+                &old_private_key,
+                "current approval gossip registry authority private key",
+            )?;
+            let new_key = read_hex_key(
+                &new_private_key,
+                "new approval gossip registry authority private key",
+            )?;
+            let rotation =
+                sign_approval_log_gossip_organization_registry_authority_key_rotation(
+                    &registry,
+                    &old_key,
+                    &new_key,
+                    rotated_at_unix,
+                )
+                .map_err(anyhow::Error::msg)?;
+            write_new_file(
+                &output,
+                &serde_json::to_string_pretty(&rotation)?,
+                false,
+            )?;
+            eprintln!(
+                "signed approval gossip registry authority rotation {} -> {}",
+                rotation.from_generation, rotation.to_generation
+            );
+        }
+        Command::ApplyApprovalLogGossipOrganizationRegistryAuthorityKeyRotation {
+            registry,
+            rotation,
+            output,
+            public_key_output,
+        } => {
+            require_distinct_outputs(
+                [
+                    Some(registry.0.as_ref()),
+                    Some(rotation.0.as_ref()),
+                    Some(output.0.as_ref()),
+                    Some(public_key_output.0.as_ref()),
+                ],
+                "approval gossip registry authority key rotation application",
+            )?;
+            let (registry, _) =
+                read_described_json::<ApprovalLogGossipOrganizationRegistry>(&registry)?;
+            let (rotation, _) = read_described_json::<
+                SignedApprovalLogGossipOrganizationRegistryAuthorityKeyRotation,
+            >(&rotation)?;
+            let next =
+                apply_approval_log_gossip_organization_registry_authority_key_rotation(
+                    &registry, &rotation,
+                )
+                .map_err(anyhow::Error::msg)?;
+            let registry_document = serde_json::to_string_pretty(&next)?;
+            let key_document = format!("{}\n", next.authority_public_key);
+            write_new_file_set(&[
+                (output.0.as_ref(), registry_document.as_str()),
+                (public_key_output.0.as_ref(), key_document.as_str()),
+            ])?;
+            eprintln!(
+                "trusted approval gossip registry authority at generation {}",
+                next.generation
             );
         }
         Command::VerifyApprovalLogWitnesses {

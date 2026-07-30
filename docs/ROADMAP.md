@@ -85,6 +85,7 @@ auditable release.
 | v1.373.0 | Remote approval public-log gossip quorum | Acquire bounded remote observations and require fresh consistent views from distinct organizations |
 | v1.374.0 | Approval gossip observer key rotation | Bind organization observers to generation-chained trust with dual-signed key transitions |
 | v1.375.0 | Approval gossip organization trust registry | Authority-sign observer admission, organization suspension, and permanent revocation before quorum eligibility |
+| v1.376.0 | Approval gossip registry authority key rotation | Preserve organization decisions while retained and successor keys dual-sign a chained trust-root change |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -93,6 +94,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should add approval-gossip registry authority key rotation,
-so the retained organization decisions survive a dual-signed, chained trust
-root change.
+The next roadmap should add threshold governance for the approval-gossip
+registry, so no single registry authority can admit, suspend, or revoke an
+organization without a distinct-key quorum.

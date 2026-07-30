@@ -2248,6 +2248,11 @@ if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]] \
   echo "approval gossip organization registry requires trust-state mode" >&2
   exit 2
 fi
+if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]] \
+  && [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]]; then
+  echo "approval gossip registry authority rotation requires a retained registry" >&2
+  exit 2
+fi
 if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" == "true" ]]; then
   if ((approval_log_anchor_inputs != 2)) \
     || [[ -z "${PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX:-}" ]]; then
@@ -2255,6 +2260,18 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
     exit 2
   fi
   approval_log_gossip_quorum="${artifact_dir}/approval-log-gossip-quorum.json"
+  approval_log_gossip_organization_registry="${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}"
+  if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION:-}" ]]; then
+    rotated_approval_gossip_registry="${artifact_dir}/approval-log-gossip-organization-registry.json"
+    rotated_approval_gossip_registry_key="${artifact_dir}/approval-log-gossip-organization-registry-authority.pub"
+    "$PCBEX_BINARY" \
+      apply-approval-log-gossip-organization-registry-authority-key-rotation \
+      "$approval_log_gossip_organization_registry" \
+      "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY_AUTHORITY_KEY_ROTATION" \
+      --output "$rotated_approval_gossip_registry" \
+      --public-key-output "$rotated_approval_gossip_registry_key"
+    approval_log_gossip_organization_registry="$rotated_approval_gossip_registry"
+  fi
   approval_quorum_arguments=(
     verify-approval-log-gossip-quorum
     --local-anchor "$PCBEX_APPROVAL_LOG_ANCHOR_PROOF"
@@ -2263,9 +2280,9 @@ if [[ "$approval_local_configured" == "true" || "$approval_remote_configured" ==
     --evaluated-at-unix "$PCBEX_APPROVAL_LOG_GOSSIP_EVALUATED_AT_UNIX"
     --output "$approval_log_gossip_quorum"
   )
-  if [[ -n "${PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY:-}" ]]; then
+  if [[ -n "$approval_log_gossip_organization_registry" ]]; then
     approval_quorum_arguments+=(
-      --organization-registry "$PCBEX_APPROVAL_LOG_GOSSIP_ORGANIZATION_REGISTRY"
+      --organization-registry "$approval_log_gossip_organization_registry"
     )
   fi
   if [[ "$approval_local_configured" == "true" ]]; then
