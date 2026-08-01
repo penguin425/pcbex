@@ -163,11 +163,12 @@ def circuit_spec_to_kicad_sch(
             pin = connection["pin"]
             x, y = positions[(reference, pin)]
             label_uuid = _uuid(f"schematic:{project_name}:label:{net['name']}:{reference}:{pin}")
+            wire_uuid = _uuid(f"schematic:{project_name}:wire:{net['name']}:{reference}:{pin}")
             lines.extend([
                 "  (wire",
                 f"    (pts (xy {_mm(x)} {_mm(y)}) (xy {_mm(x - 2.54)} {_mm(y)}))",
                 "    (stroke (width 0) (type default))",
-                f"    (uuid {_uuid(f'schematic:{project_name}:wire:{net['name']}:{reference}:{pin}')})",
+                f"    (uuid {wire_uuid})",
                 "  )",
                 f"  (label {_quote(net['name'])} (at {_mm(x - 2.54)} {_mm(y)} 0)",
                 "    (effects (font (size 1.27 1.27)) (justify left bottom))",
