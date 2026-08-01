@@ -27,12 +27,19 @@ pub struct PipelineGateReport {
 }
 
 /// Validate every phase artifact and return a report suitable for CI retention.
-pub fn verify_pipeline(
+/// Verify the complete pipeline, optionally including a factory DFM receipt.
+///
+/// The legacy five-phase entry point remains available for existing CI.  New
+/// production pipelines should pass a receipt and `require_factory=true` so a
+/// quote/DFM response is a mandatory, package-digest-bound phase.
+pub fn verify_pipeline_with_factory(
     electrical_review: &Path,
     analysis_manifest: &Path,
     quality: &Path,
     manufacturing_manifest: &Path,
     firmware_manifest: &Path,
+    factory_receipt: Option<&Path>,
+    require_factory: bool,
 ) -> PipelineGateReport {
     let phases = vec![
         electrical_phase(electrical_review),
@@ -40,7 +47,14 @@ pub fn verify_pipeline(
         quality_phase(quality),
         manufacturing_phase(manufacturing_manifest),
         firmware_phase(firmware_manifest),
-    ];
+    ]
+    .into_iter()
+    .chain(match (factory_receipt, require_factory) {
+        (Some(path), _) => Some(factory_phase(path, manufacturing_manifest)),
+        (None, true) => Some(required_factory_phase()),
+        (None, false) => None,
+    })
+    .collect::<Vec<_>>();
     let failures = phases
         .iter()
         .flat_map(|phase| {
@@ -321,6 +335,148 @@ fn firmware_phase(path: &Path) -> PipelinePhase {
     finish(phase)
 }
 
+fn required_factory_phase() -> PipelinePhase {
+    let phase = PipelinePhase {
+        name: "factory-dfm".into(),
+        input: "<missing>".into(),
+        passed: false,
+        checks: Vec::new(),
+        failures: vec!["factory receipt is required for the full pipeline".into()],
+    };
+    finish(phase)
+}
+
+fn factory_phase(receipt_path: &Path, manufacturing_manifest: &Path) -> PipelinePhase {
+    let mut phase = phase("factory-dfm", receipt_path);
+    let value = match read_json(receipt_path) {
+        Ok(value) => value,
+        Err(error) => {
+            phase.failures.push(error);
+            return finish(phase);
+        }
+    };
+    if value.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        phase
+            .failures
+            .push("factory receipt schema_version is not 1".into());
+    }
+    if value
+        .get("provider")
+        .and_then(Value::as_str)
+        .is_none_or(|provider| !matches!(provider, "jlcpcb" | "pcbway" | "generic"))
+    {
+        phase
+            .failures
+            .push("factory receipt has an unsupported provider".into());
+    }
+    let endpoint = value.get("endpoint").and_then(Value::as_str);
+    if endpoint.is_none_or(|endpoint| !endpoint.starts_with("https://")) {
+        phase
+            .failures
+            .push("factory receipt endpoint is not HTTPS".into());
+    }
+    let accepted = value.get("accepted").and_then(Value::as_bool);
+    let dfm_passed = value.get("dfm_passed").and_then(Value::as_bool);
+    phase.checks.push(format!("accepted={accepted:?}"));
+    phase.checks.push(format!("dfm_passed={dfm_passed:?}"));
+    if accepted != Some(true) {
+        phase
+            .failures
+            .push("factory submission was not accepted".into());
+    }
+    if dfm_passed != Some(true) {
+        phase
+            .failures
+            .push("factory DFM feedback did not pass".into());
+    }
+    let status = value.get("http_status").and_then(Value::as_u64);
+    if status.is_none_or(|status| !(200..=299).contains(&status)) {
+        phase
+            .failures
+            .push("factory receipt HTTP status is not successful".into());
+    }
+    let package_digest = value.get("package_sha256").and_then(Value::as_str);
+    if package_digest.is_none_or(|digest| !is_sha256(digest)) {
+        phase
+            .failures
+            .push("factory receipt package_sha256 is invalid".into());
+    }
+    let package_bytes = value.get("package_bytes").and_then(Value::as_u64);
+    if package_bytes.is_none_or(|bytes| bytes == 0) {
+        phase
+            .failures
+            .push("factory receipt package_bytes is invalid".into());
+    }
+    let findings = value.get("findings").and_then(Value::as_array);
+    if let Some(findings) = findings {
+        let severe = findings
+            .iter()
+            .filter(|finding| {
+                finding
+                    .get("severity")
+                    .and_then(Value::as_str)
+                    .is_some_and(|severity| {
+                        matches!(
+                            severity.to_ascii_lowercase().as_str(),
+                            "error" | "critical" | "fatal"
+                        )
+                    })
+            })
+            .count();
+        phase.checks.push(format!("severe_findings={severe}"));
+        if severe != 0 {
+            phase.failures.push(format!(
+                "factory receipt contains {severe} severe finding(s)"
+            ));
+        }
+    } else {
+        phase
+            .failures
+            .push("factory receipt findings is not an array".into());
+    }
+    if let (Some(expected), Some(bytes), Some(archive)) = (
+        package_digest,
+        package_bytes,
+        archive_from_manifest(manufacturing_manifest),
+    ) {
+        match fs::read(&archive) {
+            Ok(contents) => {
+                let actual = hex::encode(Sha256::digest(&contents));
+                phase
+                    .checks
+                    .push(format!("package_bytes={}", contents.len()));
+                if bytes != contents.len() as u64 || expected != actual {
+                    phase.failures.push(format!(
+                        "factory package digest/size does not match {}",
+                        archive.display()
+                    ));
+                }
+            }
+            Err(error) => phase.failures.push(format!(
+                "cannot read factory package {}: {error}",
+                archive.display()
+            )),
+        }
+    }
+    finish(phase)
+}
+
+fn archive_from_manifest(manifest: &Path) -> Option<std::path::PathBuf> {
+    let value = read_json(manifest).ok()?;
+    let archive = value.get("archive").and_then(Value::as_str)?;
+    if !safe_relative_path(archive) {
+        return None;
+    }
+    Some(manifest.parent()?.join(archive))
+}
+
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
 fn phase(name: &str, path: &Path) -> PipelinePhase {
     PipelinePhase {
         name: name.into(),
@@ -368,7 +524,7 @@ mod tests {
     #[test]
     fn rejects_missing_and_tampered_phase_outputs() {
         let path = PathBuf::from("/tmp/pcbex-missing-phase.json");
-        let report = verify_pipeline(&path, &path, &path, &path, &path);
+        let report = verify_pipeline_with_factory(&path, &path, &path, &path, &path, None, false);
         assert!(!report.passed);
         assert_eq!(report.phases.len(), 5);
         assert!(
@@ -425,8 +581,83 @@ mod tests {
             br#"{"schema_version":1,"files":["pinout.h","firmware.h","firmware.c","host.py"],"c_build":{"passed":true},"python_check":{"passed":true}}"#,
         )
         .unwrap();
-        let report = verify_pipeline(&electrical, &analysis, &quality, &manufacturing, &firmware);
+        let report = verify_pipeline_with_factory(
+            &electrical,
+            &analysis,
+            &quality,
+            &manufacturing,
+            &firmware,
+            None,
+            false,
+        );
         assert!(report.passed, "{}", report.failures.join("; "));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn accepts_factory_dfm_receipt_bound_to_manufacturing_archive() {
+        let root =
+            std::env::temp_dir().join(format!("pcbex-pipeline-factory-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let electrical = root.join("electrical.json");
+        let analysis = root.join("run.json");
+        let quality = root.join("quality.json");
+        let manufacturing = root.join("manifest.json");
+        let firmware = root.join("firmware-manifest.json");
+        let receipt = root.join("factory-receipt.json");
+        fs::write(&electrical, r#"{"approved":true,"counts":{"errors":0}}"#).unwrap();
+        fs::write(&analysis, r#"{"result":{"clean":true,"violations":0}}"#).unwrap();
+        fs::write(&quality, r#"{"unrouted_nets":0}"#).unwrap();
+        for file in ["bom.csv", "cpl.csv", "drc.rpt"] {
+            fs::write(root.join(file), file).unwrap();
+        }
+        let archive_bytes = b"factory archive";
+        fs::write(root.join("manufacturing.zip"), archive_bytes).unwrap();
+        fs::write(
+            &manufacturing,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "archive": "manufacturing.zip",
+                "artifacts": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        for file in ["pinout.h", "firmware.h", "firmware.c", "host.py"] {
+            fs::write(root.join(file), file).unwrap();
+        }
+        fs::write(
+            &firmware,
+            br#"{"schema_version":1,"files":["pinout.h","firmware.h","firmware.c","host.py"],"c_build":{"passed":true},"python_check":{"passed":true}}"#,
+        )
+        .unwrap();
+        fs::write(
+            &receipt,
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "provider": "generic",
+                "endpoint": "https://factory.example/quote",
+                "package_sha256": hex::encode(Sha256::digest(archive_bytes)),
+                "package_bytes": archive_bytes.len(),
+                "accepted": true,
+                "dfm_passed": true,
+                "http_status": 200,
+                "findings": []
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let report = verify_pipeline_with_factory(
+            &electrical,
+            &analysis,
+            &quality,
+            &manufacturing,
+            &firmware,
+            Some(&receipt),
+            true,
+        );
+        assert!(report.passed, "{}", report.failures.join("; "));
+        assert_eq!(report.phases.len(), 6);
         fs::remove_dir_all(root).unwrap();
     }
 }
