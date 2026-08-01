@@ -12,6 +12,11 @@ from .circuit_generation import (
     generate_circuit_with_llm,
 )
 from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_placement_problem
+from .firmware import (
+    FirmwareGenerationError,
+    firmware_bundle_json_schema,
+    generate_firmware_bundle,
+)
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -177,6 +182,25 @@ def main() -> None:
     circuit_to_kicad.add_argument("--board-height-nm", type=int, required=True)
     circuit_to_kicad.add_argument("--grid-nm", type=int, default=250_000)
     circuit_to_kicad.add_argument("-o", "--output", type=Path, required=True)
+    firmware = sub.add_parser(
+        "generate-firmware",
+        help="generate and verify pinout-bound C/C++/Python firmware from a circuit",
+    )
+    firmware.add_argument("spec", type=Path)
+    firmware.add_argument("--mcu-reference", required=True)
+    firmware.add_argument("--gpio-map", type=Path)
+    firmware.add_argument("--c-compiler", default="cc")
+    firmware.add_argument("--cxx-compiler", default="c++")
+    firmware.add_argument("--python", default="python3")
+    firmware.add_argument("--c-template", type=Path)
+    firmware.add_argument("--cpp-template", type=Path)
+    firmware.add_argument("--host-template", type=Path)
+    firmware.add_argument("--skip-build", action="store_true")
+    firmware.add_argument("-o", "--output", type=Path, required=True)
+    firmware_schema = sub.add_parser(
+        "firmware-schema", help="write the circuit-bound firmware bundle JSON Schema"
+    )
+    firmware_schema.add_argument("-o", "--output", type=Path)
     erc_schema = sub.add_parser(
         "circuit-erc-schema", help="write the closed deterministic circuit ERC JSON Schema"
     )
@@ -417,6 +441,36 @@ def main() -> None:
             args.output.write_text(board, encoding="utf-8")
         except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
             raise SystemExit(f"circuit KiCad conversion failed: {error}") from error
+    elif args.command == "generate-firmware":
+        try:
+            source = json.loads(args.spec.read_text(encoding="utf-8"))
+            gpio_map = {}
+            if args.gpio_map:
+                gpio_map = json.loads(args.gpio_map.read_text(encoding="utf-8"))
+                if not isinstance(gpio_map, dict):
+                    raise FirmwareGenerationError("GPIO map must be a JSON object")
+            manifest = generate_firmware_bundle(
+                source,
+                args.output,
+                mcu_reference=args.mcu_reference,
+                gpio_map=gpio_map,
+                cc=args.c_compiler,
+                cxx=args.cxx_compiler,
+                python=args.python,
+                c_template=args.c_template,
+                cpp_template=args.cpp_template,
+                host_template=args.host_template,
+                skip_build=args.skip_build,
+            )
+            print(json.dumps(manifest, indent=2, ensure_ascii=False))
+        except (OSError, json.JSONDecodeError, FirmwareGenerationError) as error:
+            raise SystemExit(f"firmware generation failed: {error}") from error
+    elif args.command == "firmware-schema":
+        rendered = json.dumps(firmware_bundle_json_schema(), indent=2, ensure_ascii=False) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
     elif args.command == "circuit-erc-schema":
         rendered = json.dumps(circuit_erc_json_schema(), indent=2, ensure_ascii=False) + "\n"
         if args.output:

@@ -22,6 +22,7 @@ from pcbex_agent.circuit import (
     circuit_spec_to_placement_problem,
     skidl_to_placement_problem,
 )
+from pcbex_agent.firmware import firmware_bundle_json_schema, generate_firmware_bundle
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
 from pcbex_agent.models import DrcViolation, PlanLimits
@@ -1181,6 +1182,37 @@ class AdapterTests(unittest.TestCase):
         self.assertIn('(footprint "HEADER"', board)
         self.assertEqual(board.count("(pad "), 2)
         self.assertTrue(board.endswith("\n") and board.rstrip().endswith(")"))
+
+    def test_circuit_bound_firmware_builds_c_cpp_and_python(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "U1",
+                "lib_id": "MCU:Example",
+                "value": "controller",
+                "footprint": "QFN",
+                "pins": {"1": "DATA", "2": "GND"},
+            }],
+            "nets": [
+                {"name": "DATA", "connections": [
+                    {"reference": "U1", "pin": "1"},
+                    {"reference": "U1", "pin": "2"},
+                ]},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = generate_firmware_bundle(
+                spec,
+                Path(directory),
+                mcu_reference="U1",
+                gpio_map={"1": "PA0"},
+            )
+            self.assertTrue(manifest["c_build"]["passed"])
+            self.assertTrue(manifest["cpp_build"]["passed"])
+            self.assertTrue(manifest["python_check"]["passed"])
+            self.assertTrue((Path(directory) / "pinout.h").is_file())
+            self.assertTrue((Path(directory) / "firmware_smoke_test").is_file())
+            self.assertTrue(firmware_bundle_json_schema()["additionalProperties"] is False)
 
     def test_ipc_adapter_applies_one_atomic_commit(self):
         class Item:

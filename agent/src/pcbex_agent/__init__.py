@@ -18,6 +18,11 @@ from .circuit_generation import (
 )
 from .skidl import CircuitErcError, check_circuit_electrical, circuit_erc_json_schema
 from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_placement_problem
+from .firmware import (
+    FirmwareGenerationError,
+    firmware_bundle_json_schema,
+    generate_firmware_bundle,
+)
 from .review import ReviewError, review_schematic_with_llm
 
 __all__ = [
@@ -33,6 +38,9 @@ __all__ = [
     "circuit_erc_json_schema",
     "circuit_spec_to_kicad_pcb",
     "circuit_spec_to_placement_problem",
+    "FirmwareGenerationError",
+    "firmware_bundle_json_schema",
+    "generate_firmware_bundle",
     "managed_provider_receipt_json_schema",
     "provider_receipt_json_schema",
     "run_provider_command",
