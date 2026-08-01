@@ -156,6 +156,7 @@ use std::{
 };
 
 mod canary_completion;
+mod factory;
 mod manufacturing_feedback;
 mod mcp;
 mod policy_deployment;
@@ -189,6 +190,10 @@ use canary_completion::{
     CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
     parse_signed_canary_decision, render_canary_completion_summary, sign_canary_completion,
     signed_canary_decision_json_schema, verify_canary_completion,
+};
+use factory::{
+    FactoryProvider, factory_feedback_passed, factory_submission_json_schema,
+    submit_factory_package,
 };
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
@@ -4356,6 +4361,32 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output_dir: PathBuf,
+    },
+    /// Print the JSON Schema for factory submission receipts.
+    FactorySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Submit a manufacturing ZIP to a configured factory quote/DFM endpoint.
+    FactorySubmit {
+        package: PathBuf,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long, default_value = "generic")]
+        provider: String,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64))]
+        timeout_seconds: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
+        /// Fail after writing the receipt unless the factory reports a passing DFM.
+        #[arg(long)]
+        require_dfm_pass: bool,
     },
 }
 
@@ -14283,6 +14314,54 @@ fn run_cli() -> Result<()> {
             )?;
             run_kicad_export(&["pcb", "export", "drill", "--output"], &output_dir, &input)?;
             eprintln!("manufacturing files written to {}", output_dir.display());
+        }
+        Command::FactorySchema { output } => {
+            let rendered = serde_json::to_string_pretty(&factory_submission_json_schema())?;
+            if let Some(path) = output {
+                fs::write(&path, rendered)
+                    .with_context(|| format!("writing {}", path.display()))?;
+            } else {
+                println!("{rendered}");
+            }
+        }
+        Command::FactorySubmit {
+            package,
+            endpoint,
+            provider,
+            bearer_token_env,
+            timeout_seconds,
+            output,
+            allow_http_loopback,
+            require_dfm_pass,
+        } => {
+            let provider = FactoryProvider::parse(&provider).map_err(anyhow::Error::msg)?;
+            let receipt = submit_factory_package(
+                &package,
+                &endpoint,
+                provider,
+                bearer_token_env.as_deref(),
+                timeout_seconds,
+                allow_http_loopback,
+            )
+            .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&receipt)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "factory {} response: status={}; accepted={}; dfm_passed={:?}; findings={}; receipt={}",
+                match receipt.provider {
+                    FactoryProvider::Jlcpcb => "jlcpcb",
+                    FactoryProvider::Pcbway => "pcbway",
+                    FactoryProvider::Generic => "generic",
+                },
+                receipt.status,
+                receipt.accepted,
+                receipt.dfm_passed,
+                receipt.findings.len(),
+                output.display()
+            );
+            if require_dfm_pass && !factory_feedback_passed(&receipt) {
+                bail!("factory DFM feedback did not pass");
+            }
         }
     }
     Ok(())
