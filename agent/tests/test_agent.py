@@ -1236,6 +1236,27 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(board.count("(pad "), 2)
         self.assertTrue(board.endswith("\n") and board.rstrip().endswith(")"))
 
+    def test_circuit_handoff_preserves_fixed_component_position_and_lock(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "J1", "lib_id": "Connector:Conn", "value": "header",
+                "footprint": "HEADER", "pins": {"1": "A", "2": "GND"},
+            }],
+            "nets": [{"name": "A", "connections": [
+                {"reference": "J1", "pin": "1"}, {"reference": "J1", "pin": "2"},
+            ]}],
+        }
+        board = circuit_spec_to_kicad_pcb(
+            spec,
+            {"HEADER": {"width_nm": 6_000_000, "height_nm": 2_000_000,
+                        "position": {"x_nm": 5_000_000, "y_nm": 20_000_000},
+                        "rotation_deg": 90, "fixed": True}},
+            width_nm=20_000_000,
+            height_nm=30_000_000,
+        )
+        self.assertIn('(at 5 20 90) (locked yes)', board)
+
     def test_circuit_netlist_is_canonical_and_digest_bound(self):
         spec = {
             "schema_version": 1,
@@ -1302,6 +1323,16 @@ class AdapterTests(unittest.TestCase):
             requirements.write_text("Connect the controller", encoding="utf-8")
             sizes = root / "sizes.json"
             sizes.write_text(json.dumps({"QFN": {"width_nm": 4_000_000, "height_nm": 4_000_000}}), encoding="utf-8")
+            physical_profile = root / "physical-profile.json"
+            physical_profile.write_text(json.dumps({
+                "schema_version": 1,
+                "id": "fixture-profile",
+                "revision": 1,
+                "description": "fixture",
+                "board_width_nm": 20_000_000,
+                "board_height_nm": 10_000_000,
+                "fixed_components": [{"reference": "U1", "x_nm": 5_000_000, "y_nm": 5_000_000}],
+            }), encoding="utf-8")
             provider = [
                 sys.executable, "-c",
                 f"import sys; sys.stdin.read(); print({json.dumps(json.dumps(spec))})",
@@ -1309,11 +1340,11 @@ class AdapterTests(unittest.TestCase):
             fake_pcbex = root / "fake-pcbex"
             fake_pcbex.write_text(
                 "#!/usr/bin/env python3\n"
-                "import pathlib, shutil, sys\n"
+                "import json, pathlib, shutil, sys\n"
                 "cmd=sys.argv[1]\n"
                 "def value(name): return pathlib.Path(sys.argv[sys.argv.index(name)+1])\n"
                 "if cmd == 'place-kicad':\n"
-                "  shutil.copy2(pathlib.Path(sys.argv[2]), value('--output')); value('--json-output').write_text('{}')\n"
+                "  shutil.copy2(pathlib.Path(sys.argv[2]), value('--output')); value('--json-output').write_text(json.dumps({'components':[{'reference':'U1','position':{'x_nm':1000000,'y_nm':2000000},'rotation_deg':90,'side':'front'}]}))\n"
                 "elif cmd == 'route-kicad':\n"
                 "  shutil.copy2(pathlib.Path(sys.argv[2]), value('--output')); value('--json-output').write_text('{}')\n"
                 "elif cmd == 'fabricate':\n"
@@ -1336,6 +1367,7 @@ class AdapterTests(unittest.TestCase):
                 board_height_nm=10_000_000,
                 mcu_reference="U1",
                 pcbex=str(fake_pcbex),
+                physical_profile=physical_profile,
                 factory_command_file=factory_command,
                 require_factory=True,
             )
@@ -1346,6 +1378,9 @@ class AdapterTests(unittest.TestCase):
                  "autonomous-routing-drc", "manufacturing-package", "firmware-build", "factory-dfm"],
             )
             self.assertTrue((root / "pipeline" / "pipeline.json").is_file())
+            self.assertIn('(at 5 5 0.0) (locked yes)', (root / "pipeline" / "circuit.kicad_pcb").read_text(encoding="utf-8"))
+            cpl = (root / "pipeline" / "manufacturing" / "cpl.csv").read_text(encoding="utf-8")
+            self.assertIn("U1,1.000000,2.000000,90,F.Cu", cpl)
             self.assertFalse(pipeline_run_json_schema()["additionalProperties"])
 
     def test_factory_http_submission_binds_package_and_response_hashes(self):

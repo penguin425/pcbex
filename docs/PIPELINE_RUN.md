@@ -47,3 +47,9 @@ provider are exposed as `PCBEX_PACKAGE_PATH`, `PCBEX_PACKAGE_SHA256`, and
 runner must include the autonomous-routing and physical-profile options when
 those options are requested; an older binary is rejected rather than silently
 falling back to a less constrained route.
+
+`--physical-profile` and the built-in `--fab` alias may be supplied together:
+the fabrication profile is applied first, then the physical profile's board,
+keepout, and manufacturing-rule declarations are applied last. This lets a
+mechanical connector profile carry project-specific DFM overrides while still
+starting from a named factory baseline.

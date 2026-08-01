@@ -139,8 +139,128 @@ def _load_factory_command(path: Path | None) -> list[str] | None:
     return value
 
 
-def _package_manufacturing(directory: Path, output: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
+def _apply_physical_profile_metadata(
+    spec: Mapping[str, Any],
+    footprint_sizes: Mapping[str, Any],
+    profile_path: Path | None,
+    *,
+    board_width_nm: int,
+    board_height_nm: int,
+) -> dict[str, Any]:
+    """Bind fixed profile coordinates to the library-independent PCB handoff.
+
+    The Rust router applies the complete profile (including keepouts and DFM
+    rules) later.  The handoff must nevertheless carry fixed component
+    coordinates and lock those footprints before ``place-kicad`` runs, or the
+    placement optimizer could move a mechanically constrained connector.
+    """
+
+    if profile_path is None:
+        return dict(footprint_sizes)
+    try:
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise PipelineRunError(f"invalid physical profile: {error}") from error
+    if not isinstance(profile, Mapping) or profile.get("schema_version") != 1:
+        raise PipelineRunError("physical profile must be a schema_version 1 object")
+    if profile.get("board_width_nm") != board_width_nm or profile.get("board_height_nm") != board_height_nm:
+        raise PipelineRunError("physical profile board dimensions must match pipeline dimensions")
+    fixed_components = profile.get("fixed_components", [])
+    if not isinstance(fixed_components, list):
+        raise PipelineRunError("physical profile fixed_components must be an array")
+    parts = spec.get("parts")
+    if not isinstance(parts, list):
+        raise PipelineRunError("circuit spec parts must be an array")
+    parts_by_reference = {part.get("reference"): part for part in parts if isinstance(part, Mapping)}
+    result: dict[str, Any] = dict(footprint_sizes)
+    seen: set[str] = set()
+    for fixed in fixed_components:
+        if not isinstance(fixed, Mapping):
+            raise PipelineRunError("physical profile fixed component must be an object")
+        reference = fixed.get("reference")
+        if not isinstance(reference, str) or not reference.strip() or reference in seen:
+            raise PipelineRunError("physical profile fixed component references must be unique and non-empty")
+        seen.add(reference)
+        part = parts_by_reference.get(reference)
+        if not isinstance(part, Mapping):
+            raise PipelineRunError(f"physical profile fixed component {reference} is not in the circuit")
+        x_nm = fixed.get("x_nm")
+        y_nm = fixed.get("y_nm")
+        rotation_mdeg = fixed.get("rotation_mdeg", 0)
+        if (
+            isinstance(x_nm, bool) or not isinstance(x_nm, int)
+            or isinstance(y_nm, bool) or not isinstance(y_nm, int)
+            or isinstance(rotation_mdeg, bool) or not isinstance(rotation_mdeg, int)
+            or x_nm < 0 or y_nm < 0 or x_nm > board_width_nm or y_nm > board_height_nm
+        ):
+            raise PipelineRunError(f"physical profile fixed component {reference} has invalid position")
+        source = result.get(reference)
+        if source is None:
+            source = result.get(str(part.get("footprint")))
+        if isinstance(source, Mapping):
+            dimensions = dict(source)
+        elif isinstance(source, Sequence) and not isinstance(source, (str, bytes)) and len(source) == 2:
+            dimensions = {"width_nm": source[0], "height_nm": source[1]}
+        else:
+            raise PipelineRunError(f"missing footprint dimensions for fixed component {reference}")
+        dimensions.update({
+            "position": {"x_nm": x_nm, "y_nm": y_nm},
+            "rotation_deg": rotation_mdeg / 1000,
+            "fixed": True,
+        })
+        result[reference] = dimensions
+    return result
+
+
+def _load_placement_components(path: Path) -> dict[str, Mapping[str, Any]]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise PipelineRunError(f"invalid placement report: {error}") from error
+    components = value.get("components") if isinstance(value, Mapping) else None
+    if not isinstance(components, list):
+        raise PipelineRunError("placement report must contain a components array")
+    result: dict[str, Mapping[str, Any]] = {}
+    for component in components:
+        if not isinstance(component, Mapping):
+            raise PipelineRunError("placement component must be an object")
+        reference = component.get("reference")
+        position = component.get("position")
+        if not isinstance(reference, str) or not reference.strip() or reference in result:
+            raise PipelineRunError("placement references must be unique and non-empty")
+        if not isinstance(position, Mapping):
+            raise PipelineRunError(f"placement component {reference} has no position")
+        x_nm = position.get("x_nm")
+        y_nm = position.get("y_nm")
+        if (
+            isinstance(x_nm, bool) or not isinstance(x_nm, int)
+            or isinstance(y_nm, bool) or not isinstance(y_nm, int)
+        ):
+            raise PipelineRunError(f"placement component {reference} has invalid coordinates")
+        rotation = component.get("rotation_deg", 0)
+        if isinstance(rotation, bool) or not isinstance(rotation, (int, float)):
+            raise PipelineRunError(f"placement component {reference} has invalid rotation")
+        side = component.get("side", "front")
+        if side not in {"front", "back"}:
+            raise PipelineRunError(f"placement component {reference} has invalid side")
+        result[reference] = {
+            "x_nm": x_nm,
+            "y_nm": y_nm,
+            "rotation_deg": rotation,
+            "side": side,
+        }
+    return result
+
+
+def _package_manufacturing(
+    directory: Path,
+    output: Path,
+    spec: Mapping[str, Any],
+    *,
+    placement_report: Path,
+) -> dict[str, Any]:
     directory.mkdir(parents=True, exist_ok=True)
+    placements = _load_placement_components(placement_report)
     bom = directory / "bom.csv"
     with bom.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream)
@@ -152,7 +272,17 @@ def _package_manufacturing(directory: Path, output: Path, spec: Mapping[str, Any
         writer = csv.writer(stream)
         writer.writerow(["Reference", "X_mm", "Y_mm", "Rotation_deg", "Side"])
         for part in sorted(spec["parts"], key=lambda item: item["reference"]):
-            writer.writerow([part["reference"], "0", "0", "0", "F.Cu"])
+            reference = part["reference"]
+            placement = placements.get(reference)
+            if placement is None:
+                raise PipelineRunError(f"placement report is missing {reference}")
+            writer.writerow([
+                reference,
+                f"{placement['x_nm'] / 1_000_000:.6f}",
+                f"{placement['y_nm'] / 1_000_000:.6f}",
+                f"{placement['rotation_deg']:.6f}".rstrip("0").rstrip("."),
+                "B.Cu" if placement["side"] == "back" else "F.Cu",
+            ])
     files = sorted(path for path in directory.rglob("*") if path.is_file() and path.name != "manifest.json")
     archive = output / "manufacturing.zip"
     output.mkdir(parents=True, exist_ok=True)
@@ -255,7 +385,10 @@ def run_hardware_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
     if any(output_dir.iterdir()):
         raise PipelineRunError(f"pipeline output directory is not empty: {output_dir}")
-    sizes = json.loads(footprint_sizes.read_text(encoding="utf-8"))
+    try:
+        sizes = json.loads(footprint_sizes.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise PipelineRunError(f"invalid footprint size map: {error}") from error
     requirements_text = requirements.read_text(encoding="utf-8")
     phases: list[dict[str, Any]] = []
     failures: list[str] = []
@@ -309,7 +442,19 @@ def run_hardware_pipeline(
     spec = bundle["spec"]
     started = time.monotonic()
     try:
-        board = circuit_spec_to_kicad_pcb(spec, sizes, width_nm=board_width_nm, height_nm=board_height_nm)
+        handoff_sizes = _apply_physical_profile_metadata(
+            spec,
+            sizes,
+            physical_profile,
+            board_width_nm=board_width_nm,
+            board_height_nm=board_height_nm,
+        )
+        board = circuit_spec_to_kicad_pcb(
+            spec,
+            handoff_sizes,
+            width_nm=board_width_nm,
+            height_nm=board_height_nm,
+        )
         board_path = output_dir / "circuit.kicad_pcb"
         board_path.write_text(board, encoding="utf-8")
         phases.append(_phase("circuit-kicad-handoff", started, [board_path], ["references", "pin-net assignments"], []))
@@ -363,7 +508,12 @@ def run_hardware_pipeline(
         result = _run_command([pcbex, "fabricate", str(routed), "--output-dir", str(manufacturing)], cwd=output_dir, timeout_seconds=900)
         if not result["passed"]:
             raise PipelineRunError(result["stderr"] or "fabrication command failed")
-        manifest = _package_manufacturing(manufacturing, manufacturing, spec)
+        manifest = _package_manufacturing(
+            manufacturing,
+            manufacturing,
+            spec,
+            placement_report=placement_json,
+        )
         phases.append(_phase("manufacturing-package", started, [manufacturing / "manifest.json", manufacturing / "manufacturing.zip"], ["gerber", "excellon", "bom", "cpl", "sha256"], []))
     except (PipelineRunError, OSError, ValueError) as error:
         failures.append(f"manufacturing-package: {error}")

@@ -259,8 +259,12 @@ def circuit_spec_to_kicad_pcb(
         rotation = metadata.get("rotation_deg", 0)
         if isinstance(rotation, bool) or not isinstance(rotation, (int, float)):
             raise CircuitSpecError(f"rotation for {reference} must be numeric")
+        locked = metadata.get("fixed", False)
+        if not isinstance(locked, bool):
+            raise CircuitSpecError(f"fixed flag for {reference} must be boolean")
+        lock_clause = " (locked yes)" if locked else ""
         lines.extend([
-            f"  (footprint {_quote_kicad(str(part['footprint']))} (layer \"F.Cu\") (at {_mm(x_nm)} {_mm(y_nm)} {rotation})",
+            f"  (footprint {_quote_kicad(str(part['footprint']))} (layer \"F.Cu\") (at {_mm(x_nm)} {_mm(y_nm)} {rotation}){lock_clause}",
             f"    (fp_text reference {_quote_kicad(reference)} (at 0 0) (layer \"F.Fab\") hide)",
             f"    (fp_text value {_quote_kicad(str(part['value']))} (at 0 0) (layer \"F.Fab\") hide)",
         ])

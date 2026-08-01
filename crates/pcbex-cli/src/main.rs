@@ -4213,7 +4213,8 @@ enum Command {
         #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
         policy_pack: Option<PathBuf>,
         /// Inject board dimensions, fixed connector coordinates, keepouts, and manufacturing rules.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
+        /// When combined with --fab, the physical profile is applied last and its rules win.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab_profile", "policy_pack"])]
         physical_profile: Option<PathBuf>,
         #[arg(long)]
         svg: Option<PathBuf>,
@@ -4264,7 +4265,8 @@ enum Command {
         #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
         policy_pack: Option<PathBuf>,
         /// Inject physical dimensions, fixed placements, keepouts, and manufacturing rules.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
+        /// When combined with --fab, the physical profile is applied last and its rules win.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab_profile", "policy_pack"])]
         physical_profile: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         candidates: usize,
@@ -15213,6 +15215,8 @@ mod tests {
             "board.kicad_pcb",
             "--physical-profile",
             "nes-profile.json",
+            "--fab",
+            "jlcpcb-2layer",
             "--output",
             "routed.kicad_pcb",
             "--convergence-rounds",
@@ -15227,8 +15231,9 @@ mod tests {
                 convergence_rounds: 4,
                 max_copper_layers: 6,
                 physical_profile: Some(profile),
+                fab: Some(fab),
                 ..
-            } if profile.as_os_str() == "nes-profile.json"
+            } if profile.as_os_str() == "nes-profile.json" && fab == "jlcpcb-2layer"
         ));
     }
 
