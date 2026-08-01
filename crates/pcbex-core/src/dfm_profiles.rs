@@ -299,11 +299,19 @@ fn validate_rules(rules: &ManufacturingRules) -> Result<(), String> {
 }
 
 pub fn apply_dfm_profile(board: &mut Board, profile: &DfmProfile) {
-    apply_routing_minimums(&mut board.rules, &profile.rules);
-    for rules in board.net_classes.values_mut() {
-        apply_net_class_minimums(rules, &profile.rules);
+    apply_manufacturing_rules(board, &profile.rules);
+}
+
+/// Apply verified manufacturing minimums without requiring a named profile.
+///
+/// This is used by higher-level orchestration profiles that carry one
+/// self-contained, reviewable set of constraints alongside physical geometry.
+pub fn apply_manufacturing_rules(board: &mut Board, rules: &ManufacturingRules) {
+    apply_routing_minimums(&mut board.rules, rules);
+    for net_class in board.net_classes.values_mut() {
+        apply_net_class_minimums(net_class, rules);
     }
-    board.manufacturing_rules = Some(profile.rules.clone());
+    board.manufacturing_rules = Some(rules.clone());
 }
 
 fn apply_routing_minimums(rules: &mut Rules, manufacturing: &ManufacturingRules) {
