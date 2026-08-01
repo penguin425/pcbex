@@ -19,5 +19,6 @@ hex.workspace = true
 getrandom.workspace = true
 ed25519-dalek.workspace = true
 ureq.workspace = true
+zip.workspace = true
 pcbex-core = { path = "../pcbex-core" }
 pcbex-kicad = { path = "../pcbex-kicad" }

@@ -85,7 +85,8 @@ use pcbex_kicad::{
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review,
     human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    new_approval_log_gossip_observer_trust_state, new_approval_log_gossip_organization_registry,
+    manufacturing_parts, new_approval_log_gossip_observer_trust_state,
+    new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
     parse_electrical_policy, parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
@@ -157,6 +158,7 @@ use std::{
 
 mod canary_completion;
 mod manufacturing_feedback;
+mod manufacturing_package;
 mod mcp;
 mod policy_deployment;
 mod policy_deployment_rollback;
@@ -199,6 +201,7 @@ use manufacturing_feedback::{
     render_manufacturing_feedback_comparison_summary, render_manufacturing_feedback_summary,
     verify_analysis_manifest_board,
 };
+use manufacturing_package::write_manufacturing_package;
 use policy_deployment::{
     advance_policy_deployment, parse_policy_deployment_state, policy_deployment_state_json_schema,
     render_policy_deployment_summary,
@@ -4569,6 +4572,9 @@ fn capabilities_report() -> CapabilitiesReport {
             "KiCad PCB",
             "Gerber",
             "Excellon",
+            "BOM CSV",
+            "Pick-and-place CSV",
+            "Manufacturing ZIP",
             "SPDX JSON",
         ],
     }
@@ -14266,7 +14272,14 @@ fn run_cli() -> Result<()> {
             );
         }
         Command::Fabricate { input, output_dir } => {
-            run_kicad_drc(&input)?;
+            let input_bytes = fs::read(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let source = std::str::from_utf8(&input_bytes)
+                .with_context(|| format!("decoding {} as UTF-8", input.display()))?;
+            let parts = manufacturing_parts(source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("extracting manufacturing metadata from {}", input.display()))?;
+            let drc_report = run_kicad_drc(&input)?;
             fs::create_dir_all(&output_dir)
                 .with_context(|| format!("creating {}", output_dir.display()))?;
             run_kicad_export(
@@ -14282,7 +14295,18 @@ fn run_cli() -> Result<()> {
                 &input,
             )?;
             run_kicad_export(&["pcb", "export", "drill", "--output"], &output_dir, &input)?;
-            eprintln!("manufacturing files written to {}", output_dir.display());
+            let archive = write_manufacturing_package(
+                &output_dir,
+                &input,
+                &input_bytes,
+                &parts,
+                Some(&drc_report),
+            )?;
+            eprintln!(
+                "manufacturing files written to {}; archive: {}",
+                output_dir.display(),
+                archive.display()
+            );
         }
     }
     Ok(())
@@ -14860,7 +14884,7 @@ fn to_nm(mm: f64, name: &str) -> Result<i64> {
     Ok((mm * 1_000_000.0).round() as i64)
 }
 
-fn run_kicad_drc(board: &PathBuf) -> Result<()> {
+fn run_kicad_drc(board: &Path) -> Result<PathBuf> {
     let report = board.with_extension("drc.rpt");
     let temp = std::env::temp_dir();
     let status = ProcessCommand::new("kicad-cli")
@@ -14879,10 +14903,10 @@ fn run_kicad_drc(board: &PathBuf) -> Result<()> {
         )
     }
     eprintln!("KiCad DRC passed; report: {}", report.display());
-    Ok(())
+    Ok(report)
 }
 
-fn run_kicad_export(arguments: &[&str], output: &PathBuf, board: &PathBuf) -> Result<()> {
+fn run_kicad_export(arguments: &[&str], output: &Path, board: &Path) -> Result<()> {
     let temp = std::env::temp_dir();
     let status = ProcessCommand::new("kicad-cli")
         .args(arguments)

@@ -19,3 +19,4 @@ hex = "0.4"
 ed25519-dalek = "3"
 getrandom = "0.4"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
