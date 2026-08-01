@@ -158,6 +158,7 @@ pub fn factory_submission_json_schema() -> Value {
 }
 
 pub fn factory_feedback_loop_json_schema() -> Value {
+    let submission_schema = factory_submission_json_schema();
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://github.com/penguin425/pcbex/schema/factory-feedback-loop-v1.json",
@@ -168,11 +169,28 @@ pub fn factory_feedback_loop_json_schema() -> Value {
         "properties": {
             "schema_version": {"const": 1},
             "passed": {"type": "boolean"},
-            "attempts": {"type": "array", "maxItems": MAX_REPAIR_ATTEMPTS, "items": {"type": "object"}},
+            "attempts": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_REPAIR_ATTEMPTS,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["attempt", "package_sha256", "package_bytes", "receipt", "repair_command_ran"],
+                    "properties": {
+                        "attempt": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_ATTEMPTS},
+                        "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_PACKAGE_BYTES},
+                        "receipt": {"$ref": "#/$defs/factory_submission_receipt"},
+                        "repair_command_ran": {"type": "boolean"}
+                    }
+                }
+            },
             "final_package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "final_package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_PACKAGE_BYTES},
             "failure": {"type": ["string", "null"]}
-        }
+        },
+        "$defs": {"factory_submission_receipt": submission_schema}
     })
 }
 
@@ -1428,6 +1446,11 @@ mod tests {
             schema["properties"]["attempts"]["maxItems"],
             MAX_REPAIR_ATTEMPTS
         );
+        assert_eq!(
+            schema["properties"]["attempts"]["items"]["additionalProperties"],
+            false
+        );
+        assert!(schema["$defs"]["factory_submission_receipt"].is_object());
         assert_eq!(
             schema["properties"]["final_package_bytes"]["maximum"],
             MAX_REPAIR_PACKAGE_BYTES
