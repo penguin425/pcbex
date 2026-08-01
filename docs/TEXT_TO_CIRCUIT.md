@@ -103,9 +103,11 @@ PYTHONPATH=agent/src python3 -m pcbex_agent generate-skidl \
 The adapter obtains a short-lived OAuth token, posts the bounded KeywordSearch
 request, maps `Products`/`QuantityAvailable`/`ProductVariations` into the
 deterministic catalog contract, and still applies the local in-stock and
-footprint checks. JLCPCB/LCSC native credentials can use the same HTTPS
-endpoint boundary and bearer-token environment once the approved API account
-exposes its response contract.
+footprint checks. The current native implementation is DigiKey; JLCPCB/LCSC
+responses can still be consumed through the normalized HTTPS gateway boundary
+and bearer-token environment. Their official API accounts require separate
+approval and expose provider-specific contracts, so no undocumented endpoint or
+order schema is hard-coded into pcbex.
 
 `circuit-generation-schema` prints the closed result contract used by the
 natural-language command. It contains the normalized circuit spec, deterministic
