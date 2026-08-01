@@ -67,7 +67,10 @@ PYTHONPATH=agent/src python3 -m pcbex_agent generate-skidl \
 
 The gateway returns either a part array or `{ "parts": [...] }` using the
 normalized fields (legacy aliases `part_number`, `package`, and `quantity` are
-accepted). Responses are capped at 4 MiB, redirects and endpoint query strings
+accepted). Native LCSC aliases (`partNumber`, `packageType`, `stockQty`) and
+DigiKey aliases (`ProductNumber`, `PackageType`, `QuantityAvailable`) are also
+normalized, while the provider identity remains an explicit request header.
+Responses are capped at 4 MiB, redirects and endpoint query strings
 are rejected, HTTPS is required, and the bearer token is read only from the
 named environment variable. Local HTTP is available only for loopback tests
 with `--allow-http-loopback`.
