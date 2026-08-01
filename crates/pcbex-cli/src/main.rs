@@ -161,6 +161,7 @@ mod factory;
 mod manufacturing_feedback;
 mod manufacturing_package;
 mod mcp;
+mod pipeline;
 mod policy_deployment;
 mod policy_deployment_rollback;
 mod policy_deployment_verification;
@@ -211,6 +212,7 @@ use manufacturing_package::{
     prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
     write_manufacturing_package,
 };
+use pipeline::{pipeline_gate_schema, verify_pipeline};
 use policy_deployment::{
     advance_policy_deployment, parse_policy_deployment_state, policy_deployment_state_json_schema,
     render_policy_deployment_summary,
@@ -742,6 +744,26 @@ enum Command {
     SchematicReviewerRoutingPlanSchema {
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+    /// Print the deterministic full hardware pipeline gate JSON Schema.
+    PipelineSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Verify ERC, DRC/analysis, routing quality, manufacturing, and firmware gates.
+    PipelineVerify {
+        #[arg(long)]
+        electrical_review: PathBuf,
+        #[arg(long)]
+        analysis_manifest: PathBuf,
+        #[arg(long)]
+        quality: PathBuf,
+        #[arg(long)]
+        manufacturing_manifest: PathBuf,
+        #[arg(long)]
+        firmware_manifest: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Normalize a KiCad schematic into the versioned electrical-design IR.
     ImportSchematic {
@@ -4739,6 +4761,36 @@ fn run_cli() -> Result<()> {
                 &schematic_reviewer_routing_plan_json_schema(),
                 output.as_ref(),
             )?;
+        }
+        Command::PipelineSchema { output } => {
+            write_or_print_json(&pipeline_gate_schema(), output.as_ref())?;
+        }
+        Command::PipelineVerify {
+            electrical_review,
+            analysis_manifest,
+            quality,
+            manufacturing_manifest,
+            firmware_manifest,
+            output,
+        } => {
+            let report = verify_pipeline(
+                &electrical_review,
+                &analysis_manifest,
+                &quality,
+                &manufacturing_manifest,
+                &firmware_manifest,
+            );
+            fs::write(&output, serde_json::to_string_pretty(&report)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            eprintln!(
+                "pipeline gate: {}; {} phase failure(s); report={}",
+                if report.passed { "passed" } else { "rejected" },
+                report.failures.len(),
+                output.display()
+            );
+            if !report.passed {
+                bail!("hardware pipeline gate rejected: {}", report.failures.join("; "));
+            }
         }
         Command::ImportSchematic {
             input,

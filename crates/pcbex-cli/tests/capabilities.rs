@@ -170,6 +170,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "factory-feedback-loop-schema",
         "factory-submit",
         "factory-feedback-loop",
+        "pipeline-schema",
+        "pipeline-verify",
     ] {
         let command = commands
             .iter()
