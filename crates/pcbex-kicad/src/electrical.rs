@@ -22,8 +22,11 @@ pub const RULE_MULTIPLE_POWER_OUTPUTS: &str = "multiple_power_outputs";
 pub const RULE_POWER_INPUT_NOT_DRIVEN: &str = "power_input_not_driven";
 pub const RULE_INPUT_NOT_DRIVEN: &str = "input_not_driven";
 pub const RULE_MULTIPLE_NET_NAMES: &str = "multiple_net_names";
+pub const RULE_POWER_RAIL_VOLTAGE_CONFLICT: &str = "power_rail_voltage_conflict";
+pub const RULE_POWER_INPUT_VOLTAGE_EXCEEDED: &str = "power_input_voltage_exceeded";
+pub const RULE_MISSING_DECOUPLING_CAPACITOR: &str = "missing_decoupling_capacitor";
 
-const RULES: [(&str, ElectricalSeverity); 12] = [
+const RULES: [(&str, ElectricalSeverity); 15] = [
     (RULE_COVERAGE_INCOMPLETE, ElectricalSeverity::Error),
     (RULE_DUPLICATE_REFERENCE_UNIT, ElectricalSeverity::Error),
     (RULE_UNANNOTATED_REFERENCE, ElectricalSeverity::Error),
@@ -39,6 +42,9 @@ const RULES: [(&str, ElectricalSeverity); 12] = [
     (RULE_POWER_INPUT_NOT_DRIVEN, ElectricalSeverity::Error),
     (RULE_INPUT_NOT_DRIVEN, ElectricalSeverity::Warning),
     (RULE_MULTIPLE_NET_NAMES, ElectricalSeverity::Warning),
+    (RULE_POWER_RAIL_VOLTAGE_CONFLICT, ElectricalSeverity::Error),
+    (RULE_POWER_INPUT_VOLTAGE_EXCEEDED, ElectricalSeverity::Error),
+    (RULE_MISSING_DECOUPLING_CAPACITOR, ElectricalSeverity::Error),
 ];
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -243,6 +249,7 @@ pub fn check_schematic(
             &mut findings,
         );
     }
+    check_power_safety(schematic, &by_net, &policy, &mut findings);
 
     findings.sort_by(|left, right| {
         right
@@ -634,6 +641,24 @@ fn rule_explanation(rule: &str) -> (&'static str, &'static str, &'static str, &'
             "One electrical net resolves to more than one distinct label.",
             "Use one canonical name or split connections that should be separate.",
         ),
+        RULE_POWER_RAIL_VOLTAGE_CONFLICT => (
+            "Conflicting power-rail voltages",
+            "Prevent rails with different nominal voltages from being shorted together.",
+            "One net has labels or metadata that resolve to more than one voltage.",
+            "Split the rails or correct the power-symbol and rail-voltage metadata.",
+        ),
+        RULE_POWER_INPUT_VOLTAGE_EXCEEDED => (
+            "Power-input voltage rating exceeded",
+            "Prevent a rail from exceeding a component's declared maximum input voltage.",
+            "A power-input pin declares pcbex:max_voltage below its connected rail voltage.",
+            "Use a compatible rail, add level conversion, or correct the component rating.",
+        ),
+        RULE_MISSING_DECOUPLING_CAPACITOR => (
+            "Missing power decoupling capacitor",
+            "Require a local bypass capacitor for explicitly marked power-sensitive devices.",
+            "A pcbex:requires_decoupling symbol has a power-input net without a capacitor.",
+            "Place a capacitor on the same power net and mark the part as decoupling.",
+        ),
         _ => unreachable!("all effective electrical rules have explanations"),
     }
 }
@@ -916,6 +941,222 @@ fn check_net(
             all_symbols(),
             all_pins(),
         );
+    }
+}
+
+fn check_power_safety(
+    schematic: &SchematicDocument,
+    by_net: &HashMap<u32, Vec<&PinContext<'_>>>,
+    policy: &ElectricalPolicy,
+    findings: &mut Vec<ElectricalFinding>,
+) {
+    for net in &schematic.nets {
+        let contexts = by_net.get(&net.id).map(Vec::as_slice).unwrap_or_default();
+        if contexts.is_empty() {
+            continue;
+        }
+        let mut voltages = voltage_hints(&net.name);
+        for label in &net.labels {
+            voltages.extend(voltage_hints(label));
+        }
+        for context in contexts {
+            for key in ["pcbex:rail_voltage", "rail_voltage"] {
+                if let Some(value) = property(context.symbol, key)
+                    && let Some(voltage) = parse_voltage_uv(value)
+                {
+                    voltages.push(voltage);
+                }
+            }
+        }
+        voltages.sort_unstable();
+        voltages.dedup();
+        if voltages.len() > 1 {
+            add_finding(
+                findings,
+                policy,
+                RULE_POWER_RAIL_VOLTAGE_CONFLICT,
+                format!(
+                    "net {} has conflicting rail voltages: {}",
+                    net.name,
+                    voltages
+                        .iter()
+                        .map(|voltage| format_voltage_uv(*voltage))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                Some(net.id),
+                contexts
+                    .iter()
+                    .map(|context| symbol_ref(context.symbol))
+                    .collect(),
+                contexts
+                    .iter()
+                    .map(|context| context.pin_ref.clone())
+                    .collect(),
+            );
+        }
+        let Some(rail_voltage) = voltages.iter().copied().max() else {
+            continue;
+        };
+        for context in contexts
+            .iter()
+            .filter(|context| context.pin.electrical_type == ElectricalPinType::PowerInput)
+        {
+            for key in [
+                "pcbex:max_voltage",
+                "pcbex:maximum_voltage",
+                "max_voltage",
+                "maximum_voltage",
+            ] {
+                let Some(value) = property(context.symbol, key) else {
+                    continue;
+                };
+                let Some(max_voltage) = parse_voltage_uv(value) else {
+                    continue;
+                };
+                if rail_voltage > max_voltage {
+                    add_finding(
+                        findings,
+                        policy,
+                        RULE_POWER_INPUT_VOLTAGE_EXCEEDED,
+                        format!(
+                            "{} pin {} is rated for at most {}, but net {} is {}",
+                            context.symbol.reference,
+                            context.pin.number,
+                            format_voltage_uv(max_voltage),
+                            net.name,
+                            format_voltage_uv(rail_voltage)
+                        ),
+                        Some(net.id),
+                        vec![symbol_ref(context.symbol)],
+                        vec![context.pin_ref.clone()],
+                    );
+                }
+                break;
+            }
+            if property_truthy(context.symbol, "pcbex:requires_decoupling")
+                && !contexts.iter().any(|candidate| {
+                    candidate.symbol.uuid != context.symbol.uuid
+                        && is_decoupling_capacitor(candidate.symbol)
+                })
+            {
+                add_finding(
+                    findings,
+                    policy,
+                    RULE_MISSING_DECOUPLING_CAPACITOR,
+                    format!(
+                        "{} pin {} on net {} requires a decoupling capacitor",
+                        context.symbol.reference, context.pin.number, net.name
+                    ),
+                    Some(net.id),
+                    contexts
+                        .iter()
+                        .map(|value| symbol_ref(value.symbol))
+                        .collect(),
+                    contexts.iter().map(|value| value.pin_ref.clone()).collect(),
+                );
+            }
+        }
+    }
+}
+
+fn property<'a>(symbol: &'a SchematicSymbol, wanted: &str) -> Option<&'a str> {
+    symbol
+        .properties
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+        .map(|(_, value)| value.as_str())
+}
+
+fn property_truthy(symbol: &SchematicSymbol, key: &str) -> bool {
+    property(symbol, key).is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "required"
+        )
+    })
+}
+
+fn is_decoupling_capacitor(symbol: &SchematicSymbol) -> bool {
+    let lib_id = symbol.lib_id.to_ascii_lowercase();
+    let value = symbol.value.to_ascii_lowercase();
+    (symbol.reference.starts_with('C')
+        || lib_id.ends_with(":c")
+        || lib_id.contains("capacitor")
+        || value.contains("cap"))
+        && property(symbol, "pcbex:decoupling").is_none_or(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "required"
+            )
+        })
+}
+
+fn voltage_hints(name: &str) -> Vec<i64> {
+    let mut values = Vec::new();
+    for token in name.split(|character: char| !character.is_ascii_alphanumeric()) {
+        if token.is_empty() {
+            continue;
+        }
+        if let Some(value) = parse_voltage_uv(token) {
+            values.push(value);
+        }
+        let upper = token.to_ascii_uppercase();
+        for prefix in ["AVCC", "AVDD", "VCC", "VDD"] {
+            if let Some(suffix) = upper.strip_prefix(prefix)
+                && let Some(value) = parse_voltage_uv(suffix)
+            {
+                values.push(value);
+            }
+        }
+    }
+    values
+}
+
+fn parse_voltage_uv(value: &str) -> Option<i64> {
+    let mut text = value.trim().to_ascii_uppercase();
+    if text.is_empty() {
+        return None;
+    }
+    let scale = if text.ends_with("MV") {
+        text.truncate(text.len() - 2);
+        1_000_i64
+    } else if text.ends_with('V') {
+        text.truncate(text.len() - 1);
+        1_000_000_i64
+    } else {
+        let index = text.find('V')?;
+        if index == 0 || index + 1 == text.len() {
+            return None;
+        }
+        text.replace_range(index..=index, ".");
+        1_000_000_i64
+    };
+    let (whole, fraction) = text.split_once('.').unwrap_or((text.as_str(), ""));
+    if whole.is_empty() || !whole.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    if fraction.len() > 6 || !fraction.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    let whole = whole.parse::<i64>().ok()?.checked_mul(scale)?;
+    let mut fraction_value = fraction.parse::<i64>().unwrap_or(0);
+    for _ in fraction.len()..6 {
+        fraction_value = fraction_value.checked_mul(10)?;
+    }
+    let fraction_scale = 1_000_000_i64 / scale;
+    whole.checked_add(fraction_value.checked_mul(fraction_scale)?)
+}
+
+fn format_voltage_uv(value: i64) -> String {
+    if value % 1_000_000 == 0 {
+        format!("{}V", value / 1_000_000)
+    } else {
+        let whole = value / 1_000_000;
+        let fraction = format!("{:06}", value % 1_000_000)
+            .trim_end_matches('0')
+            .to_string();
+        format!("{whole}.{fraction}V")
     }
 }
 
@@ -1287,6 +1528,47 @@ mod tests {
     }
 
     #[test]
+    fn checks_power_rail_conflicts_voltage_ratings_and_decoupling() {
+        let mut schematic = import_schematic(SOURCE).unwrap();
+        let power_net = schematic
+            .nets
+            .iter_mut()
+            .find(|net| net.name == "VCC")
+            .unwrap();
+        power_net.name = "VCC_5V".into();
+        power_net.labels.push("VCC_3V3".into());
+        let controller = schematic
+            .symbols
+            .iter_mut()
+            .find(|symbol| symbol.reference == "U1")
+            .unwrap();
+        controller
+            .properties
+            .insert("pcbex:max_voltage".into(), "3.3V".into());
+        controller
+            .properties
+            .insert("pcbex:requires_decoupling".into(), "true".into());
+
+        let report = check_schematic(&schematic, &ElectricalPolicy::default()).unwrap();
+        let detected = report
+            .findings
+            .iter()
+            .map(|finding| finding.rule.as_str())
+            .collect::<BTreeSet<_>>();
+        assert!(detected.contains(RULE_POWER_RAIL_VOLTAGE_CONFLICT));
+        assert!(detected.contains(RULE_POWER_INPUT_VOLTAGE_EXCEEDED));
+        assert!(detected.contains(RULE_MISSING_DECOUPLING_CAPACITOR));
+    }
+
+    #[test]
+    fn power_voltage_parser_handles_common_rail_notations() {
+        assert_eq!(parse_voltage_uv("5V"), Some(5_000_000));
+        assert_eq!(parse_voltage_uv("3V3"), Some(3_300_000));
+        assert_eq!(parse_voltage_uv("3300mV"), Some(3_300_000));
+        assert_eq!(voltage_hints("VCC_1V8"), vec![1_800_000]);
+    }
+
+    #[test]
     fn dnp_symbols_do_not_create_findings() {
         let mut schematic = import_schematic(SOURCE).unwrap();
         for symbol in &mut schematic.symbols {
@@ -1372,7 +1654,7 @@ mod tests {
         review.findings[0].message = r#"unsafe <rail> & "driver""#.into();
         let junit = electrical_review_to_junit(&review, &policy).unwrap();
         assert!(junit.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#));
-        assert!(junit.contains(r#"tests="12""#));
+        assert!(junit.contains(r#"tests="15""#));
         assert!(junit.contains(r#"<failure type="electrical_error""#));
         assert!(junit.contains(r#"<skipped message="disabled by electrical policy"/>"#));
         assert!(junit.contains("unsafe &lt;rail&gt; &amp; &quot;driver&quot;"));
