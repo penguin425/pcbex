@@ -374,11 +374,11 @@ fn validate_manufacturing_rules(rules: &ManufacturingRules) -> Result<(), String
 }
 
 fn validate_name(value: &str, label: &str) -> Result<(), String> {
-    if value.is_empty()
+    let mut bytes = value.bytes();
+    let first = bytes.next();
+    if !matches!(first, Some(b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'))
         || value.len() > 128
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        || !bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
     {
         return Err(format!("{label} must be a non-empty safe identifier"));
     }
@@ -526,5 +526,24 @@ mod tests {
             manufacturing_rules: None,
         };
         assert!(apply_physical_profile(&mut board(), &profile).is_err());
+    }
+
+    #[test]
+    fn rejects_identifiers_that_do_not_match_profile_schema() {
+        let mut profile = PhysicalConstraintProfile {
+            schema_version: 1,
+            id: "-invalid".into(),
+            revision: 1,
+            description: "profile".into(),
+            board_width_nm: 60_000_000,
+            board_height_nm: 40_000_000,
+            outline: vec![],
+            fixed_components: vec![],
+            keepouts: vec![],
+            manufacturing_rules: None,
+        };
+        assert!(validate_physical_profile(&profile).is_err());
+        profile.id = "valid-1".into();
+        assert!(validate_physical_profile(&profile).is_ok());
     }
 }
