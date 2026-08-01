@@ -326,6 +326,8 @@ fn run_repair_command(
     receipt: &FactorySubmissionReceipt,
     output_package: &Path,
 ) -> Result<(), String> {
+    let input_before = fs::read(current_package)
+        .map_err(|error| format!("reading factory repair input package: {error}"))?;
     let receipt_json = serde_json::to_vec_pretty(receipt)
         .map_err(|error| format!("serializing factory receipt for repair: {error}"))?;
     let mut child = Command::new(&command[0])
@@ -338,10 +340,14 @@ fn run_repair_command(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("starting factory repair command: {error}"))?;
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(&receipt_json)
-            .map_err(|error| format!("writing factory receipt to repair command: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(error) = stdin.write_all(&receipt_json)
+    {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!(
+            "writing factory receipt to repair command: {error}"
+        ));
     }
     let deadline = Instant::now() + Duration::from_secs(REPAIR_TIMEOUT_SECONDS);
     loop {
@@ -365,6 +371,11 @@ fn run_repair_command(
         return Err(format!(
             "factory repair output must contain 1 to {MAX_REPAIR_PACKAGE_BYTES} bytes"
         ));
+    }
+    let input_after = fs::read(current_package)
+        .map_err(|error| format!("reading factory repair input after command: {error}"))?;
+    if input_before != input_after {
+        return Err("factory repair command modified its input package".into());
     }
     Ok(())
 }
