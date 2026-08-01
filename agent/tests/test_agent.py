@@ -876,6 +876,55 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaises(CatalogRemoteError):
             fetch_catalog(CatalogEndpoint(provider="jlcpcb", endpoint="http://example.com/parts"))
 
+    def test_live_catalog_normalizes_native_digikey_and_lcsc_aliases(self):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                provider = self.headers["X-PCBEX-Catalog-Provider"]
+                if provider == "digikey":
+                    payload = {"parts": [{
+                        "ProductNumber": "DK-1",
+                        "Description": "level shifter",
+                        "PackageType": "SOT-23-6",
+                        "QuantityAvailable": 7,
+                        "isBasic": False,
+                    }]}
+                else:
+                    payload = [{
+                        "partNumber": "C-LCSC-1",
+                        "productName": "level shifter",
+                        "packageType": "SOT-23-6",
+                        "stockQty": 11,
+                        "jlcpcbBasic": "true",
+                    }]
+                body = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            endpoint = f"http://127.0.0.1:{server.server_port}/parts"
+            digikey = fetch_catalog(CatalogEndpoint(
+                provider="digikey", endpoint=endpoint, allow_http_loopback=True
+            ))
+            lcsc = fetch_catalog(CatalogEndpoint(
+                provider="lcsc", endpoint=endpoint, allow_http_loopback=True
+            ))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertEqual((digikey[0].mpn, digikey[0].stock), ("DK-1", 7))
+        self.assertEqual((lcsc[0].mpn, lcsc[0].stock, lcsc[0].basic), ("C-LCSC-1", 11, True))
+
     def test_skidl_generator_is_deterministic_and_complete(self):
         spec = {
             "schema_version": 1,

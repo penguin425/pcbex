@@ -36,6 +36,11 @@ def fetch_catalog(config: CatalogEndpoint) -> list[CatalogPart]:
     gateways can translate their native API into this contract without tying
     pcbex's deterministic selector to unstable vendor response shapes.
     """
+    provider = config.provider.strip().lower()
+    if provider not in {"jlcpcb", "digikey", "lcsc", "generic"}:
+        raise CatalogRemoteError(
+            "catalog provider must be one of: jlcpcb, digikey, lcsc, generic"
+        )
     validate_endpoint(config)
     if not 0.1 <= config.timeout_seconds <= 120:
         raise CatalogRemoteError("catalog timeout_seconds must be between 0.1 and 120")
@@ -52,7 +57,7 @@ def fetch_catalog(config: CatalogEndpoint) -> list[CatalogPart]:
         headers={
             "Accept": "application/json",
             "User-Agent": "pcbex-agent/1",
-            "X-PCBEX-Catalog-Provider": config.provider,
+            "X-PCBEX-Catalog-Provider": provider,
             **({"Authorization": f"Bearer {token}"} if token else {}),
         },
         method="GET",
@@ -86,7 +91,7 @@ def fetch_catalog(config: CatalogEndpoint) -> list[CatalogPart]:
         value = value.get("parts")
     if not isinstance(value, list):
         raise CatalogRemoteError("catalog response must be an array or an object with parts")
-    normalized = [_normalize_part(item, config.provider) for item in value]
+    normalized = [_normalize_part(item, provider) for item in value]
     return catalog_parts_from_json(normalized)
 
 
@@ -130,12 +135,37 @@ def validate_endpoint(config: CatalogEndpoint) -> None:
 def _normalize_part(value: Any, provider: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise CatalogRemoteError("catalog part must be an object")
-    mpn = _first_string(value, "mpn", "part_number", "manufacturer_part_number")
-    description = _first_string(value, "description", "comment", "value")
-    footprint = _first_string(value, "footprint", "package")
+    provider = provider.strip().lower()
+    if provider == "digikey":
+        mpn_keys = (
+            "mpn", "manufacturer_part_number", "ManufacturerPartNumber",
+            "part_number", "DigiKeyPartNumber", "ProductNumber",
+        )
+        description_keys = ("description", "Description", "comment", "value")
+        footprint_keys = ("footprint", "package", "PackageType", "package_type")
+        stock_keys = ("stock", "quantity", "inventory", "QuantityAvailable", "quantity_available")
+        basic_keys = ("basic", "isBasic", "is_basic")
+    elif provider == "lcsc":
+        mpn_keys = (
+            "mpn", "part_number", "partNumber", "manufacturer_part_number",
+            "product_code", "productCode", "lcsc_part",
+        )
+        description_keys = ("description", "comment", "value", "productName", "product_name")
+        footprint_keys = ("footprint", "package", "packageType", "package_type")
+        stock_keys = ("stock", "quantity", "inventory", "stockQty", "stock_quantity")
+        basic_keys = ("basic", "isBasic", "is_basic", "jlcpcbBasic")
+    else:
+        mpn_keys = ("mpn", "part_number", "manufacturer_part_number")
+        description_keys = ("description", "comment", "value")
+        footprint_keys = ("footprint", "package")
+        stock_keys = ("stock", "quantity", "inventory")
+        basic_keys = ("basic",)
+    mpn = _first_string(value, *mpn_keys)
+    description = _first_string(value, *description_keys)
+    footprint = _first_string(value, *footprint_keys)
     if not mpn or not description or not footprint:
         raise CatalogRemoteError("catalog part requires mpn, description, and footprint")
-    stock = value.get("stock", value.get("quantity", value.get("inventory", 0)))
+    stock = _first_value(value, *stock_keys, default=0)
     if isinstance(stock, bool) or not isinstance(stock, int) or stock < 0:
         raise CatalogRemoteError(f"catalog part {mpn} stock must be a non-negative integer")
     tags = value.get("tags", ())
@@ -148,9 +178,9 @@ def _normalize_part(value: Any, provider: str) -> dict[str, Any]:
         "description": description,
         "footprint": footprint,
         "tags": list(tags),
-        "vendor": str(value.get("vendor") or provider),
+        "vendor": _first_string(value, "vendor", "supplier", "Supplier") or provider,
         "stock": stock,
-        "basic": bool(value.get("basic", False)),
+        "basic": _first_bool(value, *basic_keys),
         "datasheet_url": str(value.get("datasheet_url") or value.get("datasheet") or ""),
     }
 
@@ -161,6 +191,26 @@ def _first_string(value: dict[str, Any], *keys: str) -> str:
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
     return ""
+
+
+def _first_value(value: dict[str, Any], *keys: str, default: Any) -> Any:
+    for key in keys:
+        if key in value and value[key] is not None:
+            return value[key]
+    return default
+
+
+def _first_bool(value: dict[str, Any], *keys: str) -> bool:
+    candidate = _first_value(value, *keys, default=False)
+    if isinstance(candidate, bool):
+        return candidate
+    if isinstance(candidate, str):
+        normalized = candidate.strip().lower()
+        if normalized in {"true", "yes", "1", "basic"}:
+            return True
+        if normalized in {"false", "no", "0", "extended", ""}:
+            return False
+    return False
 
 
 def _validate_env_name(value: str) -> None:
