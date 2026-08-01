@@ -32,6 +32,8 @@ from .review import ReviewError
 from .skidl import (
     CircuitSpecError,
     assign_catalog_parts,
+    check_circuit_electrical,
+    circuit_erc_json_schema,
     circuit_spec_json_schema,
     generate_skidl,
 )
@@ -148,6 +150,10 @@ def main() -> None:
         "circuit-spec-schema", help="write the closed Text-to-Circuit JSON Schema"
     )
     skidl_schema.add_argument("-o", "--output", type=Path)
+    erc_schema = sub.add_parser(
+        "circuit-erc-schema", help="write the closed deterministic circuit ERC JSON Schema"
+    )
+    erc_schema.add_argument("-o", "--output", type=Path)
     generate_circuit = sub.add_parser(
         "generate-circuit",
         help="convert natural-language requirements into a validated circuit bundle",
@@ -323,6 +329,10 @@ def main() -> None:
                     require_available=not args.allow_out_of_stock,
                     require_basic=args.require_basic,
                 )
+            erc = check_circuit_electrical(spec)
+            if not erc["passed"]:
+                details = "; ".join(finding["message"] for finding in erc["findings"])
+                raise CircuitSpecError(f"electrical ERC failed: {details}")
             source = generate_skidl(spec, include_netlist=not args.no_netlist)
         except (OSError, json.JSONDecodeError, CircuitSpecError, CatalogRemoteError) as error:
             raise SystemExit(f"SKiDL generation failed: {error}") from error
@@ -331,6 +341,12 @@ def main() -> None:
         rendered = json.dumps(
             circuit_spec_json_schema(), indent=2, ensure_ascii=False
         ) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
+    elif args.command == "circuit-erc-schema":
+        rendered = json.dumps(circuit_erc_json_schema(), indent=2, ensure_ascii=False) + "\n"
         if args.output:
             args.output.write_text(rendered, encoding="utf-8")
         else:
@@ -375,9 +391,14 @@ def main() -> None:
                     require_available=not args.allow_out_of_stock,
                     require_basic=args.require_basic,
                 )
+            erc = check_circuit_electrical(spec)
+            if not erc["passed"]:
+                details = "; ".join(finding["message"] for finding in erc["findings"])
+                raise CircuitSpecError(f"electrical ERC failed: {details}")
             # Re-render after catalog assignment so the emitted source and JSON
             # are bound to exactly the same normalized spec.
             bundle["spec"] = spec
+            bundle["erc"] = erc
             bundle["skidl"] = generate_skidl(spec)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(

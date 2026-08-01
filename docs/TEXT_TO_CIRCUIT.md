@@ -19,6 +19,13 @@ PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
 The provider receives only a closed schema prompt and cannot write files. Each
 response is validated for complete pin/net coverage; invalid JSON or an
 electrical shape error is returned to the model as a bounded correction request.
+The same bounded correction loop runs a deterministic circuit ERC after
+connectivity validation. Explicit rail voltages, power-output metadata,
+per-pin maximum voltage ratings, and decoupling requirements reject rail
+shorts, over-voltage inputs, incompatible power drivers, and missing bypass
+capacitors before SKiDL is written. The ERC finding text is included in the
+next provider prompt, so an electrical failure cannot silently become a layout
+input.
 After the attempt limit, generation fails closed. Catalog assignment happens
 after validation and the bundle re-renders SKiDL from the exact normalized spec,
 so the source and the recorded JSON cannot diverge.
@@ -76,5 +83,26 @@ named environment variable. Local HTTP is available only for loopback tests
 with `--allow-http-loopback`.
 
 `circuit-generation-schema` prints the closed result contract used by the
-natural-language command. It contains the normalized circuit spec, attempt
-count, repair flag, and generated SKiDL source.
+natural-language command. It contains the normalized circuit spec, deterministic
+ERC report, attempt count, repair flag, and generated SKiDL source. The ERC
+contract alone is available with `circuit-erc-schema`.
+
+Electrical metadata is optional for non-power nets and is explicit when needed:
+
+```json
+{
+  "reference": "U1",
+  "lib_id": "MCU:Example",
+  "value": "controller",
+  "footprint": "Package_QFN:QFN-16",
+  "pins": {"1": "5V", "2": "GND"},
+  "electrical": {
+    "pin_max_voltage_v": {"1": 3.3},
+    "requires_decoupling": true
+  }
+}
+```
+
+Nets may declare `voltage_v`; common `5V`, `3V3`, and `1V8` rail names are
+recognized conservatively when no explicit value is present. Capacitor parts
+are marked with `electrical.decoupling: true` on the same supply net.

@@ -39,6 +39,8 @@ from pcbex_agent.review import review_schematic_with_llm
 from pcbex_agent.skidl import (
     CircuitSpecError,
     assign_catalog_parts,
+    check_circuit_electrical,
+    circuit_erc_json_schema,
     circuit_spec_json_schema,
     generate_skidl,
 )
@@ -270,6 +272,96 @@ class AdapterTests(unittest.TestCase):
         schema = circuit_generation_json_schema()
         self.assertTrue(schema["additionalProperties"] is False)
         self.assertIn("skidl", schema["required"])
+        self.assertIn("erc", schema["required"])
+
+    def test_circuit_erc_blocks_overvoltage_and_missing_decoupling(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "U1",
+                "lib_id": "MCU:Example",
+                "value": "controller",
+                "footprint": "QFN-16",
+                "pins": {"1": "5V", "2": "GND"},
+                "electrical": {
+                    "pin_max_voltage_v": {"1": 3.3},
+                    "requires_decoupling": True,
+                },
+            }],
+            "nets": [
+                {"name": "5V", "connections": [{"reference": "U1", "pin": "1"}, {"reference": "U1", "pin": "2"}]},
+            ],
+        }
+        report = check_circuit_electrical(spec)
+        self.assertFalse(report["passed"])
+        self.assertEqual(
+            {finding["code"] for finding in report["findings"]},
+            {"power_input_voltage_exceeded", "missing_decoupling_capacitor"},
+        )
+        self.assertFalse(circuit_erc_json_schema()["additionalProperties"])
+
+    def test_circuit_erc_accepts_matching_rail_and_bypass(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {
+                    "reference": "U1",
+                    "lib_id": "MCU:Example",
+                    "value": "controller",
+                    "footprint": "QFN-16",
+                    "pins": {"1": "3V3", "2": "GND"},
+                    "electrical": {
+                        "pin_max_voltage_v": {"1": 3.3},
+                        "requires_decoupling": True,
+                    },
+                },
+                {
+                    "reference": "C1",
+                    "lib_id": "Device:C",
+                    "value": "100nF",
+                    "footprint": "C_0603",
+                    "pins": {"1": "3V3", "2": "GND"},
+                    "electrical": {"decoupling": True},
+                },
+            ],
+            "nets": [
+                {"name": "3V3", "connections": [{"reference": "U1", "pin": "1"}, {"reference": "C1", "pin": "1"}]},
+                {"name": "GND", "connections": [{"reference": "U1", "pin": "2"}, {"reference": "C1", "pin": "2"}]},
+            ],
+        }
+        report = check_circuit_electrical(spec)
+        self.assertTrue(report["passed"], report)
+
+    def test_circuit_generation_retries_after_electrical_erc_failure(self):
+        invalid = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "U1",
+                "lib_id": "MCU:Example",
+                "value": "controller",
+                "footprint": "QFN-16",
+                "pins": {"1": "5V", "2": "GND"},
+                "electrical": {"pin_max_voltage_v": {"1": 3.3}},
+            }],
+            "nets": [{"name": "5V", "connections": [{"reference": "U1", "pin": "1"}, {"reference": "U1", "pin": "2"}]}],
+        }
+        valid = {
+            **invalid,
+            "parts": [{
+                **invalid["parts"][0],
+                "electrical": {"pin_max_voltage_v": {"1": 5.0}},
+            }],
+        }
+        prompts = []
+
+        def transport(prompt):
+            prompts.append(prompt)
+            return json.dumps(invalid if len(prompts) == 1 else valid)
+
+        result = generate_circuit_with_llm("Power a controller", transport)
+        self.assertTrue(result["repaired"])
+        self.assertTrue(result["erc"]["passed"])
+        self.assertIn("electrical ERC failed", prompts[1])
 
     def test_generate_circuit_cli_writes_bundle_and_skidl(self):
         response = {
