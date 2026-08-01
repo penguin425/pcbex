@@ -27,6 +27,8 @@ pub struct AutonomousRoutingOptions {
     pub router_workers: usize,
     #[serde(default = "default_spacing_step")]
     pub spacing_step_nm: i64,
+    #[serde(default = "default_max_copper_layers")]
+    pub max_copper_layers: usize,
 }
 
 impl Default for AutonomousRoutingOptions {
@@ -37,6 +39,7 @@ impl Default for AutonomousRoutingOptions {
             workers: default_workers(),
             router_workers: default_router_workers(),
             spacing_step_nm: default_spacing_step(),
+            max_copper_layers: default_max_copper_layers(),
         }
     }
 }
@@ -83,7 +86,12 @@ pub fn autonomous_route(
     let mut converged = false;
 
     for round in 0..options.max_rounds {
-        let (input, strategy) = strategy_board(board, round, options.spacing_step_nm);
+        let (input, strategy) = strategy_board(
+            board,
+            round,
+            options.spacing_step_nm,
+            options.max_copper_layers,
+        );
         let route_options = RoutingCandidateOptions {
             candidates: options.candidates,
             workers: options.workers,
@@ -164,10 +172,25 @@ pub fn autonomous_route(
     })
 }
 
-fn strategy_board(board: &Board, round: usize, spacing_step_nm: i64) -> (Board, String) {
+fn strategy_board(
+    board: &Board,
+    round: usize,
+    spacing_step_nm: i64,
+    max_copper_layers: usize,
+) -> (Board, String) {
     let mut input = board.clone();
-    if round % 2 == 1 && input.copper_layers.len() > 2 {
+    let mut expanded_layers = false;
+    if round % 2 == 1 {
         input.via_strategy = ViaStrategy::Auto;
+        if input.copper_layers.len() < max_copper_layers {
+            let desired = max_copper_layers.min(input.copper_layers.len().saturating_add(2));
+            let inner_count = desired.saturating_sub(2);
+            input.copper_layers = std::iter::once(crate::Layer::Front)
+                .chain((1..=inner_count as u8).map(crate::Layer::Inner))
+                .chain(std::iter::once(crate::Layer::Back))
+                .collect();
+            expanded_layers = true;
+        }
     } else {
         input.via_strategy = board.via_strategy;
     }
@@ -177,10 +200,12 @@ fn strategy_board(board: &Board, round: usize, spacing_step_nm: i64) -> (Board, 
     for rules in input.net_classes.values_mut() {
         rules.clearance_nm = rules.clearance_nm.saturating_add(spacing);
     }
-    let strategy = match (round % 2, spacing_round > 0) {
-        (1, true) => "auto-layer-transitions+tightened-spacing",
-        (1, false) => "auto-layer-transitions",
-        (0, true) => "through-layer-transitions+tightened-spacing",
+    let strategy = match (round % 2, spacing_round > 0, expanded_layers) {
+        (1, true, true) => "expanded-layers+auto-transitions+tightened-spacing",
+        (1, false, true) => "expanded-layers+auto-transitions",
+        (1, true, false) => "auto-layer-transitions+tightened-spacing",
+        (1, false, false) => "auto-layer-transitions",
+        (0, true, _) => "through-layer-transitions+tightened-spacing",
         _ => "baseline",
     };
     (input, strategy.to_string())
@@ -215,6 +240,9 @@ fn validate_options(options: &AutonomousRoutingOptions) -> Result<(), String> {
     if options.spacing_step_nm < 0 {
         return Err("autonomous routing spacing_step_nm must not be negative".into());
     }
+    if !(2..=32).contains(&options.max_copper_layers) {
+        return Err("autonomous routing max_copper_layers must be between 2 and 32".into());
+    }
     Ok(())
 }
 
@@ -232,6 +260,10 @@ fn default_router_workers() -> usize {
 }
 fn default_spacing_step() -> i64 {
     50_000
+}
+
+fn default_max_copper_layers() -> usize {
+    4
 }
 
 #[cfg(test)]
@@ -307,11 +339,21 @@ mod tests {
                 workers: 1,
                 router_workers: 1,
                 spacing_step_nm: 50_000,
+                max_copper_layers: 4,
             },
         )
         .unwrap();
         assert!(result.converged);
         assert!(!result.rounds.is_empty());
         assert_eq!(result.board.routes.len(), 1);
+    }
+
+    #[test]
+    fn expands_a_two_layer_board_when_strategy_stalls() {
+        let mut input = board();
+        input.copper_layers = vec![Layer::Front, Layer::Back];
+        let (expanded, strategy) = strategy_board(&input, 1, 50_000, 4);
+        assert_eq!(expanded.copper_layers.len(), 4);
+        assert!(strategy.starts_with("expanded-layers"));
     }
 }

@@ -11,7 +11,9 @@ deterministic convergence loop:
 4. keep the best checked board, changing strategy when progress stalls.
 
 The strategy schedule alternates the physical layer-transition policy
-(`ThroughOnly` and `Auto`) and then tightens clearance in fixed 50 µm steps.
+(`ThroughOnly` and `Auto`). On a two-layer board, the first stalled alternate
+round can expand the board to four copper layers (bounded by
+`--max-copper-layers`) before tightening clearance in fixed 50 µm steps.
 No candidate is accepted without the internal checker. A successful run writes
 `<output>.convergence.json` with every round, strategy, score, selected round,
 and convergence/stall status. The normal `--allow-unrouted`, internal checker,

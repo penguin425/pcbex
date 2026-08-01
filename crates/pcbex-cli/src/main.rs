@@ -4204,6 +4204,9 @@ enum Command {
         /// Run bounded multi-strategy routing rounds and keep the best checked result.
         #[arg(long, default_value_t = 1)]
         convergence_rounds: usize,
+        /// Maximum copper layers the autonomous strategy may request when progress stalls.
+        #[arg(long, default_value_t = 4)]
+        max_copper_layers: usize,
         #[arg(long)]
         allow_unrouted: bool,
     },
@@ -13753,6 +13756,7 @@ fn run_cli() -> Result<()> {
             json_output,
             drc,
             convergence_rounds,
+            max_copper_layers,
             allow_unrouted,
         } => {
             let source = fs::read_to_string(&input)
@@ -13813,6 +13817,7 @@ fn run_cli() -> Result<()> {
                     &imported.board,
                     &AutonomousRoutingOptions {
                         max_rounds: convergence_rounds,
+                        max_copper_layers,
                         ..AutonomousRoutingOptions::default()
                     },
                 )
@@ -15126,6 +15131,30 @@ mod tests {
                 fab: Some(fab),
                 ..
             } if fab == "jlcpcb-2layer"
+        ));
+    }
+
+    #[test]
+    fn parses_autonomous_layer_expansion_limit() {
+        let cli = parse_cli(&[
+            "pcbex",
+            "route-kicad",
+            "board.kicad_pcb",
+            "--output",
+            "routed.kicad_pcb",
+            "--convergence-rounds",
+            "4",
+            "--max-copper-layers",
+            "6",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *cli.command,
+            Command::RouteKicad {
+                convergence_rounds: 4,
+                max_copper_layers: 6,
+                ..
+            }
         ));
     }
 
