@@ -252,6 +252,17 @@ def main() -> None:
     pipeline.add_argument("--placement-iterations", type=int)
     pipeline.add_argument("--seed", type=int)
     pipeline.add_argument("--factory-command-file", type=Path)
+    pipeline.add_argument(
+        "--factory-repair-command-file",
+        type=Path,
+        help="JSON string-array command that repairs a failed factory package",
+    )
+    pipeline.add_argument(
+        "--factory-max-attempts",
+        type=int,
+        default=4,
+        help="maximum factory submission/repair attempts (1..4)",
+    )
     pipeline.add_argument("--factory-receipt", type=Path)
     pipeline.add_argument("--factory-provider", default="generic")
     pipeline.add_argument("--factory-endpoint")
@@ -618,6 +629,8 @@ def main() -> None:
                 placement_iterations=args.placement_iterations,
                 seed=args.seed,
                 factory_command_file=args.factory_command_file,
+                factory_repair_command_file=args.factory_repair_command_file,
+                factory_max_attempts=args.factory_max_attempts,
                 factory_receipt=args.factory_receipt,
                 factory_provider=args.factory_provider,
                 factory_endpoint=(

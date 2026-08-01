@@ -23,6 +23,8 @@ from .skidl import CircuitSpecError, assign_catalog_parts, generate_skidl
 
 MAX_PIPELINE_SECONDS = 1800
 MAX_COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024
+MAX_FACTORY_PACKAGE_BYTES = 128 * 1024 * 1024
+MAX_FACTORY_ATTEMPTS = 4
 
 
 class PipelineRunError(RuntimeError):
@@ -347,6 +349,106 @@ def _factory_receipt(
     return value
 
 
+def _factory_passed(receipt: Mapping[str, Any]) -> bool:
+    if receipt.get("accepted") is not True:
+        return False
+    dfm_passed = receipt.get("dfm_passed")
+    if dfm_passed is None and isinstance(receipt.get("dfm"), Mapping):
+        dfm_passed = receipt["dfm"].get("passed")
+    return dfm_passed is True
+
+
+def _validate_factory_package(path: Path) -> None:
+    try:
+        metadata = path.stat()
+    except OSError as error:
+        raise PipelineRunError(f"factory repair did not create a package: {error}") from error
+    if not path.is_file() or metadata.st_size == 0 or metadata.st_size > MAX_FACTORY_PACKAGE_BYTES:
+        raise PipelineRunError(
+            f"factory repair package must contain 1 to {MAX_FACTORY_PACKAGE_BYTES} bytes"
+        )
+    if not zipfile.is_zipfile(path):
+        raise PipelineRunError("factory repair output must be a ZIP archive")
+
+
+def _run_factory_feedback_loop(
+    package: Path,
+    *,
+    command: list[str] | None,
+    receipt_path: Path | None,
+    repair_command: list[str] | None,
+    factory_endpoint: FactoryEndpoint | None,
+    workspace: Path,
+    timeout_seconds: int,
+    provider: str,
+    max_attempts: int,
+    report_path: Path,
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    """Submit DFM feedback and optionally repair/resubmit a bounded number of times."""
+
+    if not 1 <= max_attempts <= MAX_FACTORY_ATTEMPTS:
+        raise PipelineRunError(f"factory max attempts must be between 1 and {MAX_FACTORY_ATTEMPTS}")
+    if factory_endpoint is None and command is None and receipt_path is None:
+        raise PipelineRunError("factory endpoint, command, or receipt is required")
+    if receipt_path is not None:
+        if repair_command is not None:
+            raise PipelineRunError("a fixed factory receipt cannot be combined with repair attempts")
+        max_attempts = 1
+    current = package
+    attempts: list[dict[str, Any]] = []
+    receipt: dict[str, Any] | None = None
+    for attempt in range(1, max_attempts + 1):
+        if factory_endpoint is not None and receipt_path is None and command is None:
+            receipt = submit_factory_package(current, factory_endpoint)
+        else:
+            receipt = _factory_receipt(
+                current,
+                command=command,
+                receipt_path=receipt_path if attempt == 1 else None,
+                workspace=workspace,
+                timeout_seconds=timeout_seconds,
+                provider=provider,
+            )
+        passed = _factory_passed(receipt)
+        attempts.append({
+            "attempt": attempt,
+            "package": current.name,
+            "package_sha256": _sha256(current),
+            "accepted": receipt.get("accepted"),
+            "dfm_passed": receipt.get("dfm_passed"),
+            "passed": passed,
+        })
+        if passed:
+            report = {"schema_version": 1, "attempts": attempts, "passed": True}
+            _write_json(report_path, report)
+            return current, receipt, report
+        if repair_command is None or attempt == max_attempts:
+            break
+        repaired = workspace / f"manufacturing-repaired-{attempt}.zip"
+        environment = os.environ.copy()
+        environment.update({
+            "PCBEX_FACTORY_REPAIR_INPUT_PACKAGE": str(current),
+            "PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE": str(repaired),
+            "PCBEX_FACTORY_REPAIR_RECEIPT_JSON": "stdin",
+            "PCBEX_FACTORY_PROVIDER": provider,
+        })
+        result = _run_command(
+            repair_command,
+            cwd=workspace,
+            timeout_seconds=timeout_seconds,
+            input_bytes=(json.dumps(receipt, ensure_ascii=False) + "\n").encode("utf-8"),
+            environment=environment,
+        )
+        if not result["passed"]:
+            raise PipelineRunError(f"factory repair command failed: {result['stderr']}")
+        _validate_factory_package(repaired)
+        current = repaired
+    assert receipt is not None
+    report = {"schema_version": 1, "attempts": attempts, "passed": False}
+    _write_json(report_path, report)
+    return current, receipt, report
+
+
 def run_hardware_pipeline(
     requirements: Path,
     output_dir: Path,
@@ -367,6 +469,8 @@ def run_hardware_pipeline(
     placement_iterations: int | None = None,
     seed: int | None = None,
     factory_command_file: Path | None = None,
+    factory_repair_command_file: Path | None = None,
+    factory_max_attempts: int = MAX_FACTORY_ATTEMPTS,
     factory_receipt: Path | None = None,
     factory_provider: str = "generic",
     factory_endpoint: FactoryEndpoint | None = None,
@@ -542,29 +646,36 @@ def run_hardware_pipeline(
         phases.append(_phase("firmware-build", started, [], [], [str(error)]))
         return finalize()
 
-    if require_factory or factory_command_file is not None or factory_receipt is not None or factory_endpoint is not None:
+    if (
+        require_factory
+        or factory_command_file is not None
+        or factory_repair_command_file is not None
+        or factory_receipt is not None
+        or factory_endpoint is not None
+    ):
         started = time.monotonic()
         try:
             command = _load_factory_command(factory_command_file)
-            if factory_endpoint is not None and factory_receipt is None and command is None:
-                receipt = submit_factory_package(manufacturing / "manufacturing.zip", factory_endpoint)
-            else:
-                receipt = _factory_receipt(
-                    manufacturing / "manufacturing.zip",
-                    command=command,
-                    receipt_path=factory_receipt,
-                    workspace=output_dir,
-                    timeout_seconds=factory_timeout_seconds,
-                    provider=factory_provider,
-                )
+            repair_command = _load_factory_command(factory_repair_command_file)
+            final_package, receipt, loop_report = _run_factory_feedback_loop(
+                manufacturing / "manufacturing.zip",
+                command=command,
+                receipt_path=factory_receipt,
+                repair_command=repair_command,
+                factory_endpoint=factory_endpoint,
+                workspace=output_dir,
+                timeout_seconds=factory_timeout_seconds,
+                provider=factory_provider,
+                max_attempts=factory_max_attempts,
+                report_path=output_dir / "factory-loop.json",
+            )
             _write_json(output_dir / "factory-receipt.json", receipt)
-            accepted = receipt.get("accepted") is True
-            dfm_passed = receipt.get("dfm_passed")
-            if dfm_passed is None and isinstance(receipt.get("dfm"), Mapping):
-                dfm_passed = receipt["dfm"].get("passed")
-            if not accepted or dfm_passed is not True:
+            if not _factory_passed(receipt):
                 raise PipelineRunError("factory receipt is not accepted and DFM-passed")
-            phases.append(_phase("factory-dfm", started, [output_dir / "factory-receipt.json"], ["accepted", "dfm_passed"], []))
+            artifacts = [output_dir / "factory-receipt.json", output_dir / "factory-loop.json"]
+            if final_package != manufacturing / "manufacturing.zip":
+                artifacts.append(final_package)
+            phases.append(_phase("factory-dfm", started, artifacts, ["accepted", "dfm_passed", f"attempts={len(loop_report['attempts'])}"], []))
         except (OSError, PipelineRunError, ValueError, json.JSONDecodeError) as error:
             failures.append(f"factory-dfm: {error}")
             phases.append(_phase("factory-dfm", started, [], [], [str(error)]))

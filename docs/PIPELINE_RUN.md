@@ -43,6 +43,14 @@ provider are exposed as `PCBEX_PACKAGE_PATH`, `PCBEX_PACKAGE_SHA256`, and
 `PCBEX_FACTORY_PROVIDER`. The command must return a JSON object with
 `accepted: true` and `dfm_passed: true` when `--require-factory` is used.
 
+For a bounded DFM repair loop, add
+`--factory-repair-command-file repair-command.json`. The repair command receives
+the failed receipt JSON on stdin and writes a new ZIP to the path in
+`PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE`; the current package is exposed as
+`PCBEX_FACTORY_REPAIR_INPUT_PACKAGE`. `--factory-max-attempts` is capped at
+four. Each attempt is recorded in `factory-loop.json`, and the successful
+repaired ZIP is retained for the factory handoff.
+
 `pipeline-schema` emits the closed report schema. The Rust binary used by the
 runner must include the autonomous-routing and physical-profile options when
 those options are requested; an older binary is rejected rather than silently

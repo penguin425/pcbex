@@ -1356,7 +1356,12 @@ class AdapterTests(unittest.TestCase):
             factory_command = root / "factory.json"
             factory_command.write_text(json.dumps([
                 sys.executable, "-c",
-                "import sys; sys.stdin.buffer.read(); print('{\"accepted\":true,\"dfm_passed\":true}')",
+                "import pathlib,sys; sys.stdin.buffer.read(); marker=pathlib.Path('factory-attempt'); passed=marker.exists(); marker.write_text('1'); print('{\"accepted\":%s,\"dfm_passed\":%s}' % ('true' if passed else 'false','true' if passed else 'false'))",
+            ]), encoding="utf-8")
+            repair_command = root / "factory-repair.json"
+            repair_command.write_text(json.dumps([
+                sys.executable, "-c",
+                "import os,sys,zipfile; sys.stdin.buffer.read(); zipfile.ZipFile(os.environ['PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE'],'w').writestr('repaired.txt','ok')",
             ]), encoding="utf-8")
             report = run_hardware_pipeline(
                 requirements,
@@ -1369,6 +1374,8 @@ class AdapterTests(unittest.TestCase):
                 pcbex=str(fake_pcbex),
                 physical_profile=physical_profile,
                 factory_command_file=factory_command,
+                factory_repair_command_file=repair_command,
+                factory_max_attempts=2,
                 require_factory=True,
             )
             self.assertTrue(report["passed"], report)
@@ -1381,6 +1388,9 @@ class AdapterTests(unittest.TestCase):
             self.assertIn('(at 5 5 0.0) (locked yes)', (root / "pipeline" / "circuit.kicad_pcb").read_text(encoding="utf-8"))
             cpl = (root / "pipeline" / "manufacturing" / "cpl.csv").read_text(encoding="utf-8")
             self.assertIn("U1,1.000000,2.000000,90,F.Cu", cpl)
+            loop = json.loads((root / "pipeline" / "factory-loop.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(loop["attempts"]), 2)
+            self.assertTrue((root / "pipeline" / "manufacturing-repaired-1.zip").is_file())
             self.assertFalse(pipeline_run_json_schema()["additionalProperties"])
 
     def test_factory_http_submission_binds_package_and_response_hashes(self):
