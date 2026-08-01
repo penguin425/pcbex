@@ -363,7 +363,7 @@ fn decode_hex<const N: usize>(value: &str, label: &str) -> Result<[u8; N], Strin
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 #[cfg(test)]

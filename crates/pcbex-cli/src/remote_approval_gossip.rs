@@ -286,7 +286,7 @@ fn validate_digest(value: &str, label: &str) -> Result<(), String> {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

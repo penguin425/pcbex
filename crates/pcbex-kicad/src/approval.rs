@@ -728,7 +728,7 @@ fn validate_sha256(value: &str, description: &str) -> Result<(), String> {
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

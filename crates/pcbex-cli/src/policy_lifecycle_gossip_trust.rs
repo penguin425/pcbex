@@ -587,7 +587,7 @@ fn rotation_payload(
 fn normalized_sha256<T: Serialize>(value: &T, label: &str) -> Result<String, String> {
     let bytes = serde_json::to_vec(value)
         .map_err(|error| format!("serializing normalized {label}: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn validate_slug(value: &str, label: &str) -> Result<(), String> {

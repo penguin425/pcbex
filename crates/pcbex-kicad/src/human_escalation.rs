@@ -98,7 +98,7 @@ pub fn ai_quorum_evidence_sha256(evidence: &SessionAiQuorumEvidence) -> Result<S
     validate_evidence_shape(evidence)?;
     let bytes = serde_json::to_vec(evidence)
         .map_err(|error| format!("serializing AI quorum evidence: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[allow(clippy::too_many_arguments)]

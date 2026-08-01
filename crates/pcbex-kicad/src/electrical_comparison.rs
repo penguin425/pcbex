@@ -277,7 +277,7 @@ fn is_finding_id(value: &str) -> bool {
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 pub fn electrical_review_comparison_json_schema() -> Value {

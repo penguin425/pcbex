@@ -672,7 +672,7 @@ pub fn evidence_descriptor(name: &str, bytes: &[u8]) -> Result<EvidenceDescripto
     Ok(EvidenceDescriptor {
         name: name.into(),
         bytes: bytes.len() as u64,
-        sha256: format!("{:x}", Sha256::digest(bytes)),
+        sha256: hex::encode(Sha256::digest(bytes)),
     })
 }
 
@@ -684,7 +684,7 @@ fn validate_descriptor(descriptor: &EvidenceDescriptor) -> Result<(), String> {
 fn normalized_sha256<T: Serialize>(value: &T) -> Result<String, String> {
     let bytes =
         serde_json::to_vec(value).map_err(|error| format!("serializing evidence: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn disposition_rank(value: ManufacturingDisposition) -> u8 {
@@ -911,7 +911,7 @@ mod tests {
     #[test]
     fn records_digest_bound_feedback() {
         let mut declaration = declaration();
-        declaration.board_sha256 = format!("{:x}", Sha256::digest(b"board"));
+        declaration.board_sha256 = hex::encode(Sha256::digest(b"board"));
         let feedback = record_manufacturing_feedback(
             declaration,
             ("run.json", b"manifest"),
@@ -931,7 +931,7 @@ mod tests {
         assert!(parse_manufacturing_feedback_declaration(&value.to_string()).is_err());
 
         let mut declaration = declaration();
-        declaration.board_sha256 = format!("{:x}", Sha256::digest(b"other"));
+        declaration.board_sha256 = hex::encode(Sha256::digest(b"other"));
         assert!(
             record_manufacturing_feedback(
                 declaration,
@@ -946,7 +946,7 @@ mod tests {
     #[test]
     fn compares_new_escalated_and_resolved_findings() {
         let mut baseline_declaration = declaration();
-        baseline_declaration.board_sha256 = format!("{:x}", Sha256::digest(b"baseline"));
+        baseline_declaration.board_sha256 = hex::encode(Sha256::digest(b"baseline"));
         baseline_declaration.findings.push(ManufacturingFinding {
             id: "resolved".into(),
             category: ManufacturingCategory::Other,
@@ -963,7 +963,7 @@ mod tests {
         )
         .unwrap();
         let mut current_declaration = declaration();
-        current_declaration.board_sha256 = format!("{:x}", Sha256::digest(b"current"));
+        current_declaration.board_sha256 = hex::encode(Sha256::digest(b"current"));
         current_declaration.findings[0].severity = ManufacturingSeverity::Error;
         current_declaration.findings.push(ManufacturingFinding {
             id: "new-drill".into(),

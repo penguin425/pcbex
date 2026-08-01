@@ -91,7 +91,7 @@ fn session_body_sha256(session: &AiReviewSession) -> Result<String, String> {
     body.session_sha256.clear();
     let bytes = serde_json::to_vec(&body)
         .map_err(|error| format!("serializing AI review session: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn validate_sha256(value: &str, label: &str) -> Result<(), String> {

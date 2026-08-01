@@ -665,7 +665,7 @@ fn net_keys(document: &SchematicDocument) -> Result<BTreeMap<u32, String>, Strin
         } else {
             let pins = net_pin_keys(net);
             let payload = pins.join("\n");
-            format!("pins:{:x}", Sha256::digest(payload.as_bytes()))
+            format!("pins:{}", hex::encode(Sha256::digest(payload.as_bytes())))
         };
         if !used.insert(key.clone()) {
             return Err(format!(
@@ -765,7 +765,7 @@ fn identity(document: &SchematicDocument) -> Result<SchematicDiffIdentity, Strin
     let bytes = serde_json::to_vec(document)
         .map_err(|error| format!("serializing schematic IR: {error}"))?;
     Ok(SchematicDiffIdentity {
-        schematic_sha256: format!("{:x}", Sha256::digest(bytes)),
+        schematic_sha256: hex::encode(Sha256::digest(bytes)),
         document_uuid: document.uuid.clone(),
         source_version: document.source_version,
         coverage_complete: document.coverage.complete,

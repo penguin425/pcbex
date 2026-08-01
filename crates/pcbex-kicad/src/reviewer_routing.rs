@@ -119,7 +119,7 @@ pub fn route_schematic_review(
 
     let policy_bytes = serde_json::to_vec(&policy)
         .map_err(|error| format!("could not serialize reviewer routing policy: {error}"))?;
-    let policy_sha256 = format!("{:x}", Sha256::digest(policy_bytes));
+    let policy_sha256 = hex::encode(Sha256::digest(policy_bytes));
     let fallback = policy
         .profiles
         .iter()
