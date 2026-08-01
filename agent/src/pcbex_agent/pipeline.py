@@ -398,17 +398,26 @@ def _run_factory_feedback_loop(
     attempts: list[dict[str, Any]] = []
     receipt: dict[str, Any] | None = None
     for attempt in range(1, max_attempts + 1):
-        if factory_endpoint is not None and receipt_path is None and command is None:
-            receipt = submit_factory_package(current, factory_endpoint)
-        else:
-            receipt = _factory_receipt(
-                current,
-                command=command,
-                receipt_path=receipt_path if attempt == 1 else None,
-                workspace=workspace,
-                timeout_seconds=timeout_seconds,
-                provider=provider,
-            )
+        try:
+            if factory_endpoint is not None and receipt_path is None and command is None:
+                receipt = submit_factory_package(current, factory_endpoint)
+            else:
+                receipt = _factory_receipt(
+                    current,
+                    command=command,
+                    receipt_path=receipt_path if attempt == 1 else None,
+                    workspace=workspace,
+                    timeout_seconds=timeout_seconds,
+                    provider=provider,
+                )
+        except (OSError, PipelineRunError, ValueError) as error:
+            _write_json(report_path, {
+                "schema_version": 1,
+                "attempts": attempts,
+                "passed": False,
+                "failure": str(error),
+            })
+            raise
         passed = _factory_passed(receipt)
         attempts.append({
             "attempt": attempt,
@@ -432,16 +441,25 @@ def _run_factory_feedback_loop(
             "PCBEX_FACTORY_REPAIR_RECEIPT_JSON": "stdin",
             "PCBEX_FACTORY_PROVIDER": provider,
         })
-        result = _run_command(
-            repair_command,
-            cwd=workspace,
-            timeout_seconds=timeout_seconds,
-            input_bytes=(json.dumps(receipt, ensure_ascii=False) + "\n").encode("utf-8"),
-            environment=environment,
-        )
-        if not result["passed"]:
-            raise PipelineRunError(f"factory repair command failed: {result['stderr']}")
-        _validate_factory_package(repaired)
+        try:
+            result = _run_command(
+                repair_command,
+                cwd=workspace,
+                timeout_seconds=timeout_seconds,
+                input_bytes=(json.dumps(receipt, ensure_ascii=False) + "\n").encode("utf-8"),
+                environment=environment,
+            )
+            if not result["passed"]:
+                raise PipelineRunError(f"factory repair command failed: {result['stderr']}")
+            _validate_factory_package(repaired)
+        except (OSError, PipelineRunError, ValueError) as error:
+            _write_json(report_path, {
+                "schema_version": 1,
+                "attempts": attempts,
+                "passed": False,
+                "failure": str(error),
+            })
+            raise
         current = repaired
     assert receipt is not None
     report = {"schema_version": 1, "attempts": attempts, "passed": False}
