@@ -191,7 +191,9 @@ use canary_completion::{
     parse_signed_canary_decision, render_canary_completion_summary, sign_canary_completion,
     signed_canary_decision_json_schema, verify_canary_completion,
 };
-use firmware::{firmware_bundle_schema, generate_firmware_bundle, parse_pin_map};
+use firmware::{
+    FirmwareBuildOptions, firmware_bundle_schema, generate_firmware_bundle_with_cxx, parse_pin_map,
+};
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
     evidence_descriptor, manufacturing_feedback_comparison_json_schema,
@@ -747,7 +749,7 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Generate pinout.h, portable MCU C code, and a PC-side Python helper.
+    /// Generate pinout.h, portable MCU C/C++ code, and a PC-side Python helper.
     GenerateFirmware {
         input: PathBuf,
         #[arg(long)]
@@ -759,6 +761,8 @@ enum Command {
         pin_map: Option<PathBuf>,
         #[arg(long, default_value = "cc")]
         cc: String,
+        #[arg(long, default_value = "c++")]
+        cxx: String,
         #[arg(long, default_value = "python3")]
         python: String,
         /// Permit unsupported schematic features; the generated bundle may be incomplete.
@@ -4733,6 +4737,7 @@ fn run_cli() -> Result<()> {
             output_dir,
             pin_map,
             cc,
+            cxx,
             python,
             allow_incomplete,
             skip_build,
@@ -4756,20 +4761,24 @@ fn run_cli() -> Result<()> {
                 })
                 .transpose()?
                 .unwrap_or_default();
-            let report = generate_firmware_bundle(
+            let report = generate_firmware_bundle_with_cxx(
                 &schematic,
                 &output_dir,
                 &mcu_reference,
                 &pin_map,
-                &cc,
-                &python,
-                skip_build,
+                FirmwareBuildOptions {
+                    cc: &cc,
+                    cxx: &cxx,
+                    python: &python,
+                    skip_build,
+                },
             )?;
             eprintln!(
-                "generated firmware bundle for {}: {} pin(s), C build={}, Python check={}; output={}",
+                "generated firmware bundle for {}: {} pin(s), C build={}, C++ build={}, Python check={}; output={}",
                 report.mcu_reference,
                 report.pins.len(),
                 report.c_build.passed,
+                report.cpp_build.passed,
                 report.python_check.passed,
                 output_dir.display()
             );
