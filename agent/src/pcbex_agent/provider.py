@@ -226,6 +226,40 @@ def _run_provider(
         raise ProviderError("provider stdout is not valid UTF-8") from error
 
 
+def run_provider_command(
+    command: list[str],
+    prompt: str,
+    *,
+    timeout_seconds: int = 120,
+    max_output_bytes: int = 1024 * 1024,
+) -> str:
+    """Run a shell-free bounded provider for non-review structured contracts.
+
+    ``review_schematic_with_command`` retains the richer request/response
+    receipt used by schematic approval.  Circuit generation has a different
+    response schema, so it uses this small shared execution boundary while
+    keeping the same timeout, output, and shell-safety guarantees.
+    """
+
+    if not command or not command[0].strip():
+        raise ProviderError("provider command must not be empty")
+    if not 1 <= timeout_seconds <= MAXIMUM_TIMEOUT_SECONDS:
+        raise ProviderError(
+            f"timeout must be between 1 and {MAXIMUM_TIMEOUT_SECONDS} seconds"
+        )
+    if not 1 <= max_output_bytes <= MAXIMUM_PROVIDER_OUTPUT_BYTES:
+        raise ProviderError(
+            "maximum output must be between 1 and "
+            f"{MAXIMUM_PROVIDER_OUTPUT_BYTES} bytes"
+        )
+    return _run_provider(
+        command,
+        prompt,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
+    )
+
+
 def _read_bounded(
     stream: Any,
     destination: bytearray,

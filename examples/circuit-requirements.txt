@@ -1,0 +1,2 @@
+Create a 10 kOhm resistor between VCC and GND.
+Use a 0603 surface-mount footprint and expose both pins in the netlist.

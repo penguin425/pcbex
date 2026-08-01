@@ -6,6 +6,23 @@ specification from natural language, but it does not get to emit arbitrary
 Python: references, pins, nets, and connectivity are validated before any
 source is written.
 
+For a bounded command-provider flow, `generate-circuit` performs that natural
+language step and writes both an auditable JSON bundle and optional SKiDL source:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
+  requirements.txt --provider-command ./my-structured-json-model \
+  --max-attempts 3 -o build/circuit-generation.json \
+  --skidl-output build/circuit.py
+```
+
+The provider receives only a closed schema prompt and cannot write files. Each
+response is validated for complete pin/net coverage; invalid JSON or an
+electrical shape error is returned to the model as a bounded correction request.
+After the attempt limit, generation fails closed. Catalog assignment happens
+after validation and the bundle re-renders SKiDL from the exact normalized spec,
+so the source and the recorded JSON cannot diverge.
+
 The versioned contract is available with:
 
 ```sh
@@ -54,3 +71,7 @@ accepted). Responses are capped at 4 MiB, redirects and endpoint query strings
 are rejected, HTTPS is required, and the bearer token is read only from the
 named environment variable. Local HTTP is available only for loopback tests
 with `--allow-http-loopback`.
+
+`circuit-generation-schema` prints the closed result contract used by the
+natural-language command. It contains the normalized circuit spec, attempt
+count, repair flag, and generated SKiDL source.

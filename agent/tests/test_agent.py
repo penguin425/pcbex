@@ -12,6 +12,11 @@ from unittest.mock import patch
 from pcbex_agent.cli import main as agent_main
 from pcbex_agent.catalog import CatalogPart, catalog_parts_from_json, search_parts
 from pcbex_agent.catalog_remote import CatalogEndpoint, CatalogRemoteError, fetch_catalog
+from pcbex_agent.circuit_generation import (
+    CircuitGenerationError,
+    circuit_generation_json_schema,
+    generate_circuit_with_llm,
+)
 from pcbex_agent.circuit import skidl_to_placement_problem
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
@@ -221,6 +226,99 @@ class AdapterTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             build_plan_with_llm("place C1", lambda _prompt: response)
+
+    def test_circuit_generation_retries_after_deterministic_validation(self):
+        valid = {
+            "schema_version": 1,
+            "parts": [
+                {
+                    "reference": "R1",
+                    "lib_id": "Device:R",
+                    "value": "10k",
+                    "footprint": "Resistor_SMD:R_0603",
+                    "pins": {"1": "VCC", "2": "GND"},
+                }
+            ],
+            "nets": [
+                {
+                    "name": "VCC",
+                    "connections": [{"reference": "R1", "pin": "1"}, {"reference": "R1", "pin": "2"}],
+                }
+            ],
+        }
+        prompts = []
+
+        def transport(prompt):
+            prompts.append(prompt)
+            return json.dumps({"schema_version": 1, "parts": [], "nets": []}) if len(prompts) == 1 else json.dumps(valid)
+
+        result = generate_circuit_with_llm("Connect a resistor", transport)
+        self.assertTrue(result["repaired"])
+        self.assertEqual(result["attempts"], 2)
+        self.assertIn("Validation error", prompts[1])
+        self.assertIn("Part(\"Device\", \"R\"", result["skidl"])
+
+    def test_circuit_generation_rejects_unrepairable_model(self):
+        with self.assertRaises(CircuitGenerationError):
+            generate_circuit_with_llm(
+                "unsafe",
+                lambda _prompt: "not json",
+                max_attempts=2,
+            )
+
+    def test_circuit_generation_schema_is_closed(self):
+        schema = circuit_generation_json_schema()
+        self.assertTrue(schema["additionalProperties"] is False)
+        self.assertIn("skidl", schema["required"])
+
+    def test_generate_circuit_cli_writes_bundle_and_skidl(self):
+        response = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "C1",
+                "lib_id": "Device:C",
+                "value": "100nF",
+                "footprint": "Capacitor_SMD:C_0603",
+                "pins": {"1": "VCC", "2": "GND"},
+            }],
+            "nets": [
+                {"name": "VCC", "connections": [
+                    {"reference": "C1", "pin": "1"},
+                    {"reference": "C1", "pin": "2"},
+                ]}
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            requirements = root / "requirements.txt"
+            bundle = root / "bundle.json"
+            skidl = root / "circuit.py"
+            requirements.write_text("Add a 100nF bypass capacitor", encoding="utf-8")
+            provider = (
+                "import sys; sys.stdin.read(); "
+                f"print({json.dumps(json.dumps(response))})"
+            )
+            with patch.object(
+                sys,
+                "argv",
+                [
+                    "pcbex-agent",
+                    "generate-circuit",
+                    str(requirements),
+                    "-o",
+                    str(bundle),
+                    "--skidl-output",
+                    str(skidl),
+                    "--provider-command",
+                    sys.executable,
+                    "-c",
+                    provider,
+                ],
+            ):
+                agent_main()
+            generated = json.loads(bundle.read_text(encoding="utf-8"))
+            self.assertEqual(generated["spec"]["parts"][0]["reference"], "C1")
+            self.assertIn("Part(\"Device\", \"C\"", skidl.read_text(encoding="utf-8"))
 
     def test_schematic_review_adapter_accepts_only_bound_complete_evidence(self):
         request = {

@@ -6,6 +6,11 @@ from pathlib import Path
 
 from .catalog import catalog_parts_from_json
 from .catalog_remote import CatalogEndpoint, CatalogRemoteError, fetch_catalog
+from .circuit_generation import (
+    CircuitGenerationError,
+    circuit_generation_json_schema,
+    generate_circuit_with_llm,
+)
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -18,6 +23,7 @@ from .planner import build_plan
 from .provider import (
     ProviderError,
     provider_receipt_json_schema,
+    run_provider_command,
     review_schematic_with_command,
 )
 from .repair import propose_repairs
@@ -142,6 +148,47 @@ def main() -> None:
         "circuit-spec-schema", help="write the closed Text-to-Circuit JSON Schema"
     )
     skidl_schema.add_argument("-o", "--output", type=Path)
+    generate_circuit = sub.add_parser(
+        "generate-circuit",
+        help="convert natural-language requirements into a validated circuit bundle",
+    )
+    generate_circuit.add_argument("requirements", type=Path)
+    generate_circuit.add_argument("-o", "--output", type=Path, required=True)
+    generate_circuit.add_argument(
+        "--skidl-output",
+        type=Path,
+        help="also write the validated generated SKiDL source",
+    )
+    generate_circuit.add_argument("--max-attempts", type=int, default=3)
+    generate_circuit.add_argument("--timeout-seconds", type=int, default=120)
+    generate_circuit.add_argument("--maximum-output-bytes", type=int, default=1024 * 1024)
+    generate_circuit.add_argument(
+        "--catalog",
+        type=Path,
+        help="optional vendor-neutral catalog for deterministic MPN assignment",
+    )
+    generate_circuit.add_argument("--catalog-endpoint")
+    generate_circuit.add_argument(
+        "--catalog-provider",
+        choices=("jlcpcb", "digikey", "lcsc", "generic"),
+        default="generic",
+    )
+    generate_circuit.add_argument("--catalog-bearer-token-environment")
+    generate_circuit.add_argument("--catalog-timeout-seconds", type=float, default=20.0)
+    generate_circuit.add_argument("--allow-http-loopback", action="store_true")
+    generate_circuit.add_argument("--allow-out-of-stock", action="store_true")
+    generate_circuit.add_argument("--require-basic", action="store_true")
+    generate_circuit.add_argument(
+        "--provider-command",
+        nargs=argparse.REMAINDER,
+        required=True,
+        help="executable and arguments; must be the final pcbex-agent option",
+    )
+    generation_schema = sub.add_parser(
+        "circuit-generation-schema",
+        help="write the closed natural-language circuit-generation result schema",
+    )
+    generation_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -283,6 +330,75 @@ def main() -> None:
     elif args.command == "circuit-spec-schema":
         rendered = json.dumps(
             circuit_spec_json_schema(), indent=2, ensure_ascii=False
+        ) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
+    elif args.command == "generate-circuit":
+        try:
+            requirements = args.requirements.read_text(encoding="utf-8")
+            bundle = generate_circuit_with_llm(
+                requirements,
+                lambda prompt: run_provider_command(
+                    args.provider_command,
+                    prompt,
+                    timeout_seconds=args.timeout_seconds,
+                    max_output_bytes=args.maximum_output_bytes,
+                ),
+                max_attempts=args.max_attempts,
+            )
+            spec = bundle["spec"]
+            if args.catalog:
+                catalog = catalog_parts_from_json(
+                    json.loads(args.catalog.read_text(encoding="utf-8"))
+                )
+                spec = assign_catalog_parts(
+                    spec,
+                    catalog,
+                    require_available=not args.allow_out_of_stock,
+                    require_basic=args.require_basic,
+                )
+            elif args.catalog_endpoint:
+                catalog = fetch_catalog(
+                    CatalogEndpoint(
+                        provider=args.catalog_provider,
+                        endpoint=args.catalog_endpoint,
+                        bearer_token_environment=args.catalog_bearer_token_environment,
+                        timeout_seconds=args.catalog_timeout_seconds,
+                        allow_http_loopback=args.allow_http_loopback,
+                    )
+                )
+                spec = assign_catalog_parts(
+                    spec,
+                    catalog,
+                    require_available=not args.allow_out_of_stock,
+                    require_basic=args.require_basic,
+                )
+            # Re-render after catalog assignment so the emitted source and JSON
+            # are bound to exactly the same normalized spec.
+            bundle["spec"] = spec
+            bundle["skidl"] = generate_skidl(spec)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps(bundle, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            if args.skidl_output:
+                args.skidl_output.parent.mkdir(parents=True, exist_ok=True)
+                args.skidl_output.write_text(bundle["skidl"], encoding="utf-8")
+        except (
+            OSError,
+            json.JSONDecodeError,
+            CircuitGenerationError,
+            CircuitSpecError,
+            CatalogRemoteError,
+            ProviderError,
+        ) as error:
+            raise SystemExit(f"circuit generation failed: {error}") from error
+    elif args.command == "circuit-generation-schema":
+        rendered = json.dumps(
+            circuit_generation_json_schema(), indent=2, ensure_ascii=False
         ) + "\n"
         if args.output:
             args.output.write_text(rendered, encoding="utf-8")

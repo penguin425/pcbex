@@ -8,7 +8,13 @@ from .managed_provider import (
 from .provider import (
     ProviderError,
     provider_receipt_json_schema,
+    run_provider_command,
     review_schematic_with_command,
+)
+from .circuit_generation import (
+    CircuitGenerationError,
+    circuit_generation_json_schema,
+    generate_circuit_with_llm,
 )
 from .review import ReviewError, review_schematic_with_llm
 
@@ -16,9 +22,13 @@ __all__ = [
     "PlanningError",
     "ProviderError",
     "ReviewError",
+    "CircuitGenerationError",
     "build_plan",
+    "circuit_generation_json_schema",
+    "generate_circuit_with_llm",
     "managed_provider_receipt_json_schema",
     "provider_receipt_json_schema",
+    "run_provider_command",
     "review_schematic_with_managed_provider",
     "review_schematic_with_command",
     "review_schematic_with_llm",
