@@ -23,8 +23,8 @@ It verifies five phases in order:
 3. **routing-quality** — no unrouted nets remain;
 4. **manufacturing-package** — BOM/CPL/DRC report and ZIP exist, every
    manifest artifact uses a safe relative path, and every SHA-256 matches; and
-5. **firmware-build** — generated C and Python gates passed and all declared
-   source artifacts exist; and
+5. **firmware-build** — generated C, C++, and Python gates passed and all
+   declared source artifacts exist; and
 6. **factory-dfm** — the quote/DFM receipt is accepted, explicitly passed,
    contains no severe findings, uses HTTPS, and its package digest/size matches
    the manufacturing ZIP.

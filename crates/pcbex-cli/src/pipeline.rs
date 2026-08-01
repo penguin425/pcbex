@@ -301,7 +301,11 @@ fn firmware_phase(path: &Path) -> PipelinePhase {
             .failures
             .push("firmware manifest schema_version is not 1".into());
     }
-    for (name, key) in [("C build", "c_build"), ("Python check", "python_check")] {
+    for (name, key) in [
+        ("C build", "c_build"),
+        ("C++ build", "cpp_build"),
+        ("Python check", "python_check"),
+    ] {
         let passed = value
             .get(key)
             .and_then(|build| build.get("passed"))
@@ -578,7 +582,7 @@ mod tests {
         }
         fs::write(
             &firmware,
-            br#"{"schema_version":1,"files":["pinout.h","firmware.h","firmware.c","host.py"],"c_build":{"passed":true},"python_check":{"passed":true}}"#,
+            br#"{"schema_version":1,"files":["pinout.h","firmware.h","firmware.c","host.py"],"c_build":{"passed":true},"cpp_build":{"passed":true},"python_check":{"passed":true}}"#,
         )
         .unwrap();
         let report = verify_pipeline_with_factory(
@@ -628,7 +632,7 @@ mod tests {
         }
         fs::write(
             &firmware,
-            br#"{"schema_version":1,"files":["pinout.h","firmware.h","firmware.c","host.py"],"c_build":{"passed":true},"python_check":{"passed":true}}"#,
+            br#"{"schema_version":1,"files":["pinout.h","firmware.h","firmware.c","host.py"],"c_build":{"passed":true},"cpp_build":{"passed":true},"python_check":{"passed":true}}"#,
         )
         .unwrap();
         fs::write(
