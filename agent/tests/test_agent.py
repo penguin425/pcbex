@@ -1,6 +1,7 @@
 import json
 import http.server
 import sys
+import subprocess
 import threading
 import time
 import unittest
@@ -22,10 +23,16 @@ from pcbex_agent.circuit import (
     circuit_spec_to_netlist,
     circuit_spec_to_placement_problem,
     skidl_to_placement_problem,
+    verified_footprint_library_json_schema,
 )
-from pcbex_agent.firmware import firmware_bundle_json_schema, generate_firmware_bundle
+from pcbex_agent.firmware import (
+    firmware_bundle_json_schema,
+    firmware_interface_profile_json_schema,
+    generate_firmware_bundle,
+)
 from pcbex_agent.pipeline import pipeline_run_json_schema, run_hardware_pipeline
 from pcbex_agent.factory import FactoryEndpoint, factory_submission_json_schema, submit_factory_package
+from pcbex_agent.schematic import circuit_spec_to_kicad_sch, schematic_generation_json_schema
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
 from pcbex_agent.models import DrcViolation, PlanLimits
@@ -1103,6 +1110,55 @@ class AdapterTests(unittest.TestCase):
         self.assertTrue(state["token"] and state["search"])
         self.assertEqual((parts[0].mpn, parts[0].stock, parts[0].footprint), ("DK-MPN", 9, "SOT-23-6"))
 
+    def test_native_component_catalog_posts_bounded_query_for_jlcpcb_and_lcsc(self):
+        state = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                state["body"] = json.loads(self.rfile.read(length))
+                state["provider"] = self.headers.get("X-PCBEX-Catalog-Provider")
+                state["native"] = self.headers.get("X-PCBEX-Catalog-Native")
+                state["authorization"] = self.headers.get("Authorization")
+                payload = json.dumps({"data": {"items": [{
+                    "componentCode": "C-NATIVE",
+                    "productName": "3.3V level shifter",
+                    "PackageType": "SOT-23-6",
+                    "QuantityAvailable": 17,
+                    "jlcpcbBasic": "true",
+                }]}}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with patch.dict("os.environ", {"PCBEX_COMPONENT_TOKEN": "component-secret"}):
+                parts = fetch_catalog(CatalogEndpoint(
+                    provider="jlcpcb",
+                    endpoint=f"http://127.0.0.1:{server.server_port}/components",
+                    query="3.3V level shifter",
+                    bearer_token_environment="PCBEX_COMPONENT_TOKEN",
+                    allow_http_loopback=True,
+                ))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertEqual((parts[0].mpn, parts[0].stock, parts[0].basic), ("C-NATIVE", 17, True))
+        self.assertEqual(state["body"], {"query": "3.3V level shifter", "limit": 50, "offset": 0})
+        self.assertEqual(state["provider"], "jlcpcb")
+        self.assertEqual(state["native"], "component-v1")
+        self.assertEqual(state["authorization"], "Bearer component-secret")
+
     def test_skidl_generator_is_deterministic_and_complete(self):
         spec = {
             "schema_version": 1,
@@ -1257,6 +1313,87 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertIn('(at 5 20 90) (locked yes)', board)
 
+    def test_circuit_handoff_binds_verified_footprint_geometry_and_nets(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {
+                    "reference": "J1", "lib_id": "Connector:Conn", "value": "header",
+                    "footprint": "Verified:Header", "pins": {"1": "DATA"},
+                },
+                {
+                    "reference": "R1", "lib_id": "Device:R", "value": "10k",
+                    "footprint": "Verified:Resistor", "pins": {"1": "DATA"},
+                },
+            ],
+            "nets": [{"name": "DATA", "connections": [
+                {"reference": "J1", "pin": "1"}, {"reference": "R1", "pin": "1"},
+            ]}],
+        }
+        raw = (
+            '(footprint "library:part"\n'
+            '  (layer "F.Cu")\n'
+            '  (fp_rect (start -1 -1) (end 1 1) '
+            '(stroke (width 0.1) (type default)) (fill none) (layer "F.SilkS"))\n'
+            '  (pad "1" smd rect (at 0 0) (size 0.8 0.8) '
+            '(layers "F.Cu" "F.Paste" "F.Mask"))\n'
+            ')'
+        )
+        board = circuit_spec_to_kicad_pcb(
+            spec,
+            {"Verified:Header": [2_000_000, 2_000_000], "Verified:Resistor": [2_000_000, 2_000_000]},
+            width_nm=20_000_000,
+            height_nm=20_000_000,
+            footprint_library={"Verified:Header": raw, "Verified:Resistor": raw},
+            require_verified_footprints=True,
+        )
+        self.assertEqual(board.count('(fp_rect '), 2)
+        self.assertEqual(board.count('(net 1 "DATA")'), 3)  # declaration + two pads
+        self.assertIn('(fp_text reference "J1"', board)
+        self.assertIn('(footprint "Verified:Resistor"', board)
+        self.assertIn("pattern", verified_footprint_library_json_schema()["additionalProperties"])
+
+    def test_verified_footprint_missing_pad_fails_closed(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "U1", "lib_id": "MCU:Example", "value": "mcu",
+                "footprint": "Verified:QFN", "pins": {"1": "A", "2": "B"},
+            }],
+            "nets": [
+                {"name": "A", "connections": [{"reference": "U1", "pin": "1"}, {"reference": "U1", "pin": "2"}]},
+            ],
+        }
+        with self.assertRaisesRegex(CircuitSpecError, "missing pads"):
+            circuit_spec_to_kicad_pcb(
+                spec,
+                {"Verified:QFN": [2_000_000, 2_000_000]},
+                width_nm=20_000_000,
+                height_nm=20_000_000,
+                footprint_library={
+                    "Verified:QFN": '(footprint "library:qfn" (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")))'
+                },
+                require_verified_footprints=True,
+            )
+
+    def test_circuit_handoff_generates_deterministic_kicad_schematic(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "U1", "lib_id": "MCU:Example", "value": "controller",
+                "footprint": "Package_QFN:QFN-16", "pins": {"1": "DATA", "2": "GND"},
+            }],
+            "nets": [{"name": "DATA", "connections": [
+                {"reference": "U1", "pin": "1"}, {"reference": "U1", "pin": "2"},
+            ]}],
+        }
+        first = circuit_spec_to_kicad_sch(spec, project_name="fixture")
+        self.assertEqual(first, circuit_spec_to_kicad_sch(spec, project_name="fixture"))
+        self.assertIn('(lib_symbols', first)
+        self.assertIn('(lib_id "PCBEX:U1")', first)
+        self.assertIn('(label "DATA"', first)
+        self.assertFalse(schematic_generation_json_schema()["additionalProperties"])
+
     def test_circuit_netlist_is_canonical_and_digest_bound(self):
         spec = {
             "schema_version": 1,
@@ -1305,6 +1442,57 @@ class AdapterTests(unittest.TestCase):
             self.assertTrue((Path(directory) / "pinout.h").is_file())
             self.assertTrue((Path(directory) / "firmware_smoke_test").is_file())
             self.assertTrue(firmware_bundle_json_schema()["additionalProperties"] is False)
+
+    def test_parallel_rom_profile_generates_bus_logic_and_host_decoder(self):
+        bus = ["A0", "A1", "D0", "D1", "RD_N"]
+        parts = [{
+            "reference": "U1", "lib_id": "MCU:Example", "value": "controller",
+            "footprint": "QFN", "pins": {str(index + 1): net for index, net in enumerate(bus)},
+        }]
+        for index, net in enumerate(bus):
+            parts.append({
+                "reference": f"J{index + 1}", "lib_id": "Connector:Test", "value": net,
+                "footprint": "HDR", "pins": {"1": net},
+            })
+        spec = {
+            "schema_version": 1,
+            "parts": parts,
+            "nets": [{"name": net, "connections": [
+                {"reference": "U1", "pin": str(index + 1)},
+                {"reference": f"J{index + 1}", "pin": "1"},
+            ]} for index, net in enumerate(bus)],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            profile = root / "profile.json"
+            profile.write_text(json.dumps({
+                "schema_version": 1,
+                "kind": "parallel-rom-reader",
+                "address_nets": ["A0", "A1"],
+                "data_nets": ["D0", "D1"],
+                "read_net": "RD_N",
+                "active_low": True,
+            }), encoding="utf-8")
+            manifest = generate_firmware_bundle(
+                spec,
+                root / "firmware",
+                mcu_reference="U1",
+                gpio_map={str(index + 1): f"GPIO{index}" for index in range(len(bus))},
+                interface_profile=profile,
+            )
+            self.assertEqual(manifest["interface_profile"]["kind"], "parallel-rom-reader")
+            self.assertIn("pcbex_read_rom_byte", (root / "firmware" / "firmware.cpp").read_text())
+            host = root / "firmware" / "host.py"
+            self.assertEqual(
+                subprocess.run(
+                    [sys.executable, str(host)], input=b"\x01\x02", capture_output=True, check=False
+                ).returncode,
+                0,
+            )
+        self.assertEqual(
+            firmware_interface_profile_json_schema()["properties"]["kind"]["const"],
+            "parallel-rom-reader",
+        )
 
     def test_pipeline_run_is_fail_closed_and_connects_all_phases(self):
         spec = {

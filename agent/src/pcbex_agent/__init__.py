@@ -21,10 +21,17 @@ from .circuit import (
     circuit_spec_to_kicad_pcb,
     circuit_spec_to_netlist,
     circuit_spec_to_placement_problem,
+    verified_footprint_library_json_schema,
+)
+from .schematic import (
+    SchematicGenerationError,
+    circuit_spec_to_kicad_sch,
+    schematic_generation_json_schema,
 )
 from .firmware import (
     FirmwareGenerationError,
     firmware_bundle_json_schema,
+    firmware_interface_profile_json_schema,
     generate_firmware_bundle,
 )
 from .pipeline import PipelineRunError, pipeline_run_json_schema, run_hardware_pipeline
@@ -45,8 +52,13 @@ __all__ = [
     "circuit_spec_to_kicad_pcb",
     "circuit_spec_to_netlist",
     "circuit_spec_to_placement_problem",
+    "verified_footprint_library_json_schema",
+    "SchematicGenerationError",
+    "circuit_spec_to_kicad_sch",
+    "schematic_generation_json_schema",
     "FirmwareGenerationError",
     "firmware_bundle_json_schema",
+    "firmware_interface_profile_json_schema",
     "generate_firmware_bundle",
     "PipelineRunError",
     "pipeline_run_json_schema",

@@ -103,11 +103,14 @@ PYTHONPATH=agent/src python3 -m pcbex_agent generate-skidl \
 The adapter obtains a short-lived OAuth token, posts the bounded KeywordSearch
 request, maps `Products`/`QuantityAvailable`/`ProductVariations` into the
 deterministic catalog contract, and still applies the local in-stock and
-footprint checks. The current native implementation is DigiKey; JLCPCB/LCSC
-responses can still be consumed through the normalized HTTPS gateway boundary
-and bearer-token environment. Their official API accounts require separate
-approval and expose provider-specific contracts, so no undocumented endpoint or
-order schema is hard-coded into pcbex.
+footprint checks. For an approved JLCPCB or LCSC Components API endpoint,
+supplying `--catalog-query` switches the selected provider to a bounded POST
+request with `{"query": ..., "limit": 50, "offset": 0}`, optional bearer
+authentication, and normalization of common `parts`/`items`/`data` wrappers.
+Omitting the query retains the normalized HTTPS gateway GET mode. Their official
+API accounts still require separate approval and provider-specific endpoint and
+application credentials, so no undocumented URL or ordering schema is
+hard-coded into pcbex.
 
 `circuit-generation-schema` prints the closed result contract used by the
 natural-language command. It contains the normalized circuit spec, deterministic
@@ -115,6 +118,29 @@ ERC report, attempt count, repair flag, and generated SKiDL source. The ERC
 contract alone is available with `circuit-erc-schema`.
 
 Electrical metadata is optional for non-power nets and is explicit when needed:
+
+The PCB handoff can bind reviewed, real KiCad footprint geometry instead of
+the deterministic placeholder pads used for development. The footprint library
+is a bounded JSON object whose keys are part references or footprint names and
+whose values are complete single-footprint `.kicad_mod` S-expressions:
+
+The map contract is emitted by `verified-footprint-library-schema` and is
+bounded to reviewed, non-empty footprint expressions.
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent circuit-to-kicad \
+  examples/circuit-spec.json --footprint-sizes build/footprints.json \
+  --footprint-library build/verified-footprints.json \
+  --require-verified-footprints --board-width-nm 60000000 \
+  --board-height-nm 40000000 --output build/circuit.kicad_pcb
+```
+
+Every circuit pin must have exactly one matching library pad. The renderer
+retains the library's copper, mask, courtyard, and silkscreen geometry while
+binding placement, references, and deterministic net ids. With
+`--require-verified-footprints`, a missing library entry, duplicate pad number,
+or missing pin pad rejects the handoff before placement; without the flag,
+unresolved parts are explicitly reported as development placeholders.
 
 ```json
 {
@@ -181,3 +207,17 @@ SHA-256 digest that the pipeline retains as `netlist.json`:
 PYTHONPATH=agent/src python3 -m pcbex_agent circuit-to-netlist \
   build/circuit-generation.json --output build/netlist.json
 ```
+
+To retain a schematic artifact as well, emit a self-contained KiCad schematic
+whose embedded `PCBEX:*` symbols and repeated net labels preserve every pin:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent circuit-to-schematic \
+  build/circuit-generation.json --project-name pcbex-demo \
+  --output build/circuit.kicad_sch
+```
+
+The pipeline always runs the deterministic circuit ERC. With `--kicad-erc`, it
+also runs the installed KiCad native ERC at error severity and retains its
+report; warnings about a project-specific symbol library remain visible for
+the later library replacement step.

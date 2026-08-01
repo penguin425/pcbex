@@ -36,12 +36,13 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Natural-language planning | Deterministic English/Japanese parser plus schema-validated injected LLM adapter | Planner and LLM safety tests |
 | SKiDL and part search boundaries | Optional SKiDL graph converter and injected catalog search | Adapter tests |
 | Bounded Text-to-Circuit generation | Natural-language provider output is constrained to the closed circuit-spec JSON contract, retried with deterministic ERC findings, and rendered to auditable SKiDL plus canonical netlist evidence | `generate-circuit`, circuit ERC regressions, and the end-to-end pipeline generation phase |
-| Circuit-to-PCB handoff | Validated circuit specs become deterministic placement JSON and a KiCad PCB with exact references, pin/net assignments, and optional fixed/locked profile placements | `circuit-to-placement`, `circuit-to-kicad`, and fixed-component handoff regression |
-| Live supplier inventory | HTTPS gateway normalization supports JLCPCB/LCSC/DigiKey aliases; native DigiKey Product Information v4 uses bounded OAuth keyword search, while provider-specific JLC/LCSC credentials remain deployment-supplied | Catalog transport/alias regressions and native DigiKey OAuth fixture |
+| Generated KiCad schematic handoff | Closed circuit specs render deterministic, self-contained `PCBEX:*` symbols and labeled connectivity; optional native KiCad ERC runs at error severity and remains secondary to the deterministic contract ERC | `circuit-to-schematic`, KiCad 10.0.5 import/ERC smoke, and deterministic schematic regression |
+| Circuit-to-PCB handoff | Validated circuit specs become deterministic placement JSON and a KiCad PCB with exact references, pin/net assignments, optional fixed/locked profile placements, and an explicit reviewed `.kicad_mod` binding that fails closed on missing or ambiguous pads | `circuit-to-placement`, `circuit-to-kicad`, verified-footprint and fixed-component regressions |
+| Live supplier inventory | HTTPS gateway normalization supports JLCPCB/LCSC/DigiKey aliases; native DigiKey Product Information v4 uses bounded OAuth keyword search, and approved JLCPCB/LCSC component endpoints support bounded provider-native POST search with deployment-supplied credentials | Catalog transport/alias regressions, native DigiKey OAuth fixture, and native component POST fixture |
 | Autonomous hardware pipeline | `pipeline-run` fail-closed orchestration connects generation/ERC, KiCad handoff, placement, convergence routing/DRC, manufacturing package, firmware checks, and factory gate with retained phase artifacts | Seven-phase fake-tool integration, real simple-board pipeline smoke, and closed pipeline schema |
 | Manufacturing BOM/CPL evidence | Gerber/Excellon output is packaged with digest-bound BOM/CPL; CPL coordinates are read from the verified placement report and missing placement data rejects packaging | Pipeline manufacturing phase and coordinate regression |
 | Factory DFM feedback loop | Direct bounded HTTPS submission and optional shell-free repair/resubmission loop retain every attempt, package digest, receipt, and final passing ZIP; no purchase/checkout is performed | Factory HTTP fixture, repair-loop integration, and fail-closed receipt gate |
-| Pinout-bound firmware | Circuit nets produce `pinout.h`, C11/C++17 smoke builds, Python host checks, and optional trusted product templates with a digest-bound manifest | Firmware bundle build regression and pipeline firmware phase |
+| Pinout-bound firmware | Circuit nets produce `pinout.h`, C11/C++17 smoke builds, Python host checks, optional trusted templates, and a closed parallel-ROM-reader profile that generates GPIO bus-control code plus a matching Python frame decoder with a digest-bound manifest | Firmware bundle build regression, profile build/decoder regression, and pipeline firmware phase |
 | DRC repair planning | KiCad 10 report normalization and rule-to-repair mapping | DRC normalization tests |
 | Automatic DRC repair loop | Bounded candidate generation, KiCad revalidation, convergence guard, atomic clean-output promotion | Injected three-iteration repair and repeated-candidate tests; real KiCad clean-board run |
 | Polygon board geometry | Concave/convex outlines, exact polygon keepouts, edge-aware routing/checking/SVG, KiCad line-outline import | L-board routing, triangular keepout bounding-box escape, concavity tests; five-sided example passes real KiCad DRC |
@@ -226,7 +227,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.390.0 exposes 573 Rust tests and 49 Python tests. The release workflow
+Version 1.390.0 exposes 573 Rust tests and 54 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

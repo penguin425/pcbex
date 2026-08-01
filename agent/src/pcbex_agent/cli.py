@@ -15,10 +15,17 @@ from .circuit import (
     circuit_spec_to_kicad_pcb,
     circuit_spec_to_netlist,
     circuit_spec_to_placement_problem,
+    verified_footprint_library_json_schema,
+)
+from .schematic import (
+    SchematicGenerationError,
+    circuit_spec_to_kicad_sch,
+    schematic_generation_json_schema,
 )
 from .firmware import (
     FirmwareGenerationError,
     firmware_bundle_json_schema,
+    firmware_interface_profile_json_schema,
     generate_firmware_bundle,
 )
 from .pipeline import PipelineRunError, pipeline_run_json_schema, run_hardware_pipeline
@@ -137,7 +144,10 @@ def main() -> None:
         "--catalog-bearer-token-environment",
         help="environment variable containing an optional catalog Bearer token",
     )
-    skidl.add_argument("--catalog-query", help="native provider search query (required for native DigiKey)")
+    skidl.add_argument(
+        "--catalog-query",
+        help="provider-native search query (required for native DigiKey; enables POST mode for JLCPCB/LCSC)",
+    )
     skidl.add_argument("--catalog-client-id-environment")
     skidl.add_argument("--catalog-client-secret-environment")
     skidl.add_argument("--catalog-token-endpoint")
@@ -194,12 +204,39 @@ def main() -> None:
     circuit_to_kicad.add_argument("--board-width-nm", type=int, required=True)
     circuit_to_kicad.add_argument("--board-height-nm", type=int, required=True)
     circuit_to_kicad.add_argument("--grid-nm", type=int, default=250_000)
+    circuit_to_kicad.add_argument(
+        "--footprint-library",
+        type=Path,
+        help="JSON object mapping references/footprint names to raw .kicad_mod expressions",
+    )
+    circuit_to_kicad.add_argument(
+        "--require-verified-footprints",
+        action="store_true",
+        help="fail if any part does not have real library footprint geometry",
+    )
     circuit_to_kicad.add_argument("-o", "--output", type=Path, required=True)
+    footprint_schema = sub.add_parser(
+        "verified-footprint-library-schema",
+        help="write the closed verified footprint library JSON Schema",
+    )
+    footprint_schema.add_argument("-o", "--output", type=Path)
     circuit_to_netlist_parser = sub.add_parser(
         "circuit-to-netlist", help="write a canonical digest-bound circuit netlist JSON"
     )
     circuit_to_netlist_parser.add_argument("spec", type=Path)
     circuit_to_netlist_parser.add_argument("-o", "--output", type=Path, required=True)
+    circuit_to_schematic = sub.add_parser(
+        "circuit-to-schematic",
+        help="render a validated circuit spec as a self-contained KiCad schematic",
+    )
+    circuit_to_schematic.add_argument("spec", type=Path)
+    circuit_to_schematic.add_argument("--project-name", default="pcbex-generated")
+    circuit_to_schematic.add_argument("-o", "--output", type=Path, required=True)
+    schematic_schema = sub.add_parser(
+        "generated-schematic-schema",
+        help="write the generated KiCad schematic artifact JSON Schema",
+    )
+    schematic_schema.add_argument("-o", "--output", type=Path)
     firmware = sub.add_parser(
         "generate-firmware",
         help="generate and verify pinout-bound C/C++/Python firmware from a circuit",
@@ -213,18 +250,38 @@ def main() -> None:
     firmware.add_argument("--c-template", type=Path)
     firmware.add_argument("--cpp-template", type=Path)
     firmware.add_argument("--host-template", type=Path)
+    firmware.add_argument(
+        "--interface-profile",
+        type=Path,
+        help="closed parallel-rom-reader profile for generated bus-control code",
+    )
     firmware.add_argument("--skip-build", action="store_true")
     firmware.add_argument("-o", "--output", type=Path, required=True)
     firmware_schema = sub.add_parser(
         "firmware-schema", help="write the circuit-bound firmware bundle JSON Schema"
     )
     firmware_schema.add_argument("-o", "--output", type=Path)
+    firmware_interface_schema = sub.add_parser(
+        "firmware-interface-schema",
+        help="write the closed firmware interface profile JSON Schema",
+    )
+    firmware_interface_schema.add_argument("-o", "--output", type=Path)
     pipeline = sub.add_parser(
         "pipeline-run",
         help="run natural-language circuit, PCB, manufacturing, and firmware stages headlessly",
     )
     pipeline.add_argument("requirements", type=Path)
     pipeline.add_argument("--footprint-sizes", type=Path, required=True)
+    pipeline.add_argument(
+        "--footprint-library",
+        type=Path,
+        help="JSON object mapping references/footprint names to raw .kicad_mod expressions",
+    )
+    pipeline.add_argument(
+        "--require-verified-footprints",
+        action="store_true",
+        help="fail closed before placement when a real footprint is unavailable",
+    )
     pipeline.add_argument("--board-width-nm", type=int, required=True)
     pipeline.add_argument("--board-height-nm", type=int, required=True)
     pipeline.add_argument("--mcu-reference", required=True)
@@ -236,7 +293,10 @@ def main() -> None:
         "--catalog-provider", choices=("jlcpcb", "digikey", "lcsc", "generic"), default="generic"
     )
     pipeline.add_argument("--catalog-bearer-token-environment")
-    pipeline.add_argument("--catalog-query")
+    pipeline.add_argument(
+        "--catalog-query",
+        help="provider-native search query (required for native DigiKey; enables POST mode for JLCPCB/LCSC)",
+    )
     pipeline.add_argument("--catalog-client-id-environment")
     pipeline.add_argument("--catalog-client-secret-environment")
     pipeline.add_argument("--catalog-token-endpoint")
@@ -274,9 +334,20 @@ def main() -> None:
     pipeline.add_argument("--c-compiler", default="cc")
     pipeline.add_argument("--cxx-compiler", default="c++")
     pipeline.add_argument("--python", default="python3")
+    pipeline.add_argument(
+        "--kicad-erc",
+        action="store_true",
+        help="run KiCad's native schematic ERC in addition to pcbex deterministic ERC",
+    )
+    pipeline.add_argument("--kicad-cli", default="kicad-cli")
     pipeline.add_argument("--c-template", type=Path)
     pipeline.add_argument("--cpp-template", type=Path)
     pipeline.add_argument("--host-template", type=Path)
+    pipeline.add_argument(
+        "--interface-profile",
+        type=Path,
+        help="closed parallel-rom-reader profile for generated bus-control code",
+    )
     pipeline.add_argument(
         "--provider-command", nargs=argparse.REMAINDER, required=True,
         help="circuit model executable and arguments; must be the final option",
@@ -329,7 +400,10 @@ def main() -> None:
         default="generic",
     )
     generate_circuit.add_argument("--catalog-bearer-token-environment")
-    generate_circuit.add_argument("--catalog-query")
+    generate_circuit.add_argument(
+        "--catalog-query",
+        help="provider-native search query (required for native DigiKey; enables POST mode for JLCPCB/LCSC)",
+    )
     generate_circuit.add_argument("--catalog-client-id-environment")
     generate_circuit.add_argument("--catalog-client-secret-environment")
     generate_circuit.add_argument("--catalog-token-endpoint")
@@ -542,17 +616,30 @@ def main() -> None:
         try:
             source = json.loads(args.spec.read_text(encoding="utf-8"))
             sizes = json.loads(args.footprint_sizes.read_text(encoding="utf-8"))
+            footprint_library = None
+            if args.footprint_library:
+                footprint_library = json.loads(args.footprint_library.read_text(encoding="utf-8"))
+                if not isinstance(footprint_library, dict):
+                    raise CircuitSpecError("footprint library must be a JSON object")
             board = circuit_spec_to_kicad_pcb(
                 source,
                 sizes,
                 width_nm=args.board_width_nm,
                 height_nm=args.board_height_nm,
                 grid_nm=args.grid_nm,
+                footprint_library=footprint_library,
+                require_verified_footprints=args.require_verified_footprints,
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(board, encoding="utf-8")
         except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
             raise SystemExit(f"circuit KiCad conversion failed: {error}") from error
+    elif args.command == "verified-footprint-library-schema":
+        rendered = json.dumps(verified_footprint_library_json_schema(), indent=2, ensure_ascii=False) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
     elif args.command == "circuit-to-netlist":
         try:
             source = json.loads(args.spec.read_text(encoding="utf-8"))
@@ -563,6 +650,20 @@ def main() -> None:
             )
         except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
             raise SystemExit(f"circuit netlist conversion failed: {error}") from error
+    elif args.command == "circuit-to-schematic":
+        try:
+            source = json.loads(args.spec.read_text(encoding="utf-8"))
+            schematic = circuit_spec_to_kicad_sch(source, project_name=args.project_name)
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(schematic, encoding="utf-8")
+        except (OSError, json.JSONDecodeError, SchematicGenerationError) as error:
+            raise SystemExit(f"circuit schematic conversion failed: {error}") from error
+    elif args.command == "generated-schematic-schema":
+        rendered = json.dumps(schematic_generation_json_schema(), indent=2, ensure_ascii=False) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
     elif args.command == "generate-firmware":
         try:
             source = json.loads(args.spec.read_text(encoding="utf-8"))
@@ -582,6 +683,7 @@ def main() -> None:
                 c_template=args.c_template,
                 cpp_template=args.cpp_template,
                 host_template=args.host_template,
+                interface_profile=args.interface_profile,
                 skip_build=args.skip_build,
             )
             print(json.dumps(manifest, indent=2, ensure_ascii=False))
@@ -589,6 +691,12 @@ def main() -> None:
             raise SystemExit(f"firmware generation failed: {error}") from error
     elif args.command == "firmware-schema":
         rendered = json.dumps(firmware_bundle_json_schema(), indent=2, ensure_ascii=False) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
+    elif args.command == "firmware-interface-schema":
+        rendered = json.dumps(firmware_interface_profile_json_schema(), indent=2, ensure_ascii=False) + "\n"
         if args.output:
             args.output.write_text(rendered, encoding="utf-8")
         else:
@@ -602,6 +710,7 @@ def main() -> None:
                     endpoint=args.catalog_endpoint,
                     bearer_token_environment=args.catalog_bearer_token_environment,
                     timeout_seconds=args.catalog_timeout_seconds,
+                    allow_http_loopback=args.allow_http_loopback,
                     query=args.catalog_query,
                     client_id_environment=args.catalog_client_id_environment,
                     client_secret_environment=args.catalog_client_secret_environment,
@@ -615,6 +724,8 @@ def main() -> None:
                 args.output,
                 provider_command=args.provider_command,
                 footprint_sizes=args.footprint_sizes,
+                footprint_library=args.footprint_library,
+                require_verified_footprints=args.require_verified_footprints,
                 board_width_nm=args.board_width_nm,
                 board_height_nm=args.board_height_nm,
                 mcu_reference=args.mcu_reference,
@@ -650,9 +761,12 @@ def main() -> None:
                 c_compiler=args.c_compiler,
                 cxx_compiler=args.cxx_compiler,
                 python=args.python,
+                kicad_erc=args.kicad_erc,
+                kicad_cli=args.kicad_cli,
                 c_template=args.c_template,
                 cpp_template=args.cpp_template,
                 host_template=args.host_template,
+                interface_profile=args.interface_profile,
             )
             print(json.dumps(report, indent=2, ensure_ascii=False))
             if not report["passed"]:

@@ -39,10 +39,11 @@ class CatalogEndpoint:
 def fetch_catalog(config: CatalogEndpoint) -> list[CatalogPart]:
     """Fetch and normalize a bounded vendor-neutral supplier response.
 
-    The endpoint contract is intentionally small: either a JSON array of
-    catalog parts or an object containing that array under ``parts``. Supplier
-    gateways can translate their native API into this contract without tying
-    pcbex's deterministic selector to unstable vendor response shapes.
+    The deployment-neutral GET contract is intentionally small: either a JSON
+    array of catalog parts or an object containing that array under ``parts``.
+    When an approved JLCPCB/LCSC endpoint and ``query`` are supplied, the
+    bounded provider-native POST adapter accepts common component wrappers
+    before applying the same deterministic selector.
     """
     provider = config.provider.strip().lower()
     if provider not in {"jlcpcb", "digikey", "lcsc", "generic"}:
@@ -54,6 +55,8 @@ def fetch_catalog(config: CatalogEndpoint) -> list[CatalogPart]:
         raise CatalogRemoteError("catalog timeout_seconds must be between 0.1 and 120")
     if provider == "digikey" and config.client_id_environment:
         return _fetch_digikey_native(config)
+    if provider in {"jlcpcb", "lcsc"} and config.query:
+        return _fetch_component_native(config)
     token = None
     if config.bearer_token_environment:
         _validate_env_name(config.bearer_token_environment)
@@ -166,7 +169,57 @@ def _fetch_digikey_native(config: CatalogEndpoint) -> list[CatalogPart]:
     return catalog_parts_from_json(normalized)
 
 
+def _fetch_component_native(config: CatalogEndpoint) -> list[CatalogPart]:
+    """Call an approved JLCPCB/LCSC component endpoint in bounded POST mode.
+
+    Both suppliers expose account/application-specific component APIs rather
+    than one stable public URL.  The caller therefore supplies the approved
+    endpoint, while pcbex owns the safe request envelope and normalizes the
+    provider's common ``parts``/``items``/``data`` response wrappers.  Omitting
+    ``CatalogEndpoint.query`` retains the deployment-neutral GET gateway mode.
+    """
+
+    if not config.query or not config.query.strip():
+        raise CatalogRemoteError("native component search requires catalog query")
+    token = None
+    if config.bearer_token_environment:
+        _validate_env_name(config.bearer_token_environment)
+        token = os.environ.get(config.bearer_token_environment)
+        if not token or not token.strip():
+            raise CatalogRemoteError(
+                f"catalog bearer-token environment {config.bearer_token_environment} is unset or empty"
+            )
+    body = json.dumps(
+        {"query": config.query[:250], "limit": 50, "offset": 0},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        config.endpoint,
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": "pcbex-agent/1",
+            "X-PCBEX-Catalog-Provider": config.provider.lower(),
+            "X-PCBEX-Catalog-Native": "component-v1",
+            **({"Authorization": f"Bearer {token}"} if token else {}),
+        },
+        method="POST",
+    )
+    response = _native_value_request(request, config.timeout_seconds, f"{config.provider} component search")
+    values = _extract_component_parts(response)
+    normalized = [_normalize_part(item, config.provider.lower()) for item in values]
+    return catalog_parts_from_json(normalized)
+
+
 def _native_json_request(request: urllib.request.Request, timeout: float, label: str) -> dict[str, Any]:
+    value = _native_value_request(request, timeout, label)
+    if not isinstance(value, dict):
+        raise CatalogRemoteError(f"{label} response must be an object")
+    return value
+
+
+def _native_value_request(request: urllib.request.Request, timeout: float, label: str) -> Any:
     opener = urllib.request.build_opener(_NoRedirect())
     try:
         with opener.open(request, timeout=timeout) as response:
@@ -185,9 +238,28 @@ def _native_json_request(request: urllib.request.Request, timeout: float, label:
         value = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise CatalogRemoteError(f"{label} response is not UTF-8 JSON: {error}") from error
-    if not isinstance(value, dict):
-        raise CatalogRemoteError(f"{label} response must be an object")
     return value
+
+
+def _extract_component_parts(value: Any, *, depth: int = 0) -> list[Any]:
+    if depth > 8:
+        raise CatalogRemoteError("native component response wrapper nesting is too deep")
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, dict):
+        raise CatalogRemoteError("native component response must be an array or object")
+    for key in ("parts", "items", "results", "products", "components", "Products", "data"):
+        candidate = value.get(key)
+        if isinstance(candidate, list):
+            return candidate
+        if isinstance(candidate, dict):
+            try:
+                return _extract_component_parts(candidate, depth=depth + 1)
+            except CatalogRemoteError:
+                pass
+    raise CatalogRemoteError(
+        "native component response must contain parts/items/results/products/components"
+    )
 
 
 def _normalize_digikey_product(value: Any) -> dict[str, Any]:
@@ -285,6 +357,18 @@ def _normalize_part(value: Any, provider: str) -> dict[str, Any]:
         description_keys = ("description", "comment", "value", "productName", "product_name")
         footprint_keys = ("footprint", "package", "packageType", "package_type")
         stock_keys = ("stock", "quantity", "inventory", "stockQty", "stock_quantity")
+        basic_keys = ("basic", "isBasic", "is_basic", "jlcpcbBasic")
+    elif provider == "jlcpcb":
+        mpn_keys = (
+            "mpn", "part_number", "partNumber", "componentCode", "component_code",
+            "product_code", "productCode", "jlcpcb_part", "lcsc_part",
+        )
+        description_keys = ("description", "comment", "value", "productName", "product_name")
+        footprint_keys = ("footprint", "package", "packageType", "package_type", "PackageType")
+        stock_keys = (
+            "stock", "quantity", "inventory", "stockQty", "stock_quantity",
+            "QuantityAvailable",
+        )
         basic_keys = ("basic", "isBasic", "is_basic", "jlcpcbBasic")
     else:
         mpn_keys = ("mpn", "part_number", "manufacturer_part_number")

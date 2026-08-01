@@ -24,7 +24,7 @@ return JSON only. Every external command is executed without a shell, with a
 timeout and bounded output. The phases are:
 
 1. natural-language circuit generation and deterministic ERC;
-2. validated circuit → KiCad PCB handoff;
+2. validated circuit → self-contained KiCad schematic/netlist and PCB handoff;
 3. `pcbex place-kicad` placement;
 4. `pcbex route-kicad` with physical/DFM profile, convergence and DRC;
 5. `pcbex fabricate`, BOM/CPL plus a digest-bound ZIP manifest;
@@ -61,3 +61,20 @@ the fabrication profile is applied first, then the physical profile's board,
 keepout, and manufacturing-rule declarations are applied last. This lets a
 mechanical connector profile carry project-specific DFM overrides while still
 starting from a named factory baseline.
+
+The generated `circuit.kicad_sch` is self-contained and uses deterministic
+`PCBEX:*` symbols, so it can be imported without a global symbol library. The
+contract ERC always runs; pass `--kicad-erc` to make the installed KiCad native
+ERC a second fail-closed gate and retain `circuit-erc.rpt`.
+
+For a manufacturing-bound run, provide `--footprint-library` with a JSON map
+of reviewed footprint/name keys to complete `.kicad_mod` expressions and add
+`--require-verified-footprints`. The handoff then checks every circuit pin
+against a real pad, binds its net, and refuses to start placement on missing or
+ambiguous geometry. Omitting the flag keeps placeholder pads available for
+development and records `placeholder-footprints-allowed` in the handoff phase.
+
+`--interface-profile` can additionally select the closed
+`parallel-rom-reader` firmware contract. It requires explicit GPIO mappings for
+every address/data/read net and produces C++ bus-control code plus a Python
+address/data frame decoder; missing nets or GPIOs stop the firmware phase.

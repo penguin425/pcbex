@@ -16,15 +16,17 @@ from .catalog import catalog_parts_from_json
 from .catalog_remote import CatalogEndpoint, fetch_catalog
 from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_netlist
 from .circuit_generation import generate_circuit_with_llm
-from .firmware import generate_firmware_bundle
+from .firmware import FirmwareGenerationError, generate_firmware_bundle
 from .factory import FactoryEndpoint, submit_factory_package
 from .provider import ProviderError, run_provider_command
+from .schematic import SchematicGenerationError, circuit_spec_to_kicad_sch
 from .skidl import CircuitSpecError, assign_catalog_parts, generate_skidl
 
 MAX_PIPELINE_SECONDS = 1800
 MAX_COMMAND_OUTPUT_BYTES = 2 * 1024 * 1024
 MAX_FACTORY_PACKAGE_BYTES = 128 * 1024 * 1024
 MAX_FACTORY_ATTEMPTS = 4
+MAX_FOOTPRINT_LIBRARY_BYTES = 32 * 1024 * 1024
 
 
 class PipelineRunError(RuntimeError):
@@ -139,6 +141,45 @@ def _load_factory_command(path: Path | None) -> list[str] | None:
     ):
         raise PipelineRunError("factory command file must contain a non-empty string array")
     return value
+
+
+def _load_footprint_library(path: Path | None) -> dict[str, str] | None:
+    """Load a bounded reference/name → raw ``.kicad_mod`` map.
+
+    The library is deliberately an injected artifact rather than an implicit
+    search of the host's KiCad installation.  That makes a production run
+    reproducible and lets ``--require-verified-footprints`` fail closed when a
+    real geometry has not been reviewed and supplied.
+    """
+
+    if path is None:
+        return None
+    try:
+        payload = path.read_bytes()
+    except OSError as error:
+        raise PipelineRunError(f"cannot read footprint library: {error}") from error
+    if not payload or len(payload) > MAX_FOOTPRINT_LIBRARY_BYTES:
+        raise PipelineRunError(
+            f"footprint library must contain 1 to {MAX_FOOTPRINT_LIBRARY_BYTES} bytes"
+        )
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PipelineRunError(f"invalid footprint library JSON: {error}") from error
+    if not isinstance(value, dict) or not value:
+        raise PipelineRunError("footprint library must be a non-empty JSON object")
+    if not all(
+        isinstance(key, str)
+        and key.strip()
+        and isinstance(raw, str)
+        and raw.strip()
+        and len(raw.encode("utf-8")) <= 2 * 1024 * 1024
+        for key, raw in value.items()
+    ):
+        raise PipelineRunError(
+            "footprint library keys/values must be non-empty strings and each geometry must be at most 2097152 UTF-8 bytes"
+        )
+    return dict(value)
 
 
 def _apply_physical_profile_metadata(
@@ -473,6 +514,8 @@ def run_hardware_pipeline(
     *,
     provider_command: list[str],
     footprint_sizes: Path,
+    footprint_library: Path | None = None,
+    require_verified_footprints: bool = False,
     board_width_nm: int,
     board_height_nm: int,
     mcu_reference: str,
@@ -495,9 +538,12 @@ def run_hardware_pipeline(
     require_factory: bool = False,
     factory_timeout_seconds: int = 300,
     gpio_map: Path | None = None,
+    interface_profile: Path | None = None,
     c_compiler: str = "cc",
     cxx_compiler: str = "c++",
     python: str = "python3",
+    kicad_erc: bool = False,
+    kicad_cli: str = "kicad-cli",
     c_template: Path | None = None,
     cpp_template: Path | None = None,
     host_template: Path | None = None,
@@ -511,6 +557,7 @@ def run_hardware_pipeline(
         sizes = json.loads(footprint_sizes.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise PipelineRunError(f"invalid footprint size map: {error}") from error
+    verified_library = _load_footprint_library(footprint_library)
     requirements_text = requirements.read_text(encoding="utf-8")
     phases: list[dict[str, Any]] = []
     failures: list[str] = []
@@ -554,8 +601,40 @@ def run_hardware_pipeline(
         (output_dir / "circuit.py").write_text(bundle["skidl"], encoding="utf-8")
         netlist = circuit_spec_to_netlist(spec)
         _write_json(output_dir / "netlist.json", netlist)
-        phases.append(_phase("circuit-generation", started, [output_dir / "circuit-generation.json", output_dir / "circuit.py", output_dir / "netlist.json"], ["closed-spec", "electrical-erc", f"netlist-sha256={netlist['sha256']}"], []))
-    except (OSError, ProviderError, CircuitSpecError, PipelineRunError, ValueError) as error:
+        schematic_path = output_dir / "circuit.kicad_sch"
+        schematic_path.write_text(
+            circuit_spec_to_kicad_sch(spec, project_name=output_dir.name),
+            encoding="utf-8",
+        )
+        schematic_artifacts = [
+            output_dir / "circuit-generation.json",
+            output_dir / "circuit.py",
+            output_dir / "netlist.json",
+            schematic_path,
+        ]
+        schematic_checks = ["closed-spec", "electrical-erc", f"netlist-sha256={netlist['sha256']}"]
+        if kicad_erc:
+            erc_report = output_dir / "circuit-erc.rpt"
+            erc_result = _run_command(
+                [
+                    kicad_cli,
+                    "sch",
+                    "erc",
+                    str(schematic_path),
+                    "--output",
+                    str(erc_report),
+                    "--severity-error",
+                    "--exit-code-violations",
+                ],
+                cwd=output_dir,
+                timeout_seconds=300,
+            )
+            schematic_artifacts.append(erc_report)
+            if not erc_result["passed"]:
+                raise PipelineRunError(erc_result["stderr"] or "KiCad schematic ERC failed")
+            schematic_checks.append("kicad-erc=0")
+        phases.append(_phase("circuit-generation", started, schematic_artifacts, schematic_checks, []))
+    except (OSError, ProviderError, CircuitSpecError, SchematicGenerationError, PipelineRunError, ValueError) as error:
         failures.append(f"circuit-generation: {error}")
         phases.append(_phase("circuit-generation", started, [], [], [str(error)]))
     if bundle is None:
@@ -576,10 +655,16 @@ def run_hardware_pipeline(
             handoff_sizes,
             width_nm=board_width_nm,
             height_nm=board_height_nm,
+            footprint_library=verified_library,
+            require_verified_footprints=require_verified_footprints,
         )
         board_path = output_dir / "circuit.kicad_pcb"
         board_path.write_text(board, encoding="utf-8")
-        phases.append(_phase("circuit-kicad-handoff", started, [board_path], ["references", "pin-net assignments"], []))
+        handoff_checks = ["references", "pin-net assignments"]
+        handoff_checks.append(
+            "verified-footprints" if require_verified_footprints else "placeholder-footprints-allowed"
+        )
+        phases.append(_phase("circuit-kicad-handoff", started, [board_path], handoff_checks, []))
     except (OSError, CircuitSpecError) as error:
         failures.append(f"circuit-kicad-handoff: {error}")
         phases.append(_phase("circuit-kicad-handoff", started, [], [], [str(error)]))
@@ -651,6 +736,7 @@ def run_hardware_pipeline(
             firmware,
             mcu_reference=mcu_reference,
             gpio_map=gpio,
+            interface_profile=interface_profile,
             cc=c_compiler,
             cxx=cxx_compiler,
             python=python,
@@ -658,8 +744,11 @@ def run_hardware_pipeline(
             cpp_template=cpp_template,
             host_template=host_template,
         )
-        phases.append(_phase("firmware-build", started, [firmware / "manifest.json"], ["c11", "c++17", "python"], [] if manifest["c_build"]["passed"] and manifest["cpp_build"]["passed"] and manifest["python_check"]["passed"] else ["firmware build gate failed"]))
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+        firmware_checks = ["c11", "c++17", "python"]
+        if interface_profile is not None:
+            firmware_checks.append("interface-profile=parallel-rom-reader")
+        phases.append(_phase("firmware-build", started, [firmware / "manifest.json"], firmware_checks, [] if manifest["c_build"]["passed"] and manifest["cpp_build"]["passed"] and manifest["python_check"]["passed"] else ["firmware build gate failed"]))
+    except (OSError, ValueError, FirmwareGenerationError, json.JSONDecodeError) as error:
         failures.append(f"firmware-build: {error}")
         phases.append(_phase("firmware-build", started, [], [], [str(error)]))
         return finalize()
