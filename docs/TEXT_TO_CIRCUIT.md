@@ -28,7 +28,9 @@ next provider prompt, so an electrical failure cannot silently become a layout
 input.
 After the attempt limit, generation fails closed. Catalog assignment happens
 after validation and the bundle re-renders SKiDL from the exact normalized spec,
-so the source and the recorded JSON cannot diverge.
+so the source and the recorded JSON cannot diverge. Generated SKiDL also carries
+the normalized `PCBEX_ELECTRICAL_JSON` string so a later schematic/netlist
+importer can preserve the same electrical evidence instead of guessing ratings.
 
 The versioned contract is available with:
 

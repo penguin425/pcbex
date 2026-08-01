@@ -1063,6 +1063,7 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(source, generate_skidl(spec))
         self.assertIn('R1 = Part("Device", "R"', source)
         self.assertIn('R1["1"] += VCC', source)
+        self.assertIn("PCBEX_ELECTRICAL_JSON", source)
         self.assertIn("generate_netlist()", source)
         schema = circuit_spec_json_schema()
         self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
