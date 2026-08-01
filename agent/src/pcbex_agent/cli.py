@@ -137,6 +137,13 @@ def main() -> None:
         "--catalog-bearer-token-environment",
         help="environment variable containing an optional catalog Bearer token",
     )
+    skidl.add_argument("--catalog-query", help="native provider search query (required for native DigiKey)")
+    skidl.add_argument("--catalog-client-id-environment")
+    skidl.add_argument("--catalog-client-secret-environment")
+    skidl.add_argument("--catalog-token-endpoint")
+    skidl.add_argument("--catalog-locale-site", default="US")
+    skidl.add_argument("--catalog-locale-language", default="en")
+    skidl.add_argument("--catalog-locale-currency", default="USD")
     skidl.add_argument("--catalog-timeout-seconds", type=float, default=20.0)
     skidl.add_argument(
         "--allow-http-loopback",
@@ -229,6 +236,13 @@ def main() -> None:
         "--catalog-provider", choices=("jlcpcb", "digikey", "lcsc", "generic"), default="generic"
     )
     pipeline.add_argument("--catalog-bearer-token-environment")
+    pipeline.add_argument("--catalog-query")
+    pipeline.add_argument("--catalog-client-id-environment")
+    pipeline.add_argument("--catalog-client-secret-environment")
+    pipeline.add_argument("--catalog-token-endpoint")
+    pipeline.add_argument("--catalog-locale-site", default="US")
+    pipeline.add_argument("--catalog-locale-language", default="en")
+    pipeline.add_argument("--catalog-locale-currency", default="USD")
     pipeline.add_argument("--catalog-timeout-seconds", type=float, default=20.0)
     pipeline.add_argument("--require-basic", action="store_true")
     pipeline.add_argument("--physical-profile", type=Path)
@@ -304,6 +318,13 @@ def main() -> None:
         default="generic",
     )
     generate_circuit.add_argument("--catalog-bearer-token-environment")
+    generate_circuit.add_argument("--catalog-query")
+    generate_circuit.add_argument("--catalog-client-id-environment")
+    generate_circuit.add_argument("--catalog-client-secret-environment")
+    generate_circuit.add_argument("--catalog-token-endpoint")
+    generate_circuit.add_argument("--catalog-locale-site", default="US")
+    generate_circuit.add_argument("--catalog-locale-language", default="en")
+    generate_circuit.add_argument("--catalog-locale-currency", default="USD")
     generate_circuit.add_argument("--catalog-timeout-seconds", type=float, default=20.0)
     generate_circuit.add_argument("--allow-http-loopback", action="store_true")
     generate_circuit.add_argument("--allow-out-of-stock", action="store_true")
@@ -445,6 +466,13 @@ def main() -> None:
                         bearer_token_environment=args.catalog_bearer_token_environment,
                         timeout_seconds=args.catalog_timeout_seconds,
                         allow_http_loopback=args.allow_http_loopback,
+                        query=args.catalog_query,
+                        client_id_environment=args.catalog_client_id_environment,
+                        client_secret_environment=args.catalog_client_secret_environment,
+                        token_endpoint=args.catalog_token_endpoint,
+                        locale_site=args.catalog_locale_site,
+                        locale_language=args.catalog_locale_language,
+                        locale_currency=args.catalog_locale_currency,
                     )
                 )
                 spec = assign_catalog_parts(
@@ -563,6 +591,13 @@ def main() -> None:
                     endpoint=args.catalog_endpoint,
                     bearer_token_environment=args.catalog_bearer_token_environment,
                     timeout_seconds=args.catalog_timeout_seconds,
+                    query=args.catalog_query,
+                    client_id_environment=args.catalog_client_id_environment,
+                    client_secret_environment=args.catalog_client_secret_environment,
+                    token_endpoint=args.catalog_token_endpoint,
+                    locale_site=args.catalog_locale_site,
+                    locale_language=args.catalog_locale_language,
+                    locale_currency=args.catalog_locale_currency,
                 )
             report = run_hardware_pipeline(
                 args.requirements,
@@ -678,6 +713,13 @@ def main() -> None:
                         bearer_token_environment=args.catalog_bearer_token_environment,
                         timeout_seconds=args.catalog_timeout_seconds,
                         allow_http_loopback=args.allow_http_loopback,
+                        query=args.catalog_query,
+                        client_id_environment=args.catalog_client_id_environment,
+                        client_secret_environment=args.catalog_client_secret_environment,
+                        token_endpoint=args.catalog_token_endpoint,
+                        locale_site=args.catalog_locale_site,
+                        locale_language=args.catalog_locale_language,
+                        locale_currency=args.catalog_locale_currency,
                     )
                 )
                 spec = assign_catalog_parts(

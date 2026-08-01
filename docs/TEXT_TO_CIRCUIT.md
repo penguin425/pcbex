@@ -85,6 +85,28 @@ are rejected, HTTPS is required, and the bearer token is read only from the
 named environment variable. Local HTTP is available only for loopback tests
 with `--allow-http-loopback`.
 
+For a direct DigiKey Product Information v4 KeywordSearch call, provide the
+official endpoint, a query, and two-legged OAuth credentials by environment
+name:
+
+```sh
+PCBEX_DK_ID="..." PCBEX_DK_SECRET="..." \
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-skidl \
+  examples/circuit-spec.json --catalog-provider digikey \
+  --catalog-endpoint https://api.digikey.com/products/v4/search/keyword \
+  --catalog-query "3.3V level shifter" \
+  --catalog-client-id-environment PCBEX_DK_ID \
+  --catalog-client-secret-environment PCBEX_DK_SECRET \
+  --output build/circuit.py
+```
+
+The adapter obtains a short-lived OAuth token, posts the bounded KeywordSearch
+request, maps `Products`/`QuantityAvailable`/`ProductVariations` into the
+deterministic catalog contract, and still applies the local in-stock and
+footprint checks. JLCPCB/LCSC native credentials can use the same HTTPS
+endpoint boundary and bearer-token environment once the approved API account
+exposes its response contract.
+
 `circuit-generation-schema` prints the closed result contract used by the
 natural-language command. It contains the normalized circuit spec, deterministic
 ERC report, attempt count, repair flag, and generated SKiDL source. The ERC

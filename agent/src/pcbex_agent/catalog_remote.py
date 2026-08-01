@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.parse
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -26,6 +27,13 @@ class CatalogEndpoint:
     bearer_token_environment: str | None = None
     timeout_seconds: float = 20.0
     allow_http_loopback: bool = False
+    query: str | None = None
+    client_id_environment: str | None = None
+    client_secret_environment: str | None = None
+    token_endpoint: str | None = None
+    locale_site: str = "US"
+    locale_language: str = "en"
+    locale_currency: str = "USD"
 
 
 def fetch_catalog(config: CatalogEndpoint) -> list[CatalogPart]:
@@ -44,6 +52,8 @@ def fetch_catalog(config: CatalogEndpoint) -> list[CatalogPart]:
     validate_endpoint(config)
     if not 0.1 <= config.timeout_seconds <= 120:
         raise CatalogRemoteError("catalog timeout_seconds must be between 0.1 and 120")
+    if provider == "digikey" and config.client_id_environment:
+        return _fetch_digikey_native(config)
     token = None
     if config.bearer_token_environment:
         _validate_env_name(config.bearer_token_environment)
@@ -93,6 +103,128 @@ def fetch_catalog(config: CatalogEndpoint) -> list[CatalogPart]:
         raise CatalogRemoteError("catalog response must be an array or an object with parts")
     normalized = [_normalize_part(item, provider) for item in value]
     return catalog_parts_from_json(normalized)
+
+
+def _fetch_digikey_native(config: CatalogEndpoint) -> list[CatalogPart]:
+    """Call DigiKey Product Information v4 without requiring a gateway."""
+
+    if not config.query or not config.query.strip():
+        raise CatalogRemoteError("native DigiKey search requires catalog query")
+    if not config.client_secret_environment:
+        raise CatalogRemoteError("native DigiKey search requires client secret environment")
+    _validate_env_name(config.client_id_environment or "")
+    _validate_env_name(config.client_secret_environment)
+    client_id = os.environ.get(config.client_id_environment or "")
+    client_secret = os.environ.get(config.client_secret_environment)
+    if not client_id or not client_secret:
+        raise CatalogRemoteError("DigiKey client credentials are unset or empty")
+    parsed = urlsplit(config.endpoint)
+    token_endpoint = config.token_endpoint or f"{parsed.scheme}://{parsed.netloc}/v1/oauth2/token"
+    token_config = CatalogEndpoint(
+        provider="digikey",
+        endpoint=token_endpoint,
+        timeout_seconds=config.timeout_seconds,
+        allow_http_loopback=config.allow_http_loopback,
+    )
+    validate_endpoint(token_config)
+    token_body = urllib.parse.urlencode({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "client_credentials",
+    }).encode("ascii")
+    token_request = urllib.request.Request(
+        token_endpoint,
+        data=token_body,
+        headers={"Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    token_value = _native_json_request(token_request, config.timeout_seconds, "DigiKey token")
+    access_token = token_value.get("access_token") if isinstance(token_value, dict) else None
+    if not isinstance(access_token, str) or not access_token:
+        raise CatalogRemoteError("DigiKey token response did not contain access_token")
+    limit = 50
+    body = json.dumps({"Keywords": config.query[:250], "Limit": limit, "Offset": 0}).encode("utf-8")
+    request = urllib.request.Request(
+        config.endpoint,
+        data=body,
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {access_token}",
+            "X-DIGIKEY-Client-Id": client_id,
+            "X-DIGIKEY-Locale-Site": config.locale_site,
+            "X-DIGIKEY-Locale-Language": config.locale_language,
+            "X-DIGIKEY-Locale-Currency": config.locale_currency,
+        },
+        method="POST",
+    )
+    response = _native_json_request(request, config.timeout_seconds, "DigiKey search")
+    products = response.get("Products", []) if isinstance(response, dict) else []
+    if not isinstance(products, list):
+        raise CatalogRemoteError("DigiKey response Products must be an array")
+    normalized = [_normalize_digikey_product(item) for item in products]
+    return catalog_parts_from_json(normalized)
+
+
+def _native_json_request(request: urllib.request.Request, timeout: float, label: str) -> dict[str, Any]:
+    opener = urllib.request.build_opener(_NoRedirect())
+    try:
+        with opener.open(request, timeout=timeout) as response:
+            if response.status != 200:
+                raise CatalogRemoteError(f"{label} returned unexpected HTTP status {response.status}")
+            if response.headers.get_content_type() != "application/json":
+                raise CatalogRemoteError(f"{label} response Content-Type must be application/json")
+            body = response.read(MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        raise CatalogRemoteError(f"{label} HTTP request failed: {error.code}") from error
+    except urllib.error.URLError as error:
+        raise CatalogRemoteError(f"{label} request failed: {error.reason}") from error
+    if not body or len(body) > MAX_RESPONSE_BYTES:
+        raise CatalogRemoteError(f"{label} response exceeded {MAX_RESPONSE_BYTES} bytes")
+    try:
+        value = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise CatalogRemoteError(f"{label} response is not UTF-8 JSON: {error}") from error
+    if not isinstance(value, dict):
+        raise CatalogRemoteError(f"{label} response must be an object")
+    return value
+
+
+def _normalize_digikey_product(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise CatalogRemoteError("DigiKey product must be an object")
+    description = value.get("Description")
+    if isinstance(description, dict):
+        description = description.get("ProductDescription") or description.get("DetailedDescription")
+    if not isinstance(description, str) or not description.strip():
+        description = value.get("ManufacturerProductNumber") or "DigiKey product"
+    variations = value.get("ProductVariations")
+    package = ""
+    if isinstance(variations, list) and variations:
+        first = variations[0]
+        if isinstance(first, dict):
+            package_value = first.get("PackageType")
+            if isinstance(package_value, dict):
+                package = str(package_value.get("Name") or "")
+            elif isinstance(package_value, str):
+                package = package_value
+    package = package or str(value.get("PackageType") or "DigiKey:Unknown")
+    mpn = value.get("ManufacturerProductNumber") or value.get("DigiKeyProductNumber")
+    stock = value.get("QuantityAvailable", 0)
+    if not isinstance(mpn, str) or not mpn.strip():
+        raise CatalogRemoteError("DigiKey product is missing a part number")
+    if isinstance(stock, bool) or not isinstance(stock, int) or stock < 0:
+        raise CatalogRemoteError(f"DigiKey product {mpn} has invalid QuantityAvailable")
+    return {
+        "mpn": mpn.strip(),
+        "description": str(description).strip(),
+        "footprint": package,
+        "tags": [tag for tag in ("digikey", str(value.get("ProductStatus") or "")) if tag],
+        "vendor": "digikey",
+        "stock": stock,
+        "basic": False,
+        "datasheet_url": str(value.get("DatasheetUrl") or ""),
+    }
 
 
 def search_remote_parts(

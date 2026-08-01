@@ -1053,6 +1053,56 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual((digikey[0].mpn, digikey[0].stock), ("DK-1", 7))
         self.assertEqual((lcsc[0].mpn, lcsc[0].stock, lcsc[0].basic), ("C-LCSC-1", 11, True))
 
+    def test_native_digikey_catalog_uses_oauth_and_keyword_search(self):
+        state = {"token": False, "search": False}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                length = int(self.headers.get("Content-Length", "0"))
+                body = self.rfile.read(length)
+                if self.path.endswith("/oauth2/token"):
+                    state["token"] = body == b"client_id=id&client_secret=secret&grant_type=client_credentials"
+                    value = {"access_token": "access"}
+                else:
+                    state["search"] = self.headers.get("Authorization") == "Bearer access"
+                    value = {"Products": [{
+                        "ManufacturerProductNumber": "DK-MPN",
+                        "Description": {"ProductDescription": "level shifter"},
+                        "QuantityAvailable": 9,
+                        "ProductVariations": [{"PackageType": {"Name": "SOT-23-6"}}],
+                        "DatasheetUrl": "https://example.test/datasheet.pdf",
+                    }]}
+                payload = json.dumps(value).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with patch.dict("os.environ", {"PCBEX_DK_ID": "id", "PCBEX_DK_SECRET": "secret"}):
+                parts = fetch_catalog(CatalogEndpoint(
+                    provider="digikey",
+                    endpoint=f"http://127.0.0.1:{server.server_port}/products/v4/search/keyword",
+                    query="level shifter",
+                    client_id_environment="PCBEX_DK_ID",
+                    client_secret_environment="PCBEX_DK_SECRET",
+                    allow_http_loopback=True,
+                ))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
+        self.assertTrue(state["token"] and state["search"])
+        self.assertEqual((parts[0].mpn, parts[0].stock, parts[0].footprint), ("DK-MPN", 9, "SOT-23-6"))
+
     def test_skidl_generator_is_deterministic_and_complete(self):
         spec = {
             "schema_version": 1,
