@@ -3,21 +3,33 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque};
 
 pub mod analysis;
+pub mod autonomous;
 pub mod checking;
 pub mod dfm_profiles;
 mod geometry;
 pub mod impedance;
+pub mod physical_profile;
 pub mod placement;
 pub mod quality;
 pub mod routing_candidates;
 pub mod schema;
 
 pub use analysis::{AnalysisDelta, analysis_delta_to_sarif};
+pub use autonomous::{
+    AUTONOMOUS_ROUTING_SCHEMA_VERSION, AutonomousRoutingOptions, AutonomousRoutingResult,
+    AutonomousRoutingRound, autonomous_route,
+};
 pub use dfm_profiles::{
-    DFM_PROFILE_SCHEMA_VERSION, DfmProfile, apply_dfm_profile, dfm_profile,
-    dfm_profile_json_schema, dfm_profiles, parse_external_dfm_profile, validate_dfm_profile,
+    DFM_PROFILE_SCHEMA_VERSION, DfmProfile, apply_dfm_profile, apply_manufacturing_rules,
+    dfm_profile, dfm_profile_json_schema, dfm_profiles, parse_external_dfm_profile,
+    validate_dfm_profile,
 };
 pub use impedance::{ImpedanceReport, impedance_report};
+pub use physical_profile::{
+    FixedComponent, PHYSICAL_PROFILE_SCHEMA_VERSION, PhysicalConstraintProfile, ProfileKeepout,
+    apply_physical_profile, parse_physical_profile, physical_profile_json_schema,
+    validate_physical_profile,
+};
 pub use quality::{DifferentialQuality, NetQuality, RoutingQuality, routing_quality};
 pub use routing_candidates::{
     RoutingCandidate, RoutingCandidateObjective, RoutingCandidateOptions, RoutingCandidateSet,
