@@ -11,10 +11,12 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
-    fs::File,
-    io::{Cursor, Read},
-    path::Path,
-    time::Duration,
+    fs::{self, File},
+    io::{Cursor, Read, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use zip::ZipArchive;
 
@@ -23,6 +25,9 @@ const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
 const MAX_ARCHIVE_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_REPAIR_ATTEMPTS: u8 = 4;
+const MAX_REPAIR_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
+const REPAIR_TIMEOUT_SECONDS: u64 = 600;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -80,6 +85,25 @@ pub struct FactorySubmissionReceipt {
     pub response: Value,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct FactoryLoopAttempt {
+    pub attempt: u8,
+    pub package_sha256: String,
+    pub package_bytes: u64,
+    pub receipt: FactorySubmissionReceipt,
+    pub repair_command_ran: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FactoryFeedbackLoopReport {
+    pub schema_version: u32,
+    pub passed: bool,
+    pub attempts: Vec<FactoryLoopAttempt>,
+    pub final_package_sha256: String,
+    pub final_package_bytes: u64,
+    pub failure: Option<String>,
+}
+
 pub fn factory_submission_json_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -131,6 +155,240 @@ pub fn factory_submission_json_schema() -> Value {
             "response": {"type": "object"}
         }
     })
+}
+
+pub fn factory_feedback_loop_json_schema() -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/factory-feedback-loop-v1.json",
+        "title": "pcbex bounded factory feedback loop report",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "passed", "attempts", "final_package_sha256", "final_package_bytes", "failure"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "passed": {"type": "boolean"},
+            "attempts": {"type": "array", "maxItems": MAX_REPAIR_ATTEMPTS, "items": {"type": "object"}},
+            "final_package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "final_package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_PACKAGE_BYTES},
+            "failure": {"type": ["string", "null"]}
+        }
+    })
+}
+
+/// Submit a package, then invoke a bounded shell-free repair command when DFM
+/// fails. The repair command receives the current receipt on stdin and the
+/// package paths through `PCBEX_FACTORY_REPAIR_*` environment variables; it
+/// must write the next ZIP to the declared output path.
+#[allow(clippy::too_many_arguments)]
+pub fn run_factory_feedback_loop(
+    package_path: &Path,
+    endpoint: &str,
+    provider: FactoryProvider,
+    bearer_token_env: Option<&str>,
+    timeout_seconds: u64,
+    allow_http_loopback: bool,
+    max_attempts: u8,
+    repair_command: Option<&[String]>,
+    final_package_output: Option<&Path>,
+) -> Result<FactoryFeedbackLoopReport, String> {
+    if !(1..=MAX_REPAIR_ATTEMPTS).contains(&max_attempts) {
+        return Err(format!(
+            "factory feedback max_attempts must be between 1 and {MAX_REPAIR_ATTEMPTS}"
+        ));
+    }
+    if let Some(command) = repair_command
+        && (command.is_empty() || command[0].trim().is_empty())
+    {
+        return Err("factory repair command must not be empty".into());
+    }
+    let metadata = fs::metadata(package_path)
+        .map_err(|error| format!("reading factory package metadata: {error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_REPAIR_PACKAGE_BYTES {
+        return Err(format!(
+            "factory feedback package must contain 1 to {MAX_REPAIR_PACKAGE_BYTES} bytes"
+        ));
+    }
+    let working = loop_temp_path("input");
+    fs::copy(package_path, &working)
+        .map_err(|error| format!("copying factory feedback package: {error}"))?;
+    let mut current_package = working.clone();
+    let mut attempts = Vec::new();
+    let mut failure = None;
+    for attempt in 1..=max_attempts {
+        let receipt = match submit_factory_package(
+            &current_package,
+            endpoint,
+            provider,
+            bearer_token_env,
+            timeout_seconds,
+            allow_http_loopback,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                cleanup_loop_packages(&working, &current_package);
+                return Err(error);
+            }
+        };
+        let package_bytes = match fs::metadata(&current_package) {
+            Ok(metadata) => metadata.len(),
+            Err(error) => {
+                cleanup_loop_packages(&working, &current_package);
+                return Err(format!("reading current factory package metadata: {error}"));
+            }
+        };
+        let package_sha256 = receipt.package_sha256.clone();
+        let passed = factory_feedback_passed(&receipt);
+        let repair_command_ran = !passed && attempt < max_attempts && repair_command.is_some();
+        attempts.push(FactoryLoopAttempt {
+            attempt,
+            package_sha256,
+            package_bytes,
+            receipt: receipt.clone(),
+            repair_command_ran,
+        });
+        if passed {
+            let report = FactoryFeedbackLoopReport {
+                schema_version: 1,
+                passed: true,
+                attempts,
+                final_package_sha256: receipt.package_sha256,
+                final_package_bytes: receipt.package_bytes,
+                failure: None,
+            };
+            if let Err(error) = persist_final_package(&current_package, final_package_output) {
+                cleanup_loop_packages(&working, &current_package);
+                return Err(error);
+            }
+            cleanup_loop_packages(&working, &current_package);
+            return Ok(report);
+        }
+        if attempt == max_attempts {
+            failure = Some("factory DFM feedback did not pass before the attempt limit".into());
+            break;
+        }
+        let Some(command) = repair_command else {
+            failure = Some("factory DFM feedback failed and no repair command was supplied".into());
+            break;
+        };
+        let next_package = loop_temp_path(&format!("repair-{attempt}"));
+        if let Err(error) = run_repair_command(command, &current_package, &receipt, &next_package) {
+            failure = Some(error);
+            break;
+        }
+        if current_package != working {
+            remove_temp_package(&current_package);
+        }
+        current_package = next_package;
+    }
+    let final_metadata = fs::metadata(&current_package)
+        .map_err(|error| format!("reading final factory package metadata: {error}"))?;
+    let final_bytes = fs::read(&current_package)
+        .map_err(|error| format!("reading final factory package: {error}"))?;
+    let report = FactoryFeedbackLoopReport {
+        schema_version: 1,
+        passed: false,
+        attempts,
+        final_package_sha256: sha256(&final_bytes),
+        final_package_bytes: final_metadata.len(),
+        failure,
+    };
+    if let Err(error) = persist_final_package(&current_package, final_package_output) {
+        cleanup_loop_packages(&working, &current_package);
+        return Err(error);
+    }
+    cleanup_loop_packages(&working, &current_package);
+    Ok(report)
+}
+
+fn persist_final_package(current_package: &Path, output: Option<&Path>) -> Result<(), String> {
+    let Some(output) = output else {
+        return Ok(());
+    };
+    if output == current_package {
+        return Err("factory final package output must not be the working package".into());
+    }
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("creating final factory package directory: {error}"))?;
+    }
+    fs::copy(current_package, output)
+        .map_err(|error| format!("writing final factory package: {error}"))?;
+    Ok(())
+}
+
+fn run_repair_command(
+    command: &[String],
+    current_package: &Path,
+    receipt: &FactorySubmissionReceipt,
+    output_package: &Path,
+) -> Result<(), String> {
+    let receipt_json = serde_json::to_vec_pretty(receipt)
+        .map_err(|error| format!("serializing factory receipt for repair: {error}"))?;
+    let mut child = Command::new(&command[0])
+        .args(&command[1..])
+        .env("PCBEX_FACTORY_REPAIR_INPUT_PACKAGE", current_package)
+        .env("PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE", output_package)
+        .env("PCBEX_FACTORY_REPAIR_RECEIPT_JSON", "stdin")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("starting factory repair command: {error}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(&receipt_json)
+            .map_err(|error| format!("writing factory receipt to repair command: {error}"))?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(REPAIR_TIMEOUT_SECONDS);
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(Some(status)) => return Err(format!("factory repair command failed with {status}")),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "factory repair command exceeded {REPAIR_TIMEOUT_SECONDS} seconds"
+                ));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(25)),
+            Err(error) => return Err(format!("waiting for factory repair command: {error}")),
+        }
+    }
+    let metadata = fs::metadata(output_package)
+        .map_err(|error| format!("factory repair command did not write output package: {error}"))?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_REPAIR_PACKAGE_BYTES {
+        return Err(format!(
+            "factory repair output must contain 1 to {MAX_REPAIR_PACKAGE_BYTES} bytes"
+        ));
+    }
+    Ok(())
+}
+
+fn loop_temp_path(label: &str) -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    env::temp_dir().join(format!(
+        "pcbex-factory-loop-{}-{label}-{timestamp}.zip",
+        std::process::id()
+    ))
+}
+
+fn remove_temp_package(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
+fn cleanup_loop_packages(working: &Path, current: &Path) {
+    remove_temp_package(working);
+    if current != working {
+        remove_temp_package(current);
+    }
 }
 
 /// Submit a manufacturing ZIP and normalize the provider's JSON response.
@@ -1151,6 +1409,21 @@ mod tests {
     }
 
     #[test]
+    fn feedback_loop_schema_is_closed_and_bounded() {
+        let schema = factory_feedback_loop_json_schema();
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+        assert_eq!(
+            schema["properties"]["attempts"]["maxItems"],
+            MAX_REPAIR_ATTEMPTS
+        );
+        assert_eq!(
+            schema["properties"]["final_package_bytes"]["maximum"],
+            MAX_REPAIR_PACKAGE_BYTES
+        );
+    }
+
+    #[test]
     fn rejects_redirect_content_type_json_status_and_response_bounds() {
         let temporary = tempdir().unwrap();
         let package_path = temporary.path().join("manufacturing.zip");
@@ -1208,5 +1481,22 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("bounded factory response") || error.contains("1 to"));
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn feedback_loop_rejects_attempt_limits_before_touching_package() {
+        let error = run_factory_feedback_loop(
+            Path::new("missing.zip"),
+            "https://factory.example/quote",
+            FactoryProvider::Generic,
+            None,
+            60,
+            false,
+            0,
+            None,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("max_attempts"));
     }
 }

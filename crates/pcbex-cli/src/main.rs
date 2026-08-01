@@ -194,8 +194,8 @@ use canary_completion::{
     signed_canary_decision_json_schema, verify_canary_completion,
 };
 use factory::{
-    FactoryProvider, factory_feedback_passed, factory_submission_json_schema,
-    submit_factory_package,
+    FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
+    factory_submission_json_schema, run_factory_feedback_loop, submit_factory_package,
 };
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
@@ -4374,6 +4374,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the JSON Schema for bounded factory DFM feedback-loop reports.
+    FactoryFeedbackLoopSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Submit a manufacturing ZIP to a configured factory quote/DFM endpoint.
     FactorySubmit {
         package: PathBuf,
@@ -4394,6 +4399,37 @@ enum Command {
         /// Fail after writing the receipt unless the factory reports a passing DFM.
         #[arg(long)]
         require_dfm_pass: bool,
+    },
+    /// Submit a package and run a bounded, shell-free repair command after DFM failures.
+    FactoryFeedbackLoop {
+        package: PathBuf,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long, default_value = "generic")]
+        provider: String,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64))]
+        timeout_seconds: u64,
+        /// Maximum number of factory submissions, including the initial package.
+        #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u8))]
+        max_attempts: u8,
+        /// Executable wrapper invoked between failed DFM submissions. It receives the
+        /// receipt on stdin and writes the repaired ZIP to the output environment path.
+        #[arg(long)]
+        repair_command: Option<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Write the final passing (or last failed) factory receipt separately for pipeline gating.
+        #[arg(long)]
+        final_receipt: Option<PathBuf>,
+        /// Copy the final passing (or last failed) ZIP to this path for downstream fabrication gates.
+        #[arg(long)]
+        final_package: Option<PathBuf>,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
     },
 }
 
@@ -14404,6 +14440,15 @@ fn run_cli() -> Result<()> {
                 println!("{rendered}");
             }
         }
+        Command::FactoryFeedbackLoopSchema { output } => {
+            let rendered = serde_json::to_string_pretty(&factory_feedback_loop_json_schema())?;
+            if let Some(path) = output {
+                fs::write(&path, rendered)
+                    .with_context(|| format!("writing {}", path.display()))?;
+            } else {
+                println!("{rendered}");
+            }
+        }
         Command::FactorySubmit {
             package,
             endpoint,
@@ -14442,6 +14487,57 @@ fn run_cli() -> Result<()> {
             );
             if require_dfm_pass && !factory_feedback_passed(&receipt) {
                 bail!("factory DFM feedback did not pass");
+            }
+        }
+        Command::FactoryFeedbackLoop {
+            package,
+            endpoint,
+            provider,
+            bearer_token_env,
+            timeout_seconds,
+            max_attempts,
+            repair_command,
+            output,
+            final_receipt,
+            final_package,
+            allow_http_loopback,
+        } => {
+            let provider = FactoryProvider::parse(&provider).map_err(anyhow::Error::msg)?;
+            let repair_args = repair_command.map(|path| vec![path.to_string_lossy().into_owned()]);
+            let report = run_factory_feedback_loop(
+                &package,
+                &endpoint,
+                provider,
+                bearer_token_env.as_deref(),
+                timeout_seconds,
+                allow_http_loopback,
+                max_attempts,
+                repair_args.as_deref(),
+                final_package.as_deref(),
+            )
+            .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&report)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+            if let Some(path) = final_receipt {
+                let receipt = report
+                    .attempts
+                    .last()
+                    .map(|attempt| &attempt.receipt)
+                    .ok_or_else(|| anyhow::anyhow!("factory feedback loop produced no receipt"))?;
+                fs::write(&path, serde_json::to_string_pretty(receipt)?)
+                    .with_context(|| format!("writing {}", path.display()))?;
+            }
+            eprintln!(
+                "factory feedback loop: passed={}; attempts={}; final_package_sha256={}; report={}",
+                report.passed,
+                report.attempts.len(),
+                report.final_package_sha256,
+                output.display()
+            );
+            if !report.passed {
+                bail!(report
+                    .failure
+                    .unwrap_or_else(|| "factory feedback loop did not pass".into()));
             }
         }
     }
