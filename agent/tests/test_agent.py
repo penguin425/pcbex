@@ -10,7 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from pcbex_agent.cli import main as agent_main
-from pcbex_agent.catalog import CatalogPart, search_parts
+from pcbex_agent.catalog import CatalogPart, catalog_parts_from_json, search_parts
 from pcbex_agent.circuit import skidl_to_placement_problem
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
@@ -30,6 +30,12 @@ from pcbex_agent.repair_loop import run_repair_loop
 from pcbex_agent.llm import build_plan_with_llm
 from pcbex_agent.ipc import apply_routes_to_open_board
 from pcbex_agent.review import review_schematic_with_llm
+from pcbex_agent.skidl import (
+    CircuitSpecError,
+    assign_catalog_parts,
+    circuit_spec_json_schema,
+    generate_skidl,
+)
 
 
 class PlannerTests(unittest.TestCase):
@@ -703,10 +709,61 @@ class AdapterTests(unittest.TestCase):
 
     def test_catalog_search_is_ranked_and_filtered(self):
         parts = [
-            CatalogPart("A", "ceramic capacitor", "0402", ("decoupling",)),
-            CatalogPart("B", "resistor", "0402"),
+            CatalogPart("A", "ceramic capacitor", "0402", ("decoupling",), "JLC", 100, True),
+            CatalogPart("B", "resistor", "0402", stock=100, basic=True),
         ]
         self.assertEqual(search_parts(parts, "decoupling", limit=1)[0].mpn, "A")
+
+    def test_catalog_selection_requires_stock_and_basic_parts(self):
+        parts = catalog_parts_from_json([
+            {"mpn": "C1", "description": "capacitor", "footprint": "0402", "stock": 0},
+            {"mpn": "C2", "description": "capacitor", "footprint": "0402", "stock": 20, "basic": True},
+        ])
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "C1", "lib_id": "Device:C", "value": "100nF",
+                "footprint": "0402", "pins": {"1": "VCC", "2": "GND"}, "mpn": None,
+            }],
+            "nets": [
+                {"name": "VCC", "connections": [{"reference": "C1", "pin": "1"}, {"reference": "C1", "pin": "2"}]},
+            ],
+        }
+        selected = assign_catalog_parts(spec, parts, require_basic=True)
+        self.assertEqual(selected["parts"][0]["mpn"], "C2")
+
+    def test_skidl_generator_is_deterministic_and_complete(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {"reference": "R1", "lib_id": "Device:R", "value": "10k", "footprint": "0402",
+                 "pins": {"1": "VCC", "2": "GND"}},
+                {"reference": "U1", "lib_id": "Connector_Generic:Conn_01x02", "value": "JTAG",
+                 "footprint": "PinHeader_1x02_P2.54mm_Vertical", "pins": {"1": "VCC", "2": "GND"}},
+            ],
+            "nets": [
+                {"name": "GND", "connections": [{"reference": "R1", "pin": "2"}, {"reference": "U1", "pin": "2"}]},
+                {"name": "VCC", "connections": [{"reference": "R1", "pin": "1"}, {"reference": "U1", "pin": "1"}]},
+            ],
+        }
+        source = generate_skidl(spec)
+        self.assertEqual(source, generate_skidl(spec))
+        self.assertIn('R1 = Part("Device", "R"', source)
+        self.assertIn('R1["1"] += VCC', source)
+        self.assertIn("generate_netlist()", source)
+        schema = circuit_spec_json_schema()
+        self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
+
+    def test_skidl_generator_fails_on_unconnected_pin(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{"reference": "R1", "lib_id": "Device:R", "value": "10k",
+                        "footprint": "0402", "pins": {"1": "VCC", "2": "GND"}}],
+            "nets": [{"name": "VCC", "connections": [{"reference": "R1", "pin": "1"},
+                                                          {"reference": "R1", "pin": "1"}]}],
+        }
+        with self.assertRaises(CircuitSpecError):
+            generate_skidl(spec)
 
     def test_skidl_shape_converts_to_connection_graph(self):
         u1 = SimpleNamespace(ref="U1", footprint="QFN")

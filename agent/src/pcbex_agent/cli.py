@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .catalog import catalog_parts_from_json
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -21,6 +22,12 @@ from .provider import (
 from .repair import propose_repairs
 from .repair_loop import repair_kicad_board, write_repair_report
 from .review import ReviewError
+from .skidl import (
+    CircuitSpecError,
+    assign_catalog_parts,
+    circuit_spec_json_schema,
+    generate_skidl,
+)
 
 
 def main() -> None:
@@ -85,6 +92,36 @@ def main() -> None:
         help="write the closed managed-provider receipt JSON Schema",
     )
     managed_schema.add_argument("-o", "--output", type=Path)
+    skidl = sub.add_parser(
+        "generate-skidl",
+        help="validate a closed circuit spec, select available parts, and generate SKiDL",
+    )
+    skidl.add_argument("spec", type=Path)
+    skidl.add_argument("-o", "--output", type=Path, required=True)
+    skidl.add_argument(
+        "--catalog",
+        type=Path,
+        help="optional vendor-neutral catalog JSON array used for missing MPNs",
+    )
+    skidl.add_argument(
+        "--allow-out-of-stock",
+        action="store_true",
+        help="allow catalog candidates with zero reported stock",
+    )
+    skidl.add_argument(
+        "--require-basic",
+        action="store_true",
+        help="restrict automatic selection to basic parts",
+    )
+    skidl.add_argument(
+        "--no-netlist",
+        action="store_true",
+        help="omit generate_netlist() from the generated source",
+    )
+    skidl_schema = sub.add_parser(
+        "circuit-spec-schema", help="write the closed Text-to-Circuit JSON Schema"
+    )
+    skidl_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -185,6 +222,31 @@ def main() -> None:
     elif args.command == "managed-provider-receipt-schema":
         rendered = json.dumps(
             managed_provider_receipt_json_schema(), indent=2, ensure_ascii=False
+        ) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
+    elif args.command == "generate-skidl":
+        try:
+            spec = json.loads(args.spec.read_text(encoding="utf-8"))
+            if args.catalog:
+                catalog = catalog_parts_from_json(
+                    json.loads(args.catalog.read_text(encoding="utf-8"))
+                )
+                spec = assign_catalog_parts(
+                    spec,
+                    catalog,
+                    require_available=not args.allow_out_of_stock,
+                    require_basic=args.require_basic,
+                )
+            source = generate_skidl(spec, include_netlist=not args.no_netlist)
+        except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
+            raise SystemExit(f"SKiDL generation failed: {error}") from error
+        args.output.write_text(source, encoding="utf-8")
+    elif args.command == "circuit-spec-schema":
+        rendered = json.dumps(
+            circuit_spec_json_schema(), indent=2, ensure_ascii=False
         ) + "\n"
         if args.output:
             args.output.write_text(rendered, encoding="utf-8")
