@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+import hashlib
+import json
 from typing import Any
 
 from .skidl import CircuitSpecError, validate_circuit_spec
@@ -152,6 +154,37 @@ def circuit_spec_to_placement_problem(
             }
         }
     return result
+
+
+def circuit_spec_to_netlist(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Emit a canonical, digest-bound connectivity artifact for downstream gates."""
+
+    spec = _spec_from_value(value)
+    normalized = {
+        "schema_version": 1,
+        "parts": [
+            {
+                key: part[key]
+                for key in ("reference", "lib_id", "value", "footprint", "mpn", "pins", "electrical")
+                if key in part
+            }
+            for part in sorted(spec["parts"], key=lambda item: item["reference"])
+        ],
+        "nets": [
+            {
+                "name": net["name"],
+                "voltage_v": net.get("voltage_v"),
+                "connections": sorted(
+                    net["connections"],
+                    key=lambda item: (item["reference"], item["pin"]),
+                ),
+            }
+            for net in sorted(spec["nets"], key=lambda item: item["name"])
+        ],
+    }
+    canonical = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    normalized["sha256"] = hashlib.sha256(canonical).hexdigest()
+    return normalized
 
 
 def _mm(value_nm: int) -> str:

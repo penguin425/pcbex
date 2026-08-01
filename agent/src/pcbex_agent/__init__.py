@@ -17,7 +17,11 @@ from .circuit_generation import (
     generate_circuit_with_llm,
 )
 from .skidl import CircuitErcError, check_circuit_electrical, circuit_erc_json_schema
-from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_placement_problem
+from .circuit import (
+    circuit_spec_to_kicad_pcb,
+    circuit_spec_to_netlist,
+    circuit_spec_to_placement_problem,
+)
 from .firmware import (
     FirmwareGenerationError,
     firmware_bundle_json_schema,
@@ -38,6 +42,7 @@ __all__ = [
     "check_circuit_electrical",
     "circuit_erc_json_schema",
     "circuit_spec_to_kicad_pcb",
+    "circuit_spec_to_netlist",
     "circuit_spec_to_placement_problem",
     "FirmwareGenerationError",
     "firmware_bundle_json_schema",

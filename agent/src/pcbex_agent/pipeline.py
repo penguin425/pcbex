@@ -14,7 +14,7 @@ from typing import Any, Mapping, Sequence
 
 from .catalog import catalog_parts_from_json
 from .catalog_remote import CatalogEndpoint, fetch_catalog
-from .circuit import circuit_spec_to_kicad_pcb
+from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_netlist
 from .circuit_generation import generate_circuit_with_llm
 from .firmware import generate_firmware_bundle
 from .provider import ProviderError, run_provider_command
@@ -295,7 +295,9 @@ def run_hardware_pipeline(
         bundle["skidl"] = generate_skidl(spec)
         _write_json(output_dir / "circuit-generation.json", bundle)
         (output_dir / "circuit.py").write_text(bundle["skidl"], encoding="utf-8")
-        phases.append(_phase("circuit-generation", started, [output_dir / "circuit-generation.json", output_dir / "circuit.py"], ["closed-spec", "electrical-erc"], []))
+        netlist = circuit_spec_to_netlist(spec)
+        _write_json(output_dir / "netlist.json", netlist)
+        phases.append(_phase("circuit-generation", started, [output_dir / "circuit-generation.json", output_dir / "circuit.py", output_dir / "netlist.json"], ["closed-spec", "electrical-erc", f"netlist-sha256={netlist['sha256']}"], []))
     except (OSError, ProviderError, CircuitSpecError, PipelineRunError, ValueError) as error:
         failures.append(f"circuit-generation: {error}")
         phases.append(_phase("circuit-generation", started, [], [], [str(error)]))

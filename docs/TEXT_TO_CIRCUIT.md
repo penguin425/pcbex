@@ -148,3 +148,12 @@ pcbex place-kicad build/circuit.kicad_pcb \
 The handoff preserves references, pin numbers, net names, and net IDs. The
 generated footprints are deliberately placeholders; a project may replace them
 with verified library geometry before manufacturing.
+
+For an intermediate artifact that does not depend on KiCad or a footprint
+library, use `circuit-to-netlist`. It writes canonical sorted parts/nets and a
+SHA-256 digest that the pipeline retains as `netlist.json`:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent circuit-to-netlist \
+  build/circuit-generation.json --output build/netlist.json
+```

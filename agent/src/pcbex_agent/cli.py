@@ -11,7 +11,11 @@ from .circuit_generation import (
     circuit_generation_json_schema,
     generate_circuit_with_llm,
 )
-from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_placement_problem
+from .circuit import (
+    circuit_spec_to_kicad_pcb,
+    circuit_spec_to_netlist,
+    circuit_spec_to_placement_problem,
+)
 from .firmware import (
     FirmwareGenerationError,
     firmware_bundle_json_schema,
@@ -183,6 +187,11 @@ def main() -> None:
     circuit_to_kicad.add_argument("--board-height-nm", type=int, required=True)
     circuit_to_kicad.add_argument("--grid-nm", type=int, default=250_000)
     circuit_to_kicad.add_argument("-o", "--output", type=Path, required=True)
+    circuit_to_netlist_parser = sub.add_parser(
+        "circuit-to-netlist", help="write a canonical digest-bound circuit netlist JSON"
+    )
+    circuit_to_netlist_parser.add_argument("spec", type=Path)
+    circuit_to_netlist_parser.add_argument("-o", "--output", type=Path, required=True)
     firmware = sub.add_parser(
         "generate-firmware",
         help="generate and verify pinout-bound C/C++/Python firmware from a circuit",
@@ -487,6 +496,16 @@ def main() -> None:
             args.output.write_text(board, encoding="utf-8")
         except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
             raise SystemExit(f"circuit KiCad conversion failed: {error}") from error
+    elif args.command == "circuit-to-netlist":
+        try:
+            source = json.loads(args.spec.read_text(encoding="utf-8"))
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps(circuit_spec_to_netlist(source), indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
+            raise SystemExit(f"circuit netlist conversion failed: {error}") from error
     elif args.command == "generate-firmware":
         try:
             source = json.loads(args.spec.read_text(encoding="utf-8"))

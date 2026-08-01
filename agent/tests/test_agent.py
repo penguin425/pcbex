@@ -19,6 +19,7 @@ from pcbex_agent.circuit_generation import (
 )
 from pcbex_agent.circuit import (
     circuit_spec_to_kicad_pcb,
+    circuit_spec_to_netlist,
     circuit_spec_to_placement_problem,
     skidl_to_placement_problem,
 )
@@ -1183,6 +1184,24 @@ class AdapterTests(unittest.TestCase):
         self.assertIn('(footprint "HEADER"', board)
         self.assertEqual(board.count("(pad "), 2)
         self.assertTrue(board.endswith("\n") and board.rstrip().endswith(")"))
+
+    def test_circuit_netlist_is_canonical_and_digest_bound(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "U1", "lib_id": "MCU:Example", "value": "controller",
+                "footprint": "QFN", "pins": {"1": "A", "2": "B"},
+            }],
+            "nets": [
+                {"name": "B", "connections": [
+                    {"reference": "U1", "pin": "2"}, {"reference": "U1", "pin": "1"},
+                ]},
+            ],
+        }
+        netlist = circuit_spec_to_netlist(spec)
+        self.assertEqual(netlist["nets"][0]["connections"][0]["pin"], "1")
+        self.assertEqual(len(netlist["sha256"]), 64)
+        self.assertEqual(netlist["sha256"], circuit_spec_to_netlist(spec)["sha256"])
 
     def test_circuit_bound_firmware_builds_c_cpp_and_python(self):
         spec = {
