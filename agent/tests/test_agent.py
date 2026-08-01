@@ -23,6 +23,7 @@ from pcbex_agent.circuit import (
     skidl_to_placement_problem,
 )
 from pcbex_agent.firmware import firmware_bundle_json_schema, generate_firmware_bundle
+from pcbex_agent.pipeline import pipeline_run_json_schema, run_hardware_pipeline
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
 from pcbex_agent.models import DrcViolation, PlanLimits
@@ -1213,6 +1214,69 @@ class AdapterTests(unittest.TestCase):
             self.assertTrue((Path(directory) / "pinout.h").is_file())
             self.assertTrue((Path(directory) / "firmware_smoke_test").is_file())
             self.assertTrue(firmware_bundle_json_schema()["additionalProperties"] is False)
+
+    def test_pipeline_run_is_fail_closed_and_connects_all_phases(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "U1", "lib_id": "MCU:Example", "value": "controller",
+                "footprint": "QFN", "pins": {"1": "DATA", "2": "GND"},
+            }],
+            "nets": [{"name": "DATA", "connections": [
+                {"reference": "U1", "pin": "1"}, {"reference": "U1", "pin": "2"},
+            ]}],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            requirements = root / "requirements.txt"
+            requirements.write_text("Connect the controller", encoding="utf-8")
+            sizes = root / "sizes.json"
+            sizes.write_text(json.dumps({"QFN": {"width_nm": 4_000_000, "height_nm": 4_000_000}}), encoding="utf-8")
+            provider = [
+                sys.executable, "-c",
+                f"import sys; sys.stdin.read(); print({json.dumps(json.dumps(spec))})",
+            ]
+            fake_pcbex = root / "fake-pcbex"
+            fake_pcbex.write_text(
+                "#!/usr/bin/env python3\n"
+                "import pathlib, shutil, sys\n"
+                "cmd=sys.argv[1]\n"
+                "def value(name): return pathlib.Path(sys.argv[sys.argv.index(name)+1])\n"
+                "if cmd == 'place-kicad':\n"
+                "  shutil.copy2(pathlib.Path(sys.argv[2]), value('--output')); value('--json-output').write_text('{}')\n"
+                "elif cmd == 'route-kicad':\n"
+                "  shutil.copy2(pathlib.Path(sys.argv[2]), value('--output')); value('--json-output').write_text('{}')\n"
+                "elif cmd == 'fabricate':\n"
+                "  out=value('--output-dir'); out.mkdir(parents=True, exist_ok=True); (out/'F-Cu.gbr').write_text('gerber')\n"
+                "else: raise SystemExit('unknown command')\n",
+                encoding="utf-8",
+            )
+            fake_pcbex.chmod(0o755)
+            factory_command = root / "factory.json"
+            factory_command.write_text(json.dumps([
+                sys.executable, "-c",
+                "import sys; sys.stdin.buffer.read(); print('{\"accepted\":true,\"dfm_passed\":true}')",
+            ]), encoding="utf-8")
+            report = run_hardware_pipeline(
+                requirements,
+                root / "pipeline",
+                provider_command=provider,
+                footprint_sizes=sizes,
+                board_width_nm=20_000_000,
+                board_height_nm=10_000_000,
+                mcu_reference="U1",
+                pcbex=str(fake_pcbex),
+                factory_command_file=factory_command,
+                require_factory=True,
+            )
+            self.assertTrue(report["passed"], report)
+            self.assertEqual(
+                [phase["name"] for phase in report["phases"]],
+                ["circuit-generation", "circuit-kicad-handoff", "placement",
+                 "autonomous-routing-drc", "manufacturing-package", "firmware-build", "factory-dfm"],
+            )
+            self.assertTrue((root / "pipeline" / "pipeline.json").is_file())
+            self.assertFalse(pipeline_run_json_schema()["additionalProperties"])
 
     def test_ipc_adapter_applies_one_atomic_commit(self):
         class Item:

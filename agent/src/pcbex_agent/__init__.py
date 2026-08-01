@@ -23,6 +23,7 @@ from .firmware import (
     firmware_bundle_json_schema,
     generate_firmware_bundle,
 )
+from .pipeline import PipelineRunError, pipeline_run_json_schema, run_hardware_pipeline
 from .review import ReviewError, review_schematic_with_llm
 
 __all__ = [
@@ -41,6 +42,9 @@ __all__ = [
     "FirmwareGenerationError",
     "firmware_bundle_json_schema",
     "generate_firmware_bundle",
+    "PipelineRunError",
+    "pipeline_run_json_schema",
+    "run_hardware_pipeline",
     "managed_provider_receipt_json_schema",
     "provider_receipt_json_schema",
     "run_provider_command",

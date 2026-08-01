@@ -17,6 +17,7 @@ from .firmware import (
     firmware_bundle_json_schema,
     generate_firmware_bundle,
 )
+from .pipeline import PipelineRunError, pipeline_run_json_schema, run_hardware_pipeline
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -201,6 +202,51 @@ def main() -> None:
         "firmware-schema", help="write the circuit-bound firmware bundle JSON Schema"
     )
     firmware_schema.add_argument("-o", "--output", type=Path)
+    pipeline = sub.add_parser(
+        "pipeline-run",
+        help="run natural-language circuit, PCB, manufacturing, and firmware stages headlessly",
+    )
+    pipeline.add_argument("requirements", type=Path)
+    pipeline.add_argument("--footprint-sizes", type=Path, required=True)
+    pipeline.add_argument("--board-width-nm", type=int, required=True)
+    pipeline.add_argument("--board-height-nm", type=int, required=True)
+    pipeline.add_argument("--mcu-reference", required=True)
+    pipeline.add_argument("-o", "--output", type=Path, required=True)
+    pipeline.add_argument("--pcbex", default="pcbex")
+    pipeline.add_argument("--catalog", type=Path)
+    pipeline.add_argument("--catalog-endpoint")
+    pipeline.add_argument(
+        "--catalog-provider", choices=("jlcpcb", "digikey", "lcsc", "generic"), default="generic"
+    )
+    pipeline.add_argument("--catalog-bearer-token-environment")
+    pipeline.add_argument("--catalog-timeout-seconds", type=float, default=20.0)
+    pipeline.add_argument("--require-basic", action="store_true")
+    pipeline.add_argument("--physical-profile", type=Path)
+    pipeline.add_argument("--fab")
+    pipeline.add_argument("--convergence-rounds", type=int, default=4)
+    pipeline.add_argument("--max-copper-layers", type=int, default=4)
+    pipeline.add_argument("--placement-iterations", type=int)
+    pipeline.add_argument("--seed", type=int)
+    pipeline.add_argument("--factory-command-file", type=Path)
+    pipeline.add_argument("--factory-receipt", type=Path)
+    pipeline.add_argument("--factory-provider", default="generic")
+    pipeline.add_argument("--factory-timeout-seconds", type=int, default=300)
+    pipeline.add_argument("--require-factory", action="store_true")
+    pipeline.add_argument("--gpio-map", type=Path)
+    pipeline.add_argument("--c-compiler", default="cc")
+    pipeline.add_argument("--cxx-compiler", default="c++")
+    pipeline.add_argument("--python", default="python3")
+    pipeline.add_argument("--c-template", type=Path)
+    pipeline.add_argument("--cpp-template", type=Path)
+    pipeline.add_argument("--host-template", type=Path)
+    pipeline.add_argument(
+        "--provider-command", nargs=argparse.REMAINDER, required=True,
+        help="circuit model executable and arguments; must be the final option",
+    )
+    pipeline_schema = sub.add_parser(
+        "pipeline-schema", help="write the headless pipeline-run JSON Schema"
+    )
+    pipeline_schema.add_argument("-o", "--output", type=Path)
     erc_schema = sub.add_parser(
         "circuit-erc-schema", help="write the closed deterministic circuit ERC JSON Schema"
     )
@@ -467,6 +513,58 @@ def main() -> None:
             raise SystemExit(f"firmware generation failed: {error}") from error
     elif args.command == "firmware-schema":
         rendered = json.dumps(firmware_bundle_json_schema(), indent=2, ensure_ascii=False) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
+    elif args.command == "pipeline-run":
+        try:
+            endpoint = None
+            if args.catalog_endpoint:
+                endpoint = CatalogEndpoint(
+                    provider=args.catalog_provider,
+                    endpoint=args.catalog_endpoint,
+                    bearer_token_environment=args.catalog_bearer_token_environment,
+                    timeout_seconds=args.catalog_timeout_seconds,
+                )
+            report = run_hardware_pipeline(
+                args.requirements,
+                args.output,
+                provider_command=args.provider_command,
+                footprint_sizes=args.footprint_sizes,
+                board_width_nm=args.board_width_nm,
+                board_height_nm=args.board_height_nm,
+                mcu_reference=args.mcu_reference,
+                pcbex=args.pcbex,
+                catalog=args.catalog,
+                catalog_endpoint=endpoint,
+                require_basic=args.require_basic,
+                physical_profile=args.physical_profile,
+                fab=args.fab,
+                convergence_rounds=args.convergence_rounds,
+                max_copper_layers=args.max_copper_layers,
+                placement_iterations=args.placement_iterations,
+                seed=args.seed,
+                factory_command_file=args.factory_command_file,
+                factory_receipt=args.factory_receipt,
+                factory_provider=args.factory_provider,
+                require_factory=args.require_factory,
+                factory_timeout_seconds=args.factory_timeout_seconds,
+                gpio_map=args.gpio_map,
+                c_compiler=args.c_compiler,
+                cxx_compiler=args.cxx_compiler,
+                python=args.python,
+                c_template=args.c_template,
+                cpp_template=args.cpp_template,
+                host_template=args.host_template,
+            )
+            print(json.dumps(report, indent=2, ensure_ascii=False))
+            if not report["passed"]:
+                raise SystemExit("pipeline-run rejected; see pipeline.json")
+        except (OSError, json.JSONDecodeError, PipelineRunError, ValueError) as error:
+            raise SystemExit(f"pipeline-run failed: {error}") from error
+    elif args.command == "pipeline-schema":
+        rendered = json.dumps(pipeline_run_json_schema(), indent=2, ensure_ascii=False) + "\n"
         if args.output:
             args.output.write_text(rendered, encoding="utf-8")
         else:
