@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .catalog import catalog_parts_from_json
+from .catalog_remote import CatalogEndpoint, CatalogRemoteError, fetch_catalog
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -102,6 +103,25 @@ def main() -> None:
         "--catalog",
         type=Path,
         help="optional vendor-neutral catalog JSON array used for missing MPNs",
+    )
+    skidl.add_argument(
+        "--catalog-endpoint",
+        help="HTTPS catalog gateway endpoint for live supplier inventory",
+    )
+    skidl.add_argument(
+        "--catalog-provider",
+        choices=("jlcpcb", "digikey", "lcsc", "generic"),
+        default="generic",
+    )
+    skidl.add_argument(
+        "--catalog-bearer-token-environment",
+        help="environment variable containing an optional catalog Bearer token",
+    )
+    skidl.add_argument("--catalog-timeout-seconds", type=float, default=20.0)
+    skidl.add_argument(
+        "--allow-http-loopback",
+        action="store_true",
+        help="test-only: permit a loopback HTTP catalog endpoint",
     )
     skidl.add_argument(
         "--allow-out-of-stock",
@@ -240,8 +260,24 @@ def main() -> None:
                     require_available=not args.allow_out_of_stock,
                     require_basic=args.require_basic,
                 )
+            elif args.catalog_endpoint:
+                catalog = fetch_catalog(
+                    CatalogEndpoint(
+                        provider=args.catalog_provider,
+                        endpoint=args.catalog_endpoint,
+                        bearer_token_environment=args.catalog_bearer_token_environment,
+                        timeout_seconds=args.catalog_timeout_seconds,
+                        allow_http_loopback=args.allow_http_loopback,
+                    )
+                )
+                spec = assign_catalog_parts(
+                    spec,
+                    catalog,
+                    require_available=not args.allow_out_of_stock,
+                    require_basic=args.require_basic,
+                )
             source = generate_skidl(spec, include_netlist=not args.no_netlist)
-        except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
+        except (OSError, json.JSONDecodeError, CircuitSpecError, CatalogRemoteError) as error:
             raise SystemExit(f"SKiDL generation failed: {error}") from error
         args.output.write_text(source, encoding="utf-8")
     elif args.command == "circuit-spec-schema":

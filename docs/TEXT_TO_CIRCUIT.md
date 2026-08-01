@@ -36,3 +36,21 @@ is deterministic, refuses duplicate MPNs, and fails when no available part
 matches the requested footprint. SKiDL remains an optional runtime dependency;
 the generated file can be executed in a separate environment that installs
 SKiDL.
+
+For live inventory, point the same generator at an HTTPS catalog gateway:
+
+```sh
+PCBEX_CATALOG_TOKEN="..." \
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-skidl \
+  examples/circuit-spec.json --catalog-endpoint https://catalog.example/v1/parts \
+  --catalog-provider digikey \
+  --catalog-bearer-token-environment PCBEX_CATALOG_TOKEN \
+  --require-basic --output build/circuit.py
+```
+
+The gateway returns either a part array or `{ "parts": [...] }` using the
+normalized fields (legacy aliases `part_number`, `package`, and `quantity` are
+accepted). Responses are capped at 4 MiB, redirects and endpoint query strings
+are rejected, HTTPS is required, and the bearer token is read only from the
+named environment variable. Local HTTP is available only for loopback tests
+with `--allow-http-loopback`.

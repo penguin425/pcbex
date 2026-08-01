@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from pcbex_agent.cli import main as agent_main
 from pcbex_agent.catalog import CatalogPart, catalog_parts_from_json, search_parts
+from pcbex_agent.catalog_remote import CatalogEndpoint, CatalogRemoteError, fetch_catalog
 from pcbex_agent.circuit import skidl_to_placement_problem
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
@@ -731,6 +732,51 @@ class AdapterTests(unittest.TestCase):
         }
         selected = assign_catalog_parts(spec, parts, require_basic=True)
         self.assertEqual(selected["parts"][0]["mpn"], "C2")
+
+    def test_live_catalog_adapter_normalizes_inventory_and_headers(self):
+        state = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                state["headers"] = {name.lower(): value for name, value in self.headers.items()}
+                body = json.dumps({"parts": [{
+                    "part_number": "C-LIVE",
+                    "comment": "100nF capacitor",
+                    "package": "0402",
+                    "quantity": 42,
+                    "basic": True,
+                }]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            catalog = fetch_catalog(CatalogEndpoint(
+                provider="jlcpcb",
+                endpoint=f"http://127.0.0.1:{server.server_port}/parts",
+                allow_http_loopback=True,
+            ))
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+            server.server_close()
+        self.assertEqual(catalog[0].mpn, "C-LIVE")
+        self.assertEqual(catalog[0].vendor, "jlcpcb")
+        self.assertEqual(catalog[0].stock, 42)
+        self.assertEqual(state["headers"]["x-pcbex-catalog-provider"], "jlcpcb")
+
+    def test_live_catalog_rejects_insecure_remote_endpoint(self):
+        with self.assertRaises(CatalogRemoteError):
+            fetch_catalog(CatalogEndpoint(provider="jlcpcb", endpoint="http://example.com/parts"))
 
     def test_skidl_generator_is_deterministic_and_complete(self):
         spec = {
