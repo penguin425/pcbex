@@ -11,9 +11,10 @@ use pcbex_core::placement::{
 use pcbex_core::{
     AnalysisDelta, AutonomousRoutingOptions, Board, CURRENT_SCHEMA_VERSION, DfmProfile,
     RoutingCandidateObjective, RoutingCandidateOptions, RoutingCandidateSet, RoutingQuality, Rules,
-    analysis_delta_to_sarif, apply_dfm_profile, autonomous_route, board_json_schema, dfm_profile,
-    dfm_profile_json_schema, dfm_profiles, impedance_report, migrate_board_json, parse_board_json,
-    parse_external_dfm_profile, render_svg, repair_routes, repairable_net_ids, route_board,
+    analysis_delta_to_sarif, apply_dfm_profile, apply_physical_profile, autonomous_route,
+    board_json_schema, dfm_profile, dfm_profile_json_schema, dfm_profiles, impedance_report,
+    migrate_board_json, parse_board_json, parse_external_dfm_profile, parse_physical_profile,
+    physical_profile_json_schema, render_svg, repair_routes, repairable_net_ids, route_board,
     route_candidates, routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
@@ -3970,6 +3971,24 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Write the strict JSON Schema for physical orchestration profiles.
+    PhysicalProfileSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate and normalize a physical orchestration profile.
+    ValidatePhysicalProfile {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Apply a physical orchestration profile to a board JSON document.
+    ApplyPhysicalProfile {
+        board: PathBuf,
+        profile: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Validate and normalize an external DFM profile.
     ValidateDfmProfile {
         input: PathBuf,
@@ -4193,6 +4212,9 @@ enum Command {
         /// Apply the DFM profile from an organization policy pack.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
         policy_pack: Option<PathBuf>,
+        /// Inject board dimensions, fixed connector coordinates, keepouts, and manufacturing rules.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
+        physical_profile: Option<PathBuf>,
         #[arg(long)]
         svg: Option<PathBuf>,
         /// Also write routed items as JSON for the KiCad IPC adapter.
@@ -4238,6 +4260,9 @@ enum Command {
         /// Apply the DFM profile from an organization policy pack.
         #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
         policy_pack: Option<PathBuf>,
+        /// Inject physical dimensions, fixed placements, keepouts, and manufacturing rules.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
+        physical_profile: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         candidates: usize,
         #[arg(long, default_value_t = 4)]
@@ -13144,6 +13169,33 @@ fn run_cli() -> Result<()> {
                 println!("{schema}");
             }
         }
+        Command::PhysicalProfileSchema { output } => {
+            write_or_print_json(&physical_profile_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePhysicalProfile { input, output } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let profile = parse_physical_profile(&source).map_err(anyhow::Error::msg)?;
+            write_or_print_json(&serde_json::to_value(profile)?, output.as_ref())?;
+        }
+        Command::ApplyPhysicalProfile {
+            board,
+            profile,
+            output,
+        } => {
+            let board_source = fs::read_to_string(&board)
+                .with_context(|| format!("reading {}", board.display()))?;
+            let profile_source = fs::read_to_string(&profile)
+                .with_context(|| format!("reading {}", profile.display()))?;
+            let mut board_value = parse_board_json(&board_source).map_err(anyhow::Error::msg)?;
+            let physical_profile = parse_physical_profile(&profile_source)
+                .map_err(anyhow::Error::msg)?;
+            apply_physical_profile(&mut board_value, &physical_profile)
+                .map_err(anyhow::Error::msg)?;
+            fs::write(&output, serde_json::to_string_pretty(&board_value)?).with_context(|| {
+                format!("writing physical-profile board {}", output.display())
+            })?;
+        }
         Command::ValidateDfmProfile { input, output } => {
             let (profile, _) = resolve_dfm_profile(None, Some(&input))?;
             let normalized = serde_json::to_string_pretty(
@@ -13749,6 +13801,7 @@ fn run_cli() -> Result<()> {
             fab,
             fab_profile,
             policy_pack,
+            physical_profile,
             svg,
             json_output,
             drc,
@@ -13804,6 +13857,15 @@ fn run_cli() -> Result<()> {
             if let Some(profile) = profile {
                 apply_dfm_profile(&mut imported.board, &profile);
                 eprintln!("applied fabrication profile {}", profile.id);
+            }
+            if let Some(path) = physical_profile {
+                let source = fs::read_to_string(&path)
+                    .with_context(|| format!("reading physical profile {}", path.display()))?;
+                let profile = parse_physical_profile(&source).map_err(anyhow::Error::msg)?;
+                apply_physical_profile(&mut imported.board, &profile)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("applying physical profile {}", path.display()))?;
+                eprintln!("applied physical constraint profile {}", profile.id);
             }
             let (board, report, convergence) = if convergence_rounds == 1 {
                 let (board, report) = route_board(&imported.board).map_err(anyhow::Error::msg)?;
@@ -13918,6 +13980,7 @@ fn run_cli() -> Result<()> {
             fab,
             fab_profile,
             policy_pack,
+            physical_profile,
             candidates,
             workers,
             router_workers,
@@ -13967,6 +14030,14 @@ fn run_cli() -> Result<()> {
             };
             if let Some(profile) = profile {
                 apply_dfm_profile(&mut imported.board, &profile);
+            }
+            if let Some(path) = physical_profile {
+                let source = fs::read_to_string(&path)
+                    .with_context(|| format!("reading physical profile {}", path.display()))?;
+                let profile = parse_physical_profile(&source).map_err(anyhow::Error::msg)?;
+                apply_physical_profile(&mut imported.board, &profile)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("applying physical profile {}", path.display()))?;
             }
             let results = route_candidates(
                 &imported.board,
@@ -15126,6 +15197,31 @@ mod tests {
                 fab: Some(fab),
                 ..
             } if fab == "jlcpcb-2layer"
+        ));
+    }
+
+    #[test]
+    fn parses_physical_profile_route_control() {
+        let cli = parse_cli(&[
+            "pcbex",
+            "route-kicad",
+            "board.kicad_pcb",
+            "--physical-profile",
+            "nes-profile.json",
+            "--convergence-rounds",
+            "4",
+            "--output",
+            "routed.kicad_pcb",
+        ])
+        .unwrap();
+
+        assert!(matches!(
+            *cli.command,
+            Command::RouteKicad {
+                physical_profile: Some(profile),
+                convergence_rounds: 4,
+                ..
+            } if profile.as_os_str() == "nes-profile.json"
         ));
     }
 
