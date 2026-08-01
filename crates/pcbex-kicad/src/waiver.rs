@@ -233,7 +233,7 @@ fn is_finding_id(value: &str) -> bool {
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 pub fn electrical_waiver_set_json_schema() -> Value {

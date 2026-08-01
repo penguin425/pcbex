@@ -341,7 +341,7 @@ pub fn policy_lifecycle_public_log_tree_head_sha256(
     validate_tree_head_shape(head)?;
     let bytes = serde_json::to_vec(head)
         .map_err(|error| format!("serializing policy lifecycle public-log tree head: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 pub fn parse_policy_lifecycle_log_anchor_proof(
@@ -418,7 +418,7 @@ pub fn policy_lifecycle_signed_checkpoint_sha256(
 ) -> Result<String, String> {
     let bytes = serde_json::to_vec(checkpoint)
         .map_err(|error| format!("serializing policy lifecycle checkpoint: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn leaf_hash(checkpoint_sha256: &str) -> Result<[u8; 32], String> {

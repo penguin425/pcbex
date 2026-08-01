@@ -214,7 +214,7 @@ fn validate_env_name(value: &str) -> Result<(), String> {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 #[cfg(test)]

@@ -961,7 +961,7 @@ fn symbol_ref(symbol: &SchematicSymbol) -> ElectricalSymbolRef {
 }
 
 fn hex_digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 
 pub fn electrical_policy_json_schema() -> Value {

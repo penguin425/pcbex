@@ -713,7 +713,7 @@ fn validate_bound_manifest(
 ) -> Result<(), String> {
     if manifest_bytes.len() as u64 != feedback.analysis_manifest.bytes
         || manifest_bytes.len() > MAXIMUM_MANIFEST_BYTES
-        || format!("{:x}", Sha256::digest(manifest_bytes)) != feedback.analysis_manifest.sha256
+        || hex::encode(Sha256::digest(manifest_bytes)) != feedback.analysis_manifest.sha256
     {
         return Err(format!(
             "analysis manifest does not match manufacturing feedback {}",
@@ -813,7 +813,7 @@ fn measurement_to_nm(value: f64, multiplier: f64, round_up: bool) -> Option<i64>
 fn normalized_sha256<T: Serialize>(value: &T) -> Result<String, String> {
     let bytes = serde_json::to_vec(value)
         .map_err(|error| format!("serializing policy recommendation evidence: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn validate_slug(label: &str, value: &str) -> Result<(), String> {

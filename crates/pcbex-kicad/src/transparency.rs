@@ -258,7 +258,7 @@ pub fn approval_transparency_log_sha256(log: &ApprovalTransparencyLog) -> Result
     }
     let bytes = serde_json::to_vec(log)
         .map_err(|error| format!("serializing approval transparency log: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 pub fn sign_approval_log_checkpoint(
@@ -353,7 +353,7 @@ pub fn signed_approval_log_checkpoint_sha256(
     validate_checkpoint(checkpoint)?;
     let bytes = serde_json::to_vec(checkpoint)
         .map_err(|error| format!("serializing approval checkpoint: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 pub fn sign_approval_log_witness(
@@ -609,7 +609,7 @@ pub fn signed_approval_log_witness_key_rotation_sha256(
     validate_witness_key_rotation(rotation)?;
     let bytes = serde_json::to_vec(rotation)
         .map_err(|error| format!("serializing witness key rotation: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn validate_checkpoint(checkpoint: &SignedApprovalLogCheckpoint) -> Result<(), String> {
@@ -696,7 +696,7 @@ fn entry_body_sha256(entry: &ApprovalTransparencyEntry) -> Result<String, String
     body.entry_sha256.clear();
     let bytes = serde_json::to_vec(&body)
         .map_err(|error| format!("serializing approval transparency entry: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn checkpoint_payload(

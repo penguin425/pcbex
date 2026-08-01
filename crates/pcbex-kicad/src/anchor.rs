@@ -316,7 +316,7 @@ pub fn approval_public_log_tree_head_sha256(
     validate_tree_head_shape(head)?;
     let bytes = serde_json::to_vec(head)
         .map_err(|error| format!("serializing approval public-log tree head: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn leaf_hash(checkpoint_sha256: &str) -> Result<[u8; 32], String> {

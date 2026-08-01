@@ -29,7 +29,7 @@ fn record_feedback(
     let feedback = directory.join("feedback.json");
     fs::write(&board, format!("board {id}")).unwrap();
     fs::write(&artifact, "clearance_mm\n0.11\n").unwrap();
-    let board_sha256 = format!("{:x}", Sha256::digest(fs::read(&board).unwrap()));
+    let board_sha256 = hex::encode(Sha256::digest(fs::read(&board).unwrap()));
     let manifest = serde_json::json!({
         "schema_version": 1,
         "engine": "pcbex",

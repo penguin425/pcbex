@@ -517,7 +517,7 @@ pub fn observe_deployed_project(
         ));
     }
     let policy_descriptor = observed.manifest.policy_pack_file.as_ref();
-    let policy_sha256 = format!("{:x}", Sha256::digest(candidate_policy_pack_bytes));
+    let policy_sha256 = hex::encode(Sha256::digest(candidate_policy_pack_bytes));
     if observed.manifest.configuration.dfm_profile.as_ref()
         != Some(&candidate_policy_pack.dfm_profile)
         || observed
@@ -605,7 +605,7 @@ pub fn observe_restored_project(
     }
     let expected_policy = expected.manifest.policy_pack_file.as_ref();
     let observed_policy = observed.manifest.policy_pack_file.as_ref();
-    let policy_sha256 = format!("{:x}", Sha256::digest(restored_policy_pack_bytes));
+    let policy_sha256 = hex::encode(Sha256::digest(restored_policy_pack_bytes));
     let uses_restored_pack =
         |manifest: &AnalysisManifest, descriptor: Option<&AnalysisInputDescriptor>| {
             manifest.configuration.dfm_profile.as_ref() == Some(&restored_policy_pack.dfm_profile)
@@ -1324,7 +1324,7 @@ fn validate_binding(
 fn normalized_sha256<T: Serialize>(value: &T) -> Result<String, String> {
     let bytes = serde_json::to_vec(value)
         .map_err(|error| format!("serializing normalized rollout evidence: {error}"))?;
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn artifact(path: &str, bytes: &[u8]) -> Result<RolloutArtifact, String> {
@@ -1334,7 +1334,7 @@ fn artifact(path: &str, bytes: &[u8]) -> Result<RolloutArtifact, String> {
     Ok(RolloutArtifact {
         path: path.into(),
         bytes: bytes.len(),
-        sha256: format!("{:x}", Sha256::digest(bytes)),
+        sha256: hex::encode(Sha256::digest(bytes)),
     })
 }
 

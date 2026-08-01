@@ -495,7 +495,7 @@ fn policy_pack_sha256(pack: &OrganizationPolicyPack) -> Result<String, String> {
     let bytes = serde_json::to_vec(pack)
         .map_err(|error| format!("serializing organization policy pack: {error}"))?;
     use sha2::{Digest, Sha256};
-    Ok(format!("{:x}", Sha256::digest(bytes)))
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn signature_payload(

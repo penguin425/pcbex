@@ -5766,7 +5766,7 @@ fn run_cli() -> Result<()> {
                 .with_context(|| format!("reading {}", manifest_path.display()))?;
             let board_bytes =
                 fs::read(&board).with_context(|| format!("reading {}", board.display()))?;
-            let board_sha256 = format!("{:x}", Sha256::digest(&board_bytes));
+            let board_sha256 = hex::encode(Sha256::digest(&board_bytes));
             verify_analysis_manifest_board(&manifest_bytes, &board_sha256)
                 .map_err(anyhow::Error::msg)?;
             if artifacts.len() > 1_000 {
@@ -9561,7 +9561,7 @@ fn run_cli() -> Result<()> {
                 .collect::<Result<Vec<_>>>()?;
             let evidence = record_simulation_evidence(
                 &declaration_value,
-                &format!("{:x}", Sha256::digest(&review_bytes)),
+                &hex::encode(Sha256::digest(&review_bytes)),
                 review.approved,
                 artifact_values,
             )
@@ -10146,7 +10146,7 @@ fn run_cli() -> Result<()> {
                 schematic,
                 &policy,
                 review,
-                format!("{:x}", Sha256::digest(&review_bytes)),
+                hex::encode(Sha256::digest(&review_bytes)),
                 evidence,
                 requirements,
                 pack.as_ref()
@@ -14377,7 +14377,7 @@ fn input_descriptor(path: &Path, bytes: &[u8]) -> InputDescriptor {
     InputDescriptor {
         path: path.display().to_string(),
         bytes: bytes.len(),
-        sha256: format!("{:x}", Sha256::digest(bytes)),
+        sha256: hex::encode(Sha256::digest(bytes)),
     }
 }
 
@@ -14525,7 +14525,7 @@ fn simulation_artifact(path: &Path) -> Result<SimulationArtifact> {
         name,
         media_type: media_type.into(),
         bytes,
-        sha256: format!("{:x}", digest.finalize()),
+        sha256: hex::encode(digest.finalize()),
     })
 }
 
@@ -14550,7 +14550,7 @@ fn manufacturing_evidence_descriptor(path: &Path) -> Result<EvidenceDescriptor> 
     Ok(EvidenceDescriptor {
         name,
         bytes,
-        sha256: format!("{:x}", digest.finalize()),
+        sha256: hex::encode(digest.finalize()),
     })
 }
 
@@ -14730,7 +14730,7 @@ fn remote_approval_receipt_event(
 }
 
 fn normalized_json_sha256(value: &impl Serialize) -> Result<String> {
-    Ok(format!("{:x}", Sha256::digest(serde_json::to_vec(value)?)))
+    Ok(hex::encode(Sha256::digest(serde_json::to_vec(value)?)))
 }
 
 fn render_comparison_summary(delta: &AnalysisDelta) -> String {
