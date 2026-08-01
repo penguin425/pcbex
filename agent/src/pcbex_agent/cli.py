@@ -146,6 +146,11 @@ def main() -> None:
         action="store_true",
         help="omit generate_netlist() from the generated source",
     )
+    skidl.add_argument(
+        "--erc-output",
+        type=Path,
+        help="write the deterministic circuit ERC report alongside the SKiDL source",
+    )
     skidl_schema = sub.add_parser(
         "circuit-spec-schema", help="write the closed Text-to-Circuit JSON Schema"
     )
@@ -333,6 +338,12 @@ def main() -> None:
             if not erc["passed"]:
                 details = "; ".join(finding["message"] for finding in erc["findings"])
                 raise CircuitSpecError(f"electrical ERC failed: {details}")
+            if args.erc_output:
+                args.erc_output.parent.mkdir(parents=True, exist_ok=True)
+                args.erc_output.write_text(
+                    json.dumps(erc, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
             source = generate_skidl(spec, include_netlist=not args.no_netlist)
         except (OSError, json.JSONDecodeError, CircuitSpecError, CatalogRemoteError) as error:
             raise SystemExit(f"SKiDL generation failed: {error}") from error

@@ -40,7 +40,8 @@ Generate a circuit:
 
 ```sh
 PYTHONPATH=agent/src python3 -m pcbex_agent generate-skidl \
-  examples/circuit-spec.json --output build/circuit.py
+  examples/circuit-spec.json --output build/circuit.py \
+  --erc-output build/circuit-erc.json
 ```
 
 If a vendor connector returns the normalized catalog array described by
