@@ -25,6 +25,7 @@ from pcbex_agent.circuit import (
 )
 from pcbex_agent.firmware import firmware_bundle_json_schema, generate_firmware_bundle
 from pcbex_agent.pipeline import pipeline_run_json_schema, run_hardware_pipeline
+from pcbex_agent.factory import FactoryEndpoint, factory_submission_json_schema, submit_factory_package
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
 from pcbex_agent.models import DrcViolation, PlanLimits
@@ -1296,6 +1297,49 @@ class AdapterTests(unittest.TestCase):
             )
             self.assertTrue((root / "pipeline" / "pipeline.json").is_file())
             self.assertFalse(pipeline_run_json_schema()["additionalProperties"])
+
+    def test_factory_http_submission_binds_package_and_response_hashes(self):
+        state = {}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                state["body"] = self.rfile.read(int(self.headers["Content-Length"]))
+                state["adapter"] = self.headers.get("X-PCBEX-Adapter")
+                body = b'{"status":"quoted","accepted":true,"dfm":{"passed":true},"quote":{"total":12.5}}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                package = Path(directory) / "manufacturing.zip"
+                package.write_bytes(b"zip-fixture")
+                receipt = submit_factory_package(
+                    package,
+                    FactoryEndpoint(
+                        provider="jlcpcb",
+                        endpoint=f"http://127.0.0.1:{server.server_port}/submit",
+                        allow_http_loopback=True,
+                    ),
+                )
+                self.assertTrue(receipt["accepted"])
+                self.assertTrue(receipt["dfm_passed"])
+                self.assertEqual(state["adapter"], "jlcpcb-http-v1")
+                self.assertEqual(receipt["package_bytes"], len(state["body"]))
+                self.assertFalse(factory_submission_json_schema()["additionalProperties"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
     def test_ipc_adapter_applies_one_atomic_commit(self):
         class Item:

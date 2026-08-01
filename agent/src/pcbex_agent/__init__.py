@@ -28,6 +28,7 @@ from .firmware import (
     generate_firmware_bundle,
 )
 from .pipeline import PipelineRunError, pipeline_run_json_schema, run_hardware_pipeline
+from .factory import FactoryEndpoint, FactorySubmissionError, factory_submission_json_schema, submit_factory_package
 from .review import ReviewError, review_schematic_with_llm
 
 __all__ = [
@@ -50,6 +51,10 @@ __all__ = [
     "PipelineRunError",
     "pipeline_run_json_schema",
     "run_hardware_pipeline",
+    "FactoryEndpoint",
+    "FactorySubmissionError",
+    "factory_submission_json_schema",
+    "submit_factory_package",
     "managed_provider_receipt_json_schema",
     "provider_receipt_json_schema",
     "run_provider_command",

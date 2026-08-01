@@ -22,6 +22,7 @@ from .firmware import (
     generate_firmware_bundle,
 )
 from .pipeline import PipelineRunError, pipeline_run_json_schema, run_hardware_pipeline
+from .factory import FactoryEndpoint, FactorySubmissionError, factory_submission_json_schema, submit_factory_package
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -239,6 +240,9 @@ def main() -> None:
     pipeline.add_argument("--factory-command-file", type=Path)
     pipeline.add_argument("--factory-receipt", type=Path)
     pipeline.add_argument("--factory-provider", default="generic")
+    pipeline.add_argument("--factory-endpoint")
+    pipeline.add_argument("--factory-bearer-token-environment")
+    pipeline.add_argument("--allow-http-loopback", action="store_true")
     pipeline.add_argument("--factory-timeout-seconds", type=int, default=300)
     pipeline.add_argument("--require-factory", action="store_true")
     pipeline.add_argument("--gpio-map", type=Path)
@@ -256,6 +260,20 @@ def main() -> None:
         "pipeline-schema", help="write the headless pipeline-run JSON Schema"
     )
     pipeline_schema.add_argument("-o", "--output", type=Path)
+    factory_schema = sub.add_parser(
+        "factory-schema", help="write the bounded factory submission receipt JSON Schema"
+    )
+    factory_schema.add_argument("-o", "--output", type=Path)
+    factory_submit = sub.add_parser(
+        "submit-factory", help="submit a manufacturing ZIP to a configured factory endpoint"
+    )
+    factory_submit.add_argument("package", type=Path)
+    factory_submit.add_argument("--provider", choices=("jlcpcb", "pcbway", "generic"), required=True)
+    factory_submit.add_argument("--endpoint", required=True)
+    factory_submit.add_argument("--bearer-token-environment")
+    factory_submit.add_argument("--timeout-seconds", type=int, default=300)
+    factory_submit.add_argument("--allow-http-loopback", action="store_true")
+    factory_submit.add_argument("-o", "--output", type=Path, required=True)
     erc_schema = sub.add_parser(
         "circuit-erc-schema", help="write the closed deterministic circuit ERC JSON Schema"
     )
@@ -567,6 +585,17 @@ def main() -> None:
                 factory_command_file=args.factory_command_file,
                 factory_receipt=args.factory_receipt,
                 factory_provider=args.factory_provider,
+                factory_endpoint=(
+                    FactoryEndpoint(
+                        provider=args.factory_provider,
+                        endpoint=args.factory_endpoint,
+                        bearer_token_environment=args.factory_bearer_token_environment,
+                        timeout_seconds=args.factory_timeout_seconds,
+                        allow_http_loopback=args.allow_http_loopback,
+                    )
+                    if args.factory_endpoint
+                    else None
+                ),
                 require_factory=args.require_factory,
                 factory_timeout_seconds=args.factory_timeout_seconds,
                 gpio_map=args.gpio_map,
@@ -588,6 +617,29 @@ def main() -> None:
             args.output.write_text(rendered, encoding="utf-8")
         else:
             print(rendered, end="")
+    elif args.command == "factory-schema":
+        rendered = json.dumps(factory_submission_json_schema(), indent=2, ensure_ascii=False) + "\n"
+        if args.output:
+            args.output.write_text(rendered, encoding="utf-8")
+        else:
+            print(rendered, end="")
+    elif args.command == "submit-factory":
+        try:
+            receipt = submit_factory_package(
+                args.package,
+                FactoryEndpoint(
+                    provider=args.provider,
+                    endpoint=args.endpoint,
+                    bearer_token_environment=args.bearer_token_environment,
+                    timeout_seconds=args.timeout_seconds,
+                    allow_http_loopback=args.allow_http_loopback,
+                ),
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(receipt, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            print(json.dumps(receipt, indent=2, ensure_ascii=False))
+        except (OSError, FactorySubmissionError) as error:
+            raise SystemExit(f"factory submission failed: {error}") from error
     elif args.command == "circuit-erc-schema":
         rendered = json.dumps(circuit_erc_json_schema(), indent=2, ensure_ascii=False) + "\n"
         if args.output:

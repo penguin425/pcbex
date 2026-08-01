@@ -14,7 +14,8 @@ PYTHONPATH=agent/src python3 -m pcbex_agent pipeline-run \
   --mcu-reference U1 --pcbex ./target/release/pcbex \
   --physical-profile nes-profile.json --fab jlcpcb-2layer \
   --convergence-rounds 4 --max-copper-layers 4 \
-  --require-factory --factory-command-file build/factory-command.json \
+  --require-factory --factory-provider jlcpcb \
+  --factory-endpoint https://factory.example/api/quote \
   --output build/pipeline
 ```
 
@@ -30,11 +31,17 @@ timeout and bounded output. The phases are:
 6. pinout-bound C11/C++17/Python firmware generation and tests; and
 7. optional/required factory DFM receipt.
 
-The factory command file is a JSON string array. Its stdin is the manufacturing
-ZIP, and the package path, SHA-256, and provider are exposed as
-`PCBEX_PACKAGE_PATH`, `PCBEX_PACKAGE_SHA256`, and `PCBEX_FACTORY_PROVIDER`.
-The command must return a JSON object with `accepted: true` and
-`dfm_passed: true` when `--require-factory` is used.
+`submit-factory` can also be used directly. It sends the ZIP as
+`application/zip`, binds the package SHA-256 in the request and receipt, and
+normalizes `accepted`, `dfm_passed`/`dfm.passed`, quote, and DFM findings. The
+Bearer token is read only from the named environment variable. HTTP is refused
+except for loopback test fixtures.
+
+For a site-specific repair service, the factory command file is a JSON string
+array. Its stdin is the manufacturing ZIP, and the package path, SHA-256, and
+provider are exposed as `PCBEX_PACKAGE_PATH`, `PCBEX_PACKAGE_SHA256`, and
+`PCBEX_FACTORY_PROVIDER`. The command must return a JSON object with
+`accepted: true` and `dfm_passed: true` when `--require-factory` is used.
 
 `pipeline-schema` emits the closed report schema. The Rust binary used by the
 runner must include the autonomous-routing and physical-profile options when

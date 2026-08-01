@@ -17,6 +17,7 @@ from .catalog_remote import CatalogEndpoint, fetch_catalog
 from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_netlist
 from .circuit_generation import generate_circuit_with_llm
 from .firmware import generate_firmware_bundle
+from .factory import FactoryEndpoint, submit_factory_package
 from .provider import ProviderError, run_provider_command
 from .skidl import CircuitSpecError, assign_catalog_parts, generate_skidl
 
@@ -238,6 +239,7 @@ def run_hardware_pipeline(
     factory_command_file: Path | None = None,
     factory_receipt: Path | None = None,
     factory_provider: str = "generic",
+    factory_endpoint: FactoryEndpoint | None = None,
     require_factory: bool = False,
     factory_timeout_seconds: int = 300,
     gpio_map: Path | None = None,
@@ -390,18 +392,21 @@ def run_hardware_pipeline(
         phases.append(_phase("firmware-build", started, [], [], [str(error)]))
         return finalize()
 
-    if require_factory or factory_command_file is not None or factory_receipt is not None:
+    if require_factory or factory_command_file is not None or factory_receipt is not None or factory_endpoint is not None:
         started = time.monotonic()
         try:
             command = _load_factory_command(factory_command_file)
-            receipt = _factory_receipt(
-                manufacturing / "manufacturing.zip",
-                command=command,
-                receipt_path=factory_receipt,
-                workspace=output_dir,
-                timeout_seconds=factory_timeout_seconds,
-                provider=factory_provider,
-            )
+            if factory_endpoint is not None and factory_receipt is None and command is None:
+                receipt = submit_factory_package(manufacturing / "manufacturing.zip", factory_endpoint)
+            else:
+                receipt = _factory_receipt(
+                    manufacturing / "manufacturing.zip",
+                    command=command,
+                    receipt_path=factory_receipt,
+                    workspace=output_dir,
+                    timeout_seconds=factory_timeout_seconds,
+                    provider=factory_provider,
+                )
             _write_json(output_dir / "factory-receipt.json", receipt)
             accepted = receipt.get("accepted") is True
             dfm_passed = receipt.get("dfm_passed")
