@@ -332,6 +332,34 @@ class AdapterTests(unittest.TestCase):
         report = check_circuit_electrical(spec)
         self.assertTrue(report["passed"], report)
 
+    def test_circuit_erc_rejects_incompatible_power_drivers(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {
+                    "reference": "U1",
+                    "lib_id": "Regulator:FiveVolt",
+                    "value": "5V regulator",
+                    "footprint": "SOT-23",
+                    "pins": {"1": "RAIL"},
+                    "electrical": {"power_output_v": 5.0},
+                },
+                {
+                    "reference": "U2",
+                    "lib_id": "Regulator:ThreeVolt",
+                    "value": "3V3 regulator",
+                    "footprint": "SOT-23",
+                    "pins": {"1": "RAIL"},
+                    "electrical": {"power_output_v": 3.3},
+                },
+            ],
+            "nets": [{"name": "RAIL", "connections": [{"reference": "U1", "pin": "1"}, {"reference": "U2", "pin": "1"}]}],
+        }
+        report = check_circuit_electrical(spec)
+        self.assertFalse(report["passed"])
+        self.assertIn("multiple_power_outputs", {finding["code"] for finding in report["findings"]})
+        self.assertIn("power_rail_voltage_conflict", {finding["code"] for finding in report["findings"]})
+
     def test_circuit_generation_retries_after_electrical_erc_failure(self):
         invalid = {
             "schema_version": 1,
