@@ -17,7 +17,11 @@ from pcbex_agent.circuit_generation import (
     circuit_generation_json_schema,
     generate_circuit_with_llm,
 )
-from pcbex_agent.circuit import skidl_to_placement_problem
+from pcbex_agent.circuit import (
+    circuit_spec_to_kicad_pcb,
+    circuit_spec_to_placement_problem,
+    skidl_to_placement_problem,
+)
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
 from pcbex_agent.models import DrcViolation, PlanLimits
@@ -1097,6 +1101,86 @@ class AdapterTests(unittest.TestCase):
             grid_nm=250_000,
         )
         self.assertEqual(problem["connections"][0]["from"]["component"], "U1")
+
+    def test_circuit_spec_handoff_is_deterministic_and_bundle_aware(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {
+                    "reference": "U1",
+                    "lib_id": "MCU:Example",
+                    "value": "controller",
+                    "footprint": "QFN",
+                    "pins": {"1": "A", "2": "GND"},
+                },
+                {
+                    "reference": "J1",
+                    "lib_id": "Connector:Conn",
+                    "value": "header",
+                    "footprint": "HEADER",
+                    "pins": {"1": "A", "2": "GND"},
+                },
+            ],
+            "nets": [
+                {"name": "A", "connections": [
+                    {"reference": "U1", "pin": "1"},
+                    {"reference": "J1", "pin": "1"},
+                ]},
+                {"name": "GND", "connections": [
+                    {"reference": "U1", "pin": "2"},
+                    {"reference": "J1", "pin": "2"},
+                ]},
+            ],
+        }
+        sizes = {
+            "QFN": {"width_nm": 4_000_000, "height_nm": 4_000_000},
+            "HEADER": {"width_nm": 6_000_000, "height_nm": 2_000_000},
+        }
+        bundle = {"schema_version": 1, "spec": spec, "skidl": "ignored"}
+        problem = circuit_spec_to_placement_problem(
+            bundle,
+            sizes,
+            width_nm=20_000_000,
+            height_nm=10_000_000,
+            grid_nm=250_000,
+        )
+        self.assertEqual([item["reference"] for item in problem["components"]], ["J1", "U1"])
+        self.assertEqual(
+            [(item["net"], item["from"]["component"], item["to"]["component"])
+             for item in problem["connections"]],
+            [("A", "J1", "U1"), ("GND", "J1", "U1")],
+        )
+        self.assertEqual(problem, circuit_spec_to_placement_problem(
+            spec, sizes, width_nm=20_000_000, height_nm=10_000_000, grid_nm=250_000
+        ))
+
+    def test_circuit_spec_handoff_renders_kicad_nets_and_pads(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "J1",
+                "lib_id": "Connector:Conn",
+                "value": "header",
+                "footprint": "HEADER",
+                "pins": {"1": "A", "2": "GND"},
+            }],
+            "nets": [
+                {"name": "A", "connections": [
+                    {"reference": "J1", "pin": "1"},
+                    {"reference": "J1", "pin": "2"},
+                ]},
+            ],
+        }
+        board = circuit_spec_to_kicad_pcb(
+            spec,
+            {"HEADER": {"width_nm": 6_000_000, "height_nm": 2_000_000}},
+            width_nm=20_000_000,
+            height_nm=10_000_000,
+        )
+        self.assertIn('(net 1 "A")', board)
+        self.assertIn('(footprint "HEADER"', board)
+        self.assertEqual(board.count("(pad "), 2)
+        self.assertTrue(board.endswith("\n") and board.rstrip().endswith(")"))
 
     def test_ipc_adapter_applies_one_atomic_commit(self):
         class Item:

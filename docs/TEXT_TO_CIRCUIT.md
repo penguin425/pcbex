@@ -109,3 +109,42 @@ Electrical metadata is optional for non-power nets and is explicit when needed:
 Nets may declare `voltage_v`; common `5V`, `3V3`, and `1V8` rail names are
 recognized conservatively when no explicit value is present. Capacitor parts
 are marked with `electrical.decoupling: true` on the same supply net.
+
+## Handing the circuit to pcbex
+
+The normalized spec or a `generate-circuit` bundle can be converted without
+executing model-produced Python. First provide deterministic dimensions for the
+selected footprints:
+
+```json
+{
+  "MCU:Example": {"width_nm": 6000000, "height_nm": 6000000},
+  "Package_QFN:QFN-16": {"width_nm": 4000000, "height_nm": 4000000}
+}
+```
+
+Then emit the exact placement contract consumed by `pcbex place`:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent circuit-to-placement \
+  build/circuit-generation.json --footprint-sizes build/footprints.json \
+  --board-width-nm 60000000 --board-height-nm 40000000 \
+  --grid-nm 250000 --output build/placement.json
+pcbex place build/placement.json --output build/placement-result.json
+```
+
+For KiCad/DRC and the existing `place-kicad`/`route-kicad` commands, the same
+validated graph can be rendered as a library-independent PCB handoff:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent circuit-to-kicad \
+  build/circuit-generation.json --footprint-sizes build/footprints.json \
+  --board-width-nm 60000000 --board-height-nm 40000000 \
+  --output build/circuit.kicad_pcb
+pcbex place-kicad build/circuit.kicad_pcb \
+  --output build/placed.kicad_pcb --json-output build/placement.json
+```
+
+The handoff preserves references, pin numbers, net names, and net IDs. The
+generated footprints are deliberately placeholders; a project may replace them
+with verified library geometry before manufacturing.

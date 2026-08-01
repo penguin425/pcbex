@@ -17,6 +17,7 @@ from .circuit_generation import (
     generate_circuit_with_llm,
 )
 from .skidl import CircuitErcError, check_circuit_electrical, circuit_erc_json_schema
+from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_placement_problem
 from .review import ReviewError, review_schematic_with_llm
 
 __all__ = [
@@ -30,6 +31,8 @@ __all__ = [
     "generate_circuit_with_llm",
     "check_circuit_electrical",
     "circuit_erc_json_schema",
+    "circuit_spec_to_kicad_pcb",
+    "circuit_spec_to_placement_problem",
     "managed_provider_receipt_json_schema",
     "provider_receipt_json_schema",
     "run_provider_command",

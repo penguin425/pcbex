@@ -11,6 +11,7 @@ from .circuit_generation import (
     circuit_generation_json_schema,
     generate_circuit_with_llm,
 )
+from .circuit import circuit_spec_to_kicad_pcb, circuit_spec_to_placement_problem
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -155,6 +156,27 @@ def main() -> None:
         "circuit-spec-schema", help="write the closed Text-to-Circuit JSON Schema"
     )
     skidl_schema.add_argument("-o", "--output", type=Path)
+    circuit_to_placement = sub.add_parser(
+        "circuit-to-placement",
+        help="convert a validated circuit spec into a pcbex placement problem",
+    )
+    circuit_to_placement.add_argument("spec", type=Path)
+    circuit_to_placement.add_argument("--footprint-sizes", type=Path, required=True)
+    circuit_to_placement.add_argument("--board-width-nm", type=int, required=True)
+    circuit_to_placement.add_argument("--board-height-nm", type=int, required=True)
+    circuit_to_placement.add_argument("--grid-nm", type=int, default=250_000)
+    circuit_to_placement.add_argument("--constraints", type=Path)
+    circuit_to_placement.add_argument("-o", "--output", type=Path, required=True)
+    circuit_to_kicad = sub.add_parser(
+        "circuit-to-kicad",
+        help="render a validated circuit spec as a minimal KiCad PCB handoff",
+    )
+    circuit_to_kicad.add_argument("spec", type=Path)
+    circuit_to_kicad.add_argument("--footprint-sizes", type=Path, required=True)
+    circuit_to_kicad.add_argument("--board-width-nm", type=int, required=True)
+    circuit_to_kicad.add_argument("--board-height-nm", type=int, required=True)
+    circuit_to_kicad.add_argument("--grid-nm", type=int, default=250_000)
+    circuit_to_kicad.add_argument("-o", "--output", type=Path, required=True)
     erc_schema = sub.add_parser(
         "circuit-erc-schema", help="write the closed deterministic circuit ERC JSON Schema"
     )
@@ -356,6 +378,45 @@ def main() -> None:
             args.output.write_text(rendered, encoding="utf-8")
         else:
             print(rendered, end="")
+    elif args.command == "circuit-to-placement":
+        try:
+            source = json.loads(args.spec.read_text(encoding="utf-8"))
+            sizes = json.loads(args.footprint_sizes.read_text(encoding="utf-8"))
+            constraints = []
+            if args.constraints:
+                constraints = json.loads(args.constraints.read_text(encoding="utf-8"))
+                if not isinstance(constraints, list):
+                    raise CircuitSpecError("placement constraints must be a JSON array")
+            placement = circuit_spec_to_placement_problem(
+                source,
+                sizes,
+                width_nm=args.board_width_nm,
+                height_nm=args.board_height_nm,
+                grid_nm=args.grid_nm,
+                constraints=constraints,
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(
+                json.dumps(placement, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
+            raise SystemExit(f"circuit placement conversion failed: {error}") from error
+    elif args.command == "circuit-to-kicad":
+        try:
+            source = json.loads(args.spec.read_text(encoding="utf-8"))
+            sizes = json.loads(args.footprint_sizes.read_text(encoding="utf-8"))
+            board = circuit_spec_to_kicad_pcb(
+                source,
+                sizes,
+                width_nm=args.board_width_nm,
+                height_nm=args.board_height_nm,
+                grid_nm=args.grid_nm,
+            )
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(board, encoding="utf-8")
+        except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
+            raise SystemExit(f"circuit KiCad conversion failed: {error}") from error
     elif args.command == "circuit-erc-schema":
         rendered = json.dumps(circuit_erc_json_schema(), indent=2, ensure_ascii=False) + "\n"
         if args.output:
