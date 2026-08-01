@@ -9,12 +9,12 @@ use pcbex_core::placement::{
     PlacementProblem, place, place_candidates,
 };
 use pcbex_core::{
-    AnalysisDelta, Board, CURRENT_SCHEMA_VERSION, DfmProfile, RoutingCandidateObjective,
-    RoutingCandidateOptions, RoutingCandidateSet, RoutingQuality, Rules, analysis_delta_to_sarif,
-    apply_dfm_profile, board_json_schema, dfm_profile, dfm_profile_json_schema, dfm_profiles,
-    impedance_report, migrate_board_json, parse_board_json, parse_external_dfm_profile, render_svg,
-    repair_routes, repairable_net_ids, route_board, route_candidates, routing_quality,
-    solve_stackup_differential_width_nm, solve_stackup_width_nm,
+    AnalysisDelta, AutonomousRoutingOptions, Board, CURRENT_SCHEMA_VERSION, DfmProfile,
+    RoutingCandidateObjective, RoutingCandidateOptions, RoutingCandidateSet, RoutingQuality, Rules,
+    analysis_delta_to_sarif, apply_dfm_profile, autonomous_route, board_json_schema, dfm_profile,
+    dfm_profile_json_schema, dfm_profiles, impedance_report, migrate_board_json, parse_board_json,
+    parse_external_dfm_profile, render_svg, repair_routes, repairable_net_ids, route_board,
+    route_candidates, routing_quality, solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
     AiApprovalQuorumCandidate, AiApprovalQuorumPolicy, AiApprovalQuorumReport, AiRequirement,
@@ -4159,7 +4159,7 @@ enum Command {
         #[arg(long)]
         fail_on_regressions: bool,
     },
-    /// Route a placed KiCad board across its declared copper layers.
+    /// Route a placed KiCad board across its declared copper layers, optionally converging strategies.
     RouteKicad {
         input: PathBuf,
         /// KiCad project settings. Defaults to the input's sibling `.kicad_pro` when present.
@@ -4201,6 +4201,9 @@ enum Command {
         /// Run `kicad-cli pcb drc` after writing the board.
         #[arg(long)]
         drc: bool,
+        /// Run bounded multi-strategy routing rounds and keep the best checked result.
+        #[arg(long, default_value_t = 1)]
+        convergence_rounds: usize,
         #[arg(long)]
         allow_unrouted: bool,
     },
@@ -13749,6 +13752,7 @@ fn run_cli() -> Result<()> {
             svg,
             json_output,
             drc,
+            convergence_rounds,
             allow_unrouted,
         } => {
             let source = fs::read_to_string(&input)
@@ -13801,7 +13805,41 @@ fn run_cli() -> Result<()> {
                 apply_dfm_profile(&mut imported.board, &profile);
                 eprintln!("applied fabrication profile {}", profile.id);
             }
-            let (board, report) = route_board(&imported.board).map_err(anyhow::Error::msg)?;
+            let (board, report, convergence) = if convergence_rounds == 1 {
+                let (board, report) = route_board(&imported.board).map_err(anyhow::Error::msg)?;
+                (board, report, None)
+            } else {
+                let result = autonomous_route(
+                    &imported.board,
+                    &AutonomousRoutingOptions {
+                        max_rounds: convergence_rounds,
+                        ..AutonomousRoutingOptions::default()
+                    },
+                )
+                .map_err(anyhow::Error::msg)?;
+                let report = result
+                    .rounds
+                    .iter()
+                    .find(|round| round.round == result.selected_round)
+                    .and_then(|round| round.quality.as_ref())
+                    .map(|quality| pcbex_core::RouteReport {
+                        routed: quality
+                            .nets
+                            .iter()
+                            .filter(|net| net.routed)
+                            .map(|net| net.name.clone())
+                            .collect(),
+                        unrouted: quality
+                            .nets
+                            .iter()
+                            .filter(|net| !net.routed)
+                            .map(|net| net.name.clone())
+                            .collect(),
+                        ..pcbex_core::RouteReport::default()
+                    })
+                    .unwrap_or_default();
+                (result.board.clone(), report, Some(result))
+            };
             fs::write(
                 &output,
                 imported
@@ -13843,6 +13881,20 @@ fn run_cli() -> Result<()> {
                 report.expanded_states,
                 report.reroute_passes
             );
+            if let Some(convergence) = &convergence {
+                eprintln!(
+                    "autonomous convergence: rounds={}; selected_round={}; converged={}; stalled={}",
+                    convergence.rounds.len(),
+                    convergence.selected_round,
+                    convergence.converged,
+                    convergence.stalled
+                );
+                let convergence_path = output.with_extension("convergence.json");
+                fs::write(
+                    convergence_path,
+                    serde_json::to_string_pretty(convergence)?,
+                )?;
+            }
             if !allow_unrouted && !report.unrouted.is_empty() {
                 bail!("unrouted nets: {}", report.unrouted.join(", "))
             }
