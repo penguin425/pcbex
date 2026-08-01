@@ -166,6 +166,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "fetch-policy-pack",
         "mcp-server",
         "fabricate",
+        "firmware-schema",
+        "generate-firmware",
     ] {
         let command = commands
             .iter()

@@ -156,6 +156,7 @@ use std::{
 };
 
 mod canary_completion;
+mod firmware;
 mod manufacturing_feedback;
 mod mcp;
 mod policy_deployment;
@@ -190,6 +191,7 @@ use canary_completion::{
     parse_signed_canary_decision, render_canary_completion_summary, sign_canary_completion,
     signed_canary_decision_json_schema, verify_canary_completion,
 };
+use firmware::{firmware_bundle_schema, generate_firmware_bundle, parse_pin_map};
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
     evidence_descriptor, manufacturing_feedback_comparison_json_schema,
@@ -739,6 +741,32 @@ enum Command {
         /// Fail after writing the IR when buses or hierarchy prevent complete coverage.
         #[arg(long)]
         require_complete: bool,
+    },
+    /// Print the JSON Schema for generated pinout/firmware bundles.
+    FirmwareSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Generate pinout.h, portable MCU C code, and a PC-side Python helper.
+    GenerateFirmware {
+        input: PathBuf,
+        #[arg(long)]
+        mcu_reference: String,
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        /// JSON object mapping schematic pin numbers to MCU GPIO names.
+        #[arg(long)]
+        pin_map: Option<PathBuf>,
+        #[arg(long, default_value = "cc")]
+        cc: String,
+        #[arg(long, default_value = "python3")]
+        python: String,
+        /// Permit unsupported schematic features; the generated bundle may be incomplete.
+        #[arg(long)]
+        allow_incomplete: bool,
+        /// Skip the C compile/smoke test and Python syntax/self-test.
+        #[arg(long)]
+        skip_build: bool,
     },
     /// Compare two KiCad schematics by electrical intent instead of text layout.
     CompareSchematics {
@@ -4569,6 +4597,8 @@ fn capabilities_report() -> CapabilitiesReport {
             "KiCad PCB",
             "Gerber",
             "Excellon",
+            "C firmware",
+            "Python host helper",
             "SPDX JSON",
         ],
     }
@@ -4639,6 +4669,9 @@ fn run_cli() -> Result<()> {
                 println!("{schema}");
             }
         }
+        Command::FirmwareSchema { output } => {
+            write_or_print_json(&firmware_bundle_schema(), output.as_ref())?;
+        }
         Command::SchematicDiffSchema { output } => {
             write_or_print_json(&schematic_diff_json_schema(), output.as_ref())?;
         }
@@ -4693,6 +4726,53 @@ fn run_cli() -> Result<()> {
                         .join(", ")
                 );
             }
+        }
+        Command::GenerateFirmware {
+            input,
+            mcu_reference,
+            output_dir,
+            pin_map,
+            cc,
+            python,
+            allow_incomplete,
+            skip_build,
+        } => {
+            let source = fs::read_to_string(&input)
+                .with_context(|| format!("reading {}", input.display()))?;
+            let schematic = import_schematic(&source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", input.display()))?;
+            if !allow_incomplete && !schematic.coverage.complete {
+                bail!(
+                    "schematic coverage is incomplete; pass --allow-incomplete to generate anyway"
+                );
+            }
+            let pin_map = pin_map
+                .as_ref()
+                .map(|path| {
+                    let source = fs::read_to_string(path)
+                        .with_context(|| format!("reading {}", path.display()))?;
+                    parse_pin_map(&source)
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let report = generate_firmware_bundle(
+                &schematic,
+                &output_dir,
+                &mcu_reference,
+                &pin_map,
+                &cc,
+                &python,
+                skip_build,
+            )?;
+            eprintln!(
+                "generated firmware bundle for {}: {} pin(s), C build={}, Python check={}; output={}",
+                report.mcu_reference,
+                report.pins.len(),
+                report.c_build.passed,
+                report.python_check.passed,
+                output_dir.display()
+            );
         }
         Command::CompareSchematics {
             baseline,
