@@ -509,8 +509,7 @@
     {
       "id": "canonical-ir-firmware-bundle-generator",
       "release": "v1.398.0",
-      "status": "current",
-      "notes": "Publishes firmware bundle manifest v2 with seven canonical-IR-bound source artifacts and C11, C++17, and Python build/smoke evidence; also makes zone and placement serialization deterministic."
+      "status": "current"
     }
   ]
 }
