@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Audit the roadmap, a GitHub release, and optional main-branch protection."""
+"""Audit a release and optional protected-main and Actions policy."""
 
 from __future__ import annotations
 
@@ -183,6 +183,45 @@ def validate_protection(protection: Any) -> None:
             raise AuditError(f"main protection must disable {field}")
 
 
+def validate_actions_permissions(permissions: Any) -> None:
+    """Require repository Actions to be enabled and SHA pinning enforced.
+
+    The release gate does not constrain which documented ``allowed_actions``
+    mode the repository uses, but it rejects missing fields, unexpected
+    response members, and malformed known values.
+    """
+
+    if not isinstance(permissions, dict):
+        raise AuditError("GitHub Actions permissions must be an object")
+    required = {"enabled", "allowed_actions", "sha_pinning_required"}
+    optional = {"selected_actions_url"}
+    if set(permissions) - required - optional:
+        raise AuditError("GitHub Actions permissions contain unknown fields")
+    missing = required - set(permissions)
+    if missing:
+        raise AuditError(
+            "GitHub Actions permissions are missing: "
+            + ", ".join(sorted(missing))
+        )
+    for field in ("enabled", "sha_pinning_required"):
+        if type(permissions[field]) is not bool:
+            raise AuditError(
+                f"GitHub Actions permission {field} must be a boolean"
+            )
+    if permissions["enabled"] is not True:
+        raise AuditError("GitHub Actions must be enabled")
+    if permissions["sha_pinning_required"] is not True:
+        raise AuditError("GitHub Actions SHA pinning must be required")
+    allowed_actions = permissions["allowed_actions"]
+    if allowed_actions not in {"all", "local_only", "selected"}:
+        raise AuditError("GitHub Actions allowed_actions is invalid")
+    if "selected_actions_url" in permissions and (
+        not isinstance(permissions["selected_actions_url"], str)
+        or not permissions["selected_actions_url"].startswith("https://")
+    ):
+        raise AuditError("GitHub Actions selected_actions_url is invalid")
+
+
 def github_json(endpoint: str) -> Any:
     return json.loads(run("gh", "api", endpoint))
 
@@ -261,6 +300,10 @@ def main() -> int:
                 f"repos/{args.repository}/branches/main/protection"
             )
             validate_protection(protection)
+            actions_permissions = github_json(
+                f"repos/{args.repository}/actions/permissions"
+            )
+            validate_actions_permissions(actions_permissions)
     except (AuditError, json.JSONDecodeError, OSError) as error:
         print(f"release audit failed: {error}", file=sys.stderr)
         return 1

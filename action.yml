@@ -1569,7 +1569,7 @@ runs:
 
     - name: Upload analysis artifact
       if: ${{ always() && inputs.upload-artifact == 'true' && steps.analyze.outputs.artifact-dir != '' }}
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
         path: ${{ steps.analyze.outputs.artifact-dir }}
@@ -1578,7 +1578,7 @@ runs:
 
     - name: Upload SARIF
       if: ${{ always() && inputs.upload-sarif == 'true' && steps.analyze.outputs.sarif-dir != '' }}
-      uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81
+      uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
       with:
         sarif_file: ${{ steps.analyze.outputs.sarif-dir }}
         category: pcbex-hardware-ci

@@ -163,6 +163,80 @@ class ReleaseAuditTests(unittest.TestCase):
                 }
             )
 
+    def test_accepts_enabled_actions_with_sha_pinning(self):
+        release_audit.validate_actions_permissions(
+            {
+                "enabled": True,
+                "allowed_actions": "all",
+                "sha_pinning_required": True,
+            }
+        )
+
+    def test_rejects_missing_or_false_actions_permissions(self):
+        for permissions in (
+            {"enabled": True, "sha_pinning_required": True},
+            {"allowed_actions": "all", "sha_pinning_required": True},
+            {"enabled": True, "allowed_actions": "all"},
+            {
+                "enabled": False,
+                "allowed_actions": "all",
+                "sha_pinning_required": True,
+            },
+            {
+                "enabled": True,
+                "allowed_actions": "all",
+                "sha_pinning_required": False,
+            },
+        ):
+            with self.subTest(permissions=permissions):
+                with self.assertRaises(release_audit.AuditError):
+                    release_audit.validate_actions_permissions(permissions)
+
+    def test_rejects_non_boolean_or_unknown_actions_permissions(self):
+        for permissions in (
+            {
+                "enabled": 1,
+                "allowed_actions": "all",
+                "sha_pinning_required": True,
+            },
+            {
+                "enabled": True,
+                "allowed_actions": "all",
+                "sha_pinning_required": 1,
+            },
+            {
+                "enabled": True,
+                "allowed_actions": "all",
+                "sha_pinning_required": True,
+                "unexpected": False,
+            },
+            {
+                "enabled": True,
+                "sha_pinning_required": True,
+                "allowed_actions": "invalid",
+            },
+            {
+                "enabled": True,
+                "allowed_actions": "selected",
+                "sha_pinning_required": True,
+                "selected_actions_url": 1,
+            },
+        ):
+            with self.subTest(permissions=permissions):
+                with self.assertRaises(release_audit.AuditError):
+                    release_audit.validate_actions_permissions(permissions)
+
+    def test_actions_permissions_api_failure_is_not_ignored(self):
+        with mock.patch.object(
+            release_audit,
+            "run",
+            side_effect=release_audit.AuditError("GitHub API unavailable"),
+        ):
+            with self.assertRaisesRegex(
+                release_audit.AuditError, "GitHub API unavailable"
+            ):
+                release_audit.github_json("repos/owner/repo/actions/permissions")
+
 
 if __name__ == "__main__":
     unittest.main()

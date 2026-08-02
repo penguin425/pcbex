@@ -54,6 +54,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | KiCad analysis artifact bundle | Direct `.kicad_pcb` import emits normalized board, SVG, quality, DRC/DFM, SARIF, Markdown, and a SHA-256-addressed run manifest | CLI parsing, SHA-256, summary regressions, and practical-board command smoke test |
 | Analysis bundle comparison | Signed quality deltas plus identity-based new/resolved violations emit JSON, Markdown, SARIF, and input-addressed provenance before an optional regression gate | Core delta/SARIF regressions and end-to-end unchanged/regressed bundle CLI tests |
 | GitHub Actions hardware CI | Versioned composite action emits Job Summary, artifact bundles, SARIF, and post-upload violation/regression gates without privileged PR execution | CI exercises the public action contract, unchanged baseline comparison, outputs, and artifact upload |
+| GitHub Actions supply-chain pinning | Every external workflow and composite-action dependency is fixed to a reviewed 40-character commit SHA, weekly Dependabot updates retain an auditable version comment, repository enforcement rejects mutable references, and the release audit fails closed if enforcement is disabled | Static tests inspect repository workflows and composite actions, including the public root action, and reject tags, branches, short SHAs, expressions, malformed references, and Docker `uses:` references; release-audit tests cover strict Actions-permissions API schemas and disabled or missing enforcement |
 | Versioned fabrication profiles | Immutable JLCPCB/PCBWay standard 2-layer profiles retain aliases, revisions, verification dates, official sources, exact DFM rules, and non-lowering routing corrections in the run manifest | Profile resolution/application unit tests plus KiCad bundle/listing integration and public Action smoke test |
 | Distributable DFM profiles | Strict schema-versioned organization profiles apply across CLI, Action, and MCP paths while rejecting malformed, ambiguous, or built-in-colliding identities; analysis binds the source digest | Closed-schema validation unit tests plus normalized-profile and SHA-256-addressed KiCad bundle integration |
 | Review-provider command adapter | Provider-neutral schematic review runs without a shell under timeout and streaming output limits, validates before atomic writes, refuses overwrites, and emits a closed hash-bound receipt | Injected provider success, oversized-output rejection, closed-schema, and exact CLI argument-boundary tests |
@@ -223,7 +224,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.399.0 exposes 686 Rust tests and 32 Python tests. The release workflow
+Version 1.400.0 exposes 686 Rust tests and 32 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

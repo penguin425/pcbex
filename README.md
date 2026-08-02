@@ -2076,7 +2076,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.399.0
+    uses: penguin425/pcbex@v1.400.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2140,6 +2140,17 @@ updates only marker comments owned by `github-actions[bot]`, and never forwards
 the API bearer token across an artifact-download redirect. This separation
 reduces token exposure; it is not a general sandbox for arbitrary action code
 or the hosted runner.
+
+Every external GitHub Action used by this repository is pinned to a reviewed
+40-character commit SHA, with the corresponding release version retained as a
+comment for auditability. A repository test rejects mutable tags, branches,
+short SHAs, expressions, and Docker `uses:` references across workflows and
+composite actions. Dependabot proposes weekly GitHub Actions updates, while the
+repository setting rejects any workflow that introduces a non-SHA external
+reference. The release audit's `--check-protection` mode verifies that this
+enforcement remains enabled; the full update procedure and reviewed commit map
+are documented in
+[`docs/GITHUB_ACTIONS_SUPPLY_CHAIN.md`](docs/GITHUB_ACTIONS_SUPPLY_CHAIN.md).
 
 Callers select exactly one of `fab`, `fab-profile`, `policy-pack`, or
 `signed-policy-pack`. A signed pack additionally requires
@@ -3955,7 +3966,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.399.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.400.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
