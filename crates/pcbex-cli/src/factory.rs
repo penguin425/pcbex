@@ -545,6 +545,15 @@ fn run_repair_command(
     poll_interval: Duration,
     _bearer_token_env: Option<&str>,
 ) -> RepairCommandOutcome {
+    let deadline = match Instant::now().checked_add(timeout) {
+        Some(deadline) => deadline,
+        None => {
+            return RepairCommandOutcome {
+                command_ran: false,
+                result: Err("factory repair command deadline overflow".into()),
+            };
+        }
+    };
     let receipt_json = serde_json::to_vec_pretty(receipt)
         .map_err(|error| format!("serializing factory receipt for repair: {error}"));
     let receipt_json = match receipt_json {
@@ -631,7 +640,7 @@ fn run_repair_command(
             };
         }
     };
-    let process_result = wait_for_repair_command(&mut child, timeout, poll_interval);
+    let process_result = wait_for_repair_command(&mut child, deadline, timeout, poll_interval);
     if let Err(mutation) = verify_repair_input_unchanged(current_package) {
         let error = match process_result {
             Ok(()) => mutation,
@@ -661,21 +670,10 @@ fn windows_environment_name_matches(left: &str, right: &str) -> bool {
 
 fn wait_for_repair_command(
     child: &mut std::process::Child,
-    timeout: Duration,
+    deadline: Instant,
+    timeout_label: Duration,
     poll_interval: Duration,
 ) -> Result<(), String> {
-    let deadline = match Instant::now().checked_add(timeout) {
-        Some(deadline) => deadline,
-        None => {
-            let cleanup = kill_and_wait(child);
-            let mut error = "factory repair command deadline overflow".to_string();
-            if let Some(cleanup) = cleanup {
-                error.push_str("; ");
-                error.push_str(&cleanup);
-            }
-            return Err(error);
-        }
-    };
     loop {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
@@ -684,7 +682,7 @@ fn wait_for_repair_command(
                 let cleanup = kill_and_wait(child);
                 let mut error = format!(
                     "factory repair command exceeded {}",
-                    display_duration(timeout)
+                    display_duration(timeout_label)
                 );
                 if let Some(cleanup) = cleanup {
                     error.push_str("; ");
