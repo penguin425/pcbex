@@ -198,6 +198,8 @@ pub use electrical::{
     electrical_policy_json_schema, electrical_review_json_schema, electrical_review_to_junit,
     electrical_review_to_sarif, explain_electrical_review, parse_electrical_policy,
 };
+mod manufacturing;
+pub use manufacturing::{ManufacturingPart, manufacturing_gerber_layers, manufacturing_parts};
 mod electrical_comparison;
 pub use electrical_comparison::{
     ElectricalComparisonCounts, ElectricalFindingSummary, ElectricalReviewComparison,

@@ -479,6 +479,11 @@
     {
       "id": "deterministic-power-safety-erc",
       "release": "v1.392.0",
+      "status": "released"
+    },
+    {
+      "id": "reproducible-manufacturing-packages",
+      "release": "v1.393.0",
       "status": "current"
     }
   ]

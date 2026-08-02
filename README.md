@@ -326,12 +326,22 @@ The internal zone filler rasterizes conservative grid cells, removes clearance
 conflicts, creates cross-shaped pad thermal reliefs, and discards islands not
 connected to the owning net before exporting explicit filled polygons.
 Use `--drc` to run `kicad-cli pcb drc` on the result when KiCad is installed.
-After DRC passes, generate Gerber and Excellon drill files with:
+After DRC passes, generate an isolated manufacturing package from the
+metadata-complete multilayer example. It includes all declared copper layers,
+paste/mask/silkscreen, Excellon drill data, deterministic BOM/CPL CSV, a
+SHA-256 manifest, and a reproducible ZIP:
 
 ```sh
-cargo run -p pcbex -- fabricate simple.routed.kicad_pcb \
+cargo run -p pcbex -- route-kicad examples/multilayer.kicad_pcb \
+  --output multilayer.routed.kicad_pcb --drc
+cargo run -p pcbex -- fabricate multilayer.routed.kicad_pcb \
   --output-dir manufacturing
 ```
+
+Source boards are not modified, and pre-existing output file contents are not
+read or included in the package. See [the manufacturing package
+contract](docs/MANUFACTURING_PACKAGE.md) for metadata validation and the
+vendor-neutral CPL coordinate convention.
 
 ## Component placement
 
@@ -1958,7 +1968,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.392.0
+  uses: penguin425/pcbex@v1.393.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3818,7 +3828,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.392.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.393.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

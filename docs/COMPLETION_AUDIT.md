@@ -28,7 +28,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | KiCad input/output | Rectangular outline, rotated pads, footprints, tracks, vias, keepouts; board-level track/via output | Four `pcbex-kicad` tests |
 | Modern KiCad project/custom rules | Ordered wildcard/regex `netclass_patterns`, exact-assignment precedence, and NetClass-conditioned `.kicad_dru` routing dimensions | KiCad 9-style project fixture plus mm/mil custom-rule regression |
 | Headless KiCad validation | `route-kicad --drc` | KiCad 10.0.5: 0 violations, 0 unconnected pads |
-| Manufacturing output | `fabricate` DRC gate plus Gerber/Excellon export | F/B copper, mask, silkscreen, Edge.Cuts, drill, job file generated |
+| Reproducible manufacturing package | Isolated `fabricate` DRC gate plus all-copper Gerber, paste/mask/silkscreen, drill, BOM/CPL, manifest, and ZIP export | Four-layer/Paste KiCad E2E, timestamp normalization, byte-identical rerun, metadata and polluted-output regressions |
 | Interactive KiCad integration | Official `kicad-python` IPC adapter and one undoable commit | Mock transaction test and real wrapper-object serialization check |
 | Placement scoring | HPWL, overlap, boundary, congestion, constraint penalties | Placement score improved from 560624 to 642 in the example |
 | Placement search | Graph-clustered initial state, deterministic simulated annealing, move/rotate/swap, final snap | Placement unit tests |
@@ -211,7 +211,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --release
 PYTHONPATH=agent/src python3 -m unittest discover -s agent/tests -v
-cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
+cargo run -p pcbex -- route-kicad examples/multilayer.kicad_pcb \
   --output /tmp/pcbex-complete.kicad_pcb \
   --json-output /tmp/pcbex-complete-ipc.json --drc
 cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
@@ -219,7 +219,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.392.0 exposes 578 Rust tests and 32 Python tests. The release workflow
+Version 1.393.0 exposes 600 Rust tests and 32 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
