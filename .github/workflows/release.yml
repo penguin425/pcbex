@@ -17,10 +17,11 @@ jobs:
     name: Verify release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v7
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
       - name: Install Rust toolchain
@@ -116,7 +117,9 @@ jobs:
       ASSET_NAME: pcbex-${{ github.ref_name }}-${{ matrix.target }}
       ARCHIVE_NAME: pcbex-${{ github.ref_name }}-${{ matrix.target }}.${{ matrix.extension }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         shell: bash
         run: |
@@ -149,7 +152,7 @@ jobs:
           "$hash  $env:ARCHIVE_NAME" |
             Set-Content "dist/$env:ARCHIVE_NAME.sha256" -NoNewline
       - name: Generate SPDX SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
         with:
           path: dist/${{ env.ASSET_NAME }}
           format: spdx-json
@@ -157,11 +160,11 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
       - name: Attest build provenance
-        uses: actions/attest@v4
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: dist/${{ env.ARCHIVE_NAME }}
       - name: Attest SBOM
-        uses: actions/attest@v4
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
         with:
           subject-path: dist/${{ env.ARCHIVE_NAME }}
           sbom-path: dist/${{ env.ASSET_NAME }}.spdx.json
@@ -186,9 +189,10 @@ jobs:
       # The audit script itself performs only read/download operations.
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: Verify roadmap, release metadata, assets, checksums, and SBOMs
         env:
           GH_TOKEN: ${{ github.token }}

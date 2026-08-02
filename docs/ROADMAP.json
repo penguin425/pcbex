@@ -514,6 +514,11 @@
     {
       "id": "trusted-pr-comment-publisher",
       "release": "v1.399.0",
+      "status": "released"
+    },
+    {
+      "id": "github-actions-sha-pinning",
+      "release": "v1.400.0",
       "status": "current"
     }
   ]
