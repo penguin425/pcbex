@@ -136,9 +136,10 @@ def validate_circuit_spec(value: Any) -> dict[str, Any]:
     references = [part.reference for part in parts]
     if len(references) != len(set(references)):
         raise CircuitSpecError("part references must be unique")
-    pin_map = {part.reference: {pin for pin, _ in part.pins} for part in parts}
+    pin_map = {part.reference: dict(part.pins) for part in parts}
     nets: list[dict[str, Any]] = []
     net_names: set[str] = set()
+    connected: set[tuple[str, str]] = set()
     for raw_net in raw_nets:
         if not isinstance(raw_net, dict) or set(raw_net) != {"name", "connections"}:
             raise CircuitSpecError("each net must contain exactly name and connections")
@@ -158,13 +159,20 @@ def validate_circuit_spec(value: Any) -> dict[str, Any]:
             pin = _text(connection.get("pin"), "connection pin")
             if reference not in pin_map or pin not in pin_map[reference]:
                 raise CircuitSpecError(f"net {name} references unknown {reference}.{pin}")
+            declared_net = pin_map[reference][pin]
+            if declared_net != name:
+                raise CircuitSpecError(
+                    f"{reference}.{pin} declares net {declared_net!r} "
+                    f"but is connected to {name!r}"
+                )
             if (reference, pin) in seen_connections:
                 raise CircuitSpecError(f"net {name} contains duplicate connection {reference}.{pin}")
+            if (reference, pin) in connected:
+                raise CircuitSpecError(f"{reference}.{pin} is connected to multiple nets")
             seen_connections.add((reference, pin))
+            connected.add((reference, pin))
             normalized.append({"reference": reference, "pin": pin})
         nets.append({"name": name, "connections": normalized})
-    connected = {(connection["reference"], connection["pin"])
-                 for net in nets for connection in net["connections"]}
     declared = {(part.reference, pin) for part in parts for pin, _ in part.pins}
     if connected != declared:
         missing = sorted(declared - connected)

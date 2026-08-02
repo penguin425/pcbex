@@ -724,7 +724,7 @@ class AdapterTests(unittest.TestCase):
             "schema_version": 1,
             "parts": [{
                 "reference": "C1", "lib_id": "Device:C", "value": "100nF",
-                "footprint": "0402", "pins": {"1": "VCC", "2": "GND"}, "mpn": None,
+                "footprint": "0402", "pins": {"1": "VCC", "2": "VCC"}, "mpn": None,
             }],
             "nets": [
                 {"name": "VCC", "connections": [{"reference": "C1", "pin": "1"}, {"reference": "C1", "pin": "2"}]},
@@ -845,6 +845,29 @@ class AdapterTests(unittest.TestCase):
                                                           {"reference": "R1", "pin": "1"}]}],
         }
         with self.assertRaises(CircuitSpecError):
+            generate_skidl(spec)
+
+    def test_skidl_generator_rejects_declared_pin_net_mismatch(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {"reference": "R1", "lib_id": "Device:R", "value": "10k",
+                 "footprint": "0402", "pins": {"1": "VCC", "2": "GND"}},
+                {"reference": "R2", "lib_id": "Device:R", "value": "1k",
+                 "footprint": "0402", "pins": {"1": "VCC", "2": "GND"}},
+            ],
+            "nets": [
+                {"name": "GND", "connections": [
+                    {"reference": "R1", "pin": "1"},
+                    {"reference": "R2", "pin": "2"},
+                ]},
+                {"name": "VCC", "connections": [
+                    {"reference": "R1", "pin": "2"},
+                    {"reference": "R2", "pin": "1"},
+                ]},
+            ],
+        }
+        with self.assertRaisesRegex(CircuitSpecError, "declares net"):
             generate_skidl(spec)
 
     def test_skidl_shape_converts_to_connection_graph(self):
