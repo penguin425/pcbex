@@ -714,6 +714,8 @@ class AdapterTests(unittest.TestCase):
             CatalogPart("B", "resistor", "0402", stock=100, basic=True),
         ]
         self.assertEqual(search_parts(parts, "decoupling", limit=1)[0].mpn, "A")
+        with self.assertRaisesRegex(ValueError, "index 0 must be an object"):
+            catalog_parts_from_json(["not-an-object"])
 
     def test_catalog_selection_requires_stock_and_basic_parts(self):
         parts = catalog_parts_from_json([

@@ -71,7 +71,7 @@ def search_parts(
     if limit < 0:
         raise ValueError("limit must be non-negative")
     words = {word.casefold() for word in query.split() if word}
-    scored: list[tuple[int, str, CatalogPart]] = []
+    scored: list[tuple[int, int, int, str, CatalogPart]] = []
     for part in catalog:
         if footprint and part.footprint != footprint:
             continue
@@ -93,7 +93,11 @@ def catalog_parts_from_json(value: Any) -> list[CatalogPart]:
     """Validate a vendor-neutral JSON catalog payload."""
     if not isinstance(value, list):
         raise ValueError("catalog JSON must be an array")
-    parts = [CatalogPart.from_mapping(item) for item in value]
+    parts: list[CatalogPart] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"catalog part at index {index} must be an object")
+        parts.append(CatalogPart.from_mapping(item))
     mpns = [part.mpn for part in parts]
     if len(mpns) != len(set(mpns)):
         raise ValueError("catalog JSON contains duplicate MPNs")
