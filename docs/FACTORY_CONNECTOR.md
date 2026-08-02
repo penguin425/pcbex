@@ -17,7 +17,11 @@ HTTPS is required. HTTP is accepted only for loopback test endpoints with the
 hidden `--allow-http-loopback` flag. Bearer tokens are read from the named
 environment variable and are never written to the receipt. Redirects are
 disabled, endpoint query strings/userinfo are rejected, package uploads are
-limited to 128 MiB, and responses to 8 MiB.
+limited to 128 MiB, and responses to 8 MiB. Before network access, pcbex opens
+the package once and verifies the schema-v1 `manifest.json`, safe and unique ZIP
+entry names, every declared artifact's byte count and SHA-256, a 4,096-entry
+ceiling, and a 512 MiB expanded-artifact ceiling. Missing, unlisted, duplicate,
+or self-referential entries fail closed.
 
 The adapter accepts a provider response such as:
 
@@ -33,7 +37,15 @@ The adapter accepts a provider response such as:
 It writes a deterministic receipt containing request/response SHA-256 digests,
 HTTP status, normalized quote/DFM status, sorted findings, and the raw JSON
 response. `--require-dfm-pass` turns the receipt into a manufacturing gate and
-fails unless `dfm_passed` is explicitly true and no error/critical/fatal finding
-is returned.
+fails unless the HTTP response is successful, `accepted` and `dfm_passed` are
+both explicitly true, and every finding has a known non-fatal severity
+(`info`, `notice`, or `warning`). Unknown or error/critical/fatal severities fail
+closed. A non-2xx response is a transport failure and does not produce a
+receipt; deployment adapters should return normalized DFM rejection evidence in
+a successful JSON response. Receipt and schema outputs are atomically published
+with no-overwrite semantics, so an existing regular file or symlink fails
+closed and a failed submission leaves no partial output.
 
-Use `pcbex factory-schema` to obtain the receipt JSON Schema for CI artifacts.
+Use `pcbex factory-schema` to obtain the closed receipt JSON Schema for CI
+artifacts. `pcbex capabilities` advertises both the HTTPS integration and the
+versioned receipt contract for automated discovery.

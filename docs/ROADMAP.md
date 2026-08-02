@@ -103,6 +103,7 @@ auditable release.
 | v1.391.0 | Deterministic Text-to-Circuit SKiDL | Convert a closed circuit specification into executable, namespace-isolated SKiDL with deterministic catalog selection |
 | v1.392.0 | Deterministic power-safety ERC | Reject conflicting rails, over-voltage power inputs, and missing required decoupling from explicit schematic metadata |
 | v1.393.0 | Reproducible manufacturing packages | Gate and stage KiCad manufacturing outputs with complete copper/Paste layers, strict BOM/CPL metadata, hash manifests, and deterministic ZIP publication |
+| v1.394.0 | Bounded factory quote and DFM connector | Submit exact manufacturing archives through secret-safe HTTPS adapters and retain hash-bound normalized quote/DFM receipts |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -111,5 +112,5 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should submit the hash-bound manufacturing archive to a
-bounded factory quote/DFM connector and retain auditable response evidence.
+The next roadmap should turn retained factory DFM findings into a bounded,
+auditable repair loop before another manufacturing submission.

@@ -4597,7 +4597,14 @@ fn capabilities_report() -> CapabilitiesReport {
             .iter()
             .map(|profile| profile.id.to_string())
             .collect(),
-        external_integrations: vec!["kicad-cli", "kicad-python", "git", "python3", "MCP stdio"],
+        external_integrations: vec![
+            "kicad-cli",
+            "kicad-python",
+            "git",
+            "python3",
+            "MCP stdio",
+            "HTTPS factory adapter",
+        ],
         output_contracts: vec![
             "JSON Schema",
             "JSON",
@@ -4610,6 +4617,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "BOM CSV",
             "Pick-and-place CSV",
             "Manufacturing ZIP",
+            "Factory submission receipt v1",
             "SPDX JSON",
         ],
     }
@@ -14390,8 +14398,8 @@ fn run_cli() -> Result<()> {
         Command::FactorySchema { output } => {
             let rendered = serde_json::to_string_pretty(&factory_submission_json_schema())?;
             if let Some(path) = output {
-                fs::write(&path, rendered)
-                    .with_context(|| format!("writing {}", path.display()))?;
+                let prepared = prepare_atomic_new_file(&path)?;
+                persist_atomic_new_file(prepared, &path, &format!("{rendered}\n"))?;
             } else {
                 println!("{rendered}");
             }
@@ -14407,6 +14415,7 @@ fn run_cli() -> Result<()> {
             require_dfm_pass,
         } => {
             let provider = FactoryProvider::parse(&provider).map_err(anyhow::Error::msg)?;
+            let prepared_output = prepare_atomic_new_file(&output)?;
             let receipt = submit_factory_package(
                 &package,
                 &endpoint,
@@ -14416,8 +14425,8 @@ fn run_cli() -> Result<()> {
                 allow_http_loopback,
             )
             .map_err(anyhow::Error::msg)?;
-            fs::write(&output, serde_json::to_string_pretty(&receipt)?)
-                .with_context(|| format!("writing {}", output.display()))?;
+            let rendered = serde_json::to_string_pretty(&receipt)?;
+            persist_atomic_new_file(prepared_output, &output, &format!("{rendered}\n"))?;
             eprintln!(
                 "factory {} response: status={}; accepted={}; dfm_passed={:?}; findings={}; receipt={}",
                 match receipt.provider {
@@ -14568,6 +14577,58 @@ fn write_new_file(path: &Path, contents: &str, private: bool) -> Result<()> {
         .with_context(|| format!("creating {}", path.display()))?;
     file.write_all(contents.as_bytes())
         .with_context(|| format!("writing {}", path.display()))
+}
+
+fn ensure_new_file_path(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => bail!("refusing to overwrite existing output {}", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
+    }
+}
+
+fn prepare_atomic_new_file(path: &Path) -> Result<tempfile::NamedTempFile> {
+    ensure_new_file_path(path)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    tempfile::Builder::new()
+        .prefix(".pcbex-output-")
+        .tempfile_in(parent)
+        .with_context(|| format!("preparing atomic output beside {}", path.display()))
+}
+
+fn persist_atomic_new_file(
+    mut prepared: tempfile::NamedTempFile,
+    path: &Path,
+    contents: &str,
+) -> Result<()> {
+    prepared
+        .as_file_mut()
+        .write_all(contents.as_bytes())
+        .with_context(|| format!("writing prepared output for {}", path.display()))?;
+    prepared
+        .as_file_mut()
+        .flush()
+        .with_context(|| format!("flushing prepared output for {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        prepared
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o644))
+            .with_context(|| format!("setting permissions for {}", path.display()))?;
+    }
+    prepared
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("syncing prepared output for {}", path.display()))?;
+    prepared
+        .persist_noclobber(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("publishing {} without overwrite", path.display()))?;
+    Ok(())
 }
 
 fn write_new_file_set(files: &[(&Path, &str)]) -> Result<()> {
