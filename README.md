@@ -343,6 +343,26 @@ read or included in the package. See [the manufacturing package
 contract](docs/MANUFACTURING_PACKAGE.md) for metadata validation and the
 vendor-neutral CPL coordinate convention.
 
+Submit that exact archive to a deployment-owned JLCPCB, PCBWay, or generic
+quote/DFM adapter without putting credentials in argv:
+
+```sh
+export PCBEX_FACTORY_TOKEN=replace-with-secret
+pcbex factory-submit manufacturing/manufacturing.zip \
+  --provider jlcpcb \
+  --endpoint https://factory-gateway.example/v1/quote \
+  --bearer-token-env PCBEX_FACTORY_TOKEN \
+  --output factory-receipt.json \
+  --require-dfm-pass
+```
+
+The connector accepts no redirects, verifies every manifest-listed artifact,
+bounds compressed/expanded upload and response sizes, and writes a hash-bound
+normalized receipt without the token. Receipt publication is atomic and the
+path must not already exist. See [the factory connector
+contract](docs/FACTORY_CONNECTOR.md) for the adapter request and response
+boundary.
+
 ## Component placement
 
 The placement engine combines graph-clustered initialization with deterministic
@@ -1968,7 +1988,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.393.0
+  uses: penguin425/pcbex@v1.394.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3828,7 +3848,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.393.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.394.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

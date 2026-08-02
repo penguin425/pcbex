@@ -157,6 +157,7 @@ use std::{
 };
 
 mod canary_completion;
+mod factory;
 mod manufacturing_feedback;
 mod manufacturing_package;
 mod mcp;
@@ -191,6 +192,10 @@ use canary_completion::{
     CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
     parse_signed_canary_decision, render_canary_completion_summary, sign_canary_completion,
     signed_canary_decision_json_schema, verify_canary_completion,
+};
+use factory::{
+    FactoryProvider, factory_feedback_passed, factory_submission_json_schema,
+    submit_factory_package,
 };
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
@@ -4364,6 +4369,32 @@ enum Command {
         #[arg(short, long)]
         output_dir: PathBuf,
     },
+    /// Print the JSON Schema for factory submission receipts.
+    FactorySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Submit a manufacturing ZIP to a configured factory quote/DFM endpoint.
+    FactorySubmit {
+        package: PathBuf,
+        #[arg(long)]
+        endpoint: String,
+        #[arg(long, default_value = "generic")]
+        provider: String,
+        /// Environment-variable name containing an optional Bearer token.
+        #[arg(long)]
+        bearer_token_env: Option<String>,
+        #[arg(long, default_value_t = 60, value_parser = clap::value_parser!(u64))]
+        timeout_seconds: u64,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Test-only escape hatch; permits only loopback HTTP.
+        #[arg(long, hide = true)]
+        allow_http_loopback: bool,
+        /// Fail after writing the receipt unless the factory reports a passing DFM.
+        #[arg(long)]
+        require_dfm_pass: bool,
+    },
 }
 
 fn read(path: &PathBuf) -> Result<Board> {
@@ -4566,7 +4597,14 @@ fn capabilities_report() -> CapabilitiesReport {
             .iter()
             .map(|profile| profile.id.to_string())
             .collect(),
-        external_integrations: vec!["kicad-cli", "kicad-python", "git", "python3", "MCP stdio"],
+        external_integrations: vec![
+            "kicad-cli",
+            "kicad-python",
+            "git",
+            "python3",
+            "MCP stdio",
+            "HTTPS factory adapter",
+        ],
         output_contracts: vec![
             "JSON Schema",
             "JSON",
@@ -4579,6 +4617,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "BOM CSV",
             "Pick-and-place CSV",
             "Manufacturing ZIP",
+            "Factory submission receipt v1",
             "SPDX JSON",
         ],
     }
@@ -14356,6 +14395,55 @@ fn run_cli() -> Result<()> {
                 archive.display()
             );
         }
+        Command::FactorySchema { output } => {
+            let rendered = serde_json::to_string_pretty(&factory_submission_json_schema())?;
+            if let Some(path) = output {
+                let prepared = prepare_atomic_new_file(&path)?;
+                persist_atomic_new_file(prepared, &path, &format!("{rendered}\n"))?;
+            } else {
+                println!("{rendered}");
+            }
+        }
+        Command::FactorySubmit {
+            package,
+            endpoint,
+            provider,
+            bearer_token_env,
+            timeout_seconds,
+            output,
+            allow_http_loopback,
+            require_dfm_pass,
+        } => {
+            let provider = FactoryProvider::parse(&provider).map_err(anyhow::Error::msg)?;
+            let prepared_output = prepare_atomic_new_file(&output)?;
+            let receipt = submit_factory_package(
+                &package,
+                &endpoint,
+                provider,
+                bearer_token_env.as_deref(),
+                timeout_seconds,
+                allow_http_loopback,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = serde_json::to_string_pretty(&receipt)?;
+            persist_atomic_new_file(prepared_output, &output, &format!("{rendered}\n"))?;
+            eprintln!(
+                "factory {} response: status={}; accepted={}; dfm_passed={:?}; findings={}; receipt={}",
+                match receipt.provider {
+                    FactoryProvider::Jlcpcb => "jlcpcb",
+                    FactoryProvider::Pcbway => "pcbway",
+                    FactoryProvider::Generic => "generic",
+                },
+                receipt.status,
+                receipt.accepted,
+                receipt.dfm_passed,
+                receipt.findings.len(),
+                output.display()
+            );
+            if require_dfm_pass && !factory_feedback_passed(&receipt) {
+                bail!("factory DFM feedback did not pass");
+            }
+        }
     }
     Ok(())
 }
@@ -14489,6 +14577,58 @@ fn write_new_file(path: &Path, contents: &str, private: bool) -> Result<()> {
         .with_context(|| format!("creating {}", path.display()))?;
     file.write_all(contents.as_bytes())
         .with_context(|| format!("writing {}", path.display()))
+}
+
+fn ensure_new_file_path(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => bail!("refusing to overwrite existing output {}", path.display()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("inspecting {}", path.display())),
+    }
+}
+
+fn prepare_atomic_new_file(path: &Path) -> Result<tempfile::NamedTempFile> {
+    ensure_new_file_path(path)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    tempfile::Builder::new()
+        .prefix(".pcbex-output-")
+        .tempfile_in(parent)
+        .with_context(|| format!("preparing atomic output beside {}", path.display()))
+}
+
+fn persist_atomic_new_file(
+    mut prepared: tempfile::NamedTempFile,
+    path: &Path,
+    contents: &str,
+) -> Result<()> {
+    prepared
+        .as_file_mut()
+        .write_all(contents.as_bytes())
+        .with_context(|| format!("writing prepared output for {}", path.display()))?;
+    prepared
+        .as_file_mut()
+        .flush()
+        .with_context(|| format!("flushing prepared output for {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        prepared
+            .as_file()
+            .set_permissions(fs::Permissions::from_mode(0o644))
+            .with_context(|| format!("setting permissions for {}", path.display()))?;
+    }
+    prepared
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("syncing prepared output for {}", path.display()))?;
+    prepared
+        .persist_noclobber(path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("publishing {} without overwrite", path.display()))?;
+    Ok(())
 }
 
 fn write_new_file_set(files: &[(&Path, &str)]) -> Result<()> {

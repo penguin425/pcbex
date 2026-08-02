@@ -166,6 +166,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "fetch-policy-pack",
         "mcp-server",
         "fabricate",
+        "factory-schema",
+        "factory-submit",
     ] {
         let command = commands
             .iter()
@@ -182,10 +184,24 @@ fn publishes_a_complete_versioned_capability_inventory() {
             .any(|integration| integration == "MCP stdio")
     );
     assert!(
+        report["external_integrations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|integration| integration == "HTTPS factory adapter")
+    );
+    assert!(
         report["output_contracts"]
             .as_array()
             .unwrap()
             .iter()
             .any(|contract| contract == "SARIF 2.1.0")
+    );
+    assert!(
+        report["output_contracts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|contract| contract == "Factory submission receipt v1")
     );
 }

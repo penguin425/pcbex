@@ -484,6 +484,11 @@
     {
       "id": "reproducible-manufacturing-packages",
       "release": "v1.393.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-factory-quote-dfm-connector",
+      "release": "v1.394.0",
       "status": "current"
     }
   ]
