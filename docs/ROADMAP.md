@@ -100,6 +100,9 @@ auditable release.
 | v1.388.0 | Domain-separated signed receipt-quorum checkpoints | Sign the exact quorum-report digest, registry checkpoint, threshold, and approval-log state under a dedicated cryptographic domain |
 | v1.389.0 | Independent receipt-quorum checkpoint witnesses | Re-verify exact approval evidence and require a fresh quorum of distinct trusted witnesses over its dedicated checkpoint |
 | v1.390.0 | Receipt-quorum checkpoint witness key rotation | Advance identity-bound witness trust through dual-signed generation- and digest-chained key transitions |
+| v1.391.0 | Deterministic Text-to-Circuit SKiDL | Convert a closed circuit specification into executable, namespace-isolated SKiDL with deterministic catalog selection |
+| v1.392.0 | Deterministic power-safety ERC | Reject conflicting rails, over-voltage power inputs, and missing required decoupling from explicit schematic metadata |
+| v1.393.0 | Reproducible manufacturing packages | Gate and stage KiCad manufacturing outputs with complete copper/Paste layers, strict BOM/CPL metadata, hash manifests, and deterministic ZIP publication |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -108,5 +111,5 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should acquire dedicated receipt-quorum checkpoint witnesses
-from bounded remote services and retain hash-bound transport receipts.
+The next roadmap should submit the hash-bound manufacturing archive to a
+bounded factory quote/DFM connector and retain auditable response evidence.

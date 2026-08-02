@@ -28,7 +28,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | KiCad input/output | Rectangular outline, rotated pads, footprints, tracks, vias, keepouts; board-level track/via output | Four `pcbex-kicad` tests |
 | Modern KiCad project/custom rules | Ordered wildcard/regex `netclass_patterns`, exact-assignment precedence, and NetClass-conditioned `.kicad_dru` routing dimensions | KiCad 9-style project fixture plus mm/mil custom-rule regression |
 | Headless KiCad validation | `route-kicad --drc` | KiCad 10.0.5: 0 violations, 0 unconnected pads |
-| Manufacturing output | `fabricate` DRC gate plus Gerber/Excellon export | F/B copper, mask, silkscreen, Edge.Cuts, drill, job file generated |
+| Reproducible manufacturing package | Isolated `fabricate` DRC gate plus all-copper Gerber, paste/mask/silkscreen, drill, BOM/CPL, manifest, and ZIP export | Four-layer/Paste KiCad E2E, timestamp normalization, byte-identical rerun, metadata and polluted-output regressions |
 | Interactive KiCad integration | Official `kicad-python` IPC adapter and one undoable commit | Mock transaction test and real wrapper-object serialization check |
 | Placement scoring | HPWL, overlap, boundary, congestion, constraint penalties | Placement score improved from 560624 to 642 in the example |
 | Placement search | Graph-clustered initial state, deterministic simulated annealing, move/rotate/swap, final snap | Placement unit tests |
@@ -101,7 +101,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Placement candidate portfolio | Parallel deterministic generation explores balanced, wirelength, routability, constraint, and legalization objectives, computes the raw five-metric Pareto front, selects under caller base weights, and writes JSON plus KiCad candidate bundles | Core tests prove 1-vs-4-worker identity and Pareto dominance; subprocess E2E verifies reproducible JSON portfolios, selected artifacts, and KiCad boards |
 | Routing candidate portfolio | Bounded parallel N-best routing explores balanced, shortest, via-minimized, bend-minimized, and alternate-order searches, removes route duplicates from a four-metric Pareto front, selects under caller base costs, and writes JSON plus KiCad candidate bundles | Core tests prove 1-vs-4-worker identity, duplicate handling, Pareto dominance, and thread ceilings; subprocess E2E verifies reproducible JSON portfolios, selected artifacts, and KiCad boards |
 | KiCad schematic electrical IR | KiCad 6–10 symbols, unit/convert pin definitions, electrical types, transformed coordinates, wires, junctions, labels, power symbols, no-connects, and deterministic connectivity normalize into a closed versioned JSON boundary with explicit hierarchy/bus/directive coverage gaps | Importer tests cover topology, crossing junctions, transforms, UUID identity, future formats, closed schema, and coverage; CLI E2E proves byte reproducibility and complete gating writes inspectable output, while the example loads under KiCad 10.0.5 |
-| Deterministic schematic approval gate | A closed versioned policy controls 12 electrical rules for coverage, annotation, footprints, no-connects, connectivity, driver conflicts, undriven inputs, and net naming; reports bind stable findings and the approval decision to canonical schematic/policy SHA-256 identities | Unit tests prove deterministic rejection, explicit policy overrides, strict parsing, and closed schemas; CLI E2E proves byte-identical reports, fail-after-write gating, and an approved custom policy |
+| Deterministic schematic approval gate | A closed versioned policy controls 16 electrical rules for coverage, annotation, footprints, no-connects, connectivity, driver conflicts, undriven inputs, net naming, power-metadata validity, rail conflicts, over-voltage, and required decoupling; reports bind stable findings and the approval decision to canonical schematic/policy SHA-256 identities | Unit tests prove deterministic rejection, explicit policy overrides, strict parsing, and closed schemas; CLI E2E proves byte-identical reports, fail-after-write gating, and an approved custom policy |
 | Bound simulation evidence | Simulator-independent bounded assertions and streamed raw-artifact SHA-256 descriptors bind DC, AC, transient, SI, PI, thermal, or custom results to the exact normalized schematic and electrical review; overall pass requires prior electrical approval and every measurement bound | Unit tests cover deterministic pass/fail, electrical rejection, malformed bounds, duplicate/empty artifacts, and closed schemas; CLI E2E proves raw digesting, byte reproducibility, identity binding, and fail-after-write gating |
 | AI schematic review and signed approval | A closed evidence-ID-constrained AI contract assesses every explicit requirement, while fresh ERC/policy/simulation recomputation remains authoritative; deterministic Ed25519 envelopes bind request, model response, decision, failures, and signer, and verification requires a separately trusted public key | Rust tests prove approved/rejected signing, strict verification, wrong-key/tamper detection, forged-review rejection, complete requirement coverage, and closed schemas; Python injected-model tests reject invented evidence; CLI E2E covers protected key generation and the full prepare/sign/verify flow; MCP exposes approval-aware tools |
 | Signed approval transparency log | Strictly parsed approval artifacts form immutable snapshots with monotonic sequence/time, previous-entry and self-digests; an Ed25519 checkpoint binds the full normalized log digest, head, entry count, log ID, and signer | Rust and CLI E2E reject mutation, reordering, deletion, truncation, stale checkpoints, time reversal, wrong keys, and signature tampering; Action smoke verifies the checkpoint and exposes the result; MCP exposes init, append, sign, and verify tools with destructive-action annotations |
@@ -211,7 +211,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --release
 PYTHONPATH=agent/src python3 -m unittest discover -s agent/tests -v
-cargo run -p pcbex -- route-kicad examples/simple.kicad_pcb \
+cargo run -p pcbex -- route-kicad examples/multilayer.kicad_pcb \
   --output /tmp/pcbex-complete.kicad_pcb \
   --json-output /tmp/pcbex-complete-ipc.json --drc
 cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
@@ -219,7 +219,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.390.0 exposes 569 Rust tests and 27 Python tests. The release workflow
+Version 1.393.0 exposes 600 Rust tests and 32 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->
