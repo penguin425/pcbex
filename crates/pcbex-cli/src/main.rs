@@ -153,11 +153,12 @@ use std::{
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     str::FromStr,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 mod canary_completion;
 mod factory;
+mod firmware;
 mod manufacturing_feedback;
 mod manufacturing_package;
 mod mcp;
@@ -197,6 +198,10 @@ use canary_completion::{
 use factory::{
     FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
     factory_submission_json_schema, run_factory_feedback_loop, submit_factory_package,
+};
+use firmware::{
+    FIRMWARE_ARTIFACTS, FirmwareBuildOptions, FirmwareManifest, firmware_bundle_schema,
+    generate_firmware_bundle, parse_pin_map,
 };
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
@@ -805,6 +810,47 @@ enum Command {
         /// New report path; existing, aliased, or symlinked destinations are refused.
         #[arg(short, long)]
         output: PathBuf,
+    },
+    /// Print the closed JSON Schema for a generated firmware bundle manifest.
+    FirmwareSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Generate a schematic-bound pinout plus C11, C++17, and Python sources.
+    GenerateFirmware {
+        /// Exact KiCad schematic whose canonical imported IR binds the manifest.
+        input: PathBuf,
+        /// Unique schematic reference for the MCU whose connected pins are exported.
+        #[arg(long)]
+        mcu_reference: String,
+        /// New destination directory; existing or symlinked paths are refused.
+        #[arg(short, long)]
+        output_dir: PathBuf,
+        /// Optional JSON object mapping physical pin numbers to GPIO names.
+        #[arg(long)]
+        pin_map: Option<PathBuf>,
+        /// GCC/Clang-compatible C11 compiler executable name resolved through PATH.
+        #[arg(long, default_value = "cc")]
+        cc: String,
+        /// GCC/Clang-compatible C++17 compiler executable name resolved through PATH.
+        #[arg(long, default_value = "c++")]
+        cxx: String,
+        /// Python interpreter executable name resolved through PATH.
+        #[arg(long, default_value = "python3")]
+        python: String,
+        /// Permit unsupported schematic features; the generated pinout may be incomplete.
+        #[arg(long)]
+        allow_incomplete: bool,
+        /// Generate source-only evidence without running compilers or smoke tests.
+        #[arg(long)]
+        skip_build: bool,
+        /// Per-process timeout for compile, syntax-check, and smoke commands.
+        #[arg(
+            long,
+            default_value_t = 120,
+            value_parser = clap::value_parser!(u64).range(1..=3600)
+        )]
+        timeout_seconds: u64,
     },
     /// Normalize a KiCad schematic into the versioned electrical-design IR.
     ImportSchematic {
@@ -4720,6 +4766,10 @@ fn capabilities_report() -> CapabilitiesReport {
             "Factory feedback loop report v1",
             "Hardware pipeline gate report v1",
             "Factory-bound hardware pipeline gate report v2",
+            "Firmware bundle manifest v2",
+            "C11 firmware source bundle",
+            "C++17 firmware source bundle",
+            "Python host pinout helper",
             "SPDX JSON",
         ],
     }
@@ -4893,6 +4943,77 @@ fn run_cli() -> Result<()> {
             );
             if !report.passed {
                 bail!("hardware pipeline gate rejected: {}", report.failures.join("; "));
+            }
+        }
+        Command::FirmwareSchema { output } => {
+            let rendered = serde_json::to_string_pretty(&firmware_bundle_schema())?;
+            if let Some(path) = output {
+                reject_output_symlink_components(&path, "firmware schema output")?;
+                let prepared = prepare_atomic_new_file(&path)?;
+                persist_atomic_new_file(prepared, &path, &format!("{rendered}\n"))?;
+            } else {
+                println!("{rendered}");
+            }
+        }
+        Command::GenerateFirmware {
+            input,
+            mcu_reference,
+            output_dir,
+            pin_map,
+            cc,
+            cxx,
+            python,
+            allow_incomplete,
+            skip_build,
+            timeout_seconds,
+        } => {
+            let mut inputs = vec![input.as_path()];
+            if let Some(path) = pin_map.as_deref() {
+                inputs.push(path);
+            }
+            let (output_dir, staging) = prepare_firmware_output(&output_dir, &inputs)?;
+            let source = read_bounded_utf8(
+                &input,
+                "firmware schematic",
+                64 * 1024 * 1024,
+            )?;
+            let schematic = import_schematic(&source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("importing {}", input.display()))?;
+            let pin_map = pin_map
+                .as_ref()
+                .map(|path| {
+                    read_bounded_utf8(path, "firmware pin map", 1024 * 1024)
+                        .and_then(|source| parse_pin_map(&source))
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let manifest = generate_firmware_bundle(
+                &schematic,
+                staging.path(),
+                &mcu_reference,
+                &pin_map,
+                FirmwareBuildOptions {
+                    cc: &cc,
+                    cxx: &cxx,
+                    python: &python,
+                    skip_build,
+                    allow_incomplete,
+                    timeout: Duration::from_secs(timeout_seconds),
+                },
+            )?;
+            publish_firmware_output(staging, &output_dir)?;
+            eprintln!(
+                "generated schematic-bound firmware bundle: C={}, C++={}, Python={}; output={}",
+                manifest.c_build.passed,
+                manifest.cpp_build.passed,
+                manifest.python_check.passed,
+                output_dir.display()
+            );
+            if !skip_build && !firmware_checks_passed(&manifest) {
+                bail!(
+                    "generated firmware bundle retained, but one or more compile/smoke checks failed"
+                );
             }
         }
         Command::ImportSchematic {
@@ -14829,6 +14950,194 @@ fn input_descriptor(path: &Path, bytes: &[u8]) -> InputDescriptor {
         bytes: bytes.len(),
         sha256: hex::encode(Sha256::digest(bytes)),
     }
+}
+
+fn read_bounded_utf8(path: &Path, label: &str, max_bytes: u64) -> Result<String> {
+    reject_output_symlink_components(path, label)?;
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("reading metadata for {label} {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
+        bail!(
+            "{label} must be a regular non-symlink file: {}",
+            path.display()
+        );
+    }
+    if metadata.len() == 0 || metadata.len() > max_bytes {
+        bail!(
+            "{label} must contain 1..={max_bytes} bytes: {}",
+            path.display()
+        );
+    }
+    let mut file =
+        fs::File::open(path).with_context(|| format!("opening {label} {}", path.display()))?;
+    let opened = file
+        .metadata()
+        .with_context(|| format!("inspecting opened {label} {}", path.display()))?;
+    if !same_open_input(&metadata, &opened) || opened.len() != metadata.len() {
+        bail!(
+            "{label} changed while it was being opened: {}",
+            path.display()
+        );
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    Read::by_ref(&mut file)
+        .take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("reading {label} {}", path.display()))?;
+    let after = file
+        .metadata()
+        .with_context(|| format!("rechecking opened {label} {}", path.display()))?;
+    if !same_open_input(&opened, &after)
+        || after.len() != metadata.len()
+        || bytes.len() as u64 != metadata.len()
+        || bytes.len() as u64 > max_bytes
+    {
+        bail!(
+            "{label} changed while it was being read: {}",
+            path.display()
+        );
+    }
+    String::from_utf8(bytes)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("decoding {label} {} as UTF-8", path.display()))
+}
+
+#[cfg(unix)]
+fn same_open_input(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_open_input(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+    true
+}
+
+fn prepare_firmware_output(
+    output_dir: &Path,
+    inputs: &[&Path],
+) -> Result<(PathBuf, tempfile::TempDir)> {
+    if output_dir
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        bail!("firmware output path must not contain parent-directory components");
+    }
+    reject_output_symlink_components(output_dir, "firmware output")?;
+    ensure_new_file_path(output_dir)?;
+    let normalized_output = normalize_destination(output_dir)?;
+    if normalized_output.parent().is_none() {
+        bail!("firmware output must not be the filesystem root");
+    }
+    for input in inputs {
+        if let Ok(normalized_input) = fs::canonicalize(input)
+            && destinations_alias(&normalized_output, &normalized_input)
+        {
+            bail!("firmware output must not alias input {}", input.display());
+        }
+    }
+    let parent = normalized_output
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("firmware output is missing its parent directory"))?;
+    let parent_metadata = fs::symlink_metadata(parent)
+        .with_context(|| format!("reading firmware output parent {}", parent.display()))?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.file_type().is_dir() {
+        bail!(
+            "firmware output parent must be a real directory: {}",
+            parent.display()
+        );
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".pcbex-firmware-stage-")
+        .tempdir_in(parent)
+        .with_context(|| format!("creating private firmware stage in {}", parent.display()))?;
+    Ok((normalized_output, staging))
+}
+
+fn publish_firmware_output(staging: tempfile::TempDir, output_dir: &Path) -> Result<()> {
+    let staging_dir = staging.path();
+    let expected = FIRMWARE_ARTIFACTS
+        .iter()
+        .copied()
+        .chain(std::iter::once("manifest.json"))
+        .collect::<Vec<_>>();
+    let mut actual = Vec::new();
+    for entry in fs::read_dir(staging_dir)
+        .with_context(|| format!("listing firmware stage {}", staging_dir.display()))?
+    {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() || !file_type.is_file() {
+            bail!(
+                "firmware stage contains a non-regular entry: {}",
+                entry.path().display()
+            );
+        }
+        actual.push(
+            entry
+                .file_name()
+                .into_string()
+                .map_err(|_| anyhow::anyhow!("firmware stage filename is not UTF-8"))?,
+        );
+    }
+    actual.sort();
+    let mut expected_sorted = expected.iter().map(ToString::to_string).collect::<Vec<_>>();
+    expected_sorted.sort();
+    if actual != expected_sorted {
+        bail!("firmware stage does not contain the exact source bundle");
+    }
+
+    reject_output_symlink_components(output_dir, "firmware output")?;
+    ensure_new_file_path(output_dir)?;
+    let parent = output_dir
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("firmware output is missing its parent directory"))?;
+    let staging_path = staging.keep();
+    if let Err(error) = fs::rename(&staging_path, output_dir) {
+        // The kept stage is private and was verified to contain only these
+        // regular files. Remove only those owned entries; never recursively
+        // delete a destination that another actor could have swapped in.
+        for name in &expected {
+            let _ = fs::remove_file(staging_path.join(name));
+        }
+        let _ = fs::remove_dir(&staging_path);
+        return Err(error).with_context(|| {
+            format!(
+                "atomically publishing firmware stage {} to {}",
+                staging_path.display(),
+                output_dir.display()
+            )
+        });
+    }
+    #[cfg(unix)]
+    {
+        fs::File::open(output_dir)
+            .with_context(|| format!("opening firmware output {}", output_dir.display()))?
+            .sync_all()
+            .with_context(|| format!("syncing firmware output {}", output_dir.display()))?;
+        fs::File::open(parent)
+            .with_context(|| format!("opening firmware output parent {}", parent.display()))?
+            .sync_all()
+            .with_context(|| format!("syncing firmware output parent {}", parent.display()))?;
+    }
+    Ok(())
+}
+
+fn firmware_checks_passed(manifest: &FirmwareManifest) -> bool {
+    [
+        &manifest.c_build,
+        &manifest.cpp_build,
+        &manifest.python_check,
+    ]
+    .into_iter()
+    .all(|build| {
+        build.attempted
+            && build.passed
+            && build.exit_code == Some(0)
+            && build.smoke.attempted
+            && build.smoke.passed
+            && build.smoke.exit_code == Some(0)
+    })
 }
 
 fn write_or_print_json(value: &serde_json::Value, output: Option<&PathBuf>) -> Result<()> {

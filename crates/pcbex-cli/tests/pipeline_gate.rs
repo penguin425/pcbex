@@ -9,11 +9,13 @@ use std::{
 };
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-const FIRMWARE_FILES: [&str; 5] = [
+const FIRMWARE_FILES: [&str; 7] = [
     "pinout.h",
     "firmware.h",
     "firmware.c",
     "firmware_smoke_test.c",
+    "firmware.cpp",
+    "firmware_cpp_smoke_test.cpp",
     "host.py",
 ];
 
@@ -301,23 +303,27 @@ fn write_factory_receipt(path: &Path, package: &Path) {
 }
 
 fn write_firmware_manifest(directory: &Path, schematic_sha256: &str) -> PathBuf {
-    let contents: [&[u8]; 5] = [
+    let bundle = directory.join("firmware");
+    fs::create_dir_all(&bundle).unwrap();
+    let contents: [&[u8]; 7] = [
         b"#define STATUS_LED_PIN 1\n",
         b"void firmware_tick(void);\n",
         b"void firmware_tick(void) {}\n",
         b"int main(void) { firmware_tick(); return 0; }\n",
+        b"extern \"C\" void firmware_tick(void) {}\n",
+        b"int main() { firmware_tick(); return 0; }\n",
         b"print('firmware smoke check')\n",
     ];
     let artifacts = FIRMWARE_FILES
         .iter()
         .zip(contents)
         .map(|(name, bytes)| {
-            fs::write(directory.join(name), bytes).unwrap();
+            fs::write(bundle.join(name), bytes).unwrap();
             json!({"path": name, "bytes": bytes.len(), "sha256": sha256(bytes)})
         })
         .collect::<Vec<_>>();
     let manifest = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "engine": "pcbex",
         "engine_version": env!("CARGO_PKG_VERSION"),
         "schematic_sha256": schematic_sha256,
@@ -325,15 +331,41 @@ fn write_firmware_manifest(directory: &Path, schematic_sha256: &str) -> PathBuf 
         "c_build": {
             "attempted": true,
             "passed": true,
-            "command": ["cc", "firmware.c", "firmware_smoke_test.c"]
+            "command": ["cc", "firmware.c", "firmware_smoke_test.c"],
+            "exit_code": 0,
+            "smoke": {
+                "attempted": true,
+                "passed": true,
+                "command": ["firmware-c-smoke"],
+                "exit_code": 0
+            }
+        },
+        "cpp_build": {
+            "attempted": true,
+            "passed": true,
+            "command": ["c++", "firmware.cpp", "firmware_cpp_smoke_test.cpp"],
+            "exit_code": 0,
+            "smoke": {
+                "attempted": true,
+                "passed": true,
+                "command": ["firmware-cpp-smoke"],
+                "exit_code": 0
+            }
         },
         "python_check": {
             "attempted": true,
             "passed": true,
-            "command": ["python3", "-m", "py_compile", "host.py"]
+            "command": ["python3", "-m", "py_compile", "host.py"],
+            "exit_code": 0,
+            "smoke": {
+                "attempted": true,
+                "passed": true,
+                "command": ["python3", "host.py"],
+                "exit_code": 0
+            }
         }
     });
-    let path = directory.join("firmware-manifest.json");
+    let path = bundle.join("manifest.json");
     write_json(&path, &manifest);
     path
 }
@@ -450,6 +482,87 @@ fn phase<'a>(report: &'a Value, name: &str) -> &'a Value {
         .unwrap()
 }
 
+fn assert_firmware_rejected(
+    inputs: &PipelineInputs,
+    manifest_path: &Path,
+    manifest: Value,
+    report_path: &Path,
+) -> Value {
+    write_json(manifest_path, &manifest);
+    let output = inputs.command(report_path).output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        report_path.is_file(),
+        "failed firmware validation must retain a report"
+    );
+    let report = read_json(report_path);
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["pipeline"], "pcbex-hardware-v1");
+    assert_eq!(phase(&report, "firmware-build")["passed"], false);
+    assert!(
+        !phase(&report, "firmware-build")["failures"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    report
+}
+
+fn assert_firmware_manifest_contract(path: &Path, schematic_sha256: &str) {
+    let manifest = read_json(path);
+    assert_eq!(
+        keys(&manifest),
+        BTreeSet::from([
+            "artifacts",
+            "c_build",
+            "cpp_build",
+            "engine",
+            "engine_version",
+            "python_check",
+            "schema_version",
+            "schematic_sha256",
+        ])
+    );
+    assert_eq!(manifest["schema_version"], 2);
+    assert_eq!(manifest["engine"], "pcbex");
+    assert_eq!(manifest["engine_version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(manifest["schematic_sha256"], schematic_sha256);
+    let artifacts = manifest["artifacts"].as_array().unwrap();
+    assert_eq!(artifacts.len(), FIRMWARE_FILES.len());
+    assert_eq!(
+        artifacts
+            .iter()
+            .map(|artifact| artifact["path"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        FIRMWARE_FILES
+    );
+    for artifact in artifacts {
+        assert_eq!(keys(artifact), BTreeSet::from(["bytes", "path", "sha256"]));
+        assert!(artifact["bytes"].as_u64().unwrap() > 0);
+        assert_eq!(artifact["sha256"].as_str().unwrap().len(), 64);
+    }
+    for build_name in ["c_build", "cpp_build", "python_check"] {
+        let build = &manifest[build_name];
+        assert_eq!(
+            keys(build),
+            BTreeSet::from(["attempted", "command", "exit_code", "passed", "smoke"])
+        );
+        assert_eq!(build["attempted"], true);
+        assert_eq!(build["passed"], true);
+        assert_eq!(build["exit_code"], 0);
+        assert!(!build["command"].as_array().unwrap().is_empty());
+        let smoke = &build["smoke"];
+        assert_eq!(
+            keys(smoke),
+            BTreeSet::from(["attempted", "command", "exit_code", "passed"])
+        );
+        assert_eq!(smoke["attempted"], true);
+        assert_eq!(smoke["passed"], true);
+        assert_eq!(smoke["exit_code"], 0);
+        assert!(!smoke["command"].as_array().unwrap().is_empty());
+    }
+}
+
 fn assert_factory_rejected(
     inputs: &PipelineInputs,
     receipt_path: &Path,
@@ -494,6 +607,7 @@ fn tamper_zip_entry(path: &Path, entry_name: &str) {
 fn pipeline_verify_accepts_a_digest_bound_end_to_end_pipeline() {
     let temporary = tempfile::tempdir().unwrap();
     let (inputs, schematic_sha256, board_sha256) = passing_inputs(temporary.path());
+    assert_firmware_manifest_contract(&inputs.firmware_manifest, &schematic_sha256);
     let report_path = temporary.path().join("pipeline-report.json");
     let output = inputs.command(&report_path).output().unwrap();
     assert_success(&output, "pipeline-verify");
@@ -534,6 +648,7 @@ fn pipeline_verify_accepts_a_digest_bound_end_to_end_pipeline() {
 fn pipeline_verify_accepts_a_valid_factory_receipt_with_a_six_phase_v2_report() {
     let temporary = tempfile::tempdir().unwrap();
     let (mut inputs, schematic_sha256, board_sha256) = passing_inputs(temporary.path());
+    assert_firmware_manifest_contract(&inputs.firmware_manifest, &schematic_sha256);
     let receipt_path = temporary.path().join("factory-receipt.json");
     write_factory_receipt(&receipt_path, &inputs.manufacturing_package);
     inputs.factory_receipt = Some(receipt_path.clone());
@@ -877,9 +992,10 @@ fn pipeline_verify_recomputes_an_explicit_policy_pack() {
 fn pipeline_verify_rejects_exact_board_package_and_firmware_tampering() {
     let temporary = tempfile::tempdir().unwrap();
     let (inputs, schematic_sha256, _) = passing_inputs(temporary.path());
+    let firmware_directory = inputs.firmware_manifest.parent().unwrap();
 
     fs::write(
-        temporary.path().join("firmware.c"),
+        firmware_directory.join("firmware.c"),
         b"void firmware_tick(void) { /* tampered */ }\n",
     )
     .unwrap();
@@ -894,6 +1010,25 @@ fn pipeline_verify_rejects_exact_board_package_and_firmware_tampering() {
             .unwrap()
             .iter()
             .any(|failure| failure.as_str().unwrap().contains("does not match"))
+    );
+
+    let _ = write_firmware_manifest(temporary.path(), &schematic_sha256);
+    fs::write(
+        firmware_directory.join("firmware.cpp"),
+        b"extern \"C\" void firmware_tick(void) { /* tampered */ }\n",
+    )
+    .unwrap();
+    let cpp_report = temporary.path().join("firmware-cpp-tamper.json");
+    let output = inputs.command(&cpp_report).output().unwrap();
+    assert!(!output.status.success());
+    let report = read_json(&cpp_report);
+    assert_eq!(phase(&report, "firmware-build")["passed"], false);
+    assert!(
+        phase(&report, "firmware-build")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("firmware.cpp"))
     );
 
     let _ = write_firmware_manifest(temporary.path(), &schematic_sha256);
@@ -924,6 +1059,274 @@ fn pipeline_verify_rejects_exact_board_package_and_firmware_tampering() {
     let report = read_json(&board_report);
     assert_eq!(phase(&report, "analysis-drc")["passed"], false);
     assert_eq!(phase(&report, "manufacturing-package")["passed"], false);
+}
+
+#[test]
+fn pipeline_verify_rejects_cpp_artifact_descriptor_hash_or_byte_tampering() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (inputs, _, _) = passing_inputs(temporary.path());
+    let manifest_path = inputs.firmware_manifest.clone();
+    let baseline = read_json(&manifest_path);
+
+    for (label, field, value) in [
+        ("sha256", "sha256", Value::String("0".repeat(64))),
+        (
+            "bytes",
+            "bytes",
+            json!(baseline["artifacts"][4]["bytes"].as_u64().unwrap() + 1),
+        ),
+    ] {
+        let mut manifest = baseline.clone();
+        manifest["artifacts"][4][field] = value;
+        let report_path = temporary
+            .path()
+            .join(format!("cpp-descriptor-{label}.json"));
+        let report = assert_firmware_rejected(&inputs, &manifest_path, manifest, &report_path);
+        assert!(
+            phase(&report, "firmware-build")["failures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|failure| failure.as_str().unwrap().contains("firmware.cpp"))
+        );
+    }
+}
+
+#[test]
+fn pipeline_verify_rejects_missing_reordered_or_extra_firmware_artifacts() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (inputs, _, _) = passing_inputs(temporary.path());
+    let manifest_path = inputs.firmware_manifest.clone();
+    let baseline = read_json(&manifest_path);
+
+    let mut missing = baseline.clone();
+    let mut artifacts = missing["artifacts"].as_array().unwrap().to_vec();
+    artifacts.remove(4);
+    missing["artifacts"] = Value::Array(artifacts);
+    let missing_report = temporary.path().join("cpp-artifact-missing.json");
+    assert_firmware_rejected(&inputs, &manifest_path, missing, &missing_report);
+
+    let mut reordered = baseline.clone();
+    reordered["artifacts"].as_array_mut().unwrap().swap(4, 5);
+    let reordered_report = temporary.path().join("cpp-artifact-reordered.json");
+    assert_firmware_rejected(&inputs, &manifest_path, reordered, &reordered_report);
+
+    let mut extra = baseline;
+    let extra_artifact = extra["artifacts"][4].clone();
+    extra["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .push(extra_artifact);
+    let extra_report = temporary.path().join("cpp-artifact-extra.json");
+    assert_firmware_rejected(&inputs, &manifest_path, extra, &extra_report);
+}
+
+#[test]
+fn pipeline_verify_rejects_an_extra_adjacent_firmware_bundle_file() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (inputs, _, _) = passing_inputs(temporary.path());
+    let manifest_path = inputs.firmware_manifest.clone();
+    let bundle = manifest_path.parent().unwrap();
+    fs::write(bundle.join("unexpected.txt"), b"adjacent regular file\n").unwrap();
+
+    let report_path = temporary.path().join("firmware-extra-adjacent.json");
+    let report = assert_firmware_rejected(
+        &inputs,
+        &manifest_path,
+        read_json(&manifest_path),
+        &report_path,
+    );
+    assert!(
+        phase(&report, "firmware-build")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("exact v2 artifact set"))
+    );
+    assert_eq!(
+        fs::read(bundle.join("unexpected.txt")).unwrap(),
+        b"adjacent regular file\n"
+    );
+}
+
+#[test]
+fn pipeline_verify_accepts_a_generated_firmware_bundle_end_to_end() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (mut inputs, schematic_sha256, board_sha256) = passing_inputs(temporary.path());
+    let generated = temporary.path().join("generated-firmware");
+    let generated_output = Command::new(binary())
+        .arg("generate-firmware")
+        .arg(&inputs.schematic)
+        .arg("--mcu-reference")
+        .arg("U1")
+        .arg("--output-dir")
+        .arg(&generated)
+        .output()
+        .unwrap();
+    assert_success(&generated_output, "generate-firmware");
+    let generated_manifest = generated.join("manifest.json");
+    assert!(generated_manifest.is_file());
+    assert_firmware_manifest_contract(&generated_manifest, &schematic_sha256);
+
+    inputs.firmware_manifest = generated_manifest;
+    let report_path = temporary.path().join("generated-firmware-pipeline.json");
+    let output = inputs.command(&report_path).output().unwrap();
+    assert_success(&output, "pipeline-verify with generated firmware bundle");
+    let report = read_json(&report_path);
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["pipeline"], "pcbex-hardware-v1");
+    assert_eq!(report["passed"], true);
+    assert_eq!(report["failures"], json!([]));
+    assert_eq!(
+        report["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|phase| phase["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "electrical-erc",
+            "analysis-drc",
+            "routing-quality",
+            "manufacturing-package",
+            "firmware-build",
+        ]
+    );
+    assert_eq!(report["identities"]["schematic_sha256"], schematic_sha256);
+    assert_eq!(report["identities"]["board_sha256"], board_sha256);
+    assert_evidence_descriptors(&report);
+}
+
+#[test]
+fn pipeline_verify_rejects_cpp_build_and_smoke_failures() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (inputs, _, _) = passing_inputs(temporary.path());
+    let manifest_path = inputs.firmware_manifest.clone();
+    let baseline = read_json(&manifest_path);
+
+    for (label, path, value) in [
+        ("attempted", vec!["cpp_build", "attempted"], json!(false)),
+        ("passed", vec!["cpp_build", "passed"], json!(false)),
+        ("exit-code", vec!["cpp_build", "exit_code"], json!(1)),
+        (
+            "smoke-attempted",
+            vec!["cpp_build", "smoke", "attempted"],
+            json!(false),
+        ),
+        (
+            "smoke-passed",
+            vec!["cpp_build", "smoke", "passed"],
+            json!(false),
+        ),
+        (
+            "smoke-exit-code",
+            vec!["cpp_build", "smoke", "exit_code"],
+            json!(1),
+        ),
+    ] {
+        let mut manifest = baseline.clone();
+        let mut cursor = &mut manifest;
+        for key in &path[..path.len() - 1] {
+            cursor = &mut cursor[*key];
+        }
+        cursor[path[path.len() - 1]] = value;
+        let report_path = temporary.path().join(format!("cpp-build-{label}.json"));
+        assert_firmware_rejected(&inputs, &manifest_path, manifest, &report_path);
+    }
+
+    let sentinel = b"preserve existing report\n";
+    let no_clobber_report = temporary.path().join("cpp-build-no-clobber.json");
+    fs::write(&no_clobber_report, sentinel).unwrap();
+    let mut failed = baseline;
+    failed["cpp_build"]["passed"] = json!(false);
+    write_json(&manifest_path, &failed);
+    let output = inputs.command(&no_clobber_report).output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("refusing to overwrite existing output")
+    );
+    assert_eq!(fs::read(&no_clobber_report).unwrap(), sentinel);
+}
+
+#[test]
+fn pipeline_verify_rejects_legacy_unknown_and_malformed_firmware_metadata() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (inputs, _, _) = passing_inputs(temporary.path());
+    let manifest_path = inputs.firmware_manifest.clone();
+    let baseline = read_json(&manifest_path);
+
+    let mut unknown = baseline.clone();
+    unknown["cpp_build"]["smoke"]["unexpected"] = json!(true);
+    let unknown_report = temporary.path().join("cpp-unknown-nested.json");
+    assert_firmware_rejected(&inputs, &manifest_path, unknown, &unknown_report);
+
+    let mut legacy = baseline.clone();
+    legacy["schema_version"] = json!(1);
+    let legacy_report = temporary.path().join("firmware-v1.json");
+    let report = assert_firmware_rejected(&inputs, &manifest_path, legacy, &legacy_report);
+    assert!(
+        phase(&report, "firmware-build")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("schema_version"))
+    );
+
+    let mut malformed = baseline;
+    malformed["engine_version"] = json!("not-semver");
+    let malformed_report = temporary.path().join("cpp-engine-version.json");
+    let report = assert_firmware_rejected(&inputs, &manifest_path, malformed, &malformed_report);
+    assert!(
+        phase(&report, "firmware-build")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("engine version"))
+    );
+}
+
+#[test]
+fn pipeline_verify_rejects_cpp_unsafe_paths_and_symlinks() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (inputs, _, _) = passing_inputs(temporary.path());
+    let manifest_path = inputs.firmware_manifest.clone();
+    let baseline = read_json(&manifest_path);
+
+    let mut unsafe_path = baseline.clone();
+    unsafe_path["artifacts"][4]["path"] = json!("../firmware.cpp");
+    let unsafe_report = temporary.path().join("cpp-unsafe-path.json");
+    assert_firmware_rejected(&inputs, &manifest_path, unsafe_path, &unsafe_report);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let target = temporary.path().join("firmware-cpp-target");
+        fs::write(&target, b"extern \"C\" void firmware_tick(void) {}\n").unwrap();
+        let cpp_path = manifest_path.parent().unwrap().join("firmware.cpp");
+        let _ = write_firmware_manifest(
+            temporary.path(),
+            baseline["schematic_sha256"].as_str().unwrap(),
+        );
+        fs::remove_file(&cpp_path).unwrap();
+        symlink(&target, &cpp_path).unwrap();
+
+        let valid_manifest = read_json(&manifest_path);
+        let symlink_report = temporary.path().join("cpp-symlink.json");
+        let report =
+            assert_firmware_rejected(&inputs, &manifest_path, valid_manifest, &symlink_report);
+        assert!(
+            phase(&report, "firmware-build")["failures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|failure| failure.as_str().unwrap().contains("symlink"))
+        );
+        assert_eq!(
+            fs::read(&target).unwrap(),
+            b"extern \"C\" void firmware_tick(void) {}\n"
+        );
+    }
 }
 
 #[test]

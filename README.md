@@ -414,7 +414,9 @@ pcbex pipeline-verify \
 The gate recomputes electrical approval from the exact schematic and policy,
 cross-checks analysis and routing evidence against the exact board, performs
 the complete manufacturing ZIP validation, and verifies every firmware source
-digest. With `--factory-receipt`, it also validates the strict normalized
+digest plus successful C11/C++17 compile/link and smoke evidence and the
+Python compile/self-test. A source-only `--skip-build` bundle is rejected.
+With `--factory-receipt`, it also validates the strict normalized
 receipt against the same ZIP bytes and SHA-256; `--require-factory` makes a
 missing receipt a retained failure. Production jobs should use both flags.
 The factory phase performs no network submission or response re-fetch, and
@@ -431,6 +433,20 @@ alone enables the v2 report (`pcbex-hardware-v2`) and verifies that receipt;
 `--require-factory` alone enables v2 and records a retained failure when the
 receipt is absent. `pcbex pipeline-schema` prints the v1 schema, while
 `pcbex pipeline-schema --factory` prints the closed v2 schema.
+
+Generate a canonical-schematic-bound firmware bundle with strict C11, C++17,
+and Python build/smoke evidence:
+
+```sh
+mkdir -p build
+pcbex generate-firmware design.kicad_sch --mcu-reference U1 \
+  --output-dir build/firmware
+```
+
+The bundle contains exactly seven source artifacts and a closed v2 manifest; a
+`--skip-build` source-only bundle is intentionally rejected by
+`pipeline-verify`. See the [firmware generator contract](docs/FIRMWARE_GENERATOR.md)
+for the staging, subprocess, and no-overwrite boundaries.
 
 ## Component placement
 
@@ -2057,7 +2073,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.397.0
+  uses: penguin425/pcbex@v1.398.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3917,7 +3933,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.397.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.398.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

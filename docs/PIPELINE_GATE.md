@@ -71,10 +71,12 @@ unchanged and appends `factory-dfm` as a strict sixth phase:
    descriptor must identify the exact board passed with `--board`. This proves
    internal ZIP integrity and manifest identity binding; it does not regenerate
    Gerber/BOM/CPL from the board or establish signed producer provenance.
-5. **firmware-build** strictly validates the external firmware manifest, binds
-   its `schematic_sha256` to the recomputed electrical identity, requires the
-   C and Python gates to have been attempted and passed, and verifies the byte
-   count and SHA-256 of each of the five required adjacent artifacts.
+5. **firmware-build** strictly validates the generated firmware manifest,
+   binds its canonical-IR `schematic_sha256` to the recomputed electrical
+   identity, requires the C11, C++17, and Python gates (including each smoke
+   test) to have been attempted and passed, and verifies the byte count and
+   SHA-256 of each of the seven required adjacent source artifacts. A
+   source-only manifest produced with `--skip-build` is rejected.
 6. **factory-dfm** (v2 only) strictly validates the normalized factory receipt
    and binds its `package_sha256`, `package_bytes`, and `request_sha256` to the
    exact final manufacturing ZIP already read by
@@ -87,8 +89,8 @@ unchanged and appends `factory-dfm` as a strict sixth phase:
 The command therefore records two identity chains:
 
 ```text
-schematic bytes -> imported schematic identity -> recomputed review
-                                            `-> firmware manifest -> firmware artifact digests
+schematic bytes -> canonical imported IR identity -> recomputed review
+                                                  `-> firmware manifest -> source artifact digests
 
 board bytes -> analysis run -> checks + routing quality
           `-> manufacturing manifest -> exact final ZIP digest
@@ -98,45 +100,95 @@ board bytes -> analysis run -> checks + routing quality
 These are identity and integrity links, not signatures. They do not establish
 who produced an artifact.
 
-## Firmware manifest v1
+## Firmware manifest v2
 
-The firmware bundle is external: pcbex validates it but does not run the
-recorded compiler or Python command. The manifest is closed to unknown fields
-and has this exact shape (replace sizes, digests, version, and command argv
-with the values actually produced):
+`generate-firmware` emits the bundle and runs its bounded build checks before
+publication. `pipeline-verify` then independently validates the closed
+manifest, the consistency of its recorded success fields, and every adjacent
+source file. It deliberately does not execute manifest commands or generated
+binaries. The build records are therefore producer-supplied local execution
+evidence rather than a signed or independently replayed attestation. The
+manifest has this shape (replace sizes, digests, version, and command argv with
+the values actually produced; the commands below show POSIX output):
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "engine": "pcbex",
-  "engine_version": "1.397.0",
-  "schematic_sha256": "<64 lowercase hexadecimal characters>",
+  "engine_version": "1.398.0",
+  "schematic_sha256": "<canonical IR SHA-256>",
   "artifacts": [
     {"path": "pinout.h", "bytes": 123, "sha256": "<sha256>"},
     {"path": "firmware.h", "bytes": 123, "sha256": "<sha256>"},
     {"path": "firmware.c", "bytes": 123, "sha256": "<sha256>"},
     {"path": "firmware_smoke_test.c", "bytes": 123, "sha256": "<sha256>"},
+    {"path": "firmware.cpp", "bytes": 123, "sha256": "<sha256>"},
+    {"path": "firmware_cpp_smoke_test.cpp", "bytes": 123, "sha256": "<sha256>"},
     {"path": "host.py", "bytes": 123, "sha256": "<sha256>"}
   ],
   "c_build": {
     "attempted": true,
     "passed": true,
-    "command": ["cc", "-o", "firmware-smoke", "firmware.c", "firmware_smoke_test.c"]
+    "command": ["cc", "-std=c11", "-Wall", "-Wextra", "-Werror", "-pedantic", "-I", ".", "firmware.c", "firmware_smoke_test.c", "-o", ".pcbex-firmware-c-smoke"],
+    "exit_code": 0,
+    "smoke": {
+      "attempted": true,
+      "passed": true,
+      "command": ["./.pcbex-firmware-c-smoke"],
+      "exit_code": 0
+    }
+  },
+  "cpp_build": {
+    "attempted": true,
+    "passed": true,
+    "command": ["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror", "-pedantic", "-I", ".", "firmware.cpp", "firmware_cpp_smoke_test.cpp", "-o", ".pcbex-firmware-cpp-smoke"],
+    "exit_code": 0,
+    "smoke": {
+      "attempted": true,
+      "passed": true,
+      "command": ["./.pcbex-firmware-cpp-smoke"],
+      "exit_code": 0
+    }
   },
   "python_check": {
     "attempted": true,
     "passed": true,
-    "command": ["python3", "-m", "py_compile", "host.py"]
+    "command": ["python3", "-m", "py_compile", "host.py"],
+    "exit_code": 0,
+    "smoke": {
+      "attempted": true,
+      "passed": true,
+      "command": ["python3", "host.py", "--self-test"],
+      "exit_code": 0
+    }
   }
 }
 ```
 
-The artifact list must contain exactly those five unique direct-child names in
-the order shown.
-Each file must be a non-symlink regular file beside the manifest and must match
-its positive byte count and lowercase SHA-256. Command arrays are retained as
-bounded argv evidence; they must be nonempty and contain valid bounded strings,
-but pcbex does not replay or sandbox them.
+Firmware manifest v2 replaces the five-artifact v1 contract published in
+v1.397; consumers must select the schema by `schema_version` rather than infer
+it from the pcbex package version. A bounded semantic `engine_version` records
+the producer without requiring the verifier binary to have the identical
+package version. The artifact list must contain exactly those
+seven unique direct-child names in the order shown. The manifest filename must
+be `manifest.json`, and its directory may contain no other entries. Each file
+must be a non-symlink regular file beside the manifest and must match its
+positive byte count and lowercase SHA-256. Every
+build and nested smoke record must be attempted and passed with a zero exit
+code; command arrays are bounded printable-ASCII argv evidence and must contain
+valid strings.
+Unknown manifest or nested build fields, unsafe paths, symlinks, missing or
+reordered artifacts, and any failed or unattempted gate are rejected.
+
+The generator's `--skip-build` mode intentionally leaves all three records
+unattempted and is therefore not acceptable to this phase. The gate checks the
+canonical schematic IR identity and source digests, but does not independently
+prove that the recorded commands ran. It does not establish signatures,
+compiler or toolchain provenance, process isolation, or cross-compilation
+correctness. The selected MCU reference and effective GPIO mapping are retained
+inside the hash-checked sources; the gate does not receive a separate expected
+MCU reference, so policy that mandates one particular MCU must check the
+generated `PCBEX_MCU_REFERENCE` value before invoking the gate.
 
 ## Factory receipt v1 (v2 phase)
 

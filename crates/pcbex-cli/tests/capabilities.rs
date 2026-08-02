@@ -172,6 +172,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "factory-feedback-loop",
         "pipeline-schema",
         "pipeline-verify",
+        "firmware-schema",
+        "generate-firmware",
     ] {
         let command = commands
             .iter()
@@ -229,4 +231,19 @@ fn publishes_a_complete_versioned_capability_inventory() {
             .iter()
             .any(|contract| contract == "Factory-bound hardware pipeline gate report v2")
     );
+    for expected in [
+        "Firmware bundle manifest v2",
+        "C11 firmware source bundle",
+        "C++17 firmware source bundle",
+        "Python host pinout helper",
+    ] {
+        assert!(
+            report["output_contracts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|contract| contract == expected),
+            "missing output contract {expected}"
+        );
+    }
 }

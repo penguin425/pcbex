@@ -1,5 +1,5 @@
 use crate::{Nm, Point, geometry};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
@@ -42,8 +42,22 @@ pub struct Component {
     #[serde(default)]
     pub courtyard: Vec<Point>,
     /// Named pin/anchor offsets from the component origin.
-    #[serde(default)]
+    #[serde(default, serialize_with = "serialize_anchors")]
     pub anchors: HashMap<String, Point>,
+}
+
+fn serialize_anchors<S>(anchors: &HashMap<String, Point>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let mut entries = anchors.iter().collect::<Vec<_>>();
+    entries.sort_unstable_by_key(|(name, _)| *name);
+
+    let mut map = serializer.serialize_map(Some(entries.len()))?;
+    for (name, offset) in entries {
+        map.serialize_entry(name, offset)?;
+    }
+    map.end()
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -1483,6 +1497,30 @@ mod tests {
             courtyard: vec![],
             anchors: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn component_anchor_json_is_sorted_independently_of_hash_map_order() {
+        let anchors = [
+            ("Z", Point { x_nm: 5, y_nm: 6 }),
+            ("A", Point { x_nm: 1, y_nm: 2 }),
+            ("M", Point { x_nm: 3, y_nm: 4 }),
+        ];
+        let mut forward = component("U1", None);
+        let mut reverse = component("U1", None);
+        for (name, offset) in anchors {
+            forward.anchors.insert(name.to_owned(), offset);
+        }
+        for (name, offset) in anchors.iter().rev().copied() {
+            reverse.anchors.insert(name.to_owned(), offset);
+        }
+
+        let forward_json = serde_json::to_string(&forward).unwrap();
+        let reverse_json = serde_json::to_string(&reverse).unwrap();
+        assert_eq!(forward_json, reverse_json);
+        assert!(forward_json.contains(
+            r#""anchors":{"A":{"x_nm":1,"y_nm":2},"M":{"x_nm":3,"y_nm":4},"Z":{"x_nm":5,"y_nm":6}}"#
+        ));
     }
 
     fn connection(from: &str, to: &str) -> Connection {

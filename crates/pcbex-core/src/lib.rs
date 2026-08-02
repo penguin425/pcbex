@@ -3624,8 +3624,10 @@ pub fn fill_copper_zones(board: &mut Board) -> usize {
                     }
                 }
             }
-            cells = connected_zone_cells(&snapshot, route.net_id, cells, grid);
+            let cells = connected_zone_cells(&snapshot, route.net_id, cells, grid);
             total_cells += cells.len();
+            let mut cells: Vec<_> = cells.into_iter().collect();
+            cells.sort_unstable();
             zone.filled_polygons = cells
                 .into_iter()
                 .map(|(x, y)| {
@@ -3778,7 +3780,7 @@ fn connected_zone_cells(
     let start = seeds
         .first()
         .copied()
-        .unwrap_or_else(|| *cells.iter().next().unwrap());
+        .unwrap_or_else(|| cells.iter().copied().min().unwrap());
     let mut connected = HashSet::new();
     let mut queue = VecDeque::from([start]);
     while let Some(cell) = queue.pop_front() {
@@ -7888,6 +7890,20 @@ mod tests {
         let count = fill_copper_zones(&mut board);
         assert!(count > 50, "filled cells: {count}");
         let fills = &board.routes[0].zones[0].filled_polygons;
+        let centers_in_fill_order: Vec<_> = fills
+            .iter()
+            .map(|polygon| {
+                (
+                    polygon.iter().map(|point| point.x_nm).sum::<Nm>() / 4,
+                    polygon.iter().map(|point| point.y_nm).sum::<Nm>() / 4,
+                )
+            })
+            .collect();
+        assert!(
+            centers_in_fill_order
+                .windows(2)
+                .all(|pair| pair[0] <= pair[1])
+        );
         assert!(fills.iter().all(|polygon| {
             polygon.iter().map(|point| point.x_nm).sum::<Nm>() / (polygon.len() as Nm) < 4_500_000
         }));
@@ -7902,6 +7918,20 @@ mod tests {
             .collect();
         assert!(centers.contains(&(2_000_000, 5_000_000)));
         assert!(!centers.contains(&(2_500_000, 5_500_000)));
+
+        let first_fill = fills.to_vec();
+        assert_eq!(fill_copper_zones(&mut board), count);
+        assert_eq!(board.routes[0].zones[0].filled_polygons, first_fill);
+    }
+
+    #[test]
+    fn connected_zone_cells_uses_lexicographic_seedless_fallback() {
+        let board = board();
+        let expected = HashSet::from([(2, 2), (2, 3)]);
+        for _ in 0..8 {
+            let cells = HashSet::from([(2, 2), (2, 3), (8, 8), (8, 9)]);
+            assert_eq!(connected_zone_cells(&board, 99, cells, 1), expected);
+        }
     }
 
     #[test]
