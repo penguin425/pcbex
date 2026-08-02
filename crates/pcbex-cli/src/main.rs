@@ -212,7 +212,9 @@ use manufacturing_package::{
     prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
     write_manufacturing_package,
 };
-use pipeline::{PipelineInputs, pipeline_gate_schema, verify_pipeline};
+use pipeline::{
+    PipelineInputs, pipeline_factory_gate_schema, pipeline_gate_schema, verify_pipeline,
+};
 use policy_deployment::{
     advance_policy_deployment, parse_policy_deployment_state, policy_deployment_state_json_schema,
     render_policy_deployment_summary,
@@ -747,10 +749,13 @@ enum Command {
     },
     /// Print the deterministic full hardware pipeline gate JSON Schema.
     PipelineSchema {
+        /// Print the six-phase factory-bound v2 schema instead of local v1.
+        #[arg(long)]
+        factory: bool,
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Verify ERC, DRC/analysis, routing quality, manufacturing, and firmware gates.
+    /// Verify the local hardware pipeline and optional factory DFM gate.
     PipelineVerify {
         /// Exact KiCad schematic reviewed by the electrical gate.
         #[arg(long)]
@@ -791,6 +796,12 @@ enum Command {
         /// Closed firmware manifest and adjacent hash-bound source bundle.
         #[arg(long)]
         firmware_manifest: PathBuf,
+        /// Closed quote/DFM receipt for the exact selected manufacturing ZIP.
+        #[arg(long)]
+        factory_receipt: Option<PathBuf>,
+        /// Require the six-phase factory-bound v2 gate and retain a failure if the receipt is absent.
+        #[arg(long)]
+        require_factory: bool,
         /// New report path; existing, aliased, or symlinked destinations are refused.
         #[arg(short, long)]
         output: PathBuf,
@@ -4708,6 +4719,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "Factory submission receipt v1",
             "Factory feedback loop report v1",
             "Hardware pipeline gate report v1",
+            "Factory-bound hardware pipeline gate report v2",
             "SPDX JSON",
         ],
     }
@@ -4793,8 +4805,13 @@ fn run_cli() -> Result<()> {
                 output.as_ref(),
             )?;
         }
-        Command::PipelineSchema { output } => {
-            let rendered = serde_json::to_string_pretty(&pipeline_gate_schema())?;
+        Command::PipelineSchema { factory, output } => {
+            let schema = if factory {
+                pipeline_factory_gate_schema()
+            } else {
+                pipeline_gate_schema()
+            };
+            let rendered = serde_json::to_string_pretty(&schema)?;
             if let Some(path) = output {
                 reject_output_symlink_components(&path, "pipeline schema output")?;
                 let prepared = prepare_atomic_new_file(&path)?;
@@ -4817,6 +4834,8 @@ fn run_cli() -> Result<()> {
             analysis_policy_pack,
             manufacturing_package,
             firmware_manifest,
+            factory_receipt,
+            require_factory,
             output,
         } => {
             let mut input_paths = vec![
@@ -4830,6 +4849,9 @@ fn run_cli() -> Result<()> {
                 firmware_manifest.as_path(),
             ];
             if let Some(path) = electrical_policy.as_deref() {
+                input_paths.push(path);
+            }
+            if let Some(path) = factory_receipt.as_deref() {
                 input_paths.push(path);
             }
             for path in [
@@ -4858,6 +4880,8 @@ fn run_cli() -> Result<()> {
                 analysis_policy_pack: analysis_policy_pack.as_deref(),
                 manufacturing_package: &manufacturing_package,
                 firmware_manifest: &firmware_manifest,
+                factory_receipt: factory_receipt.as_deref(),
+                require_factory,
             });
             let rendered = format!("{}\n", serde_json::to_string_pretty(&report)?);
             persist_atomic_new_file(prepared, &output, &rendered)?;

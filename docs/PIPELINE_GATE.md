@@ -1,8 +1,15 @@
 # Hash-bound hardware pipeline gate
 
-`pipeline-verify` closes the local design-to-package evidence chain for one
-schematic and one routed board. It validates all five phases, writes a
-digest-bearing report, and exits nonzero when any phase is rejected.
+`pipeline-verify` closes the design-to-package evidence chain for one
+schematic and one routed board. With no factory options it preserves the
+backward-compatible v1 report and its five phases. Supplying
+`--factory-receipt PATH` or `--require-factory` enables the factory-bound v2
+report, whose sixth and final phase is `factory-dfm`.
+
+Production jobs should supply both `--factory-receipt` and
+`--require-factory`. A supplied receipt is validated even without the require
+flag; `--require-factory` by itself enables v2 and retains a failure when the
+receipt is missing. The gate never submits the package or contacts the factory.
 
 ```text
 pcbex pipeline-verify \
@@ -15,6 +22,8 @@ pcbex pipeline-verify \
   --quality build/analysis/quality.json \
   --manufacturing-package build/manufacturing/manufacturing.zip \
   --firmware-manifest build/firmware/manifest.json \
+  --factory-receipt build/factory-receipt.json \
+  --require-factory \
   --output build/pipeline-gate.json
 ```
 
@@ -28,12 +37,14 @@ files that may be read and their bytes and SHA-256 must match the descriptors.
 Every other input and `--output` is required. In particular,
 `--manufacturing-package` names the final ZIP selected for fabrication, not a
 loose manufacturing manifest. Use
-`pcbex pipeline-schema` to print the closed report schema; its optional output
-also follows the no-clobber rules described below.
+`pcbex pipeline-schema` to print the closed v1 report schema, or
+`pcbex pipeline-schema --factory` for the closed v2 schema. Schema output also
+follows the no-clobber rules described below.
 
 ## What is verified
 
-The report always contains these five phases in order:
+The v1 report contains these five phases in order. The v2 report retains them
+unchanged and appends `factory-dfm` as a strict sixth phase:
 
 1. **electrical-erc** imports the exact schematic, loads the supplied policy
    (or the built-in default), and recomputes the complete electrical review.
@@ -64,6 +75,14 @@ The report always contains these five phases in order:
    its `schematic_sha256` to the recomputed electrical identity, requires the
    C and Python gates to have been attempted and passed, and verifies the byte
    count and SHA-256 of each of the five required adjacent artifacts.
+6. **factory-dfm** (v2 only) strictly validates the normalized factory receipt
+   and binds its `package_sha256`, `package_bytes`, and `request_sha256` to the
+   exact final manufacturing ZIP already read by
+   `manufacturing-package`. It requires an HTTPS endpoint, a 2xx `http_status`,
+   explicit `accepted: true`, `dfm_passed: true`, and no finding whose severity
+   is outside `info`, `notice`, or `warning`. Missing, unknown, or error-like
+   severities fail closed. The receipt is not a trigger for another upload or
+   a response fetch.
 
 The command therefore records two identity chains:
 
@@ -73,6 +92,7 @@ schematic bytes -> imported schematic identity -> recomputed review
 
 board bytes -> analysis run -> checks + routing quality
           `-> manufacturing manifest -> exact final ZIP digest
+                                             `-> factory receipt -> normalized DFM decision
 ```
 
 These are identity and integrity links, not signatures. They do not establish
@@ -89,7 +109,7 @@ with the values actually produced):
 {
   "schema_version": 1,
   "engine": "pcbex",
-  "engine_version": "1.396.0",
+  "engine_version": "1.397.0",
   "schematic_sha256": "<64 lowercase hexadecimal characters>",
   "artifacts": [
     {"path": "pinout.h", "bytes": 123, "sha256": "<sha256>"},
@@ -118,12 +138,58 @@ its positive byte count and lowercase SHA-256. Command arrays are retained as
 bounded argv evidence; they must be nonempty and contain valid bounded strings,
 but pcbex does not replay or sandbox them.
 
+## Factory receipt v1 (v2 phase)
+
+`factory-submit` writes a closed, normalized receipt. Its top-level shape is:
+
+```json
+{
+  "schema_version": 1,
+  "adapter": "generic-factory-http-v1",
+  "provider": "generic",
+  "endpoint": "https://factory-gateway.example/v1/quote",
+  "package_sha256": "<64 lowercase hexadecimal characters>",
+  "package_bytes": 123,
+  "request_sha256": "<same ZIP SHA-256>",
+  "response_sha256": "<64 lowercase hexadecimal characters>",
+  "response_bytes": 123,
+  "http_status": 200,
+  "status": "quoted",
+  "accepted": true,
+  "dfm_passed": true,
+  "quote": {},
+  "findings": [],
+  "response": {
+    "status": "quoted",
+    "accepted": true,
+    "dfm_passed": true,
+    "quote": {},
+    "findings": []
+  }
+}
+```
+
+Unknown top-level receipt or finding fields are rejected. The factory phase
+requires an `https://` endpoint, a 2xx `http_status`, explicit
+`accepted: true`, `dfm_passed: true`, and only `info`, `notice`, or `warning`
+finding severities; missing or unknown severities fail closed. The receipt's
+`package_sha256`, `package_bytes`, and `request_sha256` must bind to the same
+single-read final manufacturing ZIP used by the `manufacturing-package` phase.
+The phase does not resend that ZIP or retrieve the factory response again.
+The package size and digest are independently re-derived from the selected
+ZIP. `response_sha256` and `response_bytes` remain bounded transport metadata:
+without the original response byte stream the offline gate cannot re-derive
+them from the parsed `response` object. Receipt evidence therefore does not
+prove factory authenticity or signature validity.
+
 ## Report and filesystem contract
 
 The v1 report has `schema_version: 1`, `pipeline: "pcbex-hardware-v1"`, nullable
 `identities.schematic_sha256` and `identities.board_sha256`, exactly five phase
-objects, and top-level `passed` and `failures`. Each phase contains its name,
-pass decision, checks, failures, and digest evidence; host input paths are not
+objects, and top-level `passed` and `failures`. The v2 report has
+`schema_version: 2`, `pipeline: "pcbex-hardware-v2"`, and exactly those five
+phases plus `factory-dfm` at the end. Each phase contains its name, pass
+decision, checks, failures, and digest evidence; host input paths are not
 serialized. A report evidence descriptor has the exact shape
 `{"role":"...","bytes":123,"sha256":"..."}`; it identifies the role and
 the byte count and digest of the exact content read without copying a host path
@@ -159,11 +225,15 @@ scope.
 
 ## Factory and repository boundaries
 
-This gate ends at the locally validated manufacturing ZIP. It does not submit
-the package, validate a factory receipt, or enforce the factory's DFM result.
-Factory receipt/DFM enforcement is a subsequent gate and must bind the receipt
-to the same ZIP digest; unknown DFM severities should remain fail-closed. A
-passing pipeline report by itself is not authorization to fabricate.
+The v1 gate ends at the locally validated manufacturing ZIP. The v2 factory
+phase validates an already-produced receipt and enforces its normalized DFM
+result, but it never submits the package, retries the network request, or
+re-fetches raw response bytes. It checks the receipt's HTTPS endpoint, 2xx
+status, explicit acceptance, DFM pass, and closed severity allowlist against
+the exact ZIP bytes/SHA already read by `manufacturing-package`. This is an
+integrity boundary, not a factory-authenticity or signature-verification
+boundary. A passing pipeline report by itself is not authorization to
+fabricate.
 
 `pipeline-verify` is also not automatically wired as a repository required
 status check. Once a workflow produces every input above, a team can add this
@@ -174,7 +244,7 @@ that job's name as a required check in the repository's branch rules.
 
 Generate all inputs in one job-private directory, select the final post-repair
 manufacturing ZIP, and run the gate only after the firmware manifest hashes are
-final. Then make the following assertions in CI:
+final. For local v1 mode, make the following assertions in CI:
 
 ```sh
 jq -e '
@@ -188,6 +258,21 @@ jq -e '
   (.identities.board_sha256 | test("^[0-9a-f]{64}$"))
 ' build/pipeline-gate.json
 sha256sum build/pipeline-gate.json > build/pipeline-gate.json.sha256
+```
+
+For the recommended production v2 invocation, use the receipt and require
+flag, then assert the additional factory phase and decision:
+
+```sh
+jq -e '
+  .schema_version == 2 and
+  .pipeline == "pcbex-hardware-v2" and
+  .passed == true and
+  .failures == [] and
+  (.phases | length == 6) and
+  (.phases[5].name == "factory-dfm" and .phases[5].passed == true) and
+  (.phases | all(.passed == true))
+' build/pipeline-gate.json
 ```
 
 Exercise the failure contract before making the job required: alter a copy of

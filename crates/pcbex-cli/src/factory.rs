@@ -31,6 +31,13 @@ const MAX_REPAIR_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
 const FACTORY_LOOP_TIMEOUT_SECONDS: u64 = 900;
 const REPAIR_TIMEOUT_SECONDS: u64 = 600;
 const MAX_LOOP_ERROR_CHARS: usize = 4096;
+const MAX_FACTORY_FINDINGS: usize = 100_000;
+const MAX_FACTORY_ADAPTER_CHARS: usize = 64;
+const MAX_FACTORY_ENDPOINT_CHARS: usize = 2048;
+const MAX_FACTORY_STATUS_CHARS: usize = 4096;
+const MAX_FACTORY_SEVERITY_CHARS: usize = 64;
+const MAX_FACTORY_FINDING_CODE_CHARS: usize = 256;
+const MAX_FACTORY_FINDING_MESSAGE_CHARS: usize = 4096;
 const REPAIR_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -132,15 +139,15 @@ pub fn factory_submission_json_schema() -> Value {
         ],
         "properties": {
             "schema_version": {"const": 1},
-            "adapter": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+            "adapter": {"type": "string", "pattern": "^[a-z0-9-]+$", "minLength": 1, "maxLength": MAX_FACTORY_ADAPTER_CHARS},
             "provider": {"enum": ["jlcpcb", "pcbway", "generic"]},
             // HTTP is accepted only for an explicitly enabled local fixture;
             // production/provider endpoints remain HTTPS-only.  Keep the
             // schema able to describe those opt-in receipts as well.
             "endpoint": {
                 "anyOf": [
-                    {"type": "string", "pattern": "^https://[^/?#]+(?:/[^?#]*)?$"},
-                    {"type": "string", "pattern": "^http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?(?:/[^?#]*)?$"}
+                    {"type": "string", "pattern": "^https://[^/?#@]+(?:/[^?#]*)?$", "maxLength": MAX_FACTORY_ENDPOINT_CHARS},
+                    {"type": "string", "pattern": "^http://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]+)?(?:/[^?#]*)?$", "maxLength": MAX_FACTORY_ENDPOINT_CHARS}
                 ]
             },
             "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -149,20 +156,26 @@ pub fn factory_submission_json_schema() -> Value {
             "response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "response_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_RESPONSE_BYTES},
             "http_status": {"type": "integer", "minimum": 200, "maximum": 599},
-            "status": {"type": "string", "minLength": 1},
+            "status": {"type": "string", "minLength": 1, "maxLength": MAX_FACTORY_STATUS_CHARS, "pattern": "^\\S(?:[\\s\\S]*\\S)?$"},
             "accepted": {"type": "boolean"},
             "dfm_passed": {"type": ["boolean", "null"]},
             "quote": {"type": ["object", "null"]},
             "findings": {
                 "type": "array",
+                "maxItems": MAX_FACTORY_FINDINGS,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
                     "required": ["code", "severity", "message"],
                     "properties": {
-                        "code": {"type": ["string", "null"]},
-                        "severity": {"type": "string", "minLength": 1},
-                        "message": {"type": "string", "minLength": 1}
+                        "code": {
+                            "anyOf": [
+                                {"type": "null"},
+                                {"type": "string", "minLength": 1, "maxLength": MAX_FACTORY_FINDING_CODE_CHARS, "pattern": "^\\S(?:[\\s\\S]*\\S)?$"}
+                            ]
+                        },
+                        "severity": {"type": "string", "minLength": 1, "maxLength": MAX_FACTORY_SEVERITY_CHARS, "pattern": "^[^A-Z\\s](?:[^A-Z]*[^A-Z\\s])?$"},
+                        "message": {"type": "string", "minLength": 1, "maxLength": MAX_FACTORY_FINDING_MESSAGE_CHARS, "pattern": "^\\S(?:[\\s\\S]*\\S)?$"}
                     }
                 }
             },
@@ -1005,6 +1018,24 @@ struct NormalizedResponse {
     findings: Vec<FactoryDfmFinding>,
 }
 
+fn validate_factory_text(
+    value: &str,
+    label: &str,
+    maximum: usize,
+    require_trimmed: bool,
+) -> Result<(), String> {
+    if value.is_empty()
+        || value.chars().count() > maximum
+        || value.contains('\0')
+        || (require_trimmed && value.trim() != value)
+    {
+        return Err(format!(
+            "{label} must contain 1 to {maximum} trimmed characters"
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ManufacturingDescriptor {
@@ -1591,6 +1622,7 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
             if status.is_empty() {
                 return Err("factory status must not be blank".into());
             }
+            validate_factory_text(status, "factory status", MAX_FACTORY_STATUS_CHARS, true)?;
             status.to_string()
         }
         None => "unknown".to_string(),
@@ -1628,6 +1660,11 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
         let values = values
             .as_array()
             .ok_or_else(|| "factory findings must be an array".to_string())?;
+        if values.len() > MAX_FACTORY_FINDINGS {
+            return Err(format!(
+                "factory findings must contain at most {MAX_FACTORY_FINDINGS} entries"
+            ));
+        }
         for finding in values {
             let finding = finding
                 .as_object()
@@ -1641,6 +1678,12 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
                     if message.is_empty() {
                         return Err("factory finding message must not be blank".into());
                     }
+                    validate_factory_text(
+                        message,
+                        "factory finding message",
+                        MAX_FACTORY_FINDING_MESSAGE_CHARS,
+                        true,
+                    )?;
                     message.to_string()
                 }
                 None => "factory DFM finding".to_string(),
@@ -1655,6 +1698,14 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
                         .as_str()
                         .ok_or_else(|| "factory finding code must be a string or null".to_string())?
                         .trim();
+                    if !code.is_empty() {
+                        validate_factory_text(
+                            code,
+                            "factory finding code",
+                            MAX_FACTORY_FINDING_CODE_CHARS,
+                            true,
+                        )?;
+                    }
                     (!code.is_empty()).then(|| code.to_string())
                 }
             };
@@ -1668,6 +1719,12 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
                     if severity.is_empty() {
                         "unknown".to_string()
                     } else {
+                        validate_factory_text(
+                            &severity,
+                            "factory finding severity",
+                            MAX_FACTORY_SEVERITY_CHARS,
+                            true,
+                        )?;
                         severity
                     }
                 }
@@ -1693,6 +1750,126 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
         quote,
         findings,
     })
+}
+
+/// Validate a factory receipt without contacting the endpoint.
+///
+/// The receipt is an evidence artifact, so this check verifies its closed
+/// shape, internal consistency, and endpoint policy.  Whether the factory
+/// outcome is acceptable remains the responsibility of
+/// [`factory_feedback_passed`].
+pub fn validate_factory_submission_receipt(
+    receipt: &FactorySubmissionReceipt,
+    allow_http_loopback: bool,
+) -> Result<(), String> {
+    if receipt.schema_version != 1 {
+        return Err("factory receipt schema_version must be 1".into());
+    }
+
+    validate_factory_text(
+        &receipt.adapter,
+        "factory receipt adapter",
+        MAX_FACTORY_ADAPTER_CHARS,
+        true,
+    )?;
+    if receipt.adapter != receipt.provider.adapter_name() {
+        return Err("factory receipt adapter does not match its provider".into());
+    }
+    validate_factory_text(
+        &receipt.endpoint,
+        "factory receipt endpoint",
+        MAX_FACTORY_ENDPOINT_CHARS,
+        true,
+    )?;
+    validate_endpoint(&receipt.endpoint, allow_http_loopback)?;
+    validate_factory_text(
+        &receipt.status,
+        "factory receipt status",
+        MAX_FACTORY_STATUS_CHARS,
+        true,
+    )?;
+
+    for (label, digest) in [
+        ("package_sha256", &receipt.package_sha256),
+        ("request_sha256", &receipt.request_sha256),
+        ("response_sha256", &receipt.response_sha256),
+    ] {
+        if !is_sha256(digest) {
+            return Err(format!(
+                "factory receipt {label} is not a lowercase SHA-256"
+            ));
+        }
+    }
+    if receipt.package_sha256 != receipt.request_sha256 {
+        return Err("factory receipt package_sha256 and request_sha256 differ".into());
+    }
+    if receipt.package_bytes == 0 || receipt.package_bytes > MAX_PACKAGE_BYTES {
+        return Err(format!(
+            "factory receipt package_bytes must contain 1 to {MAX_PACKAGE_BYTES} bytes"
+        ));
+    }
+    if receipt.response_bytes == 0 || receipt.response_bytes > MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "factory receipt response_bytes must contain 1 to {MAX_RESPONSE_BYTES} bytes"
+        ));
+    }
+    if !(200..=599).contains(&receipt.http_status) {
+        return Err("factory receipt http_status must be between 200 and 599".into());
+    }
+
+    if receipt.findings.len() > MAX_FACTORY_FINDINGS {
+        return Err(format!(
+            "factory receipt findings must contain at most {MAX_FACTORY_FINDINGS} entries"
+        ));
+    }
+    for finding in &receipt.findings {
+        if let Some(code) = finding.code.as_deref() {
+            validate_factory_text(
+                code,
+                "factory receipt finding code",
+                MAX_FACTORY_FINDING_CODE_CHARS,
+                true,
+            )?;
+        }
+        validate_factory_text(
+            &finding.message,
+            "factory receipt finding message",
+            MAX_FACTORY_FINDING_MESSAGE_CHARS,
+            true,
+        )?;
+        let canonical_severity = finding.severity.trim().to_ascii_lowercase();
+        if canonical_severity.is_empty()
+            || canonical_severity != finding.severity
+            || canonical_severity.chars().count() > MAX_FACTORY_SEVERITY_CHARS
+            || canonical_severity.contains('\0')
+        {
+            return Err(
+                "factory receipt finding severity must be non-empty lowercase canonical text"
+                    .into(),
+            );
+        }
+    }
+
+    if !receipt.response.is_object() {
+        return Err("factory receipt response must be a JSON object".into());
+    }
+    let normalized = normalize_response(&receipt.response)?;
+    if receipt.status != normalized.status {
+        return Err("factory receipt status does not match normalized response".into());
+    }
+    if receipt.accepted != normalized.accepted {
+        return Err("factory receipt accepted does not match normalized response".into());
+    }
+    if receipt.dfm_passed != normalized.dfm_passed {
+        return Err("factory receipt dfm_passed does not match normalized response".into());
+    }
+    if receipt.quote != normalized.quote {
+        return Err("factory receipt quote does not match normalized response".into());
+    }
+    if receipt.findings != normalized.findings {
+        return Err("factory receipt findings do not match normalized response".into());
+    }
+    Ok(())
 }
 
 fn response_contains_bearer_token(response: &[u8], value: &Value, token: &str) -> bool {
@@ -1986,6 +2163,28 @@ mod tests {
         package
     }
 
+    fn receipt_for_response(response: Value) -> FactorySubmissionReceipt {
+        let normalized = normalize_response(&response).unwrap();
+        FactorySubmissionReceipt {
+            schema_version: 1,
+            adapter: FactoryProvider::Generic.adapter_name().into(),
+            provider: FactoryProvider::Generic,
+            endpoint: "https://factory.example/quote".into(),
+            package_sha256: "a".repeat(64),
+            package_bytes: 1,
+            request_sha256: "a".repeat(64),
+            response_sha256: "b".repeat(64),
+            response_bytes: 1,
+            http_status: 200,
+            status: normalized.status,
+            accepted: normalized.accepted,
+            dfm_passed: normalized.dfm_passed,
+            quote: normalized.quote,
+            findings: normalized.findings,
+            response,
+        }
+    }
+
     fn unique_env_name(prefix: &str) -> String {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         format!(
@@ -2113,6 +2312,120 @@ mod tests {
         .unwrap();
         assert_eq!(blank_code_and_severity.findings[0].code, None);
         assert_eq!(blank_code_and_severity.findings[0].severity, "unknown");
+    }
+
+    #[test]
+    fn validates_a_structurally_consistent_factory_receipt_offline() {
+        let response = json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": true,
+            "quote": {"total": 12.5, "currency": "USD"},
+            "dfm_findings": [
+                {"code": "silk", "severity": "warning", "message": "overlap"},
+                {"code": "trace", "severity": "info", "message": "long"}
+            ]
+        });
+        let receipt = receipt_for_response(response);
+        assert!(validate_factory_submission_receipt(&receipt, false).is_ok());
+        assert!(factory_feedback_passed(&receipt));
+    }
+
+    #[test]
+    fn rejects_receipt_adapter_digest_and_normalized_field_mismatches() {
+        let response = json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": true,
+            "dfm_findings": []
+        });
+        let receipt = receipt_for_response(response);
+
+        let mut adapter = receipt.clone();
+        adapter.adapter = FactoryProvider::Pcbway.adapter_name().into();
+        assert!(
+            validate_factory_submission_receipt(&adapter, false)
+                .unwrap_err()
+                .contains("adapter")
+        );
+
+        let mut digest = receipt.clone();
+        digest.request_sha256 = "c".repeat(64);
+        assert!(
+            validate_factory_submission_receipt(&digest, false)
+                .unwrap_err()
+                .contains("package_sha256 and request_sha256")
+        );
+
+        let mut status = receipt.clone();
+        status.status = "accepted".into();
+        assert!(
+            validate_factory_submission_receipt(&status, false)
+                .unwrap_err()
+                .contains("status")
+        );
+
+        let mut findings = receipt;
+        findings.findings.push(FactoryDfmFinding {
+            code: None,
+            severity: "info".into(),
+            message: "unexpected".into(),
+        });
+        assert!(
+            validate_factory_submission_receipt(&findings, false)
+                .unwrap_err()
+                .contains("findings")
+        );
+    }
+
+    #[test]
+    fn enforces_receipt_https_policy_and_keeps_unknown_severity_fail_closed() {
+        let mut https = receipt_for_response(json!({
+            "accepted": true,
+            "dfm_passed": true,
+            "findings": []
+        }));
+        https.endpoint = "http://127.0.0.1:8080/quote".into();
+        assert!(validate_factory_submission_receipt(&https, false).is_err());
+        assert!(validate_factory_submission_receipt(&https, true).is_ok());
+
+        let unknown = receipt_for_response(json!({
+            "accepted": true,
+            "dfm_passed": true,
+            "findings": [{"severity": "vendor-specific", "message": "opaque"}]
+        }));
+        assert!(validate_factory_submission_receipt(&unknown, false).is_ok());
+        assert!(!factory_feedback_passed(&unknown));
+    }
+
+    #[test]
+    fn bounds_receipt_findings_and_finding_text() {
+        let mut long_message = receipt_for_response(json!({
+            "accepted": true,
+            "dfm_passed": true,
+            "findings": []
+        }));
+        long_message.findings.push(FactoryDfmFinding {
+            code: Some("code".into()),
+            severity: "info".into(),
+            message: "x".repeat(MAX_FACTORY_FINDING_MESSAGE_CHARS + 1),
+        });
+        assert!(validate_factory_submission_receipt(&long_message, false).is_err());
+
+        let mut too_many = receipt_for_response(json!({
+            "accepted": true,
+            "dfm_passed": true,
+            "findings": []
+        }));
+        too_many.findings = vec![
+            FactoryDfmFinding {
+                code: None,
+                severity: "info".into(),
+                message: "finding".into(),
+            };
+            MAX_FACTORY_FINDINGS + 1
+        ];
+        assert!(validate_factory_submission_receipt(&too_many, false).is_err());
     }
 
     #[test]
@@ -2415,6 +2728,7 @@ mod tests {
         assert_eq!(receipt.dfm_passed, Some(true));
         assert_eq!(receipt.findings[0].severity, "info");
         assert_eq!(receipt.findings[1].severity, "warning");
+        assert!(validate_factory_submission_receipt(&receipt, true).is_ok());
         assert!(factory_feedback_passed(&receipt));
     }
 
@@ -2552,7 +2866,20 @@ mod tests {
             MAX_LOOP_ERROR_CHARS
         );
         assert!(schema["allOf"].is_array());
-        assert!(schema["$defs"]["factory_submission_receipt"].is_object());
+        let receipt = &schema["$defs"]["factory_submission_receipt"];
+        assert!(receipt.is_object());
+        assert_eq!(
+            receipt["properties"]["endpoint"]["anyOf"][0]["pattern"],
+            "^https://[^/?#@]+(?:/[^?#]*)?$"
+        );
+        assert_eq!(
+            receipt["properties"]["status"]["pattern"],
+            "^\\S(?:[\\s\\S]*\\S)?$"
+        );
+        assert_eq!(
+            receipt["properties"]["findings"]["items"]["properties"]["severity"]["pattern"],
+            "^[^A-Z\\s](?:[^A-Z]*[^A-Z\\s])?$"
+        );
         assert_eq!(
             schema["properties"]["final_package_bytes"]["maximum"],
             MAX_REPAIR_PACKAGE_BYTES
