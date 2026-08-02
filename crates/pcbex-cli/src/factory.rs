@@ -11,11 +11,14 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
-    fs::File,
-    io::{Cursor, Read},
-    path::Path,
-    time::Duration,
+    fs::{self, File},
+    io::{Cursor, Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
+use tempfile::{Builder as TempfileBuilder, NamedTempFile};
 use zip::ZipArchive;
 
 const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
@@ -23,6 +26,12 @@ const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 4096;
 const MAX_ARCHIVE_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_REPAIR_ATTEMPTS: u8 = 4;
+const MAX_REPAIR_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
+const FACTORY_LOOP_TIMEOUT_SECONDS: u64 = 900;
+const REPAIR_TIMEOUT_SECONDS: u64 = 600;
+const MAX_LOOP_ERROR_CHARS: usize = 4096;
+const REPAIR_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -80,6 +89,35 @@ pub struct FactorySubmissionReceipt {
     pub response: Value,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct FactoryLoopAttempt {
+    pub attempt: u8,
+    pub package_sha256: String,
+    pub package_bytes: u64,
+    pub receipt: Option<FactorySubmissionReceipt>,
+    pub error: Option<String>,
+    pub repair_command_ran: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct FactoryFeedbackLoopReport {
+    pub schema_version: u32,
+    pub passed: bool,
+    pub attempts: Vec<FactoryLoopAttempt>,
+    pub final_package_sha256: String,
+    pub final_package_bytes: u64,
+    pub failure: Option<String>,
+}
+
+/// The auditable loop report together with the last package that passed full
+/// local manufacturing-package validation.  The package bytes are deliberately
+/// not serialized into the JSON report.
+#[derive(Debug)]
+pub struct FactoryFeedbackLoopOutcome {
+    pub report: FactoryFeedbackLoopReport,
+    pub final_package: Vec<u8>,
+}
+
 pub fn factory_submission_json_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -133,9 +171,710 @@ pub fn factory_submission_json_schema() -> Value {
     })
 }
 
+pub fn factory_feedback_loop_json_schema() -> Value {
+    let submission_schema = factory_submission_json_schema();
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": "https://github.com/penguin425/pcbex/schema/factory-feedback-loop-v1.json",
+        "title": "pcbex bounded factory feedback loop report",
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "passed", "attempts", "final_package_sha256", "final_package_bytes", "failure"],
+        "properties": {
+            "schema_version": {"const": 1},
+            "passed": {"type": "boolean"},
+            "attempts": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": MAX_REPAIR_ATTEMPTS,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "attempt", "package_sha256", "package_bytes", "receipt", "error",
+                        "repair_command_ran"
+                    ],
+                    "properties": {
+                        "attempt": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_ATTEMPTS},
+                        "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                        "package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_PACKAGE_BYTES},
+                        "receipt": {
+                            "anyOf": [
+                                {"$ref": "#/$defs/factory_submission_receipt"},
+                                {"type": "null"}
+                            ]
+                        },
+                        "error": {
+                            "type": ["string", "null"],
+                            "minLength": 1,
+                            "maxLength": MAX_LOOP_ERROR_CHARS
+                        },
+                        "repair_command_ran": {"type": "boolean"}
+                    },
+                    "allOf": [{
+                        "if": {
+                            "required": ["receipt"],
+                            "properties": {"receipt": {"type": "null"}}
+                        },
+                        "then": {
+                            "properties": {
+                                "error": {"type": "string", "minLength": 1, "maxLength": MAX_LOOP_ERROR_CHARS},
+                                "repair_command_ran": {"const": false}
+                            }
+                        }
+                    }]
+                }
+            },
+            "final_package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "final_package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_PACKAGE_BYTES},
+            "failure": {
+                "type": ["string", "null"],
+                "minLength": 1,
+                "maxLength": MAX_LOOP_ERROR_CHARS
+            }
+        },
+        "allOf": [{
+            "if": {
+                "required": ["passed"],
+                "properties": {"passed": {"const": true}}
+            },
+            "then": {"properties": {"failure": {"type": "null"}}},
+            "else": {
+                "properties": {
+                    "failure": {"type": "string", "minLength": 1, "maxLength": MAX_LOOP_ERROR_CHARS}
+                }
+            }
+        }],
+        "$defs": {"factory_submission_receipt": submission_schema}
+    })
+}
+
+/// Submit a package, then invoke a bounded shell-free repair command when DFM
+/// fails. The repair command receives the current receipt on stdin and the
+/// package paths through `PCBEX_FACTORY_REPAIR_*` environment variables; it
+/// must write the next ZIP to the declared output path.
+#[allow(clippy::too_many_arguments)]
+pub fn run_factory_feedback_loop(
+    package_path: &Path,
+    endpoint: &str,
+    provider: FactoryProvider,
+    bearer_token_env: Option<&str>,
+    timeout_seconds: u64,
+    allow_http_loopback: bool,
+    max_attempts: u8,
+    repair_command: Option<&Path>,
+) -> Result<FactoryFeedbackLoopOutcome, String> {
+    run_factory_feedback_loop_with_limits(
+        package_path,
+        endpoint,
+        provider,
+        bearer_token_env,
+        timeout_seconds,
+        allow_http_loopback,
+        max_attempts,
+        repair_command,
+        FactoryLoopLimits::production(),
+    )
+}
+
+#[derive(Clone, Copy)]
+struct FactoryLoopLimits {
+    total: Duration,
+    repair: Duration,
+    repair_poll_interval: Duration,
+}
+
+impl FactoryLoopLimits {
+    const fn production() -> Self {
+        Self {
+            total: Duration::from_secs(FACTORY_LOOP_TIMEOUT_SECONDS),
+            repair: Duration::from_secs(REPAIR_TIMEOUT_SECONDS),
+            repair_poll_interval: REPAIR_WAIT_POLL_INTERVAL,
+        }
+    }
+}
+
+struct PackageSnapshot {
+    file: NamedTempFile,
+    bytes: Vec<u8>,
+}
+
+impl PackageSnapshot {
+    fn path(&self) -> &Path {
+        self.file.path()
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+struct RepairCommandOutcome {
+    command_ran: bool,
+    result: Result<Vec<u8>, String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_factory_feedback_loop_with_limits(
+    package_path: &Path,
+    endpoint: &str,
+    provider: FactoryProvider,
+    bearer_token_env: Option<&str>,
+    timeout_seconds: u64,
+    allow_http_loopback: bool,
+    max_attempts: u8,
+    repair_command: Option<&Path>,
+    limits: FactoryLoopLimits,
+) -> Result<FactoryFeedbackLoopOutcome, String> {
+    let loop_started = Instant::now();
+    // Charge configuration checks, input validation, and initial staging to
+    // the same budget as submissions and repairs. Individual bounded file
+    // operations are not forcibly interrupted, but no later phase starts once
+    // this deadline has elapsed.
+    let deadline = loop_started
+        .checked_add(limits.total)
+        .ok_or_else(|| "factory feedback loop deadline overflow".to_string())?;
+    if !(1..=MAX_REPAIR_ATTEMPTS).contains(&max_attempts) {
+        return Err(format!(
+            "factory feedback max_attempts must be between 1 and {MAX_REPAIR_ATTEMPTS}"
+        ));
+    }
+    if !(1..=600).contains(&timeout_seconds) {
+        return Err("factory timeout must be between 1 and 600 seconds".into());
+    }
+    validate_endpoint(endpoint, allow_http_loopback)?;
+    preflight_bearer_token(bearer_token_env)?;
+    let repair_executable = repair_command.map(validate_repair_executable).transpose()?;
+
+    // Snapshot one bounded read from one handle, validate those exact bytes,
+    // and never consult the caller-controlled source path again.
+    let initial_package = read_package(package_path)?;
+    validate_manufacturing_package(&initial_package)?;
+    let workspace = TempfileBuilder::new()
+        .prefix("pcbex-factory-loop-")
+        .tempdir()
+        .map_err(|error| format!("creating secure factory feedback workspace: {error}"))?;
+    let mut current = snapshot_known_good(workspace.path(), "initial-", initial_package)?;
+    let mut attempts = Vec::new();
+
+    for attempt_number in 1..=max_attempts {
+        let package_sha256 = sha256(&current.bytes);
+        let package_bytes = current.bytes.len() as u64;
+        if let Err(error) = validate_manufacturing_package(&current.bytes) {
+            let attempt = FactoryLoopAttempt {
+                attempt: attempt_number,
+                package_sha256,
+                package_bytes,
+                receipt: None,
+                error: None,
+                repair_command_ran: false,
+            };
+            return Ok(finish_failed_attempt(attempts, attempt, error, current));
+        }
+        let Some(network_timeout) = bounded_network_timeout(deadline, timeout_seconds) else {
+            let attempt = FactoryLoopAttempt {
+                attempt: attempt_number,
+                package_sha256,
+                package_bytes,
+                receipt: None,
+                error: None,
+                repair_command_ran: false,
+            };
+            return Ok(finish_failed_attempt(
+                attempts,
+                attempt,
+                total_timeout_error(limits.total),
+                current,
+            ));
+        };
+        let receipt = match submit_validated_factory_package_bytes(
+            &current.bytes,
+            endpoint,
+            provider,
+            bearer_token_env,
+            network_timeout,
+            allow_http_loopback,
+        ) {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                let attempt = FactoryLoopAttempt {
+                    attempt: attempt_number,
+                    package_sha256,
+                    package_bytes,
+                    receipt: None,
+                    error: None,
+                    repair_command_ran: false,
+                };
+                return Ok(finish_failed_attempt(attempts, attempt, error, current));
+            }
+        };
+        let passed = factory_feedback_passed(&receipt);
+        let mut attempt = FactoryLoopAttempt {
+            attempt: attempt_number,
+            package_sha256,
+            package_bytes,
+            receipt: Some(receipt),
+            error: None,
+            repair_command_ran: false,
+        };
+
+        if Instant::now() >= deadline {
+            return Ok(finish_failed_attempt(
+                attempts,
+                attempt,
+                total_timeout_error(limits.total),
+                current,
+            ));
+        }
+        if passed {
+            attempts.push(attempt);
+            return Ok(finish_feedback_loop(true, attempts, None, current));
+        }
+        if attempt_number == max_attempts {
+            return Ok(finish_failed_attempt(
+                attempts,
+                attempt,
+                "factory DFM feedback did not pass before the attempt limit",
+                current,
+            ));
+        }
+        let Some(repair_executable) = repair_executable.as_deref() else {
+            return Ok(finish_failed_attempt(
+                attempts,
+                attempt,
+                "factory DFM feedback failed and no repair command was supplied",
+                current,
+            ));
+        };
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            return Ok(finish_failed_attempt(
+                attempts,
+                attempt,
+                total_timeout_error(limits.total),
+                current,
+            ));
+        };
+        let repair_timeout = limits.repair.min(remaining);
+        if repair_timeout.is_zero() {
+            return Ok(finish_failed_attempt(
+                attempts,
+                attempt,
+                total_timeout_error(limits.total),
+                current,
+            ));
+        }
+        let repair = run_repair_command(
+            repair_executable,
+            &current,
+            attempt
+                .receipt
+                .as_ref()
+                .expect("a repair is attempted only after a receipt"),
+            workspace.path(),
+            repair_timeout,
+            limits.repair_poll_interval,
+            bearer_token_env,
+        );
+        attempt.repair_command_ran = repair.command_ran;
+        let candidate = match repair.result {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                return Ok(finish_failed_attempt(attempts, attempt, error, current));
+            }
+        };
+        if Instant::now() >= deadline {
+            return Ok(finish_failed_attempt(
+                attempts,
+                attempt,
+                total_timeout_error(limits.total),
+                current,
+            ));
+        }
+        let next = match snapshot_known_good(workspace.path(), "validated-", candidate) {
+            Ok(next) => next,
+            Err(error) => {
+                return Ok(finish_failed_attempt(attempts, attempt, error, current));
+            }
+        };
+        attempts.push(attempt);
+        current = next;
+    }
+
+    unreachable!("the validated max_attempts bound makes the loop non-empty")
+}
+
+fn preflight_bearer_token(bearer_token_env: Option<&str>) -> Result<(), String> {
+    if let Some(variable) = bearer_token_env {
+        validate_env_name(variable)?;
+        let token = env::var(variable)
+            .map_err(|_| format!("factory bearer-token environment {variable} is unset"))?;
+        if token.trim().is_empty() {
+            return Err(format!(
+                "factory bearer-token environment {variable} is empty"
+            ));
+        }
+        validate_bearer_token(&token)?;
+    }
+    Ok(())
+}
+
+fn validate_repair_executable(path: &Path) -> Result<PathBuf, String> {
+    if path.as_os_str().is_empty() {
+        return Err("factory repair executable path must not be empty".into());
+    }
+    let canonical = fs::canonicalize(path).map_err(|error| {
+        format!(
+            "canonicalizing factory repair executable {}: {error}",
+            path.display()
+        )
+    })?;
+    let metadata = fs::metadata(&canonical).map_err(|error| {
+        format!(
+            "reading factory repair executable metadata {}: {error}",
+            canonical.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err("factory repair executable must be a regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return Err("factory repair executable must have an executable permission bit".into());
+        }
+    }
+    Ok(canonical)
+}
+
+fn run_repair_command(
+    executable: &Path,
+    current_package: &PackageSnapshot,
+    receipt: &FactorySubmissionReceipt,
+    workspace: &Path,
+    timeout: Duration,
+    poll_interval: Duration,
+    _bearer_token_env: Option<&str>,
+) -> RepairCommandOutcome {
+    let deadline = match Instant::now().checked_add(timeout) {
+        Some(deadline) => deadline,
+        None => {
+            return RepairCommandOutcome {
+                command_ran: false,
+                result: Err("factory repair command deadline overflow".into()),
+            };
+        }
+    };
+    let receipt_json = serde_json::to_vec_pretty(receipt)
+        .map_err(|error| format!("serializing factory receipt for repair: {error}"));
+    let receipt_json = match receipt_json {
+        Ok(receipt_json) => receipt_json,
+        Err(error) => {
+            return RepairCommandOutcome {
+                command_ran: false,
+                result: Err(error),
+            };
+        }
+    };
+    let mut receipt_file = match tempfile::tempfile_in(workspace) {
+        Ok(file) => file,
+        Err(error) => {
+            return RepairCommandOutcome {
+                command_ran: false,
+                result: Err(format!(
+                    "creating factory repair receipt input file: {error}"
+                )),
+            };
+        }
+    };
+    if let Err(error) = receipt_file
+        .write_all(&receipt_json)
+        .and_then(|()| receipt_file.flush())
+        .and_then(|()| receipt_file.seek(SeekFrom::Start(0)).map(|_| ()))
+    {
+        return RepairCommandOutcome {
+            command_ran: false,
+            result: Err(format!("prewriting factory receipt for repair: {error}")),
+        };
+    }
+    let output_package = match TempfileBuilder::new()
+        .prefix("candidate-")
+        .suffix(".zip")
+        .tempfile_in(workspace)
+    {
+        Ok(output) => output,
+        Err(error) => {
+            return RepairCommandOutcome {
+                command_ran: false,
+                result: Err(format!("creating factory repair output file: {error}")),
+            };
+        }
+    };
+    let mut command = Command::new(executable);
+    // Do not inherit caller state (especially the configured bearer secret).
+    // The executable is canonical/absolute, and the only utility search path
+    // is a fixed platform path rather than the caller's PATH.
+    command
+        .env_clear()
+        .current_dir(workspace)
+        .env("PCBEX_FACTORY_REPAIR_INPUT_PACKAGE", current_package.path())
+        .env("PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE", output_package.path())
+        .env("PCBEX_FACTORY_REPAIR_RECEIPT_JSON", "stdin")
+        .stdin(Stdio::from(receipt_file))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    command.env("PATH", "/usr/bin:/bin").env("LC_ALL", "C");
+    #[cfg(windows)]
+    for variable in [
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "PATH",
+        "TEMP",
+        "TMP",
+    ] {
+        let carries_bearer_token = _bearer_token_env
+            .is_some_and(|secret_name| windows_environment_name_matches(secret_name, variable));
+        if !carries_bearer_token && let Some(value) = env::var_os(variable) {
+            command.env(variable, value);
+        }
+    }
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return RepairCommandOutcome {
+                command_ran: false,
+                result: Err(format!("starting factory repair command: {error}")),
+            };
+        }
+    };
+    let process_result = wait_for_repair_command(&mut child, deadline, timeout, poll_interval);
+    if let Err(mutation) = verify_repair_input_unchanged(current_package) {
+        let error = match process_result {
+            Ok(()) => mutation,
+            Err(process_error) => format!("{mutation}; {process_error}"),
+        };
+        return RepairCommandOutcome {
+            command_ran: true,
+            result: Err(error),
+        };
+    }
+    if let Err(error) = process_result {
+        return RepairCommandOutcome {
+            command_ran: true,
+            result: Err(error),
+        };
+    }
+    RepairCommandOutcome {
+        command_ran: true,
+        result: read_validated_repair_output(output_package.path()),
+    }
+}
+
+#[cfg(any(windows, test))]
+fn windows_environment_name_matches(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+}
+
+fn wait_for_repair_command(
+    child: &mut std::process::Child,
+    deadline: Instant,
+    timeout_label: Duration,
+    poll_interval: Duration,
+) -> Result<(), String> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => return Err(format!("factory repair command failed with {status}")),
+            Ok(None) if Instant::now() >= deadline => {
+                let cleanup = kill_and_wait(child);
+                let mut error = format!(
+                    "factory repair command exceeded {}",
+                    display_duration(timeout_label)
+                );
+                if let Some(cleanup) = cleanup {
+                    error.push_str("; ");
+                    error.push_str(&cleanup);
+                }
+                return Err(error);
+            }
+            Ok(None) => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let sleep_for = poll_interval.min(remaining);
+                if !sleep_for.is_zero() {
+                    thread::sleep(sleep_for);
+                }
+            }
+            Err(error) => {
+                let cleanup = kill_and_wait(child);
+                let mut message = format!("waiting for factory repair command: {error}");
+                if let Some(cleanup) = cleanup {
+                    message.push_str("; ");
+                    message.push_str(&cleanup);
+                }
+                return Err(message);
+            }
+        }
+    }
+}
+
+fn kill_and_wait(child: &mut std::process::Child) -> Option<String> {
+    let kill_error = child.kill().err();
+    let wait_error = child.wait().err();
+    match (kill_error, wait_error) {
+        (None, None) => None,
+        (Some(kill), None) => Some(format!("killing factory repair command: {kill}")),
+        (None, Some(wait)) => Some(format!("reaping factory repair command: {wait}")),
+        (Some(kill), Some(wait)) => Some(format!(
+            "killing factory repair command: {kill}; reaping factory repair command: {wait}"
+        )),
+    }
+}
+
+fn verify_repair_input_unchanged(snapshot: &PackageSnapshot) -> Result<(), String> {
+    let path_metadata = fs::symlink_metadata(snapshot.path())
+        .map_err(|error| format!("factory repair command modified its input package: {error}"))?;
+    if !path_metadata.file_type().is_file() {
+        return Err("factory repair command modified its input package path".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let original = snapshot.file.as_file().metadata().map_err(|error| {
+            format!("reading factory repair input identity after command: {error}")
+        })?;
+        if original.dev() != path_metadata.dev() || original.ino() != path_metadata.ino() {
+            return Err("factory repair command modified its input package by replacing it".into());
+        }
+    }
+    let input_after = read_package(snapshot.path())
+        .map_err(|error| format!("factory repair command modified its input package: {error}"))?;
+    if input_after != snapshot.bytes {
+        return Err("factory repair command modified its input package".into());
+    }
+    Ok(())
+}
+
+fn read_validated_repair_output(path: &Path) -> Result<Vec<u8>, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("factory repair command did not write output package: {error}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("factory repair output must be a regular file".into());
+    }
+    let package = read_package(path)
+        .map_err(|error| format!("reading bounded factory repair output: {error}"))?;
+    validate_manufacturing_package(&package).map_err(|error| {
+        format!("factory repair output is not a valid manufacturing package: {error}")
+    })?;
+    Ok(package)
+}
+
+fn snapshot_known_good(
+    workspace: &Path,
+    prefix: &str,
+    bytes: Vec<u8>,
+) -> Result<PackageSnapshot, String> {
+    let mut file = TempfileBuilder::new()
+        .prefix(prefix)
+        .suffix(".zip")
+        .tempfile_in(workspace)
+        .map_err(|error| format!("creating secure factory package snapshot: {error}"))?;
+    file.as_file_mut()
+        .write_all(&bytes)
+        .and_then(|()| file.as_file_mut().flush())
+        .map_err(|error| format!("writing secure factory package snapshot: {error}"))?;
+    Ok(PackageSnapshot { file, bytes })
+}
+
+fn bounded_network_timeout(deadline: Instant, configured_seconds: u64) -> Option<u64> {
+    let remaining_seconds = deadline.checked_duration_since(Instant::now())?.as_secs();
+    if remaining_seconds == 0 {
+        None
+    } else {
+        Some(configured_seconds.min(remaining_seconds))
+    }
+}
+
+fn finish_failed_attempt(
+    mut attempts: Vec<FactoryLoopAttempt>,
+    mut attempt: FactoryLoopAttempt,
+    failure: impl AsRef<str>,
+    package: PackageSnapshot,
+) -> FactoryFeedbackLoopOutcome {
+    let failure = bounded_loop_error(failure.as_ref());
+    attempt.error = Some(failure.clone());
+    attempts.push(attempt);
+    finish_feedback_loop(false, attempts, Some(failure), package)
+}
+
+fn finish_feedback_loop(
+    passed: bool,
+    attempts: Vec<FactoryLoopAttempt>,
+    failure: Option<String>,
+    package: PackageSnapshot,
+) -> FactoryFeedbackLoopOutcome {
+    let final_package_sha256 = sha256(&package.bytes);
+    let final_package_bytes = package.bytes.len() as u64;
+    FactoryFeedbackLoopOutcome {
+        report: FactoryFeedbackLoopReport {
+            schema_version: 1,
+            passed,
+            attempts,
+            final_package_sha256,
+            final_package_bytes,
+            failure,
+        },
+        final_package: package.into_bytes(),
+    }
+}
+
+fn bounded_loop_error(error: &str) -> String {
+    let error = error.trim();
+    let error = if error.is_empty() {
+        "factory feedback loop failed"
+    } else {
+        error
+    };
+    error.chars().take(MAX_LOOP_ERROR_CHARS).collect()
+}
+
+fn total_timeout_error(total: Duration) -> String {
+    format!("factory feedback loop exceeded {}", display_duration(total))
+}
+
+fn display_duration(duration: Duration) -> String {
+    if duration.subsec_nanos() == 0 {
+        format!("{} seconds", duration.as_secs())
+    } else {
+        format!("{} milliseconds", duration.as_millis())
+    }
+}
+
 /// Submit a manufacturing ZIP and normalize the provider's JSON response.
 pub fn submit_factory_package(
     package_path: &Path,
+    endpoint: &str,
+    provider: FactoryProvider,
+    bearer_token_env: Option<&str>,
+    timeout_seconds: u64,
+    allow_http_loopback: bool,
+) -> Result<FactorySubmissionReceipt, String> {
+    let package = read_package(package_path)?;
+    submit_factory_package_bytes(
+        &package,
+        endpoint,
+        provider,
+        bearer_token_env,
+        timeout_seconds,
+        allow_http_loopback,
+    )
+}
+
+fn submit_factory_package_bytes(
+    package: &[u8],
     endpoint: &str,
     provider: FactoryProvider,
     bearer_token_env: Option<&str>,
@@ -146,12 +885,30 @@ pub fn submit_factory_package(
         return Err("factory timeout must be between 1 and 600 seconds".into());
     }
     validate_endpoint(endpoint, allow_http_loopback)?;
-    // Open once and inspect/read that same handle.  A separate metadata/read
-    // sequence could hash one file and upload another if the path is replaced
-    // concurrently between the two operations.
-    let package = read_package(package_path)?;
-    validate_manufacturing_package(&package)?;
-    let package_sha256 = sha256(&package);
+    validate_manufacturing_package(package)?;
+    submit_validated_factory_package_bytes(
+        package,
+        endpoint,
+        provider,
+        bearer_token_env,
+        timeout_seconds,
+        allow_http_loopback,
+    )
+}
+
+fn submit_validated_factory_package_bytes(
+    package: &[u8],
+    endpoint: &str,
+    provider: FactoryProvider,
+    bearer_token_env: Option<&str>,
+    timeout_seconds: u64,
+    allow_http_loopback: bool,
+) -> Result<FactorySubmissionReceipt, String> {
+    if !(1..=600).contains(&timeout_seconds) {
+        return Err("factory timeout must be between 1 and 600 seconds".into());
+    }
+    validate_endpoint(endpoint, allow_http_loopback)?;
+    let package_sha256 = sha256(package);
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(timeout_seconds)))
         .max_redirects(0)
@@ -165,7 +922,7 @@ pub fn submit_factory_package(
         .header("X-PCBEX-Adapter", provider.adapter_name())
         .header("X-PCBEX-Schema-Version", "1")
         .header("X-PCBEX-Package-SHA256", &package_sha256);
-    if let Some(variable) = bearer_token_env {
+    let bearer_token = if let Some(variable) = bearer_token_env {
         validate_env_name(variable)?;
         let token = env::var(variable)
             .map_err(|_| format!("factory bearer-token environment {variable} is unset"))?;
@@ -176,9 +933,12 @@ pub fn submit_factory_package(
         }
         validate_bearer_token(&token)?;
         call = call.header("Authorization", &format!("Bearer {token}"));
-    }
+        Some(token)
+    } else {
+        None
+    };
     let mut response = call
-        .send(package.as_slice())
+        .send(package)
         .map_err(|error| format!("factory HTTP request failed: {error}"))?;
     let http_status = response.status().as_u16();
     if !matches!(http_status, 200..=299) {
@@ -211,6 +971,11 @@ pub fn submit_factory_package(
     if !response_value.is_object() {
         return Err("factory response JSON must be an object".into());
     }
+    if bearer_token.as_deref().is_some_and(|token| {
+        response_contains_bearer_token(&response_bytes, &response_value, token)
+    }) {
+        return Err("factory response reflected bearer credentials".into());
+    }
     let normalized = normalize_response(&response_value)?;
     Ok(FactorySubmissionReceipt {
         schema_version: 1,
@@ -241,6 +1006,7 @@ struct NormalizedResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ManufacturingDescriptor {
     path: String,
     bytes: u64,
@@ -248,15 +1014,45 @@ struct ManufacturingDescriptor {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManufacturingTools {
+    kicad_cli: String,
+    kicad_cli_about_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManufacturingCounts {
+    total: u64,
+    bom: u64,
+    placement: u64,
+    dnp: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ManufacturingManifest {
     schema_version: u32,
+    engine: String,
+    engine_version: String,
+    tools: ManufacturingTools,
     input: ManufacturingDescriptor,
     project_inputs: Vec<ManufacturingDescriptor>,
+    parts: ManufacturingCounts,
     artifacts: Vec<ManufacturingDescriptor>,
     archive: String,
 }
 
 fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
+    let path_metadata = fs::symlink_metadata(package_path).map_err(|error| {
+        format!(
+            "inspecting factory package {}: {error}",
+            package_path.display()
+        )
+    })?;
+    if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
+        return Err("factory package path must be a real regular file, not a symlink".into());
+    }
     let file = File::open(package_path).map_err(|error| {
         format!(
             "opening factory package {}: {error}",
@@ -268,6 +1064,13 @@ fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("reading factory package metadata: {error}"))?;
     if !metadata.is_file() {
         return Err("factory package path must be a regular file".into());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if path_metadata.dev() != metadata.dev() || path_metadata.ino() != metadata.ino() {
+            return Err("factory package path changed while it was being opened".into());
+        }
     }
     if metadata.len() > MAX_PACKAGE_BYTES {
         return Err(format!(
@@ -329,6 +1132,20 @@ fn validate_manufacturing_package(package: &[u8]) -> Result<(), String> {
     if manifest.schema_version != 1 {
         return Err("factory package manifest.json must use schema_version 1".into());
     }
+    if manifest.engine != "pcbex" {
+        return Err("factory package manifest.json must name pcbex as its engine".into());
+    }
+    validate_manifest_text(&manifest.engine_version, "engine_version")?;
+    validate_manifest_text(&manifest.tools.kicad_cli, "tools.kicad_cli")?;
+    if !is_sha256(&manifest.tools.kicad_cli_about_sha256) {
+        return Err("factory package manifest.json tools.kicad_cli_about_sha256 is invalid".into());
+    }
+    if manifest.parts.bom > manifest.parts.total
+        || manifest.parts.placement > manifest.parts.total
+        || manifest.parts.dnp > manifest.parts.total
+    {
+        return Err("factory package manifest.json contains invalid part counts".into());
+    }
     if manifest.archive != "manufacturing.zip" {
         return Err(
             "factory package manifest.json must name manufacturing.zip as its archive".into(),
@@ -371,6 +1188,8 @@ fn validate_manufacturing_package(package: &[u8]) -> Result<(), String> {
             ));
         }
     }
+    validate_manifest_path_domains(&provenance_paths, &expected)?;
+    let gerber_job = validate_required_manufacturing_artifacts(&expected)?;
     let mut declared_uncompressed = 0_u64;
     for (name, (bytes, _)) in &expected {
         add_archive_size(&mut declared_uncompressed, *bytes, name)?;
@@ -422,7 +1241,201 @@ fn validate_manufacturing_package(package: &[u8]) -> Result<(), String> {
             "factory package is missing manifest entry {missing}"
         ));
     }
+    validate_gerber_job(package, &gerber_job, &expected)?;
     Ok(())
+}
+
+fn validate_manifest_text(value: &str, field: &str) -> Result<(), String> {
+    if value.trim().is_empty() || value.trim() != value || value.chars().count() > 256 {
+        return Err(format!(
+            "factory package manifest.json {field} must contain 1 to 256 trimmed characters"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_required_manufacturing_artifacts(
+    artifacts: &BTreeMap<String, (u64, String)>,
+) -> Result<String, String> {
+    for required in ["bom.csv", "cpl.csv", "drc.rpt"] {
+        if !artifacts.contains_key(required) {
+            return Err(format!(
+                "factory package manifest.json is missing required artifact {required}"
+            ));
+        }
+    }
+    if !artifacts.keys().any(|name| has_extension(name, "drl")) {
+        return Err("factory package manifest.json must contain an Excellon drill artifact".into());
+    }
+    let gerber_jobs = artifacts
+        .keys()
+        .filter(|name| name.ends_with("-job.gbrjob"))
+        .cloned()
+        .collect::<Vec<_>>();
+    if gerber_jobs.len() != 1 {
+        return Err(
+            "factory package manifest.json must contain exactly one Gerber job artifact".into(),
+        );
+    }
+    for name in artifacts.keys() {
+        if matches!(name.as_str(), "bom.csv" | "cpl.csv" | "drc.rpt")
+            || has_extension(name, "drl")
+            || name.ends_with("-job.gbrjob")
+            || is_gerber_artifact(name)
+        {
+            continue;
+        }
+        return Err(format!(
+            "factory package manifest.json contains unsupported manufacturing artifact {name}"
+        ));
+    }
+    Ok(gerber_jobs[0].clone())
+}
+
+fn validate_manifest_path_domains(
+    provenance: &BTreeSet<String>,
+    artifacts: &BTreeMap<String, (u64, String)>,
+) -> Result<(), String> {
+    if let Some(path) = artifacts.keys().find(|path| provenance.contains(*path)) {
+        return Err(format!(
+            "factory package path {path} must not identify both provenance and an artifact"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_gerber_job(
+    package: &[u8],
+    job_name: &str,
+    artifacts: &BTreeMap<String, (u64, String)>,
+) -> Result<(), String> {
+    let mut archive = ZipArchive::new(Cursor::new(package))
+        .map_err(|error| format!("reopening factory package ZIP archive: {error}"))?;
+    let job = archive
+        .by_name(job_name)
+        .map_err(|_| format!("factory package is missing Gerber job entry {job_name}"))?;
+    let mut job_bytes = Vec::new();
+    job.take(MAX_MANIFEST_BYTES.saturating_add(1))
+        .read_to_end(&mut job_bytes)
+        .map_err(|error| format!("reading factory package Gerber job {job_name}: {error}"))?;
+    if job_bytes.is_empty() || job_bytes.len() as u64 > MAX_MANIFEST_BYTES {
+        return Err(format!(
+            "factory package Gerber job must contain 1 to {MAX_MANIFEST_BYTES} bytes"
+        ));
+    }
+    let job: Value = serde_json::from_slice(&job_bytes)
+        .map_err(|error| format!("factory package Gerber job is not valid JSON: {error}"))?;
+    let layer_count = job
+        .get("GeneralSpecs")
+        .and_then(|value| value.get("LayerNumber"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            "factory package Gerber job is missing GeneralSpecs.LayerNumber".to_string()
+        })?;
+    if !(2..=32).contains(&layer_count) {
+        return Err("factory package Gerber job has an invalid copper layer count".into());
+    }
+    let file_attributes = job
+        .get("FilesAttributes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "factory package Gerber job FilesAttributes must be an array".to_string())?;
+    if file_attributes.is_empty() || file_attributes.len() > MAX_ARCHIVE_ENTRIES {
+        return Err("factory package Gerber job has an invalid FilesAttributes count".into());
+    }
+
+    let mut job_paths = BTreeSet::new();
+    let mut copper_layers = BTreeMap::<u64, String>::new();
+    let mut profile = false;
+    let mut top_mask = false;
+    let mut bottom_mask = false;
+    let mut top_legend = false;
+    let mut bottom_legend = false;
+    for attribute in file_attributes {
+        let path = attribute
+            .get("Path")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "factory package Gerber job file Path must be a string".to_string())?;
+        let function = attribute
+            .get("FileFunction")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                "factory package Gerber job FileFunction must be a string".to_string()
+            })?;
+        if !is_safe_manifest_path(path) || !job_paths.insert(path.to_string()) {
+            return Err(format!(
+                "factory package Gerber job contains unsafe or duplicate path {path:?}"
+            ));
+        }
+        if !artifacts.contains_key(path) || !is_gerber_artifact(path) {
+            return Err(format!(
+                "factory package Gerber job references undeclared Gerber artifact {path}"
+            ));
+        }
+        let components = function.split(',').collect::<Vec<_>>();
+        match components.as_slice() {
+            ["Copper", layer, side] => {
+                let index = layer
+                    .strip_prefix('L')
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or_else(|| {
+                        format!("factory package Gerber job has invalid copper function {function}")
+                    })?;
+                if !(1..=layer_count).contains(&index)
+                    || copper_layers.insert(index, (*side).to_string()).is_some()
+                {
+                    return Err(format!(
+                        "factory package Gerber job has duplicate or out-of-range copper layer {layer}"
+                    ));
+                }
+            }
+            ["Profile"] => profile = true,
+            ["SolderMask", "Top"] => top_mask = true,
+            ["SolderMask", "Bot"] => bottom_mask = true,
+            ["Legend", "Top"] => top_legend = true,
+            ["Legend", "Bot"] => bottom_legend = true,
+            _ => {}
+        }
+    }
+    if copper_layers.len() as u64 != layer_count
+        || copper_layers.get(&1).map(String::as_str) != Some("Top")
+        || copper_layers.get(&layer_count).map(String::as_str) != Some("Bot")
+        || !(1..=layer_count).all(|index| copper_layers.contains_key(&index))
+    {
+        return Err("factory package Gerber job does not bind every declared copper layer".into());
+    }
+    if !profile || !top_mask || !bottom_mask || !top_legend || !bottom_legend {
+        return Err("factory package Gerber job is missing profile, mask, or legend layers".into());
+    }
+    for path in artifacts.keys().filter(|path| is_gerber_artifact(path)) {
+        if !job_paths.contains(path) {
+            return Err(format!(
+                "factory package Gerber artifact {path} is not bound by its Gerber job"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn has_extension(path: &str, expected: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(expected))
+}
+
+fn is_gerber_artifact(path: &str) -> bool {
+    let Some(extension) = Path::new(path).extension().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let extension = extension.to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "gbr" | "gtl" | "gbl" | "gtp" | "gbp" | "gts" | "gbs" | "gto" | "gbo"
+    ) || extension.strip_prefix('g').is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.chars().all(|value| value.is_ascii_digit())
+    }) || extension.strip_prefix("gm").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.chars().all(|value| value.is_ascii_digit())
+    })
 }
 
 fn add_archive_size(total: &mut u64, size: u64, name: &str) -> Result<(), String> {
@@ -476,12 +1489,15 @@ fn validate_manifest_descriptor(
             descriptor.path
         ));
     }
-    if descriptor.path == "manufacturing.zip" {
+    if matches!(
+        descriptor.path.as_str(),
+        "manifest.json" | "manufacturing.zip"
+    ) {
         return Err(format!(
-            "factory package {kind} descriptor must not reference manufacturing.zip"
+            "factory package {kind} descriptor must not reference a reserved archive name"
         ));
     }
-    if descriptor.bytes > MAX_PACKAGE_BYTES {
+    if descriptor.bytes == 0 || descriptor.bytes > MAX_PACKAGE_BYTES {
         return Err(format!(
             "factory package {kind} descriptor has invalid byte count"
         ));
@@ -569,10 +1585,7 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
         Some(value) => value
             .as_bool()
             .ok_or_else(|| "factory accepted must be a boolean".to_string())?,
-        None => matches!(
-            status.to_ascii_lowercase().as_str(),
-            "accepted" | "quoted" | "success" | "ok" | "pass" | "passed"
-        ),
+        None => false,
     };
     let dfm_passed = match object.get("dfm_passed") {
         Some(value) if value.is_null() => None,
@@ -581,20 +1594,10 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
                 .as_bool()
                 .ok_or_else(|| "factory dfm_passed must be a boolean or null".to_string())?,
         ),
-        None => match object.get("dfm") {
-            None => None,
-            Some(value) => {
-                let dfm = value
-                    .as_object()
-                    .ok_or_else(|| "factory dfm must be an object".to_string())?;
-                match dfm.get("passed") {
-                    None | Some(Value::Null) => None,
-                    Some(value) => Some(value.as_bool().ok_or_else(|| {
-                        "factory dfm.passed must be a boolean or null".to_string()
-                    })?),
-                }
-            }
-        },
+        // Nested provider-specific DFM objects remain available in the raw
+        // response, but they cannot establish the normalized gate because
+        // their finding shape is not part of the closed v1 contract.
+        None => None,
     };
     let quote = object.get("quote").cloned();
     if quote
@@ -676,6 +1679,30 @@ fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
         quote,
         findings,
     })
+}
+
+fn response_contains_bearer_token(response: &[u8], value: &Value, token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let token_bytes = token.as_bytes();
+    response
+        .windows(token_bytes.len())
+        .any(|window| window == token_bytes)
+        || json_contains_bearer_token(value, token)
+}
+
+fn json_contains_bearer_token(value: &Value, token: &str) -> bool {
+    match value {
+        Value::String(value) => value.contains(token),
+        Value::Array(values) => values
+            .iter()
+            .any(|value| json_contains_bearer_token(value, token)),
+        Value::Object(values) => values
+            .iter()
+            .any(|(key, value)| key.contains(token) || json_contains_bearer_token(value, token)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
 }
 
 pub fn factory_feedback_passed(receipt: &FactorySubmissionReceipt) -> bool {
@@ -763,20 +1790,51 @@ mod tests {
         fs,
         io::Write,
         net::{TcpListener, TcpStream},
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
         thread::{self, JoinHandle},
     };
     use tempfile::tempdir;
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
+    type ReceivedRequests = Arc<Mutex<Vec<Vec<u8>>>>;
+
     fn manufacturing_package() -> Vec<u8> {
         let board = b"board-bytes";
-        let artifact = b"gerber-bytes";
+        let job = serde_json::to_vec(&json!({
+            "GeneralSpecs": {"LayerNumber": 2},
+            "FilesAttributes": [
+                {"Path": "board-F_Cu.gtl", "FileFunction": "Copper,L1,Top"},
+                {"Path": "board-B_Cu.gbl", "FileFunction": "Copper,L2,Bot"},
+                {"Path": "board-f_mask.gts", "FileFunction": "SolderMask,Top"},
+                {"Path": "board-b_mask.gbs", "FileFunction": "SolderMask,Bot"},
+                {"Path": "board-f_silkscreen.gto", "FileFunction": "Legend,Top"},
+                {"Path": "board-b_silkscreen.gbo", "FileFunction": "Legend,Bot"},
+                {"Path": "board-Edge_Cuts.gm1", "FileFunction": "Profile"}
+            ]
+        }))
+        .unwrap();
+        let artifacts = vec![
+            ("board-F_Cu.gtl", b"front-copper".to_vec()),
+            ("board-B_Cu.gbl", b"back-copper".to_vec()),
+            ("board-f_mask.gts", b"front-mask".to_vec()),
+            ("board-b_mask.gbs", b"back-mask".to_vec()),
+            ("board-f_silkscreen.gto", b"front-legend".to_vec()),
+            ("board-b_silkscreen.gbo", b"back-legend".to_vec()),
+            ("board-Edge_Cuts.gm1", b"profile".to_vec()),
+            ("board-job.gbrjob", job),
+            ("board.drl", b"drill".to_vec()),
+            ("drc.rpt", b"DRC clean".to_vec()),
+            ("bom.csv", b"Comment,Designator\n".to_vec()),
+            ("cpl.csv", b"Designator,Mid X (mm)\n".to_vec()),
+        ];
         let manifest = json!({
             "schema_version": 1,
             "engine": "pcbex",
             "engine_version": env!("CARGO_PKG_VERSION"),
-            "tools": {"kicad_cli": "10.0.5", "kicad_cli_about_sha256": "about"},
+            "tools": {"kicad_cli": "10.0.5", "kicad_cli_about_sha256": "a".repeat(64)},
             "input": {
                 "path": "board.kicad_pcb",
                 "bytes": board.len(),
@@ -784,18 +1842,20 @@ mod tests {
             },
             "project_inputs": [],
             "parts": {"total": 0, "bom": 0, "placement": 0, "dnp": 0},
-            "artifacts": [{
-                "path": "board-F_Cu.gbr",
-                "bytes": artifact.len(),
-                "sha256": sha256(artifact)
-            }],
+            "artifacts": artifacts.iter().map(|(path, bytes)| json!({
+                "path": path,
+                "bytes": bytes.len(),
+                "sha256": sha256(bytes)
+            })).collect::<Vec<_>>(),
             "archive": "manufacturing.zip"
         });
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
-        writer.start_file("board-F_Cu.gbr", options).unwrap();
-        writer.write_all(artifact).unwrap();
+        for (path, bytes) in artifacts {
+            writer.start_file(path, options).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
         writer.start_file("manifest.json", options).unwrap();
         writer.write_all(&manifest_bytes).unwrap();
         writer.finish().unwrap().into_inner()
@@ -828,6 +1888,43 @@ mod tests {
             response.push_str("\r\n");
             let _ = stream.write_all(response.as_bytes());
             let _ = stream.write_all(&body);
+        });
+        (endpoint, received, handle)
+    }
+
+    fn spawn_http_sequence(bodies: Vec<Vec<u8>>) -> (String, ReceivedRequests, JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}/quote", listener.local_addr().unwrap());
+        let received = Arc::new(Mutex::new(Vec::new()));
+        let received_by_server = Arc::clone(&received);
+        let handle = thread::spawn(move || {
+            for body in bodies {
+                let deadline = Instant::now() + Duration::from_secs(5);
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                Instant::now() < deadline,
+                                "factory client did not make the expected request"
+                            );
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("accepting factory request: {error}"),
+                    }
+                };
+                received_by_server
+                    .lock()
+                    .unwrap()
+                    .push(read_http_request(&mut stream));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.write_all(&body);
+            }
         });
         (endpoint, received, handle)
     }
@@ -875,11 +1972,37 @@ mod tests {
         package
     }
 
+    fn unique_env_name(prefix: &str) -> String {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        format!(
+            "{prefix}_{}_{}",
+            std::process::id(),
+            NEXT_ID.fetch_add(1, Ordering::Relaxed)
+        )
+    }
+
+    #[cfg(unix)]
+    fn write_repair_script(
+        directory: &Path,
+        name: impl AsRef<std::ffi::OsStr>,
+        body: &str,
+    ) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = directory.join(Path::new(name.as_ref()));
+        fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
+
     #[test]
     fn normalizes_provider_feedback_and_gate() {
         let value = json!({
             "status": "quoted",
-            "dfm": {"passed": false},
+            "accepted": true,
+            "dfm_passed": false,
             "quote": {"total": 12.5, "currency": "USD"},
             "dfm_findings": [
                 {"id": "clearance", "severity": "ERROR", "message": "too close"},
@@ -928,11 +2051,28 @@ mod tests {
         assert!(normalize_response(&json!({"status": "   "})).is_err());
         assert!(normalize_response(&json!({"accepted": "yes"})).is_err());
         assert!(
+            !normalize_response(&json!({"status": "quoted"}))
+                .unwrap()
+                .accepted
+        );
+        assert!(
             normalize_response(&json!({
                 "dfm_passed": true,
                 "dfm": {"passed": true}
             }))
             .is_err()
+        );
+        assert_eq!(
+            normalize_response(&json!({
+                "accepted": true,
+                "dfm": {
+                    "passed": true,
+                    "findings": [{"severity": "error", "message": "nested error"}]
+                }
+            }))
+            .unwrap()
+            .dfm_passed,
+            None
         );
         assert!(
             normalize_response(&json!({
@@ -979,6 +2119,12 @@ mod tests {
             FactoryProvider::Jlcpcb
         );
         assert!(FactoryProvider::parse("unknown").is_err());
+        assert!(windows_environment_name_matches("temp", "TEMP"));
+        assert!(windows_environment_name_matches("SystemRoot", "SYSTEMROOT"));
+        assert!(!windows_environment_name_matches(
+            "PCBEX_FACTORY_TOKEN",
+            "TEMP"
+        ));
     }
 
     #[test]
@@ -996,26 +2142,160 @@ mod tests {
     }
 
     #[test]
+    fn rejects_incomplete_manufacturing_artifact_and_layer_contracts() {
+        let hash = "a".repeat(64);
+        let mut artifacts = BTreeMap::from([
+            ("bom.csv".to_string(), (1, hash.clone())),
+            ("cpl.csv".to_string(), (1, hash.clone())),
+            ("drc.rpt".to_string(), (1, hash.clone())),
+            ("board.drl".to_string(), (1, hash.clone())),
+            ("board-job.gbrjob".to_string(), (1, hash.clone())),
+        ]);
+        artifacts.remove("bom.csv");
+        assert!(
+            validate_required_manufacturing_artifacts(&artifacts)
+                .unwrap_err()
+                .contains("bom.csv")
+        );
+        artifacts.insert("bom.csv".to_string(), (1, hash.clone()));
+        artifacts.insert("firmware.bin".to_string(), (1, hash.clone()));
+        assert!(
+            validate_required_manufacturing_artifacts(&artifacts)
+                .unwrap_err()
+                .contains("unsupported")
+        );
+
+        let empty = ManufacturingDescriptor {
+            path: "bom.csv".into(),
+            bytes: 0,
+            sha256: hash.clone(),
+        };
+        assert!(validate_manifest_descriptor(&empty, "artifact").is_err());
+        let reserved = ManufacturingDescriptor {
+            path: "manifest.json".into(),
+            bytes: 1,
+            sha256: hash.clone(),
+        };
+        assert!(validate_manifest_descriptor(&reserved, "input").is_err());
+        assert!(
+            validate_manifest_path_domains(
+                &BTreeSet::from(["bom.csv".to_string()]),
+                &BTreeMap::from([("bom.csv".to_string(), (1, hash.clone()))]),
+            )
+            .unwrap_err()
+            .contains("both provenance and an artifact")
+        );
+
+        let job = json!({
+            "GeneralSpecs": {"LayerNumber": 4},
+            "FilesAttributes": [
+                {"Path": "board-F_Cu.gtl", "FileFunction": "Copper,L1,Top"},
+                {"Path": "board-B_Cu.gbl", "FileFunction": "Copper,L4,Bot"},
+                {"Path": "board-f_mask.gts", "FileFunction": "SolderMask,Top"},
+                {"Path": "board-b_mask.gbs", "FileFunction": "SolderMask,Bot"},
+                {"Path": "board-f_silkscreen.gto", "FileFunction": "Legend,Top"},
+                {"Path": "board-b_silkscreen.gbo", "FileFunction": "Legend,Bot"},
+                {"Path": "board-Edge_Cuts.gm1", "FileFunction": "Profile"}
+            ]
+        });
+        let job_bytes = serde_json::to_vec(&job).unwrap();
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        writer.start_file("board-job.gbrjob", options).unwrap();
+        writer.write_all(&job_bytes).unwrap();
+        let package = writer.finish().unwrap().into_inner();
+        let gerbers = BTreeMap::from([
+            ("board-F_Cu.gtl".to_string(), (1, hash.clone())),
+            ("board-B_Cu.gbl".to_string(), (1, hash.clone())),
+            ("board-f_mask.gts".to_string(), (1, hash.clone())),
+            ("board-b_mask.gbs".to_string(), (1, hash.clone())),
+            ("board-f_silkscreen.gto".to_string(), (1, hash.clone())),
+            ("board-b_silkscreen.gbo".to_string(), (1, hash.clone())),
+            ("board-Edge_Cuts.gm1".to_string(), (1, hash.clone())),
+            (
+                "board-job.gbrjob".to_string(),
+                (job_bytes.len() as u64, sha256(&job_bytes)),
+            ),
+        ]);
+        let error = validate_gerber_job(&package, "board-job.gbrjob", &gerbers).unwrap_err();
+        assert!(error.contains("every declared copper layer"), "{error}");
+
+        let three_layer_job = json!({
+            "GeneralSpecs": {"LayerNumber": 3},
+            "FilesAttributes": [
+                {"Path": "board-F_Cu.gtl", "FileFunction": "Copper,L1,Top"},
+                {"Path": "board-In1_Cu.g2", "FileFunction": "Copper,L2,Inr"},
+                {"Path": "board-B_Cu.gbl", "FileFunction": "Copper,L3,Bot"},
+                {"Path": "board-f_mask.gts", "FileFunction": "SolderMask,Top"},
+                {"Path": "board-b_mask.gbs", "FileFunction": "SolderMask,Bot"},
+                {"Path": "board-f_silkscreen.gto", "FileFunction": "Legend,Top"},
+                {"Path": "board-b_silkscreen.gbo", "FileFunction": "Legend,Bot"},
+                {"Path": "board-Edge_Cuts.gm1", "FileFunction": "Profile"}
+            ]
+        });
+        let three_layer_job_bytes = serde_json::to_vec(&three_layer_job).unwrap();
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer.start_file("board-job.gbrjob", options).unwrap();
+        writer.write_all(&three_layer_job_bytes).unwrap();
+        let three_layer_package = writer.finish().unwrap().into_inner();
+        let mut three_layer_gerbers = gerbers;
+        three_layer_gerbers.insert("board-In1_Cu.g2".to_string(), (1, hash));
+        validate_gerber_job(
+            &three_layer_package,
+            "board-job.gbrjob",
+            &three_layer_gerbers,
+        )
+        .unwrap();
+    }
+
+    #[test]
     fn accepts_archive_emitted_by_manufacturing_package_writer() {
         let staging = tempdir().unwrap();
-        fs::write(staging.path().join("drc.rpt"), "DRC clean\n").unwrap();
-        fs::write(staging.path().join("board-F_Cu.gtl"), "G04 copper*\n").unwrap();
+        let job = json!({
+            "GeneralSpecs": {"LayerNumber": 2},
+            "FilesAttributes": [
+                {"Path": "board-F_Cu.gtl", "FileFunction": "Copper,L1,Top"},
+                {"Path": "board-B_Cu.gbl", "FileFunction": "Copper,L2,Bot"},
+                {"Path": "board-f_mask.gts", "FileFunction": "SolderMask,Top"},
+                {"Path": "board-b_mask.gbs", "FileFunction": "SolderMask,Bot"},
+                {"Path": "board-f_silkscreen.gto", "FileFunction": "Legend,Top"},
+                {"Path": "board-b_silkscreen.gbo", "FileFunction": "Legend,Bot"},
+                {"Path": "board-Edge_Cuts.gm1", "FileFunction": "Profile"}
+            ]
+        });
+        let files = [
+            ("drc.rpt", b"DRC clean\n".as_slice()),
+            ("board-F_Cu.gtl", b"front copper".as_slice()),
+            ("board-B_Cu.gbl", b"back copper".as_slice()),
+            ("board-f_mask.gts", b"front mask".as_slice()),
+            ("board-b_mask.gbs", b"back mask".as_slice()),
+            ("board-f_silkscreen.gto", b"front legend".as_slice()),
+            ("board-b_silkscreen.gbo", b"back legend".as_slice()),
+            ("board-Edge_Cuts.gm1", b"profile".as_slice()),
+            ("board.drl", b"drill".as_slice()),
+        ];
+        let mut exported = Vec::new();
+        for (name, bytes) in files {
+            let path = staging.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            exported.push(path);
+        }
+        let job_path = staging.path().join("board-job.gbrjob");
+        fs::write(&job_path, serde_json::to_vec(&job).unwrap()).unwrap();
+        exported.push(job_path);
         let archive = crate::manufacturing_package::write_manufacturing_package(
             staging.path(),
             Path::new("board.kicad_pcb"),
             b"board",
             &[crate::manufacturing_package::KiCadProjectInput {
                 path: Path::new("board.kicad_pro").to_path_buf(),
-                bytes: Vec::new(),
+                bytes: b"project".to_vec(),
             }],
             &[],
-            &[
-                staging.path().join("drc.rpt"),
-                staging.path().join("board-F_Cu.gtl"),
-            ],
+            &exported,
             &crate::manufacturing_package::KiCadIdentity {
                 version: "10.0.5".into(),
-                about_sha256: "about".into(),
+                about_sha256: "a".repeat(64),
             },
         )
         .unwrap();
@@ -1029,6 +2309,7 @@ mod tests {
         let package = write_package(&package_path);
         let response_value = json!({
             "status": "  Quoted ",
+            "accepted": true,
             "dfm_passed": true,
             "quote": {"total": 12.5, "currency": "USD"},
             "dfm_findings": [
@@ -1091,6 +2372,39 @@ mod tests {
     }
 
     #[test]
+    fn rejects_provider_responses_that_reflect_bearer_credentials() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        write_package(&package_path);
+        let token = "secret-token-\"\\value";
+        let response = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": true,
+            "echo": format!("authorization was Bearer {token}")
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) =
+            spawn_http_fixture(200, "application/json", response, &[]);
+        let variable = unique_env_name("PCBEX_FACTORY_REFLECTED_TOKEN");
+        unsafe { env::set_var(&variable, token) };
+        let result = submit_factory_package(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            Some(&variable),
+            5,
+            true,
+        );
+        unsafe { env::remove_var(&variable) };
+        handle.join().unwrap();
+
+        let error = result.unwrap_err();
+        assert!(error.contains("reflected bearer credentials"), "{error}");
+        assert!(!error.contains(token));
+    }
+
+    #[test]
     fn rejects_package_bounds_and_archive_integrity_errors_before_network() {
         let temporary = tempdir().unwrap();
         let endpoint = "https://factory.example/quote";
@@ -1135,10 +2449,14 @@ mod tests {
 
         let valid = temporary.path().join("valid.zip");
         let mut package = write_package(&valid);
-        let index = package
-            .windows(4)
-            .position(|window| window == b"gerb")
-            .unwrap();
+        let index = {
+            let mut archive = ZipArchive::new(Cursor::new(package.as_slice())).unwrap();
+            archive
+                .by_name("board-F_Cu.gtl")
+                .unwrap()
+                .data_start()
+                .unwrap() as usize
+        };
         package[index] ^= 1;
         fs::write(&valid, &package).unwrap();
         let error =
@@ -1147,6 +2465,56 @@ mod tests {
         assert!(
             error.contains("does not match manifest") || error.contains("Invalid checksum"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn feedback_loop_schema_is_closed_and_bounded() {
+        let schema = factory_feedback_loop_json_schema();
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+        assert_eq!(
+            schema["properties"]["attempts"]["maxItems"],
+            MAX_REPAIR_ATTEMPTS
+        );
+        assert_eq!(
+            schema["properties"]["attempts"]["items"]["additionalProperties"],
+            false
+        );
+        assert!(
+            schema["properties"]["attempts"]["items"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("error"))
+        );
+        assert_eq!(
+            schema["properties"]["attempts"]["items"]["properties"]["receipt"]["anyOf"][1]["type"],
+            "null"
+        );
+        assert_eq!(
+            schema["properties"]["attempts"]["items"]["properties"]["error"]["minLength"],
+            1
+        );
+        assert_eq!(
+            schema["properties"]["attempts"]["items"]["properties"]["error"]["maxLength"],
+            MAX_LOOP_ERROR_CHARS
+        );
+        assert_eq!(schema["properties"]["failure"]["minLength"], 1);
+        assert_eq!(
+            schema["properties"]["failure"]["maxLength"],
+            MAX_LOOP_ERROR_CHARS
+        );
+        assert!(schema["allOf"].is_array());
+        assert!(schema["$defs"]["factory_submission_receipt"].is_object());
+        assert_eq!(
+            schema["properties"]["final_package_bytes"]["maximum"],
+            MAX_REPAIR_PACKAGE_BYTES
+        );
+        assert_eq!(
+            bounded_loop_error(&"x".repeat(MAX_LOOP_ERROR_CHARS + 100))
+                .chars()
+                .count(),
+            MAX_LOOP_ERROR_CHARS
         );
     }
 
@@ -1208,5 +2576,416 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("bounded factory response") || error.contains("1 to"));
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn feedback_loop_preflights_limits_configuration_and_repair_before_package() {
+        let error = run_factory_feedback_loop(
+            Path::new("missing.zip"),
+            "https://factory.example/quote",
+            FactoryProvider::Generic,
+            None,
+            60,
+            false,
+            0,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("max_attempts"));
+
+        let error = run_factory_feedback_loop(
+            Path::new("missing.zip"),
+            "https://factory.example/quote",
+            FactoryProvider::Generic,
+            None,
+            0,
+            false,
+            1,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("timeout"), "{error}");
+
+        let error = run_factory_feedback_loop(
+            Path::new("missing.zip"),
+            "http://factory.example/quote",
+            FactoryProvider::Generic,
+            None,
+            60,
+            false,
+            1,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("HTTPS"), "{error}");
+
+        let missing_variable = unique_env_name("PCBEX_FACTORY_MISSING_TOKEN");
+        unsafe { env::remove_var(&missing_variable) };
+        let error = run_factory_feedback_loop(
+            Path::new("missing.zip"),
+            "https://factory.example/quote",
+            FactoryProvider::Generic,
+            Some(&missing_variable),
+            60,
+            false,
+            1,
+            None,
+        )
+        .unwrap_err();
+        assert!(error.contains("bearer-token"), "{error}");
+
+        let error = run_factory_feedback_loop(
+            Path::new("missing.zip"),
+            "https://factory.example/quote",
+            FactoryProvider::Generic,
+            None,
+            60,
+            false,
+            1,
+            Some(Path::new("missing-repair-executable")),
+        )
+        .unwrap_err();
+        assert!(error.contains("repair executable"), "{error}");
+
+        let temporary = tempdir().unwrap();
+        let non_file = temporary.path().join("repair-directory");
+        fs::create_dir(&non_file).unwrap();
+        let error = run_factory_feedback_loop(
+            Path::new("missing.zip"),
+            "https://factory.example/quote",
+            FactoryProvider::Generic,
+            None,
+            60,
+            false,
+            1,
+            Some(&non_file),
+        )
+        .unwrap_err();
+        assert!(error.contains("regular file"), "{error}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let non_executable = temporary.path().join("not-executable.sh");
+            fs::write(&non_executable, "#!/bin/sh\nexit 0\n").unwrap();
+            let mut permissions = fs::metadata(&non_executable).unwrap().permissions();
+            permissions.set_mode(0o600);
+            fs::set_permissions(&non_executable, permissions).unwrap();
+            let error = run_factory_feedback_loop(
+                Path::new("missing.zip"),
+                "https://factory.example/quote",
+                FactoryProvider::Generic,
+                None,
+                60,
+                false,
+                1,
+                Some(&non_executable),
+            )
+            .unwrap_err();
+            assert!(error.contains("executable permission"), "{error}");
+        }
+    }
+
+    #[test]
+    fn feedback_loop_preserves_transport_failure_evidence_and_known_good_package() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let (endpoint, _received, handle) = spawn_http_fixture(
+            503,
+            "application/json",
+            br#"{"status":"unavailable"}"#.to_vec(),
+            &[],
+        );
+
+        let outcome = run_factory_feedback_loop(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            None,
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(!outcome.report.passed);
+        assert_eq!(outcome.report.attempts.len(), 1);
+        let attempt = &outcome.report.attempts[0];
+        assert_eq!(attempt.package_sha256, sha256(&package));
+        assert_eq!(attempt.package_bytes, package.len() as u64);
+        assert!(attempt.receipt.is_none());
+        assert!(!attempt.repair_command_ran);
+        assert!(attempt.error.as_deref().unwrap().contains("HTTP"));
+        assert_eq!(outcome.report.failure, attempt.error);
+        assert_eq!(outcome.final_package, package);
+        assert_eq!(outcome.report.final_package_sha256, sha256(&package));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn feedback_loop_repairs_passes_rewound_receipt_and_isolates_token_environment() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": [{"severity": "error", "message": "clearance"}]
+        }))
+        .unwrap();
+        let passed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": true,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, received, handle) = spawn_http_sequence(vec![failed, passed]);
+        let token_variable = unique_env_name("PCBEX_FACTORY_LOOP_SECRET");
+        let script = write_repair_script(
+            temporary.path(),
+            "repair.sh",
+            &format!(
+                "grep -q '\"dfm_passed\": false'\nif env | grep -q '^{}='; then exit 91; fi\ncp \"$PCBEX_FACTORY_REPAIR_INPUT_PACKAGE\" \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"",
+                token_variable
+            ),
+        );
+        unsafe { env::set_var(&token_variable, "super-secret-token") };
+        let result = run_factory_feedback_loop(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            Some(&token_variable),
+            5,
+            true,
+            2,
+            Some(&script),
+        );
+        unsafe { env::remove_var(&token_variable) };
+        let outcome = result.unwrap();
+        handle.join().unwrap();
+
+        assert!(outcome.report.passed);
+        assert_eq!(outcome.report.attempts.len(), 2);
+        assert!(outcome.report.attempts[0].receipt.is_some());
+        assert!(outcome.report.attempts[0].error.is_none());
+        assert!(outcome.report.attempts[0].repair_command_ran);
+        assert!(!outcome.report.attempts[1].repair_command_ran);
+        assert!(outcome.report.attempts[1].error.is_none());
+        assert_eq!(outcome.final_package, package);
+        assert_eq!(received.lock().unwrap().len(), 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn feedback_loop_executes_repair_from_non_utf8_path() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let temporary = tempdir().unwrap();
+        let package_path = temporary
+            .path()
+            .join(OsString::from_vec(b"manufacturing-\xff.zip".to_vec()));
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": []
+        }))
+        .unwrap();
+        let passed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": true,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) = spawn_http_sequence(vec![failed, passed]);
+        let executable_name = OsString::from_vec(b"repair-\xfe".to_vec());
+        let script = write_repair_script(
+            temporary.path(),
+            &executable_name,
+            "cp \"$PCBEX_FACTORY_REPAIR_INPUT_PACKAGE\" \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"",
+        );
+
+        let outcome = run_factory_feedback_loop(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            Some(&script),
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(outcome.report.passed);
+        assert!(outcome.report.attempts[0].repair_command_ran);
+        assert_eq!(outcome.final_package, package);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_with_large_receipt_does_not_block_when_child_ignores_stdin() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "opaque": "x".repeat(256 * 1024)
+        }))
+        .unwrap();
+        let passed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": true,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) = spawn_http_sequence(vec![failed, passed]);
+        let script = write_repair_script(
+            temporary.path(),
+            "ignore-stdin.sh",
+            "cp \"$PCBEX_FACTORY_REPAIR_INPUT_PACKAGE\" \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"",
+        );
+
+        let started = Instant::now();
+        let outcome = run_factory_feedback_loop(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            Some(&script),
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(outcome.report.passed);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(outcome.final_package, package);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_mutation_and_invalid_output_never_replace_known_good_bytes() {
+        let cases = [
+            (
+                "mutate.sh",
+                "printf tampered > \"$PCBEX_FACTORY_REPAIR_INPUT_PACKAGE\"\nprintf invalid > \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"",
+                "modified its input package",
+            ),
+            (
+                "invalid.sh",
+                "printf not-a-package > \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"",
+                "not a valid manufacturing package",
+            ),
+        ];
+        for (name, body, expected) in cases {
+            let temporary = tempdir().unwrap();
+            let package_path = temporary.path().join("manufacturing.zip");
+            let package = write_package(&package_path);
+            let failed = serde_json::to_vec(&json!({
+                "status": "quoted",
+                "accepted": true,
+                "dfm_passed": false,
+                "findings": []
+            }))
+            .unwrap();
+            let (endpoint, _received, handle) =
+                spawn_http_fixture(200, "application/json", failed, &[]);
+            let script = write_repair_script(temporary.path(), name, body);
+
+            let outcome = run_factory_feedback_loop(
+                &package_path,
+                &endpoint,
+                FactoryProvider::Generic,
+                None,
+                5,
+                true,
+                2,
+                Some(&script),
+            )
+            .unwrap();
+            handle.join().unwrap();
+
+            assert!(!outcome.report.passed);
+            assert_eq!(outcome.report.attempts.len(), 1);
+            let attempt = &outcome.report.attempts[0];
+            assert!(attempt.receipt.is_some());
+            assert!(attempt.repair_command_ran);
+            assert!(attempt.error.as_deref().unwrap().contains(expected));
+            assert_eq!(outcome.final_package, package);
+            assert_eq!(outcome.report.final_package_sha256, sha256(&package));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_timeout_is_bounded_by_internal_short_limit_and_keeps_input() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) =
+            spawn_http_fixture(200, "application/json", failed, &[]);
+        let script = write_repair_script(temporary.path(), "hang.sh", "while :; do :; done");
+        let limits = FactoryLoopLimits {
+            total: Duration::from_secs(3),
+            repair: Duration::from_millis(100),
+            repair_poll_interval: Duration::from_millis(5),
+        };
+
+        let started = Instant::now();
+        let outcome = run_factory_feedback_loop_with_limits(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            Some(&script),
+            limits,
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(!outcome.report.passed);
+        assert!(outcome.report.attempts[0].repair_command_ran);
+        assert!(
+            outcome.report.attempts[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("exceeded")
+        );
+        assert_eq!(outcome.final_package, package);
+    }
+
+    #[test]
+    fn network_timeout_is_capped_to_whole_seconds_remaining() {
+        let deadline = Instant::now() + Duration::from_millis(2_500);
+        let bounded = bounded_network_timeout(deadline, 600).unwrap();
+        assert!((1..=2).contains(&bounded), "{bounded}");
+        assert!(bounded_network_timeout(Instant::now(), 600).is_none());
     }
 }

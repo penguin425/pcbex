@@ -167,7 +167,9 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "mcp-server",
         "fabricate",
         "factory-schema",
+        "factory-feedback-loop-schema",
         "factory-submit",
+        "factory-feedback-loop",
     ] {
         let command = commands
             .iter()
@@ -203,5 +205,12 @@ fn publishes_a_complete_versioned_capability_inventory() {
             .unwrap()
             .iter()
             .any(|contract| contract == "Factory submission receipt v1")
+    );
+    assert!(
+        report["output_contracts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|contract| contract == "Factory feedback loop report v1")
     );
 }
