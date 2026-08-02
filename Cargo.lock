@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex"
-version = "1.390.0"
+version = "1.392.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-core"
-version = "1.390.0"
+version = "1.392.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -748,7 +748,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-kicad"
-version = "1.390.0"
+version = "1.392.0"
 dependencies = [
  "ed25519-dalek",
  "hex",

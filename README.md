@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.390.0
+  uses: penguin425/pcbex@v1.392.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2627,10 +2627,14 @@ pcbex check-schematic design.kicad_sch \
 The default policy checks importer coverage, annotation and footprint
 completeness, duplicate reference units, connected no-connect pins, unmarked
 unconnected pins, conflicting signal and power drivers, undriven signal and
-power inputs, and nets with multiple names. DNP symbols are excluded. Every
-finding has a stable identity and structured symbol/pin references.
+power inputs, nets with multiple names, invalid power metadata, conflicting
+rail-voltage declarations, power-input over-voltage, and explicitly required
+decoupling. DNP symbols are excluded. Every finding has a stable identity and
+structured symbol/pin references. Power-safety metadata and inference rules are
+documented in
+[`docs/ELECTRICAL_POWER_SAFETY.md`](docs/ELECTRICAL_POWER_SAFETY.md).
 
-`--explain` writes a separate policy-bound report covering all 12 rules,
+`--explain` writes a separate policy-bound report covering all 16 rules,
 including each rule's purpose, exact trigger, remediation guidance, effective
 severity and enablement, and the stable IDs of findings it produced. This keeps
 the signed electrical-review contract unchanged while making CI failures and
@@ -2647,7 +2651,7 @@ same approval evidence without changing the canonical JSON review.
 SARIF-aware review tools. Every finding carries its severity, source schematic,
 stable partial fingerprint, net/symbol/pin context, and the canonical
 schematic/policy identities. The SARIF driver also embeds the title, purpose,
-trigger, remediation, default level, and enablement of all 12 rules.
+trigger, remediation, default level, and enablement of all 16 rules.
 
 Adopt an existing review as a CI baseline without allowing new electrical
 errors:
@@ -3814,7 +3818,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.390.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.392.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
@@ -3927,6 +3931,8 @@ pcbex is a deterministic physical-design engine for placed signal boards with
 a versioned KiCad schematic electrical IR. It supports polygonal multilayer
 boards, differential pairs, length tuning, copper zones, partial-span vias,
 exact KiCad pad geometry, placement optimization, DFM reporting, and headless
-or IPC-assisted KiCad workflows. It does not yet synthesize schematics, select
-electrical components, perform analog or signal-integrity simulation, or
-replace final KiCad ERC/DRC and fabrication review.
+or IPC-assisted KiCad workflows. The companion agent can render a validated,
+closed circuit specification as executable SKiDL and deterministically select
+parts from a normalized catalog input. It does not yet replace complete
+electrical design, analog or signal-integrity simulation, final KiCad ERC/DRC,
+or fabrication review.
