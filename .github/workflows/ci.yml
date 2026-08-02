@@ -18,9 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Prepare manufacturing feedback fixture
         run: |
           mkdir -p build/action-feedback
@@ -725,8 +726,7 @@ jobs:
           fail-on-violations: "false"
           fail-on-regressions: "true"
           artifact-name: pcbex-action-smoke
-          pr-comment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
-          github-token: ${{ github.token }}
+          pr-comment: "false"
           comment-id: action-smoke
       - name: Verify action outputs
         env:
@@ -782,7 +782,6 @@ jobs:
           REMOTE_WITNESS_RECEIPT: ${{ steps.pcbex.outputs.remote-witness-receipt }}
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
           APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-witness-quorum-met }}
-          SHOULD_COMMENT: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
           test -s "$ARTIFACT_DIR/pr-comment.md"
           grep -F '# pcbex hardware analysis' "$ARTIFACT_DIR/pr-comment.md"
@@ -882,11 +881,27 @@ jobs:
           test -s "$APPROVAL_LOG_WITNESS_QUORUM"
           test "$APPROVAL_LOG_WITNESS_QUORUM_MET" = "true"
           test "$(jq -r '.valid_witnesses' "$APPROVAL_LOG_WITNESS_QUORUM")" = "3"
-          if [[ "$SHOULD_COMMENT" == "true" ]]; then
-            [[ "$COMMENT_URL" == https://github.com/* ]]
-          else
-            test -z "$COMMENT_URL"
-          fi
+          test -z "$COMMENT_URL"
+      - name: Stage unprivileged pull-request comment bundle
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          ARTIFACT_DIR: ${{ steps.pcbex.outputs.artifact-dir }}
+        run: >-
+          python3 scripts/stage-pr-comment.py
+          --event "$GITHUB_EVENT_PATH"
+          --body "$ARTIFACT_DIR/pr-comment.md"
+          --output-dir build/pr-comment-publish
+          --workflow-name CI
+          --workflow-path .github/workflows/ci.yml
+          --comment-id action-smoke
+      - name: Upload staged pull-request comment
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: pcbex-pr-comment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/pr-comment-publish
+          if-no-files-found: error
+          retention-days: 2
       - name: Prepare signed policy trust fixture
         id: policy-fixture
         run: |
@@ -949,6 +964,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Install Rust toolchain
         run: rustup toolchain install stable --profile minimal --component clippy,rustfmt
       - run: rustup default stable
@@ -976,6 +993,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v7
         with:
           python-version: "3.11"

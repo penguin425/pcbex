@@ -2051,7 +2051,10 @@ trust mechanism.
 The repository is also a composite GitHub Action. It builds the engine from the
 selected pcbex tag, analyzes the current board, adds Markdown to the Job
 Summary, and uploads the complete bundle. An optional baseline board enables
-the structured regression comparison:
+the structured regression comparison. The public action keeps its direct
+`pr-comment` input as a backwards-compatible opt-in for trusted callers; the
+example below is therefore only appropriate when the caller deliberately
+grants comment-write access and does not execute unreviewed pull-request code:
 
 ```yaml
 permissions:
@@ -2073,7 +2076,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.398.0
+    uses: penguin425/pcbex@v1.399.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2110,7 +2113,7 @@ violation count, regression result, and optional PR comment URL.
 `upload-sarif` is opt-in because the calling job must grant
 `security-events: write`; artifact upload defaults to on.
 
-`pr-comment` is also opt-in and requires both `pull-requests: write` and an
+`pr-comment` remains opt-in and requires both `pull-requests: write` and an
 explicit `github-token`. A stable `comment-id` creates a hidden marker; later
 runs update the newest editable matching comment instead of appending another.
 The comment body is read from the generated `pr-comment.md` artifact and is
@@ -2118,6 +2121,25 @@ never expanded as shell source. Invalid identities, blank or oversized bodies,
 unexpected API shapes, and missing event context fail closed. The example
 disables comments for fork PRs, whose default `GITHUB_TOKEN` is read-only,
 while still producing their Job Summary and evidence artifact.
+
+This repository uses a stricter split for its own pull-request workflow. The
+job that checks out and executes pull-request code has only `contents: read`;
+checkout does not persist credentials, the local action receives no token
+input, and the job has no comment-write permission. It emits only a small,
+hash-bound publisher artifact containing the
+minimum run, attempt, PR, head/base, and comment-body provenance needed by the
+publisher. A default-branch `workflow_run` publisher is the only comment writer
+and has `actions: read` plus `pull-requests: write`. Before posting, it
+revalidates repository names and immutable IDs, the event, exact run and
+attempt, exact artifact and digest, current PR head/base, and that the run is
+the newest eligible run for the PR. Closed or stale PRs are skipped; malformed
+or invalid bindings fail closed. The artifact's `pr-comment.md` is untrusted
+data, so the publisher adds a provenance banner, escapes raw HTML, suppresses
+mentions, and never treats its contents as instructions or shell source. It
+updates only marker comments owned by `github-actions[bot]`, and never forwards
+the API bearer token across an artifact-download redirect. This separation
+reduces token exposure; it is not a general sandbox for arbitrary action code
+or the hosted runner.
 
 Callers select exactly one of `fab`, `fab-profile`, `policy-pack`, or
 `signed-policy-pack`. A signed pack additionally requires
@@ -3933,7 +3955,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.398.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.399.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

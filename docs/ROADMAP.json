@@ -509,6 +509,11 @@
     {
       "id": "canonical-ir-firmware-bundle-generator",
       "release": "v1.398.0",
+      "status": "released"
+    },
+    {
+      "id": "trusted-pr-comment-publisher",
+      "release": "v1.399.0",
       "status": "current"
     }
   ]

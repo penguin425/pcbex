@@ -1015,11 +1015,11 @@ inputs:
     required: false
     default: "false"
   pr-comment:
-    description: Create or update one marker-addressed pull-request comment.
+    description: Create or update one marker-addressed pull-request comment from a trusted workflow only.
     required: false
     default: "false"
   github-token:
-    description: Token used only for the opt-in PR comment; requires pull-requests write permission.
+    description: Token used only for the trusted opt-in PR comment; requires pull-requests write permission and must never be exposed to pull-request-controlled action code.
     required: false
     default: ""
   pr-number:
