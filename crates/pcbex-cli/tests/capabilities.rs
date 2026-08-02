@@ -222,4 +222,11 @@ fn publishes_a_complete_versioned_capability_inventory() {
             .iter()
             .any(|contract| contract == "Hardware pipeline gate report v1")
     );
+    assert!(
+        report["output_contracts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|contract| contract == "Factory-bound hardware pipeline gate report v2")
+    );
 }

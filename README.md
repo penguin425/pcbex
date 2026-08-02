@@ -393,7 +393,8 @@ rejected. Loop outputs are atomic, refuse overwrite and symlink components,
 and must be distinct from the input. Report `passed` describes DFM only; CLI
 success additionally requires publication of every requested artifact. A
 copied final ZIP does not update a downstream pipeline manifest. Rebuild the
-five-phase manifest against the exact selected ZIP:
+pipeline manifest against the exact selected ZIP. For production, require the
+receipt-bound factory phase as well:
 
 ```sh
 pcbex pipeline-verify \
@@ -405,19 +406,31 @@ pcbex pipeline-verify \
   --quality build/analysis/quality.json \
   --manufacturing-package manufacturing-final.zip \
   --firmware-manifest build/firmware/manifest.json \
+  --factory-receipt factory-final-receipt.json \
+  --require-factory \
   --output build/pipeline-gate.json
 ```
 
 The gate recomputes electrical approval from the exact schematic and policy,
 cross-checks analysis and routing evidence against the exact board, performs
 the complete manufacturing ZIP validation, and verifies every firmware source
-digest. When `run.json` declares project settings, custom rules, an external
-DFM profile, or a policy pack, authorize each source with the matching
-`--analysis-*` option; embedded descriptor paths are never opened. The gate
-writes a no-clobber digest manifest even when a phase is rejected.
-Factory receipt/DFM enforcement remains a separate subsequent gate and must
-bind its receipt to the same ZIP; unknown DFM severities continue to fail
-closed. See [the hardware pipeline gate contract](docs/PIPELINE_GATE.md).
+digest. With `--factory-receipt`, it also validates the strict normalized
+receipt against the same ZIP bytes and SHA-256; `--require-factory` makes a
+missing receipt a retained failure. Production jobs should use both flags.
+The factory phase performs no network submission or response re-fetch, and
+unknown DFM severities continue to fail closed. When `run.json` declares
+project settings, custom rules, an external DFM profile, or a policy pack,
+authorize each source with the matching `--analysis-*` option; embedded
+descriptor paths are never opened. The gate writes a no-clobber digest
+manifest even when a phase is rejected. See [the hardware pipeline gate
+contract](docs/PIPELINE_GATE.md).
+
+For local-only compatibility, omit both factory options. That retains the
+v1 report (`pcbex-hardware-v1`) and its exact five phases. Supplying a receipt
+alone enables the v2 report (`pcbex-hardware-v2`) and verifies that receipt;
+`--require-factory` alone enables v2 and records a retained failure when the
+receipt is absent. `pcbex pipeline-schema` prints the v1 schema, while
+`pcbex pipeline-schema --factory` prints the closed v2 schema.
 
 ## Component placement
 
@@ -2044,7 +2057,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.396.0
+  uses: penguin425/pcbex@v1.397.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3904,7 +3917,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.396.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.397.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

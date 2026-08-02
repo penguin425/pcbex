@@ -62,6 +62,8 @@ struct PipelineInputs {
     analysis_policy_pack: Option<PathBuf>,
     manufacturing_package: PathBuf,
     firmware_manifest: PathBuf,
+    factory_receipt: Option<PathBuf>,
+    require_factory: bool,
 }
 
 impl PipelineInputs {
@@ -101,6 +103,12 @@ impl PipelineInputs {
             .arg(&self.firmware_manifest)
             .arg("--output")
             .arg(output);
+        if let Some(receipt) = &self.factory_receipt {
+            command.arg("--factory-receipt").arg(receipt);
+        }
+        if self.require_factory {
+            command.arg("--require-factory");
+        }
         command
     }
 }
@@ -258,6 +266,40 @@ fn write_manufacturing_package(path: &Path, board: &Path) {
     fs::write(path, writer.finish().unwrap().into_inner()).unwrap();
 }
 
+fn factory_receipt_value(package: &[u8]) -> Value {
+    let response = json!({
+        "status": "accepted",
+        "accepted": true,
+        "dfm_passed": true,
+        "quote": {"currency": "USD", "total": 1.0},
+        "findings": []
+    });
+    let response_bytes = serde_json::to_vec(&response).unwrap();
+    let package_sha256 = sha256(package);
+    json!({
+        "schema_version": 1,
+        "adapter": "generic-factory-http-v1",
+        "provider": "generic",
+        "endpoint": "https://factory.example/quote",
+        "package_sha256": package_sha256,
+        "package_bytes": package.len(),
+        "request_sha256": sha256(package),
+        "response_sha256": sha256(&response_bytes),
+        "response_bytes": response_bytes.len(),
+        "http_status": 200,
+        "status": "accepted",
+        "accepted": true,
+        "dfm_passed": true,
+        "quote": {"currency": "USD", "total": 1.0},
+        "findings": [],
+        "response": response
+    })
+}
+
+fn write_factory_receipt(path: &Path, package: &Path) {
+    write_json(path, &factory_receipt_value(&fs::read(package).unwrap()));
+}
+
 fn write_firmware_manifest(directory: &Path, schematic_sha256: &str) -> PathBuf {
     let contents: [&[u8]; 5] = [
         b"#define STATUS_LED_PIN 1\n",
@@ -324,6 +366,8 @@ fn passing_inputs(directory: &Path) -> (PipelineInputs, String, String) {
             analysis_policy_pack: None,
             manufacturing_package,
             firmware_manifest,
+            factory_receipt: None,
+            require_factory: false,
         },
         schematic_sha256,
         board_sha256,
@@ -345,6 +389,8 @@ fn missing_inputs(directory: &Path) -> PipelineInputs {
         analysis_policy_pack: None,
         manufacturing_package: directory.join("missing-manufacturing.zip"),
         firmware_manifest: directory.join("missing-firmware.json"),
+        factory_receipt: None,
+        require_factory: false,
     }
 }
 
@@ -363,6 +409,8 @@ fn one_dummy_input(path: &Path) -> PipelineInputs {
         analysis_policy_pack: None,
         manufacturing_package: path.to_path_buf(),
         firmware_manifest: path.to_path_buf(),
+        factory_receipt: None,
+        require_factory: false,
     }
 }
 
@@ -400,6 +448,36 @@ fn phase<'a>(report: &'a Value, name: &str) -> &'a Value {
         .iter()
         .find(|phase| phase["name"] == name)
         .unwrap()
+}
+
+fn assert_factory_rejected(
+    inputs: &PipelineInputs,
+    receipt_path: &Path,
+    report_path: &Path,
+    receipt: Value,
+) -> Value {
+    write_json(receipt_path, &receipt);
+    let output = inputs.command(report_path).output().unwrap();
+    assert!(!output.status.success());
+    assert!(report_path.is_file());
+    let report = read_json(report_path);
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["pipeline"], "pcbex-hardware-v2");
+    assert_eq!(phase(&report, "factory-dfm")["passed"], false);
+    assert!(
+        !phase(&report, "factory-dfm")["failures"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    report
+}
+
+fn replace_factory_response(receipt: &mut Value, response: Value) {
+    let response_bytes = serde_json::to_vec(&response).unwrap();
+    receipt["response_sha256"] = Value::String(sha256(&response_bytes));
+    receipt["response_bytes"] = Value::Number((response_bytes.len() as u64).into());
+    receipt["response"] = response;
 }
 
 fn tamper_zip_entry(path: &Path, entry_name: &str) {
@@ -450,6 +528,231 @@ fn pipeline_verify_accepts_a_digest_bound_end_to_end_pipeline() {
     assert_eq!(report["identities"]["schematic_sha256"], schematic_sha256);
     assert_eq!(report["identities"]["board_sha256"], board_sha256);
     assert_evidence_descriptors(&report);
+}
+
+#[test]
+fn pipeline_verify_accepts_a_valid_factory_receipt_with_a_six_phase_v2_report() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (mut inputs, schematic_sha256, board_sha256) = passing_inputs(temporary.path());
+    let receipt_path = temporary.path().join("factory-receipt.json");
+    write_factory_receipt(&receipt_path, &inputs.manufacturing_package);
+    inputs.factory_receipt = Some(receipt_path.clone());
+    let report_path = temporary.path().join("pipeline-v2-report.json");
+
+    let output = inputs.command(&report_path).output().unwrap();
+    assert_success(&output, "pipeline-verify with factory receipt");
+
+    let report = read_json(&report_path);
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["pipeline"], "pcbex-hardware-v2");
+    assert_eq!(report["passed"], true);
+    assert_eq!(report["failures"], json!([]));
+    assert_eq!(
+        report["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|phase| phase["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "electrical-erc",
+            "analysis-drc",
+            "routing-quality",
+            "manufacturing-package",
+            "firmware-build",
+            "factory-dfm",
+        ]
+    );
+    assert!(
+        report["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|phase| phase["passed"] == true && phase["failures"] == json!([]))
+    );
+    assert_eq!(report["identities"]["schematic_sha256"], schematic_sha256);
+    assert_eq!(report["identities"]["board_sha256"], board_sha256);
+    let factory = phase(&report, "factory-dfm");
+    let evidence = factory["evidence"].as_array().unwrap();
+    let receipt_evidence = evidence
+        .iter()
+        .find(|descriptor| descriptor["role"] == "factory-receipt")
+        .unwrap();
+    assert_eq!(
+        receipt_evidence["bytes"],
+        fs::metadata(&receipt_path).unwrap().len()
+    );
+    assert_eq!(receipt_evidence["sha256"], sha256_file(&receipt_path));
+    assert_evidence_descriptors(&report);
+}
+
+#[test]
+fn pipeline_verify_retains_a_v2_rejection_when_factory_is_required_but_missing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (mut inputs, _, _) = passing_inputs(temporary.path());
+    inputs.require_factory = true;
+    let report_path = temporary.path().join("factory-required-missing.json");
+    let output = inputs.command(&report_path).output().unwrap();
+    assert!(!output.status.success());
+    assert!(report_path.is_file());
+
+    let report = read_json(&report_path);
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["pipeline"], "pcbex-hardware-v2");
+    assert_eq!(report["passed"], false);
+    assert_eq!(report["phases"].as_array().unwrap().len(), 6);
+    assert_eq!(phase(&report, "factory-dfm")["passed"], false);
+    assert!(
+        !phase(&report, "factory-dfm")["failures"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(fs::read(&report_path).unwrap().ends_with(b"\n"));
+}
+
+#[test]
+fn pipeline_verify_rejects_factory_receipts_with_package_or_request_identity_mismatches() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (mut inputs, _, _) = passing_inputs(temporary.path());
+    let receipt_path = temporary.path().join("factory-receipt.json");
+    inputs.factory_receipt = Some(receipt_path.clone());
+    let package = fs::read(&inputs.manufacturing_package).unwrap();
+    let valid = factory_receipt_value(&package);
+
+    for (label, field) in [
+        ("package-digest", "package_sha256"),
+        ("request-digest", "request_sha256"),
+    ] {
+        let mut receipt = valid.clone();
+        receipt[field] = Value::String("0".repeat(64));
+        let report_path = temporary.path().join(format!("{label}.json"));
+        let report = assert_factory_rejected(&inputs, &receipt_path, &report_path, receipt);
+        assert_eq!(phase(&report, "factory-dfm")["passed"], false);
+    }
+
+    let mut receipt = valid;
+    receipt["package_bytes"] = json!(package.len() + 1);
+    let report_path = temporary.path().join("package-size.json");
+    let report = assert_factory_rejected(&inputs, &receipt_path, &report_path, receipt);
+    assert_eq!(phase(&report, "factory-dfm")["passed"], false);
+}
+
+#[test]
+fn pipeline_verify_rejects_factory_receipts_with_failed_or_ambiguous_feedback() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (mut inputs, _, _) = passing_inputs(temporary.path());
+    let receipt_path = temporary.path().join("factory-receipt.json");
+    inputs.factory_receipt = Some(receipt_path.clone());
+    let package = fs::read(&inputs.manufacturing_package).unwrap();
+    let valid = factory_receipt_value(&package);
+
+    let mut accepted_false = valid.clone();
+    accepted_false["accepted"] = json!(false);
+    let mut response = accepted_false["response"].clone();
+    response["accepted"] = json!(false);
+    replace_factory_response(&mut accepted_false, response);
+    let report_path = temporary.path().join("accepted-false.json");
+    assert_factory_rejected(&inputs, &receipt_path, &report_path, accepted_false);
+
+    let mut dfm_false = valid.clone();
+    dfm_false["dfm_passed"] = json!(false);
+    let mut response = dfm_false["response"].clone();
+    response["dfm_passed"] = json!(false);
+    replace_factory_response(&mut dfm_false, response);
+    let report_path = temporary.path().join("dfm-false.json");
+    assert_factory_rejected(&inputs, &receipt_path, &report_path, dfm_false);
+
+    let mut unknown_severity = valid.clone();
+    let finding = json!({"code": "X-1", "severity": "mystery", "message": "unknown"});
+    unknown_severity["findings"] = json!([finding.clone()]);
+    let mut response = unknown_severity["response"].clone();
+    response["findings"] = json!([finding]);
+    replace_factory_response(&mut unknown_severity, response);
+    let report_path = temporary.path().join("unknown-severity.json");
+    assert_factory_rejected(&inputs, &receipt_path, &report_path, unknown_severity);
+
+    let mut bad_http_status = valid.clone();
+    bad_http_status["http_status"] = json!(500);
+    let report_path = temporary.path().join("http-status.json");
+    assert_factory_rejected(&inputs, &receipt_path, &report_path, bad_http_status);
+
+    let mut bad_endpoint = valid.clone();
+    bad_endpoint["endpoint"] = json!("http://factory.example/quote");
+    let report_path = temporary.path().join("endpoint.json");
+    assert_factory_rejected(&inputs, &receipt_path, &report_path, bad_endpoint);
+
+    let mut unknown_field = valid;
+    unknown_field["unexpected"] = json!(true);
+    let report_path = temporary.path().join("unknown-field.json");
+    assert_factory_rejected(&inputs, &receipt_path, &report_path, unknown_field);
+}
+
+#[test]
+fn pipeline_verify_rejects_unsafe_factory_receipts_and_preserves_an_aliased_output() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (mut inputs, _, _) = passing_inputs(temporary.path());
+    let receipt_path = temporary.path().join("factory-receipt.json");
+    write_factory_receipt(&receipt_path, &inputs.manufacturing_package);
+    inputs.factory_receipt = Some(receipt_path.clone());
+
+    let original_receipt = fs::read(&receipt_path).unwrap();
+    let alias_output = inputs.command(&receipt_path).output().unwrap();
+    assert!(!alias_output.status.success());
+    let alias_stderr = String::from_utf8_lossy(&alias_output.stderr);
+    assert!(
+        alias_stderr.contains("pipeline output must not alias an input")
+            || alias_stderr.contains("refusing to overwrite existing output")
+    );
+    assert_eq!(fs::read(&receipt_path).unwrap(), original_receipt);
+
+    let empty_receipt = temporary.path().join("empty-receipt.json");
+    fs::write(&empty_receipt, []).unwrap();
+    inputs.factory_receipt = Some(empty_receipt.clone());
+    let empty_report = temporary.path().join("empty-receipt-report.json");
+    let output = inputs.command(&empty_report).output().unwrap();
+    assert!(!output.status.success());
+    assert!(empty_report.is_file());
+
+    let oversize_receipt = temporary.path().join("oversize-receipt.json");
+    // The pipeline's receipt snapshot limit is 64 MiB; this is one byte beyond
+    // that bound and is rejected before JSON parsing.
+    fs::File::create(&oversize_receipt)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    inputs.factory_receipt = Some(oversize_receipt.clone());
+    let oversize_report = temporary.path().join("oversize-receipt-report.json");
+    let output = inputs.command(&oversize_report).output().unwrap();
+    assert!(!output.status.success());
+    assert!(oversize_report.is_file());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let valid_receipt = temporary.path().join("valid-receipt.json");
+        write_factory_receipt(&valid_receipt, &inputs.manufacturing_package);
+        let receipt_link = temporary.path().join("receipt-link.json");
+        symlink(&valid_receipt, &receipt_link).unwrap();
+        inputs.factory_receipt = Some(receipt_link);
+        let report_path = temporary.path().join("receipt-link-report.json");
+        let output = inputs.command(&report_path).output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("symlink"));
+
+        let real_parent = temporary.path().join("receipt-parent");
+        let linked_parent = temporary.path().join("receipt-parent-link");
+        fs::create_dir(&real_parent).unwrap();
+        symlink(&real_parent, &linked_parent).unwrap();
+        let parent_receipt = real_parent.join("factory-receipt.json");
+        write_factory_receipt(&parent_receipt, &inputs.manufacturing_package);
+        inputs.factory_receipt = Some(linked_parent.join("factory-receipt.json"));
+        let report_path = temporary.path().join("receipt-parent-link-report.json");
+        let output = inputs.command(&report_path).output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("symlink"));
+    }
 }
 
 #[test]
@@ -761,7 +1064,68 @@ fn pipeline_schema_is_closed_and_never_clobbers_output() {
         "https://json-schema.org/draft/2020-12/schema"
     );
     assert_eq!(schema["additionalProperties"], false);
+    assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+    assert_eq!(
+        schema["properties"]["pipeline"]["const"],
+        "pcbex-hardware-v1"
+    );
+    assert_eq!(schema["properties"]["phases"]["minItems"], 5);
+    assert_eq!(schema["properties"]["phases"]["maxItems"], 5);
+    assert_eq!(schema["properties"]["phases"]["items"], false);
+    assert_eq!(
+        schema["properties"]["phases"]["prefixItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|phase| phase["properties"]["name"]["const"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "electrical-erc",
+            "analysis-drc",
+            "routing-quality",
+            "manufacturing-package",
+            "firmware-build",
+        ]
+    );
     assert_schema_objects_are_closed(&schema);
+
+    let factory_schema_path = temporary.path().join("pipeline-factory.schema.json");
+    let factory = Command::new(binary())
+        .arg("pipeline-schema")
+        .arg("--factory")
+        .arg("--output")
+        .arg(&factory_schema_path)
+        .output()
+        .unwrap();
+    assert_success(&factory, "pipeline-schema --factory");
+    let factory_schema = read_json(&factory_schema_path);
+    assert_eq!(factory_schema["$schema"], schema["$schema"]);
+    assert_eq!(factory_schema["additionalProperties"], false);
+    assert_eq!(factory_schema["properties"]["schema_version"]["const"], 2);
+    assert_eq!(
+        factory_schema["properties"]["pipeline"]["const"],
+        "pcbex-hardware-v2"
+    );
+    assert_eq!(factory_schema["properties"]["phases"]["minItems"], 6);
+    assert_eq!(factory_schema["properties"]["phases"]["maxItems"], 6);
+    assert_eq!(factory_schema["properties"]["phases"]["items"], false);
+    assert_eq!(
+        factory_schema["properties"]["phases"]["prefixItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|phase| phase["properties"]["name"]["const"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "electrical-erc",
+            "analysis-drc",
+            "routing-quality",
+            "manufacturing-package",
+            "firmware-build",
+            "factory-dfm",
+        ]
+    );
+    assert_schema_objects_are_closed(&factory_schema);
 
     let sentinel = b"preserve existing schema\n";
     fs::write(&schema_path, sentinel).unwrap();

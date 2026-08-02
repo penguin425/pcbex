@@ -1,6 +1,9 @@
 //! Final, fail-closed gate for the local hardware development pipeline.
 
-use crate::factory::validate_manufacturing_package;
+use crate::factory::{
+    FactorySubmissionReceipt, factory_feedback_passed, validate_factory_submission_receipt,
+    validate_manufacturing_package,
+};
 use crate::policy_pack::parse_policy_pack;
 use pcbex_core::{
     DfmProfile, Rules, apply_dfm_profile, checking::CheckReport, checking::check_board,
@@ -27,6 +30,9 @@ const MAX_REVIEW_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BOARD_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_ANALYSIS_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
+// A receipt repeats normalized quote/findings beside the bounded raw response,
+// and pretty JSON can be substantially larger than the provider's 8 MiB body.
+const MAX_FACTORY_RECEIPT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FIRMWARE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_FIRMWARE_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FIRMWARE_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
@@ -69,6 +75,8 @@ pub struct PipelineInputs<'a> {
     pub analysis_policy_pack: Option<&'a Path>,
     pub manufacturing_package: &'a Path,
     pub firmware_manifest: &'a Path,
+    pub factory_receipt: Option<&'a Path>,
+    pub require_factory: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -141,6 +149,12 @@ struct BoardIdentity {
     bytes: u64,
     sha256: String,
     file_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ManufacturingIdentity {
+    bytes: u64,
+    sha256: String,
 }
 
 #[derive(Clone, Debug)]
@@ -240,9 +254,17 @@ pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
     let (electrical, schematic_sha256) = electrical_phase(inputs);
     let (analysis, board_identity, analysis_binding) = analysis_phase(inputs);
     let quality = quality_phase(inputs, analysis_binding.as_ref());
-    let manufacturing = manufacturing_phase(inputs, board_identity.as_ref());
+    let (manufacturing, manufacturing_identity) =
+        manufacturing_phase(inputs, board_identity.as_ref());
     let firmware = firmware_phase(inputs, schematic_sha256.as_deref());
-    let phases = vec![electrical, analysis, quality, manufacturing, firmware];
+    let factory_enabled = inputs.require_factory || inputs.factory_receipt.is_some();
+    let mut phases = vec![electrical, analysis, quality, manufacturing, firmware];
+    if factory_enabled {
+        phases.push(factory_phase(
+            inputs.factory_receipt,
+            manufacturing_identity.as_ref(),
+        ));
+    }
     let failures = phases
         .iter()
         .flat_map(|phase| {
@@ -253,8 +275,12 @@ pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
         })
         .collect::<Vec<_>>();
     PipelineGateReport {
-        schema_version: 1,
-        pipeline: "pcbex-hardware-v1",
+        schema_version: if factory_enabled { 2 } else { 1 },
+        pipeline: if factory_enabled {
+            "pcbex-hardware-v2"
+        } else {
+            "pcbex-hardware-v1"
+        },
         identities: PipelineIdentities {
             schematic_sha256,
             board_sha256: board_identity.map(|identity| identity.sha256),
@@ -266,30 +292,59 @@ pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
 }
 
 pub fn pipeline_gate_schema() -> Value {
+    pipeline_gate_schema_for(false)
+}
+
+pub fn pipeline_factory_gate_schema() -> Value {
+    pipeline_gate_schema_for(true)
+}
+
+fn pipeline_gate_schema_for(include_factory: bool) -> Value {
+    let schema_version = if include_factory { 2 } else { 1 };
+    let pipeline = if include_factory {
+        "pcbex-hardware-v2"
+    } else {
+        "pcbex-hardware-v1"
+    };
+    let schema_id = if include_factory {
+        "https://github.com/penguin425/pcbex/schema/pipeline-gate-v2.json"
+    } else {
+        "https://github.com/penguin425/pcbex/schema/pipeline-gate-v1.json"
+    };
+    let title = if include_factory {
+        "pcbex factory-bound hardware pipeline gate"
+    } else {
+        "pcbex hash-bound hardware pipeline gate"
+    };
+    let mut phase_schemas = vec![
+        phase_schema("electrical-erc"),
+        phase_schema("analysis-drc"),
+        phase_schema("routing-quality"),
+        phase_schema("manufacturing-package"),
+        phase_schema("firmware-build"),
+    ];
+    if include_factory {
+        phase_schemas.push(phase_schema("factory-dfm"));
+    }
+    let phase_count = phase_schemas.len();
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://github.com/penguin425/pcbex/schema/pipeline-gate-v1.json",
-        "title": "pcbex hash-bound hardware pipeline gate",
+        "$id": schema_id,
+        "title": title,
         "type": "object",
         "additionalProperties": false,
         "required": [
             "schema_version", "pipeline", "identities", "phases", "passed", "failures"
         ],
         "properties": {
-            "schema_version": {"const": 1},
-            "pipeline": {"const": "pcbex-hardware-v1"},
+            "schema_version": {"const": schema_version},
+            "pipeline": {"const": pipeline},
             "identities": {"$ref": "#/$defs/identities"},
             "phases": {
                 "type": "array",
-                "minItems": 5,
-                "maxItems": 5,
-                "prefixItems": [
-                    phase_schema("electrical-erc"),
-                    phase_schema("analysis-drc"),
-                    phase_schema("routing-quality"),
-                    phase_schema("manufacturing-package"),
-                    phase_schema("firmware-build")
-                ],
+                "minItems": phase_count,
+                "maxItems": phase_count,
+                "prefixItems": phase_schemas,
                 "items": false
             },
             "passed": {"type": "boolean"},
@@ -879,8 +934,9 @@ fn quality_phase(inputs: &PipelineInputs<'_>, analysis: Option<&AnalysisBinding>
 fn manufacturing_phase(
     inputs: &PipelineInputs<'_>,
     board: Option<&BoardIdentity>,
-) -> PipelinePhase {
+) -> (PipelinePhase, Option<ManufacturingIdentity>) {
     let mut phase = PipelinePhase::new("manufacturing-package");
+    let mut manufacturing_identity = None;
     let package = capture_snapshot(
         &mut phase,
         inputs.manufacturing_package,
@@ -888,6 +944,10 @@ fn manufacturing_phase(
         MAX_PACKAGE_BYTES,
     );
     if let Some(package) = package {
+        manufacturing_identity = Some(ManufacturingIdentity {
+            bytes: package.evidence.bytes,
+            sha256: package.evidence.sha256.clone(),
+        });
         match validate_manufacturing_package(&package.bytes) {
             Ok(identity) => {
                 phase.check("complete-package-validated");
@@ -916,7 +976,12 @@ fn manufacturing_phase(
             Err(error) => phase.fail(format!("invalid manufacturing package: {error}")),
         }
     }
-    phase.finish()
+    let phase = phase.finish();
+    if phase.passed {
+        (phase, manufacturing_identity)
+    } else {
+        (phase, None)
+    }
 }
 
 fn firmware_phase(inputs: &PipelineInputs<'_>, schematic_sha256: Option<&str>) -> PipelinePhase {
@@ -981,6 +1046,67 @@ fn firmware_phase(inputs: &PipelineInputs<'_>, schematic_sha256: Option<&str>) -
                 }
                 Err(error) => phase.fail(error),
             }
+        }
+    }
+    phase.finish()
+}
+
+fn factory_phase(
+    receipt_path: Option<&Path>,
+    manufacturing: Option<&ManufacturingIdentity>,
+) -> PipelinePhase {
+    let mut phase = PipelinePhase::new("factory-dfm");
+    let Some(receipt_path) = receipt_path else {
+        phase.fail("factory receipt is required for the factory-bound pipeline");
+        return phase.finish();
+    };
+    let receipt_snapshot = capture_snapshot(
+        &mut phase,
+        receipt_path,
+        "factory-receipt",
+        MAX_FACTORY_RECEIPT_BYTES,
+    );
+    let receipt = receipt_snapshot.as_ref().and_then(|snapshot| {
+        match parse_json::<FactorySubmissionReceipt>(&snapshot.bytes, "factory receipt") {
+            Ok(receipt) => match validate_factory_submission_receipt(&receipt, false) {
+                Ok(()) => {
+                    phase.check("factory-receipt-validated");
+                    Some(receipt)
+                }
+                Err(error) => {
+                    phase.fail(format!("invalid factory receipt: {error}"));
+                    None
+                }
+            },
+            Err(error) => {
+                phase.fail(error);
+                None
+            }
+        }
+    });
+
+    if let Some(receipt) = receipt.as_ref() {
+        match manufacturing {
+            Some(identity)
+                if receipt.package_bytes == identity.bytes
+                    && receipt.package_sha256 == identity.sha256
+                    && receipt.request_sha256 == identity.sha256 =>
+            {
+                phase.check("factory-package-bound");
+            }
+            Some(_) => phase.fail(
+                "factory receipt package/request identity does not match the exact validated manufacturing ZIP",
+            ),
+            None => phase.fail(
+                "exact validated manufacturing package identity is unavailable for factory binding",
+            ),
+        }
+        if factory_feedback_passed(receipt) {
+            phase.check("factory-dfm=passed");
+        } else {
+            phase.fail(
+                "factory receipt did not pass accepted, DFM, HTTP, and fail-closed severity policy",
+            );
         }
     }
     phase.finish()
@@ -1430,6 +1556,8 @@ mod tests {
             analysis_policy_pack: None,
             manufacturing_package: path,
             firmware_manifest: path,
+            factory_receipt: None,
+            require_factory: false,
         }
     }
 
@@ -1650,6 +1778,37 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn factory_report_schema_is_closed_and_appends_the_sixth_phase() {
+        let schema = pipeline_factory_gate_schema();
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 2);
+        assert_eq!(
+            schema["properties"]["pipeline"]["const"],
+            "pcbex-hardware-v2"
+        );
+        assert_eq!(schema["properties"]["phases"]["minItems"], 6);
+        assert_eq!(schema["properties"]["phases"]["maxItems"], 6);
+        let names = schema["properties"]["phases"]["prefixItems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|phase| phase["properties"]["name"]["const"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "electrical-erc",
+                "analysis-drc",
+                "routing-quality",
+                "manufacturing-package",
+                "firmware-build",
+                "factory-dfm",
+            ]
+        );
+        assert_eq!(schema["properties"]["phases"]["items"], false);
     }
 
     #[test]
