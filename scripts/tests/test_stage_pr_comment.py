@@ -94,6 +94,9 @@ class StagePrCommentTests(unittest.TestCase):
                     for path in output.iterdir()
                 )
             )
+            self.assertTrue(
+                all(path.stat().st_mode & 0o077 == 0 for path in output.iterdir())
+            )
             self.assertEqual(json.loads((output / "binding.json").read_text()), binding)
             self.assertEqual(binding["schema_version"], 1)
             self.assertEqual(binding["body_path"], "pr-comment.md")

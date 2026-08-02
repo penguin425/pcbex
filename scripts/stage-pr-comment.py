@@ -388,7 +388,7 @@ def _write_new_file(directory: Path, name: str, data: bytes) -> None:
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(path, flags, 0o644)
+        descriptor = os.open(path, flags, 0o600)
     except OSError as failure:
         raise _error(f"unable to create staged {name}: {failure}") from failure
     try:
