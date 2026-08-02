@@ -4421,10 +4421,10 @@ enum Command {
         repair_command: Option<PathBuf>,
         #[arg(short, long)]
         output: PathBuf,
-        /// Write the final passing (or last failed) factory receipt separately for pipeline gating.
+        /// Write the final submission receipt; fail if requested but transport produced none.
         #[arg(long)]
         final_receipt: Option<PathBuf>,
-        /// Copy the final passing (or last failed) ZIP to this path for downstream fabrication gates.
+        /// Copy the final locally validated ZIP to this path for downstream fabrication gates.
         #[arg(long)]
         final_package: Option<PathBuf>,
         /// Test-only escape hatch; permits only loopback HTTP.
@@ -4654,6 +4654,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "Pick-and-place CSV",
             "Manufacturing ZIP",
             "Factory submission receipt v1",
+            "Factory feedback loop report v1",
             "SPDX JSON",
         ],
     }
@@ -14443,8 +14444,8 @@ fn run_cli() -> Result<()> {
         Command::FactoryFeedbackLoopSchema { output } => {
             let rendered = serde_json::to_string_pretty(&factory_feedback_loop_json_schema())?;
             if let Some(path) = output {
-                fs::write(&path, rendered)
-                    .with_context(|| format!("writing {}", path.display()))?;
+                let prepared = prepare_atomic_new_file(&path)?;
+                persist_atomic_new_file(prepared, &path, &format!("{rendered}\n"))?;
             } else {
                 println!("{rendered}");
             }
@@ -14503,8 +14504,13 @@ fn run_cli() -> Result<()> {
             allow_http_loopback,
         } => {
             let provider = FactoryProvider::parse(&provider).map_err(anyhow::Error::msg)?;
-            let repair_args = repair_command.map(|path| vec![path.to_string_lossy().into_owned()]);
-            let report = run_factory_feedback_loop(
+            let mut prepared_outputs = prepare_factory_feedback_loop_outputs(
+                &package,
+                &output,
+                final_receipt.as_deref(),
+                final_package.as_deref(),
+            )?;
+            let outcome = run_factory_feedback_loop(
                 &package,
                 &endpoint,
                 provider,
@@ -14512,30 +14518,63 @@ fn run_cli() -> Result<()> {
                 timeout_seconds,
                 allow_http_loopback,
                 max_attempts,
-                repair_args.as_deref(),
-                final_package.as_deref(),
+                repair_command.as_deref(),
             )
             .map_err(anyhow::Error::msg)?;
-            fs::write(&output, serde_json::to_string_pretty(&report)?)
-                .with_context(|| format!("writing {}", output.display()))?;
-            if let Some(path) = final_receipt {
-                let receipt = report
-                    .attempts
-                    .last()
-                    .map(|attempt| &attempt.receipt)
-                    .ok_or_else(|| anyhow::anyhow!("factory feedback loop produced no receipt"))?;
-                fs::write(&path, serde_json::to_string_pretty(receipt)?)
-                    .with_context(|| format!("writing {}", path.display()))?;
+
+            let report_rendered = format!("{}\n", serde_json::to_string_pretty(&outcome.report)?);
+            let final_receipt_rendered = outcome
+                .report
+                .attempts
+                .last()
+                .and_then(|attempt| attempt.receipt.as_ref())
+                .map(serde_json::to_string_pretty)
+                .transpose()?
+                .map(|rendered| format!("{rendered}\n"));
+            let missing_requested_receipt =
+                final_receipt.is_some() && final_receipt_rendered.is_none();
+
+            let mut artifact_publication_error = None;
+            if let (Some(prepared), Some(path)) = (
+                prepared_outputs.final_package.take(),
+                final_package.as_deref(),
+            ) && let Err(error) = persist_atomic_new_file_bytes(
+                prepared,
+                path,
+                &outcome.final_package,
+            ) {
+                artifact_publication_error = Some(error);
             }
+            if let (Some(prepared), Some(path), Some(rendered)) = (
+                prepared_outputs.final_receipt.take(),
+                final_receipt.as_deref(),
+                final_receipt_rendered.as_deref(),
+            ) && let Err(error) = persist_atomic_new_file(prepared, path, rendered)
+                && artifact_publication_error.is_none()
+            {
+                artifact_publication_error = Some(error);
+            }
+
+            // The loop report is durable evidence even when the DFM gate, a
+            // transport attempt, or publication of an optional artifact fails.
+            persist_atomic_new_file(prepared_outputs.report, &output, &report_rendered)?;
+            if let Some(error) = artifact_publication_error {
+                return Err(error);
+            }
+
             eprintln!(
                 "factory feedback loop: passed={}; attempts={}; final_package_sha256={}; report={}",
-                report.passed,
-                report.attempts.len(),
-                report.final_package_sha256,
+                outcome.report.passed,
+                outcome.report.attempts.len(),
+                outcome.report.final_package_sha256,
                 output.display()
             );
-            if !report.passed {
-                bail!(report
+            if missing_requested_receipt {
+                bail!("factory feedback loop produced no final receipt; report and final package evidence were published");
+            }
+            if !outcome.report.passed {
+                bail!(outcome
+                    .report
                     .failure
                     .unwrap_or_else(|| "factory feedback loop did not pass".into()));
             }
@@ -14695,14 +14734,150 @@ fn prepare_atomic_new_file(path: &Path) -> Result<tempfile::NamedTempFile> {
         .with_context(|| format!("preparing atomic output beside {}", path.display()))
 }
 
+struct PreparedFactoryFeedbackLoopOutputs {
+    report: tempfile::NamedTempFile,
+    final_receipt: Option<tempfile::NamedTempFile>,
+    final_package: Option<tempfile::NamedTempFile>,
+}
+
+fn prepare_factory_feedback_loop_outputs(
+    package: &Path,
+    report: &Path,
+    final_receipt: Option<&Path>,
+    final_package: Option<&Path>,
+) -> Result<PreparedFactoryFeedbackLoopOutputs> {
+    let mut destinations = vec![("report", report)];
+    if let Some(path) = final_receipt {
+        destinations.push(("final receipt", path));
+    }
+    if let Some(path) = final_package {
+        destinations.push(("final package", path));
+    }
+    for (_, path) in &destinations {
+        reject_factory_output_symlink_components(path)?;
+    }
+
+    let normalized = destinations
+        .iter()
+        .map(|(label, path)| Ok((*label, normalize_destination(path)?)))
+        .collect::<Result<Vec<_>>>()?;
+    for (index, (left_label, left)) in normalized.iter().enumerate() {
+        for (right_label, right) in &normalized[index + 1..] {
+            if destinations_alias(left, right) {
+                bail!(
+                    "factory feedback loop {left_label} and {right_label} outputs resolve to the same destination {}",
+                    left.display()
+                );
+            }
+        }
+    }
+
+    // Resolve the input only for alias comparison. Failure to resolve a
+    // missing or otherwise invalid package belongs to the core, after every
+    // output has been reserved; an existing output still wins preflight.
+    if let Ok(normalized_package) = normalize_destination(package)
+        && let Some((label, _)) = normalized
+            .iter()
+            .find(|(_, destination)| destinations_alias(destination, &normalized_package))
+    {
+        bail!(
+            "factory feedback loop {label} output must not alias input package {}",
+            package.display()
+        );
+    }
+
+    // Inspect every requested destination before creating any reservation so
+    // an existing late-listed output cannot leave even a transient prepared
+    // file beside an earlier destination.
+    for (_, path) in &destinations {
+        ensure_new_file_path(path)?;
+    }
+
+    let report = prepare_atomic_new_file(report)?;
+    let final_receipt = final_receipt.map(prepare_atomic_new_file).transpose()?;
+    let final_package = final_package.map(prepare_atomic_new_file).transpose()?;
+    Ok(PreparedFactoryFeedbackLoopOutputs {
+        report,
+        final_receipt,
+        final_package,
+    })
+}
+
+fn normalize_destination(path: &Path) -> Result<PathBuf> {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return Ok(canonical);
+    }
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("output path must name a file: {}", path.display()))?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let canonical_parent = fs::canonicalize(parent)
+        .with_context(|| format!("resolving output directory {}", parent.display()))?;
+    Ok(canonical_parent.join(file_name))
+}
+
+fn reject_factory_output_symlink_components(path: &Path) -> Result<()> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("resolving current directory for factory feedback output")?
+            .join(path)
+    };
+    let mut current = PathBuf::new();
+    for component in absolute.components() {
+        current.push(component.as_os_str());
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "factory feedback loop output path contains symlink component {}",
+                    current.display()
+                )
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading metadata for {}", current.display()));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn destinations_alias(left: &Path, right: &Path) -> bool {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        // Windows and macOS destinations are commonly case-insensitive. A
+        // conservative fold can reject an unusual distinct pair, but it must
+        // never let two spellings of one no-clobber target reach the network.
+        left.to_string_lossy().to_lowercase() == right.to_string_lossy().to_lowercase()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        left == right
+    }
+}
+
 fn persist_atomic_new_file(
-    mut prepared: tempfile::NamedTempFile,
+    prepared: tempfile::NamedTempFile,
     path: &Path,
     contents: &str,
 ) -> Result<()> {
+    persist_atomic_new_file_bytes(prepared, path, contents.as_bytes())
+}
+
+fn persist_atomic_new_file_bytes(
+    mut prepared: tempfile::NamedTempFile,
+    path: &Path,
+    contents: &[u8],
+) -> Result<()> {
     prepared
         .as_file_mut()
-        .write_all(contents.as_bytes())
+        .write_all(contents)
         .with_context(|| format!("writing prepared output for {}", path.display()))?;
     prepared
         .as_file_mut()

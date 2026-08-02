@@ -489,6 +489,11 @@
     {
       "id": "bounded-factory-quote-dfm-connector",
       "release": "v1.394.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-factory-dfm-repair-loop",
+      "release": "v1.395.0",
       "status": "current"
     }
   ]

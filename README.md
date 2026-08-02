@@ -363,6 +363,39 @@ path must not already exist. See [the factory connector
 contract](docs/FACTORY_CONNECTOR.md) for the adapter request and response
 boundary.
 
+Run a bounded feedback loop only with a trusted, deployment-owned repair
+wrapper:
+
+```sh
+pcbex factory-feedback-loop manufacturing/manufacturing.zip \
+  --provider jlcpcb \
+  --endpoint https://factory-gateway.example/v1/quote \
+  --bearer-token-env PCBEX_FACTORY_TOKEN \
+  --repair-command /opt/pcbex/bin/repair-dfm-package \
+  --max-attempts 4 \
+  --output factory-loop.json \
+  --final-receipt factory-final-receipt.json \
+  --final-package manufacturing-final.zip
+```
+
+The loop allows at most four submissions in 900 seconds and gives its direct
+repair child at most 600 seconds. It revalidates a complete manifest ZIP with
+BOM/CPL/DRC/drill and Gerber-job-bound copper, profile, mask, and legend layers
+before every submission, keeps the last structurally valid package as a
+fallback, and retains a report for submission or repair failures after the
+initial package validates; a transport failure can leave no final receipt. The
+wrapper runs without a shell in a private temporary area with a cleared caller
+environment and only documented platform/process variables, but it is trusted
+code: pcbex does not provide a full sandbox for the wrapper or its descendants.
+It must write a complete, valid manifest ZIP, not a partial patch. Provider
+acceptance must be explicit, and responses reflecting the Bearer token are
+rejected. Loop outputs are atomic, refuse overwrite and symlink components,
+and must be distinct from the input. Report `passed` describes DFM only; CLI
+success additionally requires publication of every requested artifact. A
+copied final ZIP does not update a downstream pipeline manifest; rebuild and
+bind that manifest to the final ZIP and its matching receipt, with unknown DFM
+severities failing closed.
+
 ## Component placement
 
 The placement engine combines graph-clustered initialization with deterministic
@@ -1988,7 +2021,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.394.0
+  uses: penguin425/pcbex@v1.395.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3848,7 +3881,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.394.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.395.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

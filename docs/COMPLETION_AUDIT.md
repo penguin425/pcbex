@@ -30,6 +30,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Headless KiCad validation | `route-kicad --drc` | KiCad 10.0.5: 0 violations, 0 unconnected pads |
 | Reproducible manufacturing package | Isolated `fabricate` DRC gate plus all-copper Gerber, paste/mask/silkscreen, drill, BOM/CPL, manifest, and ZIP export | Four-layer/Paste KiCad E2E, timestamp normalization, byte-identical rerun, metadata and polluted-output regressions |
 | Bounded factory quote and DFM connector | JLCPCB, PCBWay, and generic adapter identities verify every manifest-bound manufacturing artifact before submission through a no-redirect, compressed/expanded-size- and timeout-bounded HTTPS boundary; optional Bearer credentials remain environment-only while normalized receipts bind package/request/response digests and deterministic quote/DFM evidence | Real HTTP-stack loopback tests cover headers, credentials, payload and digest binding, producer-package compatibility, archive tampering, redirects, malformed/oversized responses, strict receipt schema, and fail-closed DFM gating; CLI integration atomically refuses receipt/schema overwrite before factory access |
+| Bounded factory DFM repair loop | `factory-feedback-loop` permits at most four submissions in 900 seconds, caps the trusted deployment-owned repair child at 600 seconds, clears its inherited environment, rejects reflected Bearer credentials, and promotes a candidate from private staging only after closed manifest and complete manufacturing/Gerber-job validation; the last structurally valid package, failure report, and available matching receipt use atomic no-overwrite outputs distinct from the input, without claiming descendant-process sandboxing | Unit, real HTTP-stack, and CLI regressions cover deadline and attempt bounds, token non-inheritance/reflection, input immutability, complete candidate revalidation, known-good fallback, repair/submission failure reports, missing receipts after transport failure, and output collision/symlink/overwrite refusal |
 | Interactive KiCad integration | Official `kicad-python` IPC adapter and one undoable commit | Mock transaction test and real wrapper-object serialization check |
 | Placement scoring | HPWL, overlap, boundary, congestion, constraint penalties | Placement score improved from 560624 to 642 in the example |
 | Placement search | Graph-clustered initial state, deterministic simulated annealing, move/rotate/swap, final snap | Placement unit tests |
@@ -220,7 +221,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.394.0 exposes 610 Rust tests and 32 Python tests. The release workflow
+Version 1.395.0 exposes 633 Rust tests and 32 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

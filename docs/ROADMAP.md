@@ -104,6 +104,7 @@ auditable release.
 | v1.392.0 | Deterministic power-safety ERC | Reject conflicting rails, over-voltage power inputs, and missing required decoupling from explicit schematic metadata |
 | v1.393.0 | Reproducible manufacturing packages | Gate and stage KiCad manufacturing outputs with complete copper/Paste layers, strict BOM/CPL metadata, hash manifests, and deterministic ZIP publication |
 | v1.394.0 | Bounded factory quote and DFM connector | Submit exact manufacturing archives through secret-safe HTTPS adapters and retain hash-bound normalized quote/DFM receipts |
+| v1.395.0 | Bounded factory DFM repair loop | Revalidate and resubmit complete manifest-bound ZIPs through a deadline-bounded, deployment-owned repair wrapper while retaining failure evidence and the last known-good package |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -112,5 +113,6 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap should turn retained factory DFM findings into a bounded,
-auditable repair loop before another manufacturing submission.
+The next roadmap should harden the pipeline/factory-gate handoff by rebuilding
+and binding the manifest to the exact final ZIP while keeping unknown DFM
+severities fail-closed.
