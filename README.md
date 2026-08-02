@@ -1958,7 +1958,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.390.0
+  uses: penguin425/pcbex@v1.391.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3814,7 +3814,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.390.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.391.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
@@ -3927,6 +3927,8 @@ pcbex is a deterministic physical-design engine for placed signal boards with
 a versioned KiCad schematic electrical IR. It supports polygonal multilayer
 boards, differential pairs, length tuning, copper zones, partial-span vias,
 exact KiCad pad geometry, placement optimization, DFM reporting, and headless
-or IPC-assisted KiCad workflows. It does not yet synthesize schematics, select
-electrical components, perform analog or signal-integrity simulation, or
-replace final KiCad ERC/DRC and fabrication review.
+or IPC-assisted KiCad workflows. The companion agent can render a validated,
+closed circuit specification as executable SKiDL and deterministically select
+parts from a normalized catalog input. It does not yet replace complete
+electrical design, analog or signal-integrity simulation, final KiCad ERC/DRC,
+or fabrication review.

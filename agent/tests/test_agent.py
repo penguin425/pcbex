@@ -1,3 +1,4 @@
+import ast
 import json
 import http.server
 import sys
@@ -6,11 +7,11 @@ import time
 import unittest
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from pcbex_agent.cli import main as agent_main
-from pcbex_agent.catalog import CatalogPart, search_parts
+from pcbex_agent.catalog import CatalogPart, catalog_parts_from_json, search_parts
 from pcbex_agent.circuit import skidl_to_placement_problem
 from pcbex_agent.drc import normalize_kicad_report
 from pcbex_agent.executor import ScoreComparison, run_bounded
@@ -30,6 +31,12 @@ from pcbex_agent.repair_loop import run_repair_loop
 from pcbex_agent.llm import build_plan_with_llm
 from pcbex_agent.ipc import apply_routes_to_open_board
 from pcbex_agent.review import review_schematic_with_llm
+from pcbex_agent.skidl import (
+    CircuitSpecError,
+    assign_catalog_parts,
+    circuit_spec_json_schema,
+    generate_skidl,
+)
 
 
 class PlannerTests(unittest.TestCase):
@@ -703,10 +710,167 @@ class AdapterTests(unittest.TestCase):
 
     def test_catalog_search_is_ranked_and_filtered(self):
         parts = [
-            CatalogPart("A", "ceramic capacitor", "0402", ("decoupling",)),
-            CatalogPart("B", "resistor", "0402"),
+            CatalogPart("A", "ceramic capacitor", "0402", ("decoupling",), "JLC", 100, True),
+            CatalogPart("B", "resistor", "0402", stock=100, basic=True),
         ]
         self.assertEqual(search_parts(parts, "decoupling", limit=1)[0].mpn, "A")
+        with self.assertRaisesRegex(ValueError, "index 0 must be an object"):
+            catalog_parts_from_json(["not-an-object"])
+
+    def test_catalog_selection_requires_stock_and_basic_parts(self):
+        parts = catalog_parts_from_json([
+            {"mpn": "C1", "description": "capacitor", "footprint": "0402", "stock": 0},
+            {"mpn": "C2", "description": "capacitor", "footprint": "0402", "stock": 20, "basic": True},
+        ])
+        spec = {
+            "schema_version": 1,
+            "parts": [{
+                "reference": "C1", "lib_id": "Device:C", "value": "100nF",
+                "footprint": "0402", "pins": {"1": "VCC", "2": "VCC"}, "mpn": None,
+            }],
+            "nets": [
+                {"name": "VCC", "connections": [{"reference": "C1", "pin": "1"}, {"reference": "C1", "pin": "2"}]},
+            ],
+        }
+        selected = assign_catalog_parts(spec, parts, require_basic=True)
+        self.assertEqual(selected["parts"][0]["mpn"], "C2")
+
+    def test_skidl_generator_is_deterministic_and_complete(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {"reference": "R1", "lib_id": "Device:R", "value": "10k", "footprint": "0402",
+                 "pins": {"1": "VCC", "2": "GND"}},
+                {"reference": "U1", "lib_id": "Connector_Generic:Conn_01x02", "value": "JTAG",
+                 "footprint": "PinHeader_1x02_P2.54mm_Vertical", "pins": {"1": "VCC", "2": "GND"}},
+            ],
+            "nets": [
+                {"name": "GND", "connections": [{"reference": "R1", "pin": "2"}, {"reference": "U1", "pin": "2"}]},
+                {"name": "VCC", "connections": [{"reference": "R1", "pin": "1"}, {"reference": "U1", "pin": "1"}]},
+            ],
+        }
+        source = generate_skidl(spec)
+        self.assertEqual(source, generate_skidl(spec))
+        self.assertIn('_pcbex_parts["R1"] = Part("Device", "R"', source)
+        self.assertIn('_pcbex_parts["R1"]["1"] += _pcbex_nets["VCC"]', source)
+        self.assertIn("generate_netlist()", source)
+        schema = circuit_spec_json_schema()
+        self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
+
+    def test_skidl_generator_isolates_external_names_from_python_namespace(self):
+        net_names = [
+            "5V",
+            "USB+",
+            "A.B",
+            "Part",
+            "Net",
+            "generate_netlist",
+            "PCBEX_ELECTRICAL_JSON",
+            "class",
+            "__debug__",
+        ]
+        pins = {str(index): name for index, name in enumerate(net_names, start=1)}
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {"reference": "Part", "lib_id": "Device:R", "value": "10k",
+                 "footprint": "0402", "pins": pins},
+                {"reference": "generate_netlist", "lib_id": "Device:R", "value": "1k",
+                 "footprint": "0402", "pins": pins},
+            ],
+            "nets": [
+                {"name": name,
+                 "connections": [
+                     {"reference": "Part", "pin": str(index)},
+                     {"reference": "generate_netlist", "pin": str(index)},
+                 ]}
+                for index, name in enumerate(net_names, start=1)
+            ],
+        }
+
+        source = generate_skidl(spec)
+        ast.parse(source)
+        compile(source, "generated-circuit.py", "exec")
+        compile(
+            generate_skidl(spec, include_netlist=False),
+            "generated-circuit-without-netlist.py",
+            "exec",
+        )
+        self.assertIn('_pcbex_nets["5V"] = Net("5V")', source)
+        self.assertIn(
+            '_pcbex_parts["Part"]["4"] += _pcbex_nets["Part"]', source
+        )
+
+        class FakeNet:
+            def __init__(self, name):
+                self.name = name
+                self.connections = 0
+
+        class FakePin:
+            def __iadd__(self, net):
+                net.connections += 1
+                return self
+
+        class FakePart:
+            def __init__(self, _library, _symbol, *, value, footprint):
+                self.value = value
+                self.footprint = footprint
+                self.pins = {}
+
+            def __getitem__(self, pin):
+                return self.pins.setdefault(pin, FakePin())
+
+            def __setitem__(self, pin, value):
+                self.pins[pin] = value
+
+        generated_netlists = []
+        fake_skidl = ModuleType("skidl")
+        fake_skidl.Net = FakeNet
+        fake_skidl.Part = FakePart
+        fake_skidl.generate_netlist = lambda: generated_netlists.append(True)
+        namespace = {}
+        with patch.dict(sys.modules, {"skidl": fake_skidl}):
+            exec(compile(source, "generated-circuit.py", "exec"), namespace)
+
+        self.assertEqual(generated_netlists, [True])
+        self.assertEqual(set(namespace["_pcbex_nets"]), set(net_names))
+        self.assertTrue(
+            all(net.connections == 2 for net in namespace["_pcbex_nets"].values())
+        )
+
+    def test_skidl_generator_fails_on_unconnected_pin(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [{"reference": "R1", "lib_id": "Device:R", "value": "10k",
+                        "footprint": "0402", "pins": {"1": "VCC", "2": "GND"}}],
+            "nets": [{"name": "VCC", "connections": [{"reference": "R1", "pin": "1"},
+                                                          {"reference": "R1", "pin": "1"}]}],
+        }
+        with self.assertRaises(CircuitSpecError):
+            generate_skidl(spec)
+
+    def test_skidl_generator_rejects_declared_pin_net_mismatch(self):
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {"reference": "R1", "lib_id": "Device:R", "value": "10k",
+                 "footprint": "0402", "pins": {"1": "VCC", "2": "GND"}},
+                {"reference": "R2", "lib_id": "Device:R", "value": "1k",
+                 "footprint": "0402", "pins": {"1": "VCC", "2": "GND"}},
+            ],
+            "nets": [
+                {"name": "GND", "connections": [
+                    {"reference": "R1", "pin": "1"},
+                    {"reference": "R2", "pin": "2"},
+                ]},
+                {"name": "VCC", "connections": [
+                    {"reference": "R1", "pin": "2"},
+                    {"reference": "R2", "pin": "1"},
+                ]},
+            ],
+        }
+        with self.assertRaisesRegex(CircuitSpecError, "declares net"):
+            generate_skidl(spec)
 
     def test_skidl_shape_converts_to_connection_graph(self):
         u1 = SimpleNamespace(ref="U1", footprint="QFN")

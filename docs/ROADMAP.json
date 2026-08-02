@@ -469,6 +469,11 @@
     {
       "id": "approval-receipt-quorum-checkpoint-witness-key-rotation",
       "release": "v1.390.0",
+      "status": "released"
+    },
+    {
+      "id": "deterministic-text-to-circuit-skidl",
+      "release": "v1.391.0",
       "status": "current"
     }
   ]
