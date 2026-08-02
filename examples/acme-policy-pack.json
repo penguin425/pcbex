@@ -32,6 +32,8 @@
       "coverage_incomplete": {"enabled": true, "severity": "error"},
       "duplicate_reference_unit": {"enabled": true, "severity": "error"},
       "input_not_driven": {"enabled": true, "severity": "warning"},
+      "invalid_power_metadata": {"enabled": true, "severity": "error"},
+      "missing_decoupling_capacitor": {"enabled": true, "severity": "error"},
       "missing_footprint": {"enabled": true, "severity": "warning"},
       "multiple_net_names": {"enabled": true, "severity": "warning"},
       "multiple_output_drivers": {"enabled": true, "severity": "error"},
@@ -39,6 +41,8 @@
       "no_connect_connected": {"enabled": true, "severity": "error"},
       "pin_type_no_connect_connected": {"enabled": true, "severity": "error"},
       "power_input_not_driven": {"enabled": true, "severity": "error"},
+      "power_input_voltage_exceeded": {"enabled": true, "severity": "error"},
+      "power_rail_voltage_conflict": {"enabled": true, "severity": "error"},
       "unannotated_reference": {"enabled": true, "severity": "error"},
       "unconnected_pin": {"enabled": true, "severity": "warning"}
     }

@@ -101,6 +101,7 @@ auditable release.
 | v1.389.0 | Independent receipt-quorum checkpoint witnesses | Re-verify exact approval evidence and require a fresh quorum of distinct trusted witnesses over its dedicated checkpoint |
 | v1.390.0 | Receipt-quorum checkpoint witness key rotation | Advance identity-bound witness trust through dual-signed generation- and digest-chained key transitions |
 | v1.391.0 | Deterministic Text-to-Circuit SKiDL | Convert a closed circuit specification into executable, namespace-isolated SKiDL with deterministic catalog selection |
+| v1.392.0 | Deterministic power-safety ERC | Reject conflicting rails, over-voltage power inputs, and missing required decoupling from explicit schematic metadata |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing

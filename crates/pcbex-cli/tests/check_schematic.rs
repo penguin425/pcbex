@@ -73,7 +73,7 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
         review["schematic_sha256"]
     );
     assert_eq!(explanation_report["policy_sha256"], review["policy_sha256"]);
-    assert_eq!(explanation_report["rules"].as_array().unwrap().len(), 15);
+    assert_eq!(explanation_report["rules"].as_array().unwrap().len(), 16);
     for rule in explanation_report["rules"].as_array().unwrap() {
         for field in ["title", "purpose", "trigger", "remediation"] {
             assert!(!rule[field].as_str().unwrap().is_empty());
@@ -81,7 +81,7 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
     }
     let junit_source = fs::read_to_string(&junit).unwrap();
     assert!(junit_source.starts_with(r#"<?xml version="1.0" encoding="UTF-8"?>"#));
-    assert!(junit_source.contains(r#"<testsuite name="pcbex electrical rules" tests="15""#));
+    assert!(junit_source.contains(r#"<testsuite name="pcbex electrical rules" tests="16""#));
     assert!(junit_source.contains(r#"<failure type="electrical_error""#));
     assert!(junit_source.contains(review["schematic_sha256"].as_str().unwrap()));
     let sarif_report: Value = serde_json::from_slice(&fs::read(&sarif).unwrap()).unwrap();
