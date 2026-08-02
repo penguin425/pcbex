@@ -170,6 +170,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "factory-feedback-loop-schema",
         "factory-submit",
         "factory-feedback-loop",
+        "pipeline-schema",
+        "pipeline-verify",
     ] {
         let command = commands
             .iter()
@@ -212,5 +214,12 @@ fn publishes_a_complete_versioned_capability_inventory() {
             .unwrap()
             .iter()
             .any(|contract| contract == "Factory feedback loop report v1")
+    );
+    assert!(
+        report["output_contracts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|contract| contract == "Hardware pipeline gate report v1")
     );
 }

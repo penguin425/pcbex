@@ -146,9 +146,9 @@ an optional receipt or package could not be published.
 
 The loop's trust boundary ends at the final ZIP and its matching factory
 receipt. `--final-package` copies exact ZIP bytes; it does not rebuild or
-silently update a downstream pipeline/run manifest. Before a later pipeline
-factory gate consumes the result, rebuild and bind that manifest to the exact
-final ZIP and require the receipt for the same package digest. Do not pair a
-repaired ZIP with the original package's manifest or receipt. The pass decision
-continues to use the fail-closed severity rules above, including rejection of
-unknown severities.
+silently update a downstream pipeline/run manifest. Run `pipeline-verify`
+against that exact final ZIP to rebuild the five-phase digest manifest. A
+subsequent factory phase must then require the receipt for the same package
+digest. Do not pair a repaired ZIP with the original package's pipeline
+manifest or receipt. The factory pass decision continues to use the fail-closed
+severity rules above, including rejection of unknown severities.

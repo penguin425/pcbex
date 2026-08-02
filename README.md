@@ -392,9 +392,32 @@ acceptance must be explicit, and responses reflecting the Bearer token are
 rejected. Loop outputs are atomic, refuse overwrite and symlink components,
 and must be distinct from the input. Report `passed` describes DFM only; CLI
 success additionally requires publication of every requested artifact. A
-copied final ZIP does not update a downstream pipeline manifest; rebuild and
-bind that manifest to the final ZIP and its matching receipt, with unknown DFM
-severities failing closed.
+copied final ZIP does not update a downstream pipeline manifest. Rebuild the
+five-phase manifest against the exact selected ZIP:
+
+```sh
+pcbex pipeline-verify \
+  --schematic design.kicad_sch \
+  --electrical-review build/electrical-review.json \
+  --board multilayer.routed.kicad_pcb \
+  --analysis-manifest build/analysis/run.json \
+  --analysis-checks build/analysis/checks.json \
+  --quality build/analysis/quality.json \
+  --manufacturing-package manufacturing-final.zip \
+  --firmware-manifest build/firmware/manifest.json \
+  --output build/pipeline-gate.json
+```
+
+The gate recomputes electrical approval from the exact schematic and policy,
+cross-checks analysis and routing evidence against the exact board, performs
+the complete manufacturing ZIP validation, and verifies every firmware source
+digest. When `run.json` declares project settings, custom rules, an external
+DFM profile, or a policy pack, authorize each source with the matching
+`--analysis-*` option; embedded descriptor paths are never opened. The gate
+writes a no-clobber digest manifest even when a phase is rejected.
+Factory receipt/DFM enforcement remains a separate subsequent gate and must
+bind its receipt to the same ZIP; unknown DFM severities continue to fail
+closed. See [the hardware pipeline gate contract](docs/PIPELINE_GATE.md).
 
 ## Component placement
 
@@ -2021,7 +2044,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-  uses: penguin425/pcbex@v1.395.0
+  uses: penguin425/pcbex@v1.396.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3881,7 +3904,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.395.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.396.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
