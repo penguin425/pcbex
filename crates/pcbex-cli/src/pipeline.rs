@@ -4,6 +4,10 @@ use crate::factory::{
     FactorySubmissionReceipt, factory_feedback_passed, validate_factory_submission_receipt,
     validate_manufacturing_package,
 };
+use crate::firmware::{
+    FIRMWARE_ARTIFACTS, FIRMWARE_SCHEMA_VERSION, FirmwareBuildEvidence, FirmwareCommandEvidence,
+    FirmwareManifest, MAX_FIRMWARE_ARTIFACT_BYTES,
+};
 use crate::policy_pack::parse_policy_pack;
 use pcbex_core::{
     DfmProfile, Rules, apply_dfm_profile, checking::CheckReport, checking::check_board,
@@ -34,7 +38,6 @@ const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
 // and pretty JSON can be substantially larger than the provider's 8 MiB body.
 const MAX_FACTORY_RECEIPT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FIRMWARE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_FIRMWARE_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FIRMWARE_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_FINDINGS: usize = 100_000;
 const MAX_NETS: usize = 100_000;
@@ -51,14 +54,6 @@ const ANALYSIS_ARTIFACTS: [&str; 7] = [
     "report.sarif",
     "summary.md",
     "run.json",
-];
-
-const FIRMWARE_ARTIFACTS: [&str; 5] = [
-    "pinout.h",
-    "firmware.h",
-    "firmware.c",
-    "firmware_smoke_test.c",
-    "host.py",
 ];
 
 pub struct PipelineInputs<'a> {
@@ -219,34 +214,6 @@ struct AnalysisManifest {
     configuration: AnalysisConfiguration,
     result: AnalysisResult,
     artifacts: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FirmwareArtifact {
-    path: String,
-    bytes: u64,
-    sha256: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FirmwareBuild {
-    attempted: bool,
-    passed: bool,
-    command: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FirmwareManifest {
-    schema_version: u32,
-    engine: String,
-    engine_version: String,
-    schematic_sha256: String,
-    artifacts: Vec<FirmwareArtifact>,
-    c_build: FirmwareBuild,
-    python_check: FirmwareBuild,
 }
 
 /// Validate every pipeline phase and retain all independent failures.
@@ -992,15 +959,12 @@ fn firmware_phase(inputs: &PipelineInputs<'_>, schematic_sha256: Option<&str>) -
         "firmware-manifest",
         MAX_FIRMWARE_MANIFEST_BYTES,
     );
+    if manifest_snapshot.is_some() {
+        validate_firmware_bundle_directory(&mut phase, inputs.firmware_manifest);
+    }
     let manifest = manifest_snapshot.as_ref().and_then(|snapshot| {
         match parse_json::<FirmwareManifest>(&snapshot.bytes, "firmware manifest") {
-            Ok(manifest) => match validate_firmware_manifest(&manifest) {
-                Ok(()) => Some(manifest),
-                Err(error) => {
-                    phase.fail(error);
-                    None
-                }
-            },
+            Ok(manifest) => Some(manifest),
             Err(error) => {
                 phase.fail(error);
                 None
@@ -1009,6 +973,17 @@ fn firmware_phase(inputs: &PipelineInputs<'_>, schematic_sha256: Option<&str>) -
     });
 
     if let Some(manifest) = manifest.as_ref() {
+        // Keep manifest shape failures independent from the evidence checks.  A
+        // malformed engine/version or artifact descriptor must not hide a
+        // missing/failed C, C++, or Python build evidence record.
+        let manifest_shape_valid = match validate_firmware_manifest(manifest) {
+            Ok(()) => true,
+            Err(error) => {
+                phase.fail(error);
+                false
+            }
+        };
+
         match schematic_sha256 {
             Some(expected) if manifest.schematic_sha256 == expected => {
                 phase.check("firmware-schematic-bound");
@@ -1017,38 +992,111 @@ fn firmware_phase(inputs: &PipelineInputs<'_>, schematic_sha256: Option<&str>) -
             None => phase.fail("exact schematic identity is unavailable for firmware binding"),
         }
         validate_firmware_build(&mut phase, "c-build", &manifest.c_build);
+        validate_firmware_build(&mut phase, "cpp-build", &manifest.cpp_build);
         validate_firmware_build(&mut phase, "python-check", &manifest.python_check);
 
-        let parent = inputs
-            .firmware_manifest
-            .parent()
-            .filter(|parent| !parent.as_os_str().is_empty())
-            .unwrap_or_else(|| Path::new("."));
-        for descriptor in &manifest.artifacts {
-            let role = format!("firmware-artifact:{}", descriptor.path);
-            match read_snapshot(
-                &parent.join(&descriptor.path),
-                &role,
-                MAX_FIRMWARE_ARTIFACT_BYTES,
-            ) {
-                Ok(snapshot) => {
-                    if snapshot.evidence.bytes != descriptor.bytes
-                        || snapshot.evidence.sha256 != descriptor.sha256
-                    {
-                        phase.fail(format!(
-                            "firmware artifact {} does not match its bytes/SHA-256 descriptor",
-                            descriptor.path
-                        ));
-                    } else {
-                        phase.check(format!("hash-ok:{}", descriptor.path));
+        // Do not use untrusted artifact paths unless the complete descriptor
+        // set has passed validation.  Once shape-checked, retain the existing
+        // bounded, regular-file, anti-symlink snapshot and hash binding logic.
+        if manifest_shape_valid {
+            let parent = inputs
+                .firmware_manifest
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            for descriptor in &manifest.artifacts {
+                let role = format!("firmware-artifact:{}", descriptor.path);
+                match read_snapshot(
+                    &parent.join(&descriptor.path),
+                    &role,
+                    MAX_FIRMWARE_ARTIFACT_BYTES,
+                ) {
+                    Ok(snapshot) => {
+                        if snapshot.evidence.bytes != descriptor.bytes
+                            || snapshot.evidence.sha256 != descriptor.sha256
+                        {
+                            phase.fail(format!(
+                                "firmware artifact {} does not match its bytes/SHA-256 descriptor",
+                                descriptor.path
+                            ));
+                        } else {
+                            phase.check(format!("hash-ok:{}", descriptor.path));
+                        }
+                        phase.evidence.push(snapshot.evidence);
                     }
-                    phase.evidence.push(snapshot.evidence);
+                    Err(error) => phase.fail(error),
                 }
-                Err(error) => phase.fail(error),
             }
         }
     }
     phase.finish()
+}
+
+fn validate_firmware_bundle_directory(phase: &mut PipelinePhase, manifest_path: &Path) {
+    if manifest_path.file_name().and_then(|name| name.to_str()) != Some("manifest.json") {
+        phase.fail("firmware v2 manifest filename must be manifest.json");
+        return;
+    }
+    let parent = manifest_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut actual = Vec::new();
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(error) => {
+            phase.fail(format!("cannot list firmware bundle directory: {error}"));
+            return;
+        }
+    };
+    for entry in entries {
+        if actual.len() > FIRMWARE_ARTIFACTS.len() {
+            phase.fail(
+                "firmware bundle directory does not contain the exact v2 artifact set: entry limit exceeded",
+            );
+            return;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                phase.fail(format!("cannot inspect firmware bundle entry: {error}"));
+                return;
+            }
+        };
+        let file_type = match entry.file_type() {
+            Ok(file_type) => file_type,
+            Err(error) => {
+                phase.fail(format!(
+                    "cannot inspect firmware bundle entry type: {error}"
+                ));
+                return;
+            }
+        };
+        if file_type.is_symlink() || !file_type.is_file() {
+            phase.fail("firmware bundle directory contains a non-regular entry");
+            return;
+        }
+        let name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => {
+                phase.fail("firmware bundle directory contains a non-UTF-8 filename");
+                return;
+            }
+        };
+        actual.push(name);
+    }
+    actual.sort();
+    let mut expected = FIRMWARE_ARTIFACTS
+        .iter()
+        .map(ToString::to_string)
+        .chain(std::iter::once("manifest.json".to_string()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    if actual != expected {
+        phase.fail("firmware bundle directory does not contain the exact v2 artifact set");
+    } else {
+        phase.check("firmware-directory-exact");
+    }
 }
 
 fn factory_phase(
@@ -1424,10 +1472,17 @@ fn validate_quality(quality: &RoutingQuality) -> Result<(), String> {
 }
 
 fn validate_firmware_manifest(manifest: &FirmwareManifest) -> Result<(), String> {
-    if manifest.schema_version != 1 || manifest.engine != "pcbex" {
-        return Err("firmware manifest is not a pcbex v1 manifest".into());
+    if manifest.schema_version != FIRMWARE_SCHEMA_VERSION {
+        return Err(format!(
+            "firmware manifest schema_version must be {FIRMWARE_SCHEMA_VERSION}"
+        ));
     }
-    validate_text(&manifest.engine_version, "firmware engine version")?;
+    if manifest.engine != "pcbex" {
+        return Err("firmware manifest engine must be pcbex".into());
+    }
+    if !is_semver_like(&manifest.engine_version) {
+        return Err("firmware manifest engine version must be a bounded semantic version".into());
+    }
     if !is_sha256(&manifest.schematic_sha256) {
         return Err("firmware manifest has an invalid schematic SHA-256".into());
     }
@@ -1438,7 +1493,7 @@ fn validate_firmware_manifest(manifest: &FirmwareManifest) -> Result<(), String>
             .map(|artifact| artifact.path.as_str())
             .eq(FIRMWARE_ARTIFACTS)
     {
-        return Err("firmware manifest must list the exact ordered v1 artifact set".into());
+        return Err("firmware manifest must list the exact ordered v2 artifact set".into());
     }
     let mut total = 0_u64;
     for artifact in &manifest.artifacts {
@@ -1464,33 +1519,76 @@ fn validate_firmware_manifest(manifest: &FirmwareManifest) -> Result<(), String>
             return Err("firmware artifacts exceed the total byte limit".into());
         }
     }
-    validate_build_shape(&manifest.c_build, "C build")?;
-    validate_build_shape(&manifest.python_check, "Python check")?;
     Ok(())
 }
 
-fn validate_build_shape(build: &FirmwareBuild, label: &str) -> Result<(), String> {
-    if build.command.is_empty() || build.command.len() > MAX_COMMAND_ARGUMENTS {
-        return Err(format!(
+fn validate_firmware_build(phase: &mut PipelinePhase, label: &str, build: &FirmwareBuildEvidence) {
+    validate_firmware_evidence(
+        phase,
+        label,
+        build.attempted,
+        build.passed,
+        build.exit_code,
+        &build.command,
+    );
+    validate_firmware_command_evidence(phase, &format!("{label}-smoke"), &build.smoke);
+}
+
+fn validate_firmware_command_evidence(
+    phase: &mut PipelinePhase,
+    label: &str,
+    evidence: &FirmwareCommandEvidence,
+) {
+    validate_firmware_evidence(
+        phase,
+        label,
+        evidence.attempted,
+        evidence.passed,
+        evidence.exit_code,
+        &evidence.command,
+    );
+}
+
+fn validate_firmware_evidence(
+    phase: &mut PipelinePhase,
+    label: &str,
+    attempted: bool,
+    passed: bool,
+    exit_code: Option<i32>,
+    command: &[String],
+) {
+    if !attempted {
+        phase.fail(format!("firmware {label} was not attempted"));
+    }
+    if !passed {
+        phase.fail(format!("firmware {label} did not pass"));
+    }
+    if exit_code != Some(0) {
+        phase.fail(format!("firmware {label} exit code is not zero"));
+    }
+    validate_firmware_command(phase, label, command);
+    if attempted && passed && exit_code == Some(0) {
+        phase.check(format!("{label}=passed"));
+    }
+}
+
+fn validate_firmware_command(phase: &mut PipelinePhase, label: &str, command: &[String]) {
+    if command.is_empty() || command.len() > MAX_COMMAND_ARGUMENTS {
+        phase.fail(format!(
             "firmware {label} command has an invalid argument count"
         ));
+        return;
     }
-    for argument in &build.command {
-        validate_text(argument, &format!("firmware {label} command argument"))?;
-        if argument.chars().any(char::is_control) {
-            return Err(format!(
-                "firmware {label} command arguments must not contain control characters"
+    for argument in command {
+        if let Err(error) = validate_text(argument, &format!("firmware {label} command argument")) {
+            phase.fail(error);
+            continue;
+        }
+        if !argument.bytes().all(|byte| (b' '..=b'~').contains(&byte)) {
+            phase.fail(format!(
+                "firmware {label} command arguments must contain printable ASCII only"
             ));
         }
-    }
-    Ok(())
-}
-
-fn validate_firmware_build(phase: &mut PipelinePhase, label: &str, build: &FirmwareBuild) {
-    if !build.attempted || !build.passed {
-        phase.fail(format!("firmware {label} was not attempted and passed"));
-    } else {
-        phase.check(format!("{label}=passed"));
     }
 }
 
@@ -1499,6 +1597,7 @@ fn is_safe_firmware_name(path: &str) -> bool {
         && !path.contains('/')
         && !path.contains('\\')
         && !path.contains('\0')
+        && !path.chars().any(char::is_control)
         && path != "."
         && path != ".."
 }
@@ -1521,6 +1620,38 @@ fn is_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn is_semver_like(value: &str) -> bool {
+    if value.len() < 5 || value.len() > 128 || !value.is_ascii() {
+        return false;
+    }
+    let (without_build, build) = value
+        .split_once('+')
+        .map_or((value, None), |(core, suffix)| (core, Some(suffix)));
+    if build.is_some_and(|suffix| !is_semver_suffix(suffix)) || without_build.contains('+') {
+        return false;
+    }
+    let (core, prerelease) = without_build
+        .split_once('-')
+        .map_or((without_build, None), |(core, suffix)| (core, Some(suffix)));
+    if prerelease.is_some_and(|suffix| !is_semver_suffix(suffix)) {
+        return false;
+    }
+    let mut parts = core.split('.');
+    let valid_core = (0..3).all(|_| {
+        parts
+            .next()
+            .is_some_and(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
+    });
+    valid_core && parts.next().is_none()
+}
+
+fn is_semver_suffix(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'.' || byte == b'-')
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -1692,13 +1823,47 @@ mod tests {
         fs::write(
             &manifest_path,
             serde_json::to_vec(&json!({
-                "schema_version": 1,
+                "schema_version": FIRMWARE_SCHEMA_VERSION,
                 "engine": "pcbex",
-                "engine_version": "test",
+                "engine_version": env!("CARGO_PKG_VERSION"),
                 "schematic_sha256": "a".repeat(64),
                 "artifacts": artifacts,
-                "c_build": {"attempted": true, "passed": true, "command": ["cc"]},
-                "python_check": {"attempted": true, "passed": true, "command": ["python3"]},
+                "c_build": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["cc"],
+                    "exit_code": 0,
+                    "smoke": {
+                        "attempted": true,
+                        "passed": true,
+                        "command": ["firmware-c-smoke"],
+                        "exit_code": 0
+                    }
+                },
+                "cpp_build": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["c++"],
+                    "exit_code": 0,
+                    "smoke": {
+                        "attempted": true,
+                        "passed": true,
+                        "command": ["firmware-cpp-smoke"],
+                        "exit_code": 0
+                    }
+                },
+                "python_check": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["python3"],
+                    "exit_code": 0,
+                    "smoke": {
+                        "attempted": true,
+                        "passed": true,
+                        "command": ["python3", "host.py"],
+                        "exit_code": 0
+                    }
+                },
                 "unknown": true
             }))
             .unwrap(),
@@ -1715,15 +1880,49 @@ mod tests {
         );
 
         let mut manifest = json!({
-            "schema_version": 1,
+            "schema_version": FIRMWARE_SCHEMA_VERSION,
             "engine": "pcbex",
-            "engine_version": "test",
+            "engine_version": env!("CARGO_PKG_VERSION"),
             "schematic_sha256": "a".repeat(64),
             "artifacts": FIRMWARE_ARTIFACTS.iter().map(|name| {
                 json!({"path": name, "bytes": 6, "sha256": sha256(b"source")})
             }).collect::<Vec<_>>(),
-            "c_build": {"attempted": true, "passed": true, "command": ["cc"]},
-            "python_check": {"attempted": true, "passed": true, "command": ["python3"]}
+            "c_build": {
+                "attempted": true,
+                "passed": true,
+                "command": ["cc"],
+                "exit_code": 0,
+                "smoke": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["firmware-c-smoke"],
+                    "exit_code": 0
+                }
+            },
+            "cpp_build": {
+                "attempted": true,
+                "passed": true,
+                "command": ["c++"],
+                "exit_code": 0,
+                "smoke": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["firmware-cpp-smoke"],
+                    "exit_code": 0
+                }
+            },
+            "python_check": {
+                "attempted": true,
+                "passed": true,
+                "command": ["python3"],
+                "exit_code": 0,
+                "smoke": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["python3", "host.py"],
+                    "exit_code": 0
+                }
+            }
         });
         manifest["artifacts"][0]["sha256"] = Value::String("b".repeat(64));
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
@@ -1734,6 +1933,101 @@ mod tests {
                 .failures
                 .iter()
                 .any(|failure| failure.contains("does not match"))
+        );
+    }
+
+    #[test]
+    fn firmware_gate_accumulates_cpp_python_smoke_and_version_failures() {
+        let directory = tempdir().unwrap();
+        let artifacts = FIRMWARE_ARTIFACTS
+            .iter()
+            .map(|name| {
+                fs::write(directory.path().join(name), b"source").unwrap();
+                json!({"path": name, "bytes": 6, "sha256": sha256(b"source")})
+            })
+            .collect::<Vec<_>>();
+        let manifest_path = directory.path().join("manifest.json");
+        let mut manifest = json!({
+            "schema_version": FIRMWARE_SCHEMA_VERSION,
+            "engine": "pcbex",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "schematic_sha256": "a".repeat(64),
+            "artifacts": artifacts,
+            "c_build": {
+                "attempted": true,
+                "passed": true,
+                "command": ["cc"],
+                "exit_code": 0,
+                "smoke": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["firmware-c-smoke"],
+                    "exit_code": 0
+                }
+            },
+            "cpp_build": {
+                "attempted": true,
+                "passed": true,
+                "command": ["c++"],
+                "exit_code": 0,
+                "smoke": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["firmware-cpp-smoke"],
+                    "exit_code": 0
+                }
+            },
+            "python_check": {
+                "attempted": true,
+                "passed": true,
+                "command": ["python3"],
+                "exit_code": 0,
+                "smoke": {
+                    "attempted": true,
+                    "passed": true,
+                    "command": ["python3", "host.py"],
+                    "exit_code": 0
+                }
+            }
+        });
+        let inputs = all_inputs(&manifest_path);
+
+        manifest["cpp_build"]["passed"] = json!(false);
+        manifest["python_check"]["smoke"]["exit_code"] = json!(1);
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let phase = firmware_phase(&inputs, Some(&"a".repeat(64)));
+        assert!(!phase.passed);
+        assert!(
+            phase
+                .failures
+                .iter()
+                .any(|failure| failure.contains("cpp-build did not pass"))
+        );
+        assert!(
+            phase
+                .failures
+                .iter()
+                .any(|failure| failure.contains("python-check-smoke exit code"))
+        );
+
+        manifest["cpp_build"]["passed"] = json!(true);
+        manifest["python_check"]["smoke"]["exit_code"] = json!(0);
+        manifest["cpp_build"]["smoke"]["attempted"] = json!(false);
+        manifest["engine_version"] = json!("not-this-pcbex-version");
+        fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+        let phase = firmware_phase(&inputs, Some(&"a".repeat(64)));
+        assert!(!phase.passed);
+        assert!(
+            phase
+                .failures
+                .iter()
+                .any(|failure| failure.contains("cpp-build-smoke was not attempted"))
+        );
+        assert!(
+            phase
+                .failures
+                .iter()
+                .any(|failure| failure.contains("engine version"))
         );
     }
 

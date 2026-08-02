@@ -107,6 +107,7 @@ auditable release.
 | v1.395.0 | Bounded factory DFM repair loop | Revalidate and resubmit complete manifest-bound ZIPs through a deadline-bounded, deployment-owned repair wrapper while retaining failure evidence and the last known-good package |
 | v1.396.0 | Hash-bound hardware pipeline gate | Recompute and bind schematic/ERC, board analysis, routing quality, the exact final manufacturing ZIP, and firmware evidence into one fail-closed digest manifest |
 | v1.397.0 | Factory-bound hardware pipeline gate | Bind a strict normalized factory receipt and fail-closed DFM result to the exact final manufacturing ZIP without network resubmission |
+| v1.398.0 | Canonical-IR C/C++17 firmware bundle generator | Generate a v2 manifest with seven hash-bound source artifacts from the canonical KiCad schematic IR, compile/link and smoke-test C11/C++17, run Python compile/self-tests, publish only clean source bundles, and make zone/placement serialization deterministic |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -115,5 +116,8 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap candidate is C++ firmware bundle generation and build
-verification, while keeping unknown factory DFM severities fail-closed.
+The next roadmap candidate is fail-closed input and execution hardening: bound
+KiCad parsing and zone work, reject malformed geometry instead of synthesizing
+defaults, make generic CLI I/O atomic and symlink-safe, and isolate privileged
+PR comments from untrusted analysis. Bounded natural-language circuit generation
+with a deterministic ERC correction loop follows that safety boundary.
