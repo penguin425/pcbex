@@ -360,6 +360,17 @@ fn run_factory_feedback_loop_with_limits(
     for attempt_number in 1..=max_attempts {
         let package_sha256 = sha256(&current.bytes);
         let package_bytes = current.bytes.len() as u64;
+        if let Err(error) = validate_manufacturing_package(&current.bytes) {
+            let attempt = FactoryLoopAttempt {
+                attempt: attempt_number,
+                package_sha256,
+                package_bytes,
+                receipt: None,
+                error: None,
+                repair_command_ran: false,
+            };
+            return Ok(finish_failed_attempt(attempts, attempt, error, current));
+        }
         let Some(network_timeout) = bounded_network_timeout(deadline, timeout_seconds) else {
             let attempt = FactoryLoopAttempt {
                 attempt: attempt_number,
@@ -376,7 +387,7 @@ fn run_factory_feedback_loop_with_limits(
                 current,
             ));
         };
-        let receipt = match submit_factory_package_bytes(
+        let receipt = match submit_validated_factory_package_bytes(
             &current.bytes,
             endpoint,
             provider,
@@ -875,6 +886,28 @@ fn submit_factory_package_bytes(
     }
     validate_endpoint(endpoint, allow_http_loopback)?;
     validate_manufacturing_package(package)?;
+    submit_validated_factory_package_bytes(
+        package,
+        endpoint,
+        provider,
+        bearer_token_env,
+        timeout_seconds,
+        allow_http_loopback,
+    )
+}
+
+fn submit_validated_factory_package_bytes(
+    package: &[u8],
+    endpoint: &str,
+    provider: FactoryProvider,
+    bearer_token_env: Option<&str>,
+    timeout_seconds: u64,
+    allow_http_loopback: bool,
+) -> Result<FactorySubmissionReceipt, String> {
+    if !(1..=600).contains(&timeout_seconds) {
+        return Err("factory timeout must be between 1 and 600 seconds".into());
+    }
+    validate_endpoint(endpoint, allow_http_loopback)?;
     let package_sha256 = sha256(package);
     let config = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(timeout_seconds)))
