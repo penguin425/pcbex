@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "parts": [
+    {
+      "reference": "R1",
+      "lib_id": "Device:R",
+      "value": "10k",
+      "footprint": "Resistor_SMD:R_0603_1608Metric",
+      "mpn": null,
+      "pins": {
+        "1": "VCC_3V3",
+        "2": "RESET_N"
+      }
+    },
+    {
+      "reference": "C1",
+      "lib_id": "Device:C",
+      "value": "100nF",
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "mpn": null,
+      "pins": {
+        "1": "VCC_3V3",
+        "2": "GND"
+      }
+    },
+    {
+      "reference": "U1",
+      "lib_id": "MCU_Microchip_ATmega:ATmega328P-AU",
+      "value": "ATmega328P-AU",
+      "footprint": "Package_QFP:TQFP-32_7x7mm_P0.8mm",
+      "mpn": "ATMEGA328P-AU",
+      "pins": {
+        "1": "RESET_N",
+        "4": "GND",
+        "7": "VCC_3V3",
+        "8": "GND"
+      }
+    }
+  ],
+  "nets": [
+    {
+      "name": "GND",
+      "connections": [
+        {"reference": "C1", "pin": "2"},
+        {"reference": "U1", "pin": "4"},
+        {"reference": "U1", "pin": "8"}
+      ]
+    },
+    {
+      "name": "RESET_N",
+      "connections": [
+        {"reference": "R1", "pin": "2"},
+        {"reference": "U1", "pin": "1"}
+      ]
+    },
+    {
+      "name": "VCC_3V3",
+      "connections": [
+        {"reference": "C1", "pin": "1"},
+        {"reference": "R1", "pin": "1"},
+        {"reference": "U1", "pin": "7"}
+      ]
+    }
+  ]
+}
