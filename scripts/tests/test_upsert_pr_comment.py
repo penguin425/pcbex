@@ -40,6 +40,36 @@ class FakeClient:
         return {"id": 99, "html_url": "https://example.test/comments/99"}
 
 
+class RedirectResponse:
+    status = 302
+
+    def __init__(self):
+        self.headers = {"Location": "https://attacker.example/collect"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def getcode(self):
+        return self.status
+
+    def read(self, *args, **kwargs):
+        raise AssertionError("redirect response body must not be read")
+
+
+class RedirectOpener:
+    def __init__(self):
+        self.calls = []
+
+    def open(self, call, timeout):
+        self.calls.append((call, timeout))
+        if len(self.calls) > 1:
+            raise AssertionError("redirect must not trigger a second request")
+        return RedirectResponse()
+
+
 class UpsertPrCommentTests(unittest.TestCase):
     def test_updates_the_newest_editable_marker_comment(self):
         marker = "<!-- pcbex-hardware-ci:layout -->"
@@ -115,7 +145,7 @@ class UpsertPrCommentTests(unittest.TestCase):
             io.BytesIO(b'{"message":"forbidden"}'),
         )
         with mock.patch.object(
-            upsert_pr_comment.request, "urlopen", side_effect=forbidden
+            client.opener, "open", side_effect=forbidden
         ):
             self.assertIsNone(
                 client.update_comment("owner/repository", 12, "body")
@@ -129,10 +159,127 @@ class UpsertPrCommentTests(unittest.TestCase):
             io.BytesIO(b'{"message":"failed"}'),
         )
         with mock.patch.object(
-            upsert_pr_comment.request, "urlopen", side_effect=failure
+            client.opener, "open", side_effect=failure
         ):
             with self.assertRaises(upsert_pr_comment.CommentError):
                 client.update_comment("owner/repository", 12, "body")
+
+    def test_api_redirect_is_not_followed_or_logged(self):
+        opener = RedirectOpener()
+        client = upsert_pr_comment.GitHubClient(
+            "https://api.github.example", "secret-token", opener=opener
+        )
+        with self.assertRaises(upsert_pr_comment.CommentError) as raised:
+            client.list_comments("owner/repository", 12)
+        self.assertEqual(len(opener.calls), 1)
+        call, timeout = opener.calls[0]
+        self.assertEqual(timeout, 30)
+        self.assertEqual(
+            call.full_url,
+            "https://api.github.example/repos/owner/repository/issues/12/comments?"
+            "per_page=100&page=1",
+        )
+        self.assertEqual(call.headers["Authorization"], "Bearer secret-token")
+        self.assertNotIn("secret-token", str(raised.exception))
+        self.assertNotIn("attacker.example", str(raised.exception))
+
+    def test_http_error_redirect_body_is_not_read_or_logged(self):
+        client = upsert_pr_comment.GitHubClient(
+            "https://api.github.example", "secret-token"
+        )
+
+        class NoReadBody(io.BytesIO):
+            def read(self, *args, **kwargs):
+                raise AssertionError("redirect response body must not be read")
+
+        failure = error.HTTPError(
+            "https://api.github.example/comment",
+            302,
+            "Found",
+            {"Location": "https://attacker.example/collect"},
+            NoReadBody(b"secret-token"),
+        )
+        with mock.patch.object(client.opener, "open", side_effect=failure):
+            with self.assertRaises(upsert_pr_comment.CommentError) as raised:
+                client.update_comment("owner/repository", 12, "body")
+        self.assertNotIn("secret-token", str(raised.exception))
+        self.assertNotIn("attacker.example", str(raised.exception))
+
+    def test_user_marker_is_not_updated_when_expected_bot_author_does_not_match(
+        self,
+    ):
+        marker = "<!-- pcbex-hardware-ci:layout -->"
+        client = FakeClient(
+            comments=[
+                {
+                    "id": 30,
+                    "body": marker,
+                    "user": {"login": "human", "type": "User"},
+                }
+            ],
+            editable={30},
+        )
+        operation, comment = upsert_pr_comment.upsert_comment(
+            client,
+            "owner/repository",
+            42,
+            "layout",
+            "# Fresh result",
+            expected_author="github-actions[bot]",
+        )
+        self.assertEqual(operation, "created")
+        self.assertEqual(comment["id"], 99)
+        self.assertEqual(client.updated, [])
+        self.assertEqual(len(client.created), 1)
+
+    def test_expected_bot_marker_is_updated(self):
+        marker = "<!-- pcbex-hardware-ci:layout -->"
+        client = FakeClient(
+            comments=[
+                {
+                    "id": 30,
+                    "body": marker,
+                    "user": {"login": "github-actions[bot]", "type": "Bot"},
+                }
+            ],
+            editable={30},
+        )
+        operation, comment = upsert_pr_comment.upsert_comment(
+            client,
+            "owner/repository",
+            42,
+            "layout",
+            "# Fresh result",
+            expected_author="github-actions[bot]",
+        )
+        self.assertEqual(operation, "updated")
+        self.assertEqual(comment["id"], 30)
+        self.assertEqual([entry[1] for entry in client.updated], [30])
+        self.assertEqual(client.created, [])
+
+    def test_malformed_expected_author_shape_is_candidate_only(self):
+        marker = "<!-- pcbex-hardware-ci:layout -->"
+        client = FakeClient(
+            comments=[
+                {
+                    "id": 30,
+                    "body": marker,
+                    "user": {"login": "github-actions[bot]"},
+                },
+                {"id": 20, "body": marker, "user": "github-actions[bot]"},
+            ],
+            editable={20, 30},
+        )
+        operation, _ = upsert_pr_comment.upsert_comment(
+            client,
+            "owner/repository",
+            42,
+            "layout",
+            "# Fresh result",
+            expected_author="github-actions[bot]",
+        )
+        self.assertEqual(operation, "created")
+        self.assertEqual(client.updated, [])
 
 
 if __name__ == "__main__":

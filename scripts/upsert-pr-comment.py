@@ -24,8 +24,23 @@ class CommentError(RuntimeError):
     """An actionable comment-upsert failure."""
 
 
+class _NoRedirectHandler(request.HTTPRedirectHandler):
+    """Prevent urllib from following API redirects with the bearer token."""
+
+    def redirect_request(
+        self,
+        req: request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> None:
+        return None
+
+
 class GitHubClient:
-    def __init__(self, api_url: str, token: str) -> None:
+    def __init__(self, api_url: str, token: str, opener: Any | None = None) -> None:
         api_url = api_url.rstrip("/")
         parsed = parse.urlparse(api_url)
         if parsed.scheme != "https" or not parsed.netloc:
@@ -34,6 +49,9 @@ class GitHubClient:
             raise CommentError("GitHub token must not be empty")
         self.api_url = api_url
         self.token = token
+        self.opener = (
+            opener if opener is not None else request.build_opener(_NoRedirectHandler())
+        )
 
     def list_comments(self, repository: str, pull_request: int) -> list[dict[str, Any]]:
         comments: list[dict[str, Any]] = []
@@ -100,15 +118,28 @@ class GitHubClient:
             },
         )
         try:
-            with request.urlopen(call, timeout=30) as response:
+            with self.opener.open(call, timeout=30) as response:
+                status = getattr(response, "status", None)
+                if status is None:
+                    status = response.getcode()
+                if status is not None and 300 <= status < 400:
+                    # Do not read or include redirect response bodies: they can
+                    # contain secrets reflected by a malicious endpoint.
+                    raise CommentError(
+                        f"GitHub API {method} {endpoint} failed with HTTP redirect {status}"
+                    )
                 return json.load(response)
         except error.HTTPError as failure:
+            if 300 <= failure.code < 400:
+                # The no-redirect opener should surface redirects as HTTPError.
+                # Never follow them or log their response body/Location header.
+                raise CommentError(
+                    f"GitHub API {method} {endpoint} failed with HTTP redirect {failure.code}"
+                ) from failure
             if failure.code in (tolerated_statuses or set()):
                 return None
-            detail = failure.read().decode(errors="replace")
             raise CommentError(
-                f"GitHub API {method} {endpoint} failed "
-                f"with HTTP {failure.code}: {detail}"
+                f"GitHub API {method} {endpoint} failed with HTTP {failure.code}"
             ) from failure
         except error.URLError as failure:
             raise CommentError(
@@ -143,18 +174,36 @@ def upsert_comment(
     pull_request: int,
     comment_id: str,
     markdown: str,
+    *,
+    expected_author: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     if not REPOSITORY_PATTERN.fullmatch(repository):
         raise CommentError("repository must use owner/name form")
     if pull_request <= 0:
         raise CommentError("pull-request number must be positive")
+    if expected_author is not None and (
+        not isinstance(expected_author, str) or not expected_author
+    ):
+        raise CommentError("expected author must be a non-empty string")
     marker, body = render_body(comment_id, markdown)
-    matches = [
-        comment
-        for comment in client.list_comments(repository, pull_request)
-        if str(comment.get("body", "")).lstrip().startswith(marker)
-        and isinstance(comment.get("id"), int)
-    ]
+    matches: list[dict[str, Any]] = []
+    for comment in client.list_comments(repository, pull_request):
+        if not isinstance(comment, dict):
+            continue
+        comment_body = comment.get("body", "")
+        if not isinstance(comment_body, str) or not comment_body.lstrip().startswith(
+            marker
+        ):
+            continue
+        if type(comment.get("id")) is not int:
+            continue
+        if expected_author is not None:
+            user = comment.get("user")
+            if not isinstance(user, dict):
+                continue
+            if user.get("login") != expected_author or user.get("type") != "Bot":
+                continue
+        matches.append(comment)
     matches.sort(key=lambda comment: comment["id"], reverse=True)
     for comment in matches:
         updated = client.update_comment(repository, comment["id"], body)

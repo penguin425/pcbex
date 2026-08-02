@@ -108,6 +108,7 @@ auditable release.
 | v1.396.0 | Hash-bound hardware pipeline gate | Recompute and bind schematic/ERC, board analysis, routing quality, the exact final manufacturing ZIP, and firmware evidence into one fail-closed digest manifest |
 | v1.397.0 | Factory-bound hardware pipeline gate | Bind a strict normalized factory receipt and fail-closed DFM result to the exact final manufacturing ZIP without network resubmission |
 | v1.398.0 | Canonical-IR C/C++17 firmware bundle generator | Generate a v2 manifest with seven hash-bound source artifacts from the canonical KiCad schematic IR, compile/link and smoke-test C11/C++17, run Python compile/self-tests, publish only clean source bundles, and make zone/placement serialization deterministic |
+| v1.399.0 | Trusted PR comment publisher | Keep PR code execution without comment-write permission or persisted checkout credentials, publish only a small hash-bound result artifact, and have a default-branch `workflow_run` publisher bind repository IDs, sanitize untrusted Markdown, and revalidate the exact run, attempt, artifact, PR head/base, and newest-run status before updating a bot-owned comment |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -116,8 +117,11 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The next roadmap candidate is fail-closed input and execution hardening: bound
-KiCad parsing and zone work, reject malformed geometry instead of synthesizing
-defaults, make generic CLI I/O atomic and symlink-safe, and isolate privileged
-PR comments from untrusted analysis. Bounded natural-language circuit generation
-with a deterministic ERC correction loop follows that safety boundary.
+The current release isolates privileged PR comments from untrusted analysis.
+The next roadmap candidates are fail-closed input and execution hardening, in
+order: pin every action used by privileged workflows to a verified commit and
+enable repository SHA-pinning enforcement; bound KiCad parsing, numeric and
+raster work; make generic CLI I/O and subprocess execution atomic and bounded;
+and enforce an immutable ERC safety floor. Bounded natural-language circuit
+generation with a deterministic ERC correction loop follows that safety
+boundary.
