@@ -212,7 +212,7 @@ use manufacturing_package::{
     prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
     write_manufacturing_package,
 };
-use pipeline::{pipeline_gate_schema, verify_pipeline};
+use pipeline::{PipelineInputs, pipeline_gate_schema, verify_pipeline};
 use policy_deployment::{
     advance_policy_deployment, parse_policy_deployment_state, policy_deployment_state_json_schema,
     render_policy_deployment_summary,
@@ -752,16 +752,46 @@ enum Command {
     },
     /// Verify ERC, DRC/analysis, routing quality, manufacturing, and firmware gates.
     PipelineVerify {
+        /// Exact KiCad schematic reviewed by the electrical gate.
+        #[arg(long)]
+        schematic: PathBuf,
+        /// Electrical policy used for the review; the built-in default is used when omitted.
+        #[arg(long)]
+        electrical_policy: Option<PathBuf>,
+        /// Closed electrical review that must equal the deterministic recomputation.
         #[arg(long)]
         electrical_review: PathBuf,
+        /// Exact routed KiCad PCB consumed by analysis and manufacturing.
+        #[arg(long)]
+        board: PathBuf,
+        /// `run.json` emitted by `analyze-kicad` for the exact board.
         #[arg(long)]
         analysis_manifest: PathBuf,
+        /// `checks.json` emitted by the same `analyze-kicad` run.
+        #[arg(long)]
+        analysis_checks: PathBuf,
+        /// `quality.json` emitted by the same `analyze-kicad` run.
         #[arg(long)]
         quality: PathBuf,
+        /// Project settings declared by `run.json`; required only when declared there.
         #[arg(long)]
-        manufacturing_manifest: PathBuf,
+        analysis_project: Option<PathBuf>,
+        /// Custom design rules declared by `run.json`; required only when declared there.
+        #[arg(long)]
+        analysis_rules: Option<PathBuf>,
+        /// External DFM profile declared by `run.json`; required only when declared there.
+        #[arg(long)]
+        analysis_dfm_profile: Option<PathBuf>,
+        /// Organization policy pack declared by `run.json`; required only when declared there.
+        #[arg(long)]
+        analysis_policy_pack: Option<PathBuf>,
+        /// Final manufacturing ZIP whose complete embedded manifest is revalidated.
+        #[arg(long)]
+        manufacturing_package: PathBuf,
+        /// Closed firmware manifest and adjacent hash-bound source bundle.
         #[arg(long)]
         firmware_manifest: PathBuf,
+        /// New report path; existing, aliased, or symlinked destinations are refused.
         #[arg(short, long)]
         output: PathBuf,
     },
@@ -4677,6 +4707,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "Manufacturing ZIP",
             "Factory submission receipt v1",
             "Factory feedback loop report v1",
+            "Hardware pipeline gate report v1",
             "SPDX JSON",
         ],
     }
@@ -4763,25 +4794,73 @@ fn run_cli() -> Result<()> {
             )?;
         }
         Command::PipelineSchema { output } => {
-            write_or_print_json(&pipeline_gate_schema(), output.as_ref())?;
+            let rendered = serde_json::to_string_pretty(&pipeline_gate_schema())?;
+            if let Some(path) = output {
+                reject_output_symlink_components(&path, "pipeline schema output")?;
+                let prepared = prepare_atomic_new_file(&path)?;
+                persist_atomic_new_file(prepared, &path, &format!("{rendered}\n"))?;
+            } else {
+                println!("{rendered}");
+            }
         }
         Command::PipelineVerify {
+            schematic,
+            electrical_policy,
             electrical_review,
+            board,
             analysis_manifest,
+            analysis_checks,
             quality,
-            manufacturing_manifest,
+            analysis_project,
+            analysis_rules,
+            analysis_dfm_profile,
+            analysis_policy_pack,
+            manufacturing_package,
             firmware_manifest,
             output,
         } => {
-            let report = verify_pipeline(
-                &electrical_review,
-                &analysis_manifest,
-                &quality,
-                &manufacturing_manifest,
-                &firmware_manifest,
-            );
-            fs::write(&output, serde_json::to_string_pretty(&report)?)
-                .with_context(|| format!("writing {}", output.display()))?;
+            let mut input_paths = vec![
+                schematic.as_path(),
+                electrical_review.as_path(),
+                board.as_path(),
+                analysis_manifest.as_path(),
+                analysis_checks.as_path(),
+                quality.as_path(),
+                manufacturing_package.as_path(),
+                firmware_manifest.as_path(),
+            ];
+            if let Some(path) = electrical_policy.as_deref() {
+                input_paths.push(path);
+            }
+            for path in [
+                analysis_project.as_deref(),
+                analysis_rules.as_deref(),
+                analysis_dfm_profile.as_deref(),
+                analysis_policy_pack.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                input_paths.push(path);
+            }
+            let prepared = prepare_pipeline_output(&output, &input_paths)?;
+            let report = verify_pipeline(&PipelineInputs {
+                schematic: &schematic,
+                electrical_policy: electrical_policy.as_deref(),
+                electrical_review: &electrical_review,
+                board: &board,
+                analysis_manifest: &analysis_manifest,
+                analysis_checks: &analysis_checks,
+                quality: &quality,
+                analysis_project: analysis_project.as_deref(),
+                analysis_rules: analysis_rules.as_deref(),
+                analysis_dfm_profile: analysis_dfm_profile.as_deref(),
+                analysis_policy_pack: analysis_policy_pack.as_deref(),
+                manufacturing_package: &manufacturing_package,
+                firmware_manifest: &firmware_manifest,
+            });
+            let rendered = format!("{}\n", serde_json::to_string_pretty(&report)?);
+            persist_atomic_new_file(prepared, &output, &rendered)?;
             eprintln!(
                 "pipeline gate: {}; {} phase failure(s); report={}",
                 if report.passed { "passed" } else { "rejected" },
@@ -14806,7 +14885,7 @@ fn prepare_factory_feedback_loop_outputs(
         destinations.push(("final package", path));
     }
     for (_, path) in &destinations {
-        reject_factory_output_symlink_components(path)?;
+        reject_output_symlink_components(path, "factory feedback loop output")?;
     }
 
     let normalized = destinations
@@ -14871,12 +14950,28 @@ fn normalize_destination(path: &Path) -> Result<PathBuf> {
     Ok(canonical_parent.join(file_name))
 }
 
-fn reject_factory_output_symlink_components(path: &Path) -> Result<()> {
+fn prepare_pipeline_output(output: &Path, inputs: &[&Path]) -> Result<tempfile::NamedTempFile> {
+    reject_output_symlink_components(output, "pipeline output")?;
+    let normalized_output = normalize_destination(output)?;
+    for input in inputs {
+        if let Ok(normalized_input) = normalize_destination(input)
+            && destinations_alias(&normalized_output, &normalized_input)
+        {
+            bail!(
+                "pipeline output must not alias an input: {}",
+                input.display()
+            );
+        }
+    }
+    prepare_atomic_new_file(output)
+}
+
+fn reject_output_symlink_components(path: &Path, label: &str) -> Result<()> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir()
-            .context("resolving current directory for factory feedback output")?
+            .with_context(|| format!("resolving current directory for {label}"))?
             .join(path)
     };
     let mut current = PathBuf::new();
@@ -14885,7 +14980,7 @@ fn reject_factory_output_symlink_components(path: &Path) -> Result<()> {
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 bail!(
-                    "factory feedback loop output path contains symlink component {}",
+                    "{label} path contains symlink component {}",
                     current.display()
                 )
             }

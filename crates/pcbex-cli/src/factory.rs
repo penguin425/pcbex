@@ -1043,6 +1043,13 @@ struct ManufacturingManifest {
     archive: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ManufacturingPackageIdentity {
+    pub(crate) input_path: String,
+    pub(crate) input_bytes: u64,
+    pub(crate) input_sha256: String,
+}
+
 fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
     let path_metadata = fs::symlink_metadata(package_path).map_err(|error| {
         format!(
@@ -1092,7 +1099,9 @@ fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
     Ok(package)
 }
 
-fn validate_manufacturing_package(package: &[u8]) -> Result<(), String> {
+pub(crate) fn validate_manufacturing_package(
+    package: &[u8],
+) -> Result<ManufacturingPackageIdentity, String> {
     let central_entries = central_directory_entry_count(package);
     if central_entries.is_some_and(|entries| entries > MAX_ARCHIVE_ENTRIES) {
         return Err(format!(
@@ -1153,6 +1162,11 @@ fn validate_manufacturing_package(package: &[u8]) -> Result<(), String> {
     }
 
     validate_manifest_descriptor(&manifest.input, "input")?;
+    let identity = ManufacturingPackageIdentity {
+        input_path: manifest.input.path.clone(),
+        input_bytes: manifest.input.bytes,
+        input_sha256: manifest.input.sha256.clone(),
+    };
     let mut provenance_paths = BTreeSet::from([manifest.input.path.clone()]);
     for descriptor in &manifest.project_inputs {
         validate_manifest_descriptor(descriptor, "project input")?;
@@ -1242,7 +1256,7 @@ fn validate_manufacturing_package(package: &[u8]) -> Result<(), String> {
         ));
     }
     validate_gerber_job(package, &gerber_job, &expected)?;
-    Ok(())
+    Ok(identity)
 }
 
 fn validate_manifest_text(value: &str, field: &str) -> Result<(), String> {
@@ -2249,6 +2263,31 @@ mod tests {
     }
 
     #[test]
+    fn validates_fixture_identity_and_rejects_tampering() {
+        let input = b"board-bytes";
+        let mut package = manufacturing_package();
+        assert_eq!(
+            validate_manufacturing_package(&package).unwrap(),
+            ManufacturingPackageIdentity {
+                input_path: "board.kicad_pcb".into(),
+                input_bytes: input.len() as u64,
+                input_sha256: sha256(input),
+            }
+        );
+
+        let index = {
+            let mut archive = ZipArchive::new(Cursor::new(package.as_slice())).unwrap();
+            archive
+                .by_name("board-F_Cu.gtl")
+                .unwrap()
+                .data_start()
+                .unwrap() as usize
+        };
+        package[index] ^= 1;
+        assert!(validate_manufacturing_package(&package).is_err());
+    }
+
+    #[test]
     fn accepts_archive_emitted_by_manufacturing_package_writer() {
         let staging = tempdir().unwrap();
         let job = json!({
@@ -2299,7 +2338,15 @@ mod tests {
             },
         )
         .unwrap();
-        validate_manufacturing_package(&fs::read(archive).unwrap()).unwrap();
+        let identity = validate_manufacturing_package(&fs::read(archive).unwrap()).unwrap();
+        assert_eq!(
+            identity,
+            ManufacturingPackageIdentity {
+                input_path: "board.kicad_pcb".into(),
+                input_bytes: 5,
+                input_sha256: sha256(b"board"),
+            }
+        );
     }
 
     #[test]

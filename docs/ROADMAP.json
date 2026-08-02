@@ -494,6 +494,11 @@
     {
       "id": "bounded-factory-dfm-repair-loop",
       "release": "v1.395.0",
+      "status": "released"
+    },
+    {
+      "id": "hash-bound-hardware-pipeline-gate",
+      "release": "v1.396.0",
       "status": "current"
     }
   ]
