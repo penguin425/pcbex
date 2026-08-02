@@ -199,7 +199,7 @@ pub use electrical::{
     electrical_review_to_sarif, explain_electrical_review, parse_electrical_policy,
 };
 mod manufacturing;
-pub use manufacturing::{ManufacturingPart, manufacturing_parts};
+pub use manufacturing::{ManufacturingPart, manufacturing_gerber_layers, manufacturing_parts};
 mod electrical_comparison;
 pub use electrical_comparison::{
     ElectricalComparisonCounts, ElectricalFindingSummary, ElectricalReviewComparison,

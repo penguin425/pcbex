@@ -3,7 +3,7 @@ members = ["crates/pcbex-core", "crates/pcbex-kicad", "crates/pcbex-cli"]
 resolver = "2"
 
 [workspace.package]
-version = "1.392.0"
+version = "1.393.0"
 edition = "2024"
 license = "MIT"
 
@@ -19,4 +19,5 @@ hex = "0.4"
 ed25519-dalek = "3"
 getrandom = "0.4"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8.2", default-features = false, features = ["deflate"] }
+tempfile = "3"

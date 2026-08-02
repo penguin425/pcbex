@@ -85,7 +85,7 @@ use pcbex_kicad::{
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
     electrical_waiver_set_json_schema, explain_electrical_review,
     human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    manufacturing_parts, new_approval_log_gossip_observer_trust_state,
+    manufacturing_gerber_layers, manufacturing_parts, new_approval_log_gossip_observer_trust_state,
     new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
@@ -201,7 +201,11 @@ use manufacturing_feedback::{
     render_manufacturing_feedback_comparison_summary, render_manufacturing_feedback_summary,
     verify_analysis_manifest_board,
 };
-use manufacturing_package::write_manufacturing_package;
+use manufacturing_package::{
+    KiCadIdentity, KiCadProjectInput, collect_staged_artifacts, normalize_kicad_artifacts,
+    prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
+    write_manufacturing_package,
+};
 use policy_deployment::{
     advance_policy_deployment, parse_policy_deployment_state, policy_deployment_state_json_schema,
     render_policy_deployment_summary,
@@ -4354,7 +4358,7 @@ enum Command {
         #[arg(long)]
         seed: Option<u64>,
     },
-    /// Run KiCad DRC and generate Gerber and Excellon manufacturing files.
+    /// Run KiCad DRC and publish a reproducible Gerber/BOM/CPL manufacturing package.
     Fabricate {
         input: PathBuf,
         #[arg(short, long)]
@@ -14272,36 +14276,80 @@ fn run_cli() -> Result<()> {
             );
         }
         Command::Fabricate { input, output_dir } => {
+            if output_dir.file_name().is_none() {
+                bail!("manufacturing output must name a directory below its parent")
+            }
+            let output_dir = prepare_manufacturing_output_directory(&output_dir)?;
             let input_bytes = fs::read(&input)
                 .with_context(|| format!("reading {}", input.display()))?;
             let source = std::str::from_utf8(&input_bytes)
                 .with_context(|| format!("decoding {} as UTF-8", input.display()))?;
             let parts = manufacturing_parts(source)
                 .map_err(anyhow::Error::msg)
-                .with_context(|| format!("extracting manufacturing metadata from {}", input.display()))?;
-            let drc_report = run_kicad_drc(&input)?;
-            fs::create_dir_all(&output_dir)
-                .with_context(|| format!("creating {}", output_dir.display()))?;
+                .with_context(|| {
+                    format!(
+                        "extracting manufacturing metadata from {}",
+                        input.display()
+                    )
+                })?;
+            let gerber_layers = manufacturing_gerber_layers(source)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("extracting Gerber layers from {}", input.display()))?;
+            let gerber_layer_list = gerber_layers.join(",");
+            let staging = tempfile::Builder::new()
+                .prefix(".pcbex-manufacturing-")
+                .tempdir_in(&output_dir)
+                .with_context(|| {
+                    format!(
+                        "creating private manufacturing staging directory in {}",
+                        output_dir.display()
+                    )
+                })?;
+            let source_dir = staging.path().join("source");
+            let staging_dir = staging.path().join("artifacts");
+            let kicad_environment = staging.path().join("kicad-environment");
+            fs::create_dir(&source_dir)
+                .with_context(|| format!("creating {}", source_dir.display()))?;
+            fs::create_dir(&staging_dir)
+                .with_context(|| format!("creating {}", staging_dir.display()))?;
+            let (staged_input, project_inputs) =
+                stage_kicad_project(&input, &input_bytes, &source_dir)?;
+            let drc_report = staging_dir.join("drc.rpt");
+            run_kicad_drc_to(&staged_input, &drc_report, &kicad_environment)?;
             run_kicad_export(
                 &[
                     "pcb",
                     "export",
                     "gerbers",
                     "--layers",
-                    "F.Cu,B.Cu,F.Mask,B.Mask,F.Silkscreen,B.Silkscreen,Edge.Cuts",
+                    &gerber_layer_list,
+                    "--check-zones",
                     "--output",
                 ],
-                &output_dir,
-                &input,
+                &staging_dir,
+                &staged_input,
+                &kicad_environment,
             )?;
-            run_kicad_export(&["pcb", "export", "drill", "--output"], &output_dir, &input)?;
-            let archive = write_manufacturing_package(
-                &output_dir,
+            run_kicad_export(
+                &["pcb", "export", "drill", "--output"],
+                &staging_dir,
+                &staged_input,
+                &kicad_environment,
+            )?;
+            let exported_artifacts = collect_staged_artifacts(&staging_dir)?;
+            validate_exported_layer_set(&exported_artifacts, &gerber_layers)?;
+            normalize_kicad_artifacts(&exported_artifacts)?;
+            let kicad_identity = kicad_cli_identity(&kicad_environment)?;
+            write_manufacturing_package(
+                &staging_dir,
                 &input,
                 &input_bytes,
+                &project_inputs,
                 &parts,
-                Some(&drc_report),
+                &exported_artifacts,
+                &kicad_identity,
             )?;
+            let archive = publish_staged_package(&staging_dir, &output_dir)?;
             eprintln!(
                 "manufacturing files written to {}; archive: {}",
                 output_dir.display(),
@@ -14886,14 +14934,16 @@ fn to_nm(mm: f64, name: &str) -> Result<i64> {
 
 fn run_kicad_drc(board: &Path) -> Result<PathBuf> {
     let report = board.with_extension("drc.rpt");
-    let temp = std::env::temp_dir();
-    let status = ProcessCommand::new("kicad-cli")
+    let environment = tempfile::tempdir().context("creating private KiCad environment")?;
+    run_kicad_drc_to(board, &report, environment.path())?;
+    Ok(report)
+}
+
+fn run_kicad_drc_to(board: &Path, report: &Path, environment: &Path) -> Result<()> {
+    let status = kicad_command(environment)?
         .args(["pcb", "drc", "--exit-code-violations", "--output"])
-        .arg(&report)
+        .arg(report)
         .arg(board)
-        .env("XDG_CONFIG_HOME", temp.join("pcbex-kicad-config"))
-        .env("XDG_CACHE_HOME", temp.join("pcbex-kicad-cache"))
-        .env("XDG_DATA_HOME", temp.join("pcbex-kicad-data"))
         .status()
         .context("running kicad-cli; install KiCad or omit --drc")?;
     if !status.success() {
@@ -14902,25 +14952,128 @@ fn run_kicad_drc(board: &Path) -> Result<PathBuf> {
             report.display()
         )
     }
+    let metadata = fs::symlink_metadata(report)
+        .with_context(|| format!("KiCad DRC did not produce {}", report.display()))?;
+    if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+        bail!(
+            "KiCad DRC report is not a regular file: {}",
+            report.display()
+        )
+    }
     eprintln!("KiCad DRC passed; report: {}", report.display());
-    Ok(report)
+    Ok(())
 }
 
-fn run_kicad_export(arguments: &[&str], output: &Path, board: &Path) -> Result<()> {
-    let temp = std::env::temp_dir();
-    let status = ProcessCommand::new("kicad-cli")
+fn run_kicad_export(
+    arguments: &[&str],
+    output: &Path,
+    board: &Path,
+    environment: &Path,
+) -> Result<()> {
+    let status = kicad_command(environment)?
         .args(arguments)
         .arg(output)
         .arg(board)
-        .env("XDG_CONFIG_HOME", temp.join("pcbex-kicad-config"))
-        .env("XDG_CACHE_HOME", temp.join("pcbex-kicad-cache"))
-        .env("XDG_DATA_HOME", temp.join("pcbex-kicad-data"))
         .status()
         .context("running kicad-cli manufacturing export")?;
     if !status.success() {
         bail!("KiCad manufacturing export failed with status {status}")
     }
     Ok(())
+}
+
+fn stage_kicad_project(
+    input: &Path,
+    input_bytes: &[u8],
+    source_dir: &Path,
+) -> Result<(PathBuf, Vec<KiCadProjectInput>)> {
+    let input_name = input
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("manufacturing input must name a KiCad board file"))?;
+    let staged_input = source_dir.join(input_name);
+    fs::write(&staged_input, input_bytes)
+        .with_context(|| format!("staging {}", input.display()))?;
+
+    let mut project_inputs = Vec::new();
+    for extension in ["kicad_pro", "kicad_dru"] {
+        let project_path = input.with_extension(extension);
+        match fs::symlink_metadata(&project_path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!(
+                    "KiCad project input must not be a symlink: {}",
+                    project_path.display()
+                )
+            }
+            Ok(metadata) if metadata.file_type().is_file() => {
+                let bytes = fs::read(&project_path)
+                    .with_context(|| format!("reading {}", project_path.display()))?;
+                let name = project_path.file_name().ok_or_else(|| {
+                    anyhow::anyhow!("KiCad project input is missing its filename")
+                })?;
+                fs::write(source_dir.join(name), &bytes)
+                    .with_context(|| format!("staging {}", project_path.display()))?;
+                project_inputs.push(KiCadProjectInput {
+                    path: project_path,
+                    bytes,
+                });
+            }
+            Ok(_) => bail!(
+                "KiCad project input is not a regular file: {}",
+                project_path.display()
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading metadata for {}", project_path.display()));
+            }
+        }
+    }
+    Ok((staged_input, project_inputs))
+}
+
+fn kicad_cli_identity(environment: &Path) -> Result<KiCadIdentity> {
+    let output = kicad_command(environment)?
+        .args(["version", "--format", "about"])
+        .output()
+        .context("querying kicad-cli build identity")?;
+    if !output.status.success() {
+        bail!(
+            "querying kicad-cli build identity failed with status {}",
+            output.status
+        )
+    }
+    if output.stdout.is_empty() || output.stdout.len() > 128 * 1024 {
+        bail!("kicad-cli returned an invalid build identity size")
+    }
+    let about = std::str::from_utf8(&output.stdout)
+        .context("decoding kicad-cli build identity as UTF-8")?;
+    let version = about
+        .lines()
+        .find_map(|line| line.strip_prefix("Version: "))
+        .map(str::trim)
+        .filter(|version| !version.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("kicad-cli build identity is missing its version"))?;
+    Ok(KiCadIdentity {
+        version: version.to_string(),
+        about_sha256: hex::encode(Sha256::digest(&output.stdout)),
+    })
+}
+
+fn kicad_command(environment: &Path) -> Result<ProcessCommand> {
+    let config = environment.join("config");
+    let cache = environment.join("cache");
+    let data = environment.join("data");
+    for directory in [&config, &cache, &data] {
+        fs::create_dir_all(directory)
+            .with_context(|| format!("creating private KiCad directory {}", directory.display()))?;
+    }
+    let mut command = ProcessCommand::new("kicad-cli");
+    command
+        .env("XDG_CONFIG_HOME", config)
+        .env("XDG_CACHE_HOME", cache)
+        .env("XDG_DATA_HOME", data);
+    Ok(command)
 }
 
 fn ensure_clean(board: &Board) -> Result<()> {
@@ -14957,6 +15110,24 @@ mod tests {
             .expect("CLI parser test thread starts")
             .join()
             .expect("CLI parser test thread succeeds")
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manufacturing_staging_rejects_symlinked_project_inputs() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let source_dir = workspace.path().join("staged");
+        fs::create_dir(&source_dir).unwrap();
+        let board = workspace.path().join("board.kicad_pcb");
+        let secret = workspace.path().join("secret");
+        fs::write(&board, "(kicad_pcb)").unwrap();
+        fs::write(&secret, "must not be read").unwrap();
+        symlink(&secret, workspace.path().join("board.kicad_pro")).unwrap();
+
+        let error = stage_kicad_project(&board, b"(kicad_pcb)", &source_dir).unwrap_err();
+        assert!(error.to_string().contains("must not be a symlink"));
     }
 
     #[test]
