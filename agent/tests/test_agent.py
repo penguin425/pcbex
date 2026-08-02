@@ -1,3 +1,4 @@
+import ast
 import json
 import http.server
 import sys
@@ -6,7 +7,7 @@ import time
 import unittest
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 from pcbex_agent.cli import main as agent_main
@@ -748,11 +749,92 @@ class AdapterTests(unittest.TestCase):
         }
         source = generate_skidl(spec)
         self.assertEqual(source, generate_skidl(spec))
-        self.assertIn('R1 = Part("Device", "R"', source)
-        self.assertIn('R1["1"] += VCC', source)
+        self.assertIn('_pcbex_parts["R1"] = Part("Device", "R"', source)
+        self.assertIn('_pcbex_parts["R1"]["1"] += _pcbex_nets["VCC"]', source)
         self.assertIn("generate_netlist()", source)
         schema = circuit_spec_json_schema()
         self.assertEqual(schema["properties"]["schema_version"]["const"], 1)
+
+    def test_skidl_generator_isolates_external_names_from_python_namespace(self):
+        net_names = [
+            "5V",
+            "USB+",
+            "A.B",
+            "Part",
+            "Net",
+            "generate_netlist",
+            "PCBEX_ELECTRICAL_JSON",
+            "class",
+            "__debug__",
+        ]
+        pins = {str(index): name for index, name in enumerate(net_names, start=1)}
+        spec = {
+            "schema_version": 1,
+            "parts": [
+                {"reference": "Part", "lib_id": "Device:R", "value": "10k",
+                 "footprint": "0402", "pins": pins},
+                {"reference": "generate_netlist", "lib_id": "Device:R", "value": "1k",
+                 "footprint": "0402", "pins": pins},
+            ],
+            "nets": [
+                {"name": name,
+                 "connections": [
+                     {"reference": "Part", "pin": str(index)},
+                     {"reference": "generate_netlist", "pin": str(index)},
+                 ]}
+                for index, name in enumerate(net_names, start=1)
+            ],
+        }
+
+        source = generate_skidl(spec)
+        ast.parse(source)
+        compile(source, "generated-circuit.py", "exec")
+        compile(
+            generate_skidl(spec, include_netlist=False),
+            "generated-circuit-without-netlist.py",
+            "exec",
+        )
+        self.assertIn('_pcbex_nets["5V"] = Net("5V")', source)
+        self.assertIn(
+            '_pcbex_parts["Part"]["4"] += _pcbex_nets["Part"]', source
+        )
+
+        class FakeNet:
+            def __init__(self, name):
+                self.name = name
+                self.connections = 0
+
+        class FakePin:
+            def __iadd__(self, net):
+                net.connections += 1
+                return self
+
+        class FakePart:
+            def __init__(self, _library, _symbol, *, value, footprint):
+                self.value = value
+                self.footprint = footprint
+                self.pins = {}
+
+            def __getitem__(self, pin):
+                return self.pins.setdefault(pin, FakePin())
+
+            def __setitem__(self, pin, value):
+                self.pins[pin] = value
+
+        generated_netlists = []
+        fake_skidl = ModuleType("skidl")
+        fake_skidl.Net = FakeNet
+        fake_skidl.Part = FakePart
+        fake_skidl.generate_netlist = lambda: generated_netlists.append(True)
+        namespace = {}
+        with patch.dict(sys.modules, {"skidl": fake_skidl}):
+            exec(compile(source, "generated-circuit.py", "exec"), namespace)
+
+        self.assertEqual(generated_netlists, [True])
+        self.assertEqual(set(namespace["_pcbex_nets"]), set(net_names))
+        self.assertTrue(
+            all(net.connections == 2 for net in namespace["_pcbex_nets"].values())
+        )
 
     def test_skidl_generator_fails_on_unconnected_pin(self):
         spec = {

@@ -36,3 +36,9 @@ is deterministic, refuses duplicate MPNs, and fails when no available part
 matches the requested footprint. SKiDL remains an optional runtime dependency;
 the generated file can be executed in a separate environment that installs
 SKiDL.
+
+External net names and part references are retained as quoted mapping keys in
+the generated Python instead of being interpolated as Python identifiers. This
+keeps common rail names such as `5V`, punctuation-bearing names such as `USB+`,
+and names that overlap Python or SKiDL symbols executable without renaming the
+electrical design.
