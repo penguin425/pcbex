@@ -148,14 +148,15 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     convert::Infallible,
-    fs::{self, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Write},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     str::FromStr,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+mod bounded_io;
+mod bounded_process;
 mod canary_completion;
 mod factory;
 mod firmware;
@@ -189,6 +190,8 @@ mod remote_policy_lifecycle_gossip;
 mod remote_policy_lifecycle_gossip_registry_checkpoint_witness;
 mod remote_policy_lifecycle_witness;
 mod remote_witness;
+
+use bounded_io as fs;
 
 use canary_completion::{
     CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
@@ -4631,36 +4634,83 @@ fn validate_ai_request_against_policy_pack(
     Ok(())
 }
 
+const DOCTOR_PROCESS_LIMITS: crate::bounded_process::ProcessLimits =
+    crate::bounded_process::ProcessLimits {
+        timeout: Duration::from_secs(10),
+        stdout_bytes: 64 * 1024,
+        stderr_bytes: 64 * 1024,
+    };
+
+const KICAD_PROCESS_LIMITS: crate::bounded_process::ProcessLimits =
+    crate::bounded_process::ProcessLimits {
+        timeout: Duration::from_secs(600),
+        stdout_bytes: 8 * 1024 * 1024,
+        stderr_bytes: 1024 * 1024,
+    };
+
+// `kicad-cli version --format about` is expected to be a small text document.
+// Keep its historical 128 KiB contract, but enforce it in the reader thread so
+// a hostile executable cannot make the identity path allocate the full KiB
+// process output budget first.
+const KICAD_IDENTITY_PROCESS_LIMITS: crate::bounded_process::ProcessLimits =
+    crate::bounded_process::ProcessLimits {
+        timeout: Duration::from_secs(600),
+        stdout_bytes: 128 * 1024,
+        stderr_bytes: 1024 * 1024,
+    };
+
+const MAX_DIAGNOSTIC_LINE_BYTES: usize = 4 * 1024;
+
+fn first_diagnostic_line(bytes: &[u8]) -> Option<String> {
+    let end = bytes
+        .iter()
+        .position(|byte| matches!(byte, b'\n' | b'\r'))
+        .unwrap_or(bytes.len());
+    let line = &bytes[..end];
+    let truncated = line.len() > MAX_DIAGNOSTIC_LINE_BYTES;
+    let line = &line[..line.len().min(MAX_DIAGNOSTIC_LINE_BYTES)];
+    let rendered = String::from_utf8_lossy(line).trim().to_string();
+    if rendered.is_empty() {
+        None
+    } else if truncated {
+        Some(format!("{rendered}…"))
+    } else {
+        Some(rendered)
+    }
+}
+
+fn process_diagnostic(preferred: &[u8], fallback: &[u8]) -> String {
+    first_diagnostic_line(preferred)
+        .or_else(|| first_diagnostic_line(fallback))
+        .unwrap_or_else(|| "no diagnostic output".to_string())
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
     version_arguments: &[&str],
     required: bool,
 ) -> DoctorCheck {
-    match ProcessCommand::new(executable)
-        .args(version_arguments)
-        .output()
-    {
+    let mut command = ProcessCommand::new(executable);
+    command.args(version_arguments);
+    match crate::bounded_process::run_bounded(&mut command, DOCTOR_PROCESS_LIMITS, None) {
         Ok(output) => {
-            let rendered = if output.stdout.is_empty() {
-                &output.stderr
+            let rendered = if output.status.success() {
+                process_diagnostic(&output.stdout, &output.stderr)
             } else {
-                &output.stdout
+                process_diagnostic(&output.stderr, &output.stdout)
             };
-            let detail = String::from_utf8_lossy(rendered)
-                .lines()
-                .next()
-                .unwrap_or("version output was empty")
-                .trim()
-                .to_string();
             DoctorCheck {
                 id,
                 required,
                 available: output.status.success(),
                 detail: if output.status.success() {
-                    detail
+                    rendered
                 } else {
-                    format!("version command exited with {}: {detail}", output.status)
+                    format!(
+                        "version command exited with {}: {}",
+                        output.status, rendered
+                    )
                 },
             }
         }
@@ -4668,7 +4718,7 @@ fn executable_check(
             id,
             required,
             available: false,
-            detail: error.to_string(),
+            detail: format!("bounded {executable} version check failed: {error}"),
         },
     }
 }
@@ -14953,64 +15003,17 @@ fn input_descriptor(path: &Path, bytes: &[u8]) -> InputDescriptor {
 }
 
 fn read_bounded_utf8(path: &Path, label: &str, max_bytes: u64) -> Result<String> {
-    reject_output_symlink_components(path, label)?;
-    let metadata = fs::symlink_metadata(path)
-        .with_context(|| format!("reading metadata for {label} {}", path.display()))?;
-    if metadata.file_type().is_symlink() || !metadata.file_type().is_file() {
-        bail!(
-            "{label} must be a regular non-symlink file: {}",
-            path.display()
-        );
-    }
-    if metadata.len() == 0 || metadata.len() > max_bytes {
+    let bytes = fs::read_with_limit(path, max_bytes)
+        .with_context(|| format!("reading {label} {}", path.display()))?;
+    if bytes.is_empty() {
         bail!(
             "{label} must contain 1..={max_bytes} bytes: {}",
-            path.display()
-        );
-    }
-    let mut file =
-        fs::File::open(path).with_context(|| format!("opening {label} {}", path.display()))?;
-    let opened = file
-        .metadata()
-        .with_context(|| format!("inspecting opened {label} {}", path.display()))?;
-    if !same_open_input(&metadata, &opened) || opened.len() != metadata.len() {
-        bail!(
-            "{label} changed while it was being opened: {}",
-            path.display()
-        );
-    }
-    let mut bytes = Vec::with_capacity(metadata.len() as usize);
-    Read::by_ref(&mut file)
-        .take(max_bytes + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("reading {label} {}", path.display()))?;
-    let after = file
-        .metadata()
-        .with_context(|| format!("rechecking opened {label} {}", path.display()))?;
-    if !same_open_input(&opened, &after)
-        || after.len() != metadata.len()
-        || bytes.len() as u64 != metadata.len()
-        || bytes.len() as u64 > max_bytes
-    {
-        bail!(
-            "{label} changed while it was being read: {}",
             path.display()
         );
     }
     String::from_utf8(bytes)
         .map_err(anyhow::Error::msg)
         .with_context(|| format!("decoding {label} {} as UTF-8", path.display()))
-}
-
-#[cfg(unix)]
-fn same_open_input(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(not(unix))]
-fn same_open_input(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    true
 }
 
 fn prepare_firmware_output(
@@ -15164,18 +15167,8 @@ fn parse_ai_requirement(value: &str) -> Result<AiRequirement> {
 }
 
 fn write_new_file(path: &Path, contents: &str, private: bool) -> Result<()> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(if private { 0o600 } else { 0o644 });
-    }
-    let mut file = options
-        .open(path)
-        .with_context(|| format!("creating {}", path.display()))?;
-    file.write_all(contents.as_bytes())
-        .with_context(|| format!("writing {}", path.display()))
+    let prepared = prepare_atomic_new_file(path)?;
+    persist_atomic_new_file_bytes_with_privacy(prepared, path, contents.as_bytes(), private)
 }
 
 fn ensure_new_file_path(path: &Path) -> Result<()> {
@@ -15187,6 +15180,7 @@ fn ensure_new_file_path(path: &Path) -> Result<()> {
 }
 
 fn prepare_atomic_new_file(path: &Path) -> Result<tempfile::NamedTempFile> {
+    reject_output_symlink_components(path, "atomic output")?;
     ensure_new_file_path(path)?;
     let parent = path
         .parent()
@@ -15351,10 +15345,27 @@ fn persist_atomic_new_file(
 }
 
 fn persist_atomic_new_file_bytes(
-    mut prepared: tempfile::NamedTempFile,
+    prepared: tempfile::NamedTempFile,
     path: &Path,
     contents: &[u8],
 ) -> Result<()> {
+    persist_atomic_new_file_bytes_with_privacy(prepared, path, contents, false)
+}
+
+fn persist_atomic_new_file_bytes_with_privacy(
+    mut prepared: tempfile::NamedTempFile,
+    path: &Path,
+    contents: &[u8],
+    private: bool,
+) -> Result<()> {
+    if contents.len() as u128 > fs::MAX_FILE_BYTES as u128 {
+        bail!(
+            "{} exceeds the {}-byte file limit ({} bytes)",
+            path.display(),
+            fs::MAX_FILE_BYTES,
+            contents.len()
+        );
+    }
     prepared
         .as_file_mut()
         .write_all(contents)
@@ -15368,7 +15379,11 @@ fn persist_atomic_new_file_bytes(
         use std::os::unix::fs::PermissionsExt;
         prepared
             .as_file()
-            .set_permissions(fs::Permissions::from_mode(0o644))
+            .set_permissions(fs::Permissions::from_mode(if private {
+                0o600
+            } else {
+                0o644
+            }))
             .with_context(|| format!("setting permissions for {}", path.display()))?;
     }
     prepared
@@ -15379,34 +15394,37 @@ fn persist_atomic_new_file_bytes(
         .persist_noclobber(path)
         .map_err(|error| error.error)
         .with_context(|| format!("publishing {} without overwrite", path.display()))?;
+    #[cfg(unix)]
+    {
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        fs::File::open(parent)
+            .with_context(|| format!("opening output parent {}", parent.display()))?
+            .sync_all()
+            .with_context(|| format!("syncing output parent {}", parent.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = private;
     Ok(())
 }
 
 fn write_new_file_set(files: &[(&Path, &str)]) -> Result<()> {
-    let mut created = Vec::with_capacity(files.len());
+    let mut prepared = Vec::with_capacity(files.len());
     for (path, contents) in files {
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o644);
-        }
-        let mut file = match options.open(path) {
-            Ok(file) => file,
+        prepared.push((*path, *contents, prepare_atomic_new_file(path)?));
+    }
+    let mut created = Vec::with_capacity(files.len());
+    for (path, contents, output) in prepared {
+        match persist_atomic_new_file(output, path, contents) {
+            Ok(()) => created.push(path),
             Err(error) => {
                 for created_path in created {
                     let _ = fs::remove_file(created_path);
                 }
-                return Err(error).with_context(|| format!("creating {}", path.display()));
+                return Err(error);
             }
-        };
-        created.push(*path);
-        if let Err(error) = file.write_all(contents.as_bytes()) {
-            for created_path in created {
-                let _ = fs::remove_file(created_path);
-            }
-            return Err(error).with_context(|| format!("writing {}", path.display()));
         }
     }
     Ok(())
@@ -15462,22 +15480,9 @@ fn simulation_artifact(path: &Path) -> Result<SimulationArtifact> {
         .filter(|name| !name.is_empty())
         .ok_or_else(|| anyhow::anyhow!("simulation artifact requires a UTF-8 basename"))?
         .to_string();
-    let mut file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut digest = Sha256::new();
-    let mut bytes = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .with_context(|| format!("reading {}", path.display()))?;
-        if count == 0 {
-            break;
-        }
-        bytes = bytes
-            .checked_add(count as u64)
-            .ok_or_else(|| anyhow::anyhow!("simulation artifact size overflow"))?;
-        digest.update(&buffer[..count]);
-    }
+    let contents = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = u64::try_from(contents.len())
+        .map_err(|_| anyhow::anyhow!("simulation artifact size overflow"))?;
     let media_type = match path.extension().and_then(|extension| extension.to_str()) {
         Some("csv") => "text/csv",
         Some("json") => "application/json",
@@ -15488,32 +15493,19 @@ fn simulation_artifact(path: &Path) -> Result<SimulationArtifact> {
         name,
         media_type: media_type.into(),
         bytes,
-        sha256: hex::encode(digest.finalize()),
+        sha256: hex::encode(Sha256::digest(&contents)),
     })
 }
 
 fn manufacturing_evidence_descriptor(path: &Path) -> Result<EvidenceDescriptor> {
     let name = portable_basename(path)?;
-    let mut file = fs::File::open(path).with_context(|| format!("reading {}", path.display()))?;
-    let mut digest = Sha256::new();
-    let mut bytes = 0_u64;
-    let mut buffer = [0_u8; 64 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .with_context(|| format!("reading {}", path.display()))?;
-        if count == 0 {
-            break;
-        }
-        bytes = bytes
-            .checked_add(count as u64)
-            .ok_or_else(|| anyhow::anyhow!("manufacturing evidence artifact size overflow"))?;
-        digest.update(&buffer[..count]);
-    }
+    let contents = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    let bytes = u64::try_from(contents.len())
+        .map_err(|_| anyhow::anyhow!("manufacturing evidence artifact size overflow"))?;
     Ok(EvidenceDescriptor {
         name,
         bytes,
-        sha256: hex::encode(digest.finalize()),
+        sha256: hex::encode(Sha256::digest(&contents)),
     })
 }
 
@@ -15831,26 +15823,73 @@ fn run_kicad_drc(board: &Path) -> Result<PathBuf> {
 }
 
 fn run_kicad_drc_to(board: &Path, report: &Path, environment: &Path) -> Result<()> {
-    let status = kicad_command(environment)?
+    let output_directory = environment.join("drc-output");
+    fs::create_dir_all(&output_directory).with_context(|| {
+        format!(
+            "creating private KiCad DRC output directory {}",
+            output_directory.display()
+        )
+    })?;
+    let staged_report = output_directory.join("drc.rpt");
+    match fs::symlink_metadata(&staged_report) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.file_type().is_file() => {
+            bail!(
+                "private KiCad DRC report path is not a regular file: {}",
+                staged_report.display()
+            )
+        }
+        Ok(_) => fs::remove_file(&staged_report).with_context(|| {
+            format!(
+                "removing stale private KiCad DRC report {}",
+                staged_report.display()
+            )
+        })?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspecting private KiCad DRC report {}",
+                    staged_report.display()
+                )
+            });
+        }
+    }
+
+    let mut command = kicad_command(environment)?;
+    command
         .args(["pcb", "drc", "--exit-code-violations", "--output"])
-        .arg(report)
-        .arg(board)
-        .status()
-        .context("running kicad-cli; install KiCad or omit --drc")?;
-    if !status.success() {
+        .arg(&staged_report)
+        .arg(board);
+    let output = crate::bounded_process::run_bounded(&mut command, KICAD_PROCESS_LIMITS, None)
+        .map_err(|error| anyhow::anyhow!("bounded kicad-cli DRC execution failed: {error}"))?;
+    if !output.status.success() {
+        let diagnostic = process_diagnostic(&output.stderr, &output.stdout);
         bail!(
-            "KiCad DRC failed (status {status}); report: {}",
+            "KiCad DRC failed (status {}): {diagnostic}; report: {}",
+            output.status,
             report.display()
         )
     }
-    let metadata = fs::symlink_metadata(report)
-        .with_context(|| format!("KiCad DRC did not produce {}", report.display()))?;
+    let metadata = fs::symlink_metadata(&staged_report).with_context(|| {
+        format!(
+            "KiCad DRC did not produce private report {}",
+            staged_report.display()
+        )
+    })?;
     if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
         bail!(
             "KiCad DRC report is not a regular file: {}",
-            report.display()
+            staged_report.display()
         )
     }
+    let report_bytes = fs::read(&staged_report).with_context(|| {
+        format!(
+            "reading bounded KiCad DRC report {}",
+            staged_report.display()
+        )
+    })?;
+    fs::write(report, report_bytes)
+        .with_context(|| format!("publishing KiCad DRC report {}", report.display()))?;
     eprintln!("KiCad DRC passed; report: {}", report.display());
     Ok(())
 }
@@ -15861,14 +15900,18 @@ fn run_kicad_export(
     board: &Path,
     environment: &Path,
 ) -> Result<()> {
-    let status = kicad_command(environment)?
-        .args(arguments)
-        .arg(output)
-        .arg(board)
-        .status()
-        .context("running kicad-cli manufacturing export")?;
-    if !status.success() {
-        bail!("KiCad manufacturing export failed with status {status}")
+    let mut command = kicad_command(environment)?;
+    command.args(arguments).arg(output).arg(board);
+    let execution = crate::bounded_process::run_bounded(&mut command, KICAD_PROCESS_LIMITS, None)
+        .map_err(|error| {
+        anyhow::anyhow!("bounded kicad-cli manufacturing export failed: {error}")
+    })?;
+    if !execution.status.success() {
+        let diagnostic = process_diagnostic(&execution.stderr, &execution.stdout);
+        bail!(
+            "KiCad manufacturing export failed with status {}: {diagnostic}",
+            execution.status
+        )
     }
     Ok(())
 }
@@ -15924,18 +15967,20 @@ fn stage_kicad_project(
 }
 
 fn kicad_cli_identity(environment: &Path) -> Result<KiCadIdentity> {
-    let output = kicad_command(environment)?
-        .args(["version", "--format", "about"])
-        .output()
-        .context("querying kicad-cli build identity")?;
+    let mut command = kicad_command(environment)?;
+    command.args(["version", "--format", "about"]);
+    let output =
+        crate::bounded_process::run_bounded(&mut command, KICAD_IDENTITY_PROCESS_LIMITS, None)
+            .map_err(|error| anyhow::anyhow!("bounded kicad-cli build identity failed: {error}"))?;
     if !output.status.success() {
+        let diagnostic = process_diagnostic(&output.stderr, &output.stdout);
         bail!(
-            "querying kicad-cli build identity failed with status {}",
-            output.status
+            "querying kicad-cli build identity failed with status {}: {diagnostic}",
+            output.status,
         )
     }
-    if output.stdout.is_empty() || output.stdout.len() > 128 * 1024 {
-        bail!("kicad-cli returned an invalid build identity size")
+    if output.stdout.is_empty() {
+        bail!("kicad-cli returned an empty build identity")
     }
     let about = std::str::from_utf8(&output.stdout)
         .context("decoding kicad-cli build identity as UTF-8")?;
@@ -16019,6 +16064,77 @@ mod tests {
 
         let error = stage_kicad_project(&board, b"(kicad_pcb)", &source_dir).unwrap_err();
         assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    #[test]
+    fn diagnostic_lines_are_trimmed_and_bounded() {
+        let diagnostic = first_diagnostic_line(
+            format!(
+                "  {}  \nsecond line",
+                "x".repeat(MAX_DIAGNOSTIC_LINE_BYTES + 32)
+            )
+            .as_bytes(),
+        )
+        .expect("first diagnostic line is present");
+        assert!(diagnostic.ends_with('…'));
+        assert!(diagnostic.len() <= MAX_DIAGNOSTIC_LINE_BYTES + "…".len());
+        assert_eq!(process_diagnostic(b"\n", b"fallback\nsecond"), "fallback");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kicad_drc_failure_preserves_public_report() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Mutex;
+
+        static KICAD_PATH_LOCK: Mutex<()> = Mutex::new(());
+        let _lock = KICAD_PATH_LOCK.lock().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let fake_bin = workspace.path().join("bin");
+        std::fs::create_dir(&fake_bin).unwrap();
+        let fake_kicad = fake_bin.join("kicad-cli");
+        std::fs::write(
+            &fake_kicad,
+            br#"#!/bin/sh
+report=""; capture=0
+for arg in "$@"; do
+  if [ "$capture" = 1 ]; then
+    report="$arg"; capture=0
+  elif [ "$arg" = "--output" ]; then
+    capture=1
+  fi
+done
+printf staged-report > "$report"
+printf 'synthetic DRC failure\n' >&2
+exit 9
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_kicad, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let public_report = workspace.path().join("public.drc.rpt");
+        fs::write(&public_report, b"known-good").unwrap();
+        let environment = workspace.path().join("environment");
+        let previous_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var("PATH", fake_bin.as_os_str());
+        }
+        let result = run_kicad_drc_to(
+            workspace.path().join("board.kicad_pcb").as_path(),
+            &public_report,
+            &environment,
+        );
+        unsafe {
+            if let Some(previous_path) = previous_path {
+                std::env::set_var("PATH", previous_path);
+            } else {
+                std::env::remove_var("PATH");
+            }
+        }
+
+        let error = result.expect_err("fake KiCad DRC must fail");
+        assert!(error.to_string().contains("synthetic DRC failure"));
+        assert_eq!(fs::read(&public_report).unwrap(), b"known-good");
     }
 
     #[test]

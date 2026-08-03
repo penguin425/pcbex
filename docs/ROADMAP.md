@@ -114,6 +114,7 @@ auditable release.
 | v1.402.0 | Fail-closed numeric and raster bounds | Reject non-finite, out-of-range, or malformed KiCad physical values and enforce checked board/grid/layer, topology, raster candidate/edge, segment/via, and zone cell/blocker ceilings before covered geometry, allocation, narrowing, or mutation |
 | v1.403.0 | Deterministic A* work budget | Bound aggregate heap-pop and successful-relaxation work across differential, normal, retry, and shove routing while preserving deterministic parallel results and fail-closed public compatibility |
 | v1.404.0 | Deterministic zone-fill work budget | Bound aggregate queue-pop and successful-discovery work across every zone in one atomic fill while eliminating duplicate queue entries and preserving deterministic output |
+| v1.405.0 | Bounded CLI I/O and subprocess execution | Limit generic Rust CLI files and MCP frames, atomically publish per-file outputs, and enforce deadlines, output ceilings, cancellation, and process-tree cleanup for doctor, KiCad, and MCP children |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -122,12 +123,12 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release adds a deterministic aggregate runtime ceiling to
-copper-zone connectivity after the static numeric/raster preflight. The exact
-accounting, derived production ceiling, atomic failure behavior, and configurable
-checked API are documented in
-[`ZONE_FILL_WORK_BUDGET.md`](ZONE_FILL_WORK_BUDGET.md). The next roadmap
-candidates are fail-closed input and execution hardening, in order: make generic
-CLI I/O and subprocess execution atomic and bounded; enforce an immutable ERC
-safety floor; then add bounded natural-language circuit generation with a
+The current release applies a 128 MiB regular-file boundary and atomic per-file
+publication to generic Rust CLI paths, limits MCP frames, and gives the doctor,
+KiCad, and MCP child paths fixed deadlines and output ceilings with process-tree
+cleanup. Exact limits, atomicity scope, platform behavior, and exclusions are
+documented in [`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). The next roadmap work is
+to unify specialized manufacturing/Python execution boundaries, close the
+remaining static resource-accounting gaps, enforce an immutable ERC safety
+floor, and then add bounded natural-language circuit generation with a
 deterministic ERC correction loop.

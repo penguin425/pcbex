@@ -54,7 +54,10 @@ board has no explicit outline; board/cutout edge tests; polygon obstacle and
 track-keepout windows; static accounting of existing segment/via clearance
 scans and runtime counting of generated scans; route cross-products and
 self-pairs used by the checker; drilled-hole pairs;
-and per-cell zone outline, boundary, blocker, route, and thermal-pad work.
+and modeled per-cell zone outline, boundary, blocker, route, and thermal-pad
+predicate work. Layer-vector membership scans and the cardinality of outer
+blocker collection remain separate follow-up accounting; this preflight does
+not claim to bound every container traversal.
 
 ## Enforcement points and failure behavior
 
@@ -84,8 +87,11 @@ connectivity has a separate queue-work ceiling documented in
 is a whole-command deadline or a shared budget across a multi-candidate
 portfolio.
 
-Repeated routing-candidate portfolios, aggregate arc linearization,
-placement/optimization passes, generic CLI file size, subprocess output, and
-subprocess time still require separate dynamic controls. Keeping those controls
-explicit prevents this static preflight from claiming a wall-clock guarantee it
-does not provide.
+Generic Rust CLI files and the doctor, KiCad, and MCP subprocess paths now have
+separate dynamic controls documented in
+[`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). Repeated routing-candidate portfolios,
+aggregate arc linearization, placement/optimization passes, specialized
+manufacturing artifact walkers, and Python or CI subprocesses still require
+their own aggregate controls. Keeping those boundaries explicit prevents this
+static preflight from claiming a whole-command wall-clock guarantee it does not
+provide.
