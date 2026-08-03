@@ -115,7 +115,7 @@ the values actually produced; the commands below show POSIX output):
 {
   "schema_version": 2,
   "engine": "pcbex",
-  "engine_version": "1.401.0",
+  "engine_version": "1.402.0",
   "schematic_sha256": "<canonical IR SHA-256>",
   "artifacts": [
     {"path": "pinout.h", "bytes": 123, "sha256": "<sha256>"},

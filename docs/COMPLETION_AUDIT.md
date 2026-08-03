@@ -27,6 +27,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Explicit local route repair | Checker-derived or user-selected net rip-up with byte-locked unrelated routes and owned-zone preservation | Obstacle violation regression reroutes one net while proving the other route is unchanged |
 | KiCad input/output | Rectangular outline, rotated pads, footprints, tracks, vias, keepouts; board-level track/via output | Four `pcbex-kicad` tests |
 | Bounded KiCad S-expression parsing | One typed, iterative parser serves PCB, schematic, manufacturing, placement, and custom-rule paths while enforcing fixed input, token, decoded-atom, nesting, direct-list-element, and span-result ceilings; quoted parentheses remain atoms and custom rules use a no-copy multi-root mode | Exact-bound and one-over unit tests cover every resource limit, malformed documents, quoted/escaped/Unicode atoms, deep nesting without recursion, multiple custom-rule roots, bounded span discovery, and public import/write-back compatibility |
+| Fail-closed numeric and raster resource domain | KiCad physical values, routing-relevant copper layer sets, and supported pad geometry fail closed instead of using float-cast saturation or malformed-value defaults; shared core preflight uses checked wide arithmetic to bound board/grid/layer products, polygon and checker pairs, raster candidates and edge visits, segment/via clearance work, and atomic zone cells/blocker scans | Exact-bound and one-over injectable-limit tests plus JSON/KiCad regressions cover non-finite and out-of-range fields, malformed explicit geometry, huge boards with tiny grids, high-edge and high-blocker amplification, excessive topology/line work, clamped off-board zones, nonpositive dimensions, and atomic zone-fill rejection |
 | Modern KiCad project/custom rules | Ordered wildcard/regex `netclass_patterns`, exact-assignment precedence, and NetClass-conditioned `.kicad_dru` routing dimensions | KiCad 9-style project fixture plus mm/mil custom-rule regression |
 | Headless KiCad validation | `route-kicad --drc` | KiCad 10.0.5: 0 violations, 0 unconnected pads |
 | Reproducible manufacturing package | Isolated `fabricate` DRC gate plus all-copper Gerber, paste/mask/silkscreen, drill, BOM/CPL, manifest, and ZIP export | Four-layer/Paste KiCad E2E, timestamp normalization, byte-identical rerun, metadata and polluted-output regressions |
@@ -225,7 +226,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.401.0 exposes 693 Rust tests and 32 Python tests. The release workflow
+Version 1.402.0 exposes 721 Rust tests and 32 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

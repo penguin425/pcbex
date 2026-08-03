@@ -357,19 +357,38 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
     let mut footprint_geometry = FootprintGeometry::default();
     let mut keepouts = Vec::new();
     let mut route_candidates = HashMap::new();
+    let mut footprint_references = HashSet::new();
     for item in top {
         let Some(xs) = item.as_list() else { continue };
         match atom(xs.first()) {
             Some("footprint") => {
+                let reference = footprint_reference(xs);
+                if !reference.trim().is_empty() && !footprint_references.insert(reference.clone()) {
+                    return Err(format!("duplicate footprint reference: {reference}"));
+                }
                 import_footprint(xs, min, &mut nets, &mut footprint_geometry, &copper_layers)?
             }
             Some("segment") => {
                 validate_declared_copper_net(xs, "segment", &nets)?;
-                import_segment(xs, min, &rules, &mut obstacles, &mut route_candidates)
+                import_segment(
+                    xs,
+                    min,
+                    &rules,
+                    &copper_layers,
+                    &mut obstacles,
+                    &mut route_candidates,
+                )?
             }
             Some("arc") => {
                 validate_declared_copper_net(xs, "route arc", &nets)?;
-                import_route_arc(xs, min, &rules, &mut obstacles, &mut route_candidates)
+                import_route_arc(
+                    xs,
+                    min,
+                    &rules,
+                    &copper_layers,
+                    &mut obstacles,
+                    &mut route_candidates,
+                )?
             }
             Some("via") => {
                 validate_declared_copper_net(xs, "via", &nets)?;
@@ -380,7 +399,7 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                     &mut obstacles,
                     &mut route_candidates,
                     &copper_layers,
-                )
+                )?
             }
             Some("zone") => {
                 if child_values(xs, "keepout").is_none()
@@ -391,13 +410,14 @@ pub fn import(source: &str, rules: Rules) -> Result<ImportedBoard, String> {
                     validate_declared_copper_net(xs, "copper zone", &nets)?;
                     validate_copper_zone_net_name(xs, &nets)?;
                 }
-                import_keepout(xs, min, &mut keepouts, &copper_layers);
+                import_keepout(xs, min, &mut keepouts, &copper_layers)?;
                 import_copper_zone(
                     xs,
                     min,
+                    &copper_layers,
                     &mut footprint_geometry.polygon_obstacles,
                     &mut route_candidates,
-                );
+                )?;
             }
             _ => {}
         }
@@ -1159,37 +1179,37 @@ impl ImportedBoard {
                     .then(|| footprint_reference(values))
             })
             .collect();
-        let courtyards: HashMap<String, Vec<Point>> = top
-            .iter()
-            .filter_map(|item| {
-                let values = item.as_list()?;
-                if atom(values.first()) != Some("footprint") {
-                    return None;
-                }
-                courtyard_polygon_local(values)
-                    .map(|polygon| (footprint_reference(values), polygon))
-            })
-            .collect();
-        let sides: HashMap<String, BoardSide> = top
-            .iter()
-            .filter_map(|item| {
-                let values = item.as_list()?;
-                if atom(values.first()) != Some("footprint") {
-                    return None;
-                }
-                Some((
-                    footprint_reference(values),
-                    if child_atom(values, "layer").is_some_and(|layer| layer.starts_with("B.")) {
-                        BoardSide::Back
-                    } else {
-                        BoardSide::Front
-                    },
-                ))
-            })
-            .collect();
+        let mut courtyards = HashMap::<String, Vec<Point>>::new();
+        for item in top {
+            let Some(values) = item.as_list() else {
+                continue;
+            };
+            if atom(values.first()) != Some("footprint") {
+                continue;
+            }
+            if let Some(polygon) = courtyard_polygon_local(values)? {
+                courtyards.insert(footprint_reference(values), polygon);
+            }
+        }
+        let mut sides = Vec::new();
+        let mut side_references = HashSet::new();
+        for item in top {
+            let Some(values) = item.as_list() else {
+                continue;
+            };
+            if atom(values.first()) != Some("footprint") {
+                continue;
+            }
+            let reference = footprint_reference(values);
+            let side = footprint_side(values)?;
+            if !reference.trim().is_empty() && !side_references.insert(reference.clone()) {
+                return Err(format!("duplicate footprint reference: {reference}"));
+            }
+            sides.push(side);
+        }
         let mut components = Vec::with_capacity(self.board.footprints.len());
         let mut net_pins = HashMap::<u32, Vec<PinRef>>::new();
-        for footprint in &self.board.footprints {
+        for (footprint_index, footprint) in self.board.footprints.iter().enumerate() {
             if footprint.reference.is_empty() {
                 return Err("every footprint requires a Reference property for placement".into());
             }
@@ -1207,7 +1227,7 @@ impl ImportedBoard {
                     footprint.position.y_nm,
                 ));
                 let (local_x, local_y) = rotate(dx, dy, -footprint.rotation_deg);
-                let local = point_mm(local_x, local_y);
+                let local = point_mm_checked(local_x, local_y)?;
                 min_x = min_x.min(local.x_nm.saturating_sub(pad.width_nm / 2));
                 min_y = min_y.min(local.y_nm.saturating_sub(pad.height_nm / 2));
                 max_x = max_x.max(local.x_nm.saturating_add(pad.width_nm / 2));
@@ -1234,10 +1254,9 @@ impl ImportedBoard {
                 position: Some(footprint.position),
                 rotation_deg: footprint.rotation_deg.round().rem_euclid(360.0) as u16,
                 fixed: fixed.contains(&footprint.reference),
-                side: sides
-                    .get(&footprint.reference)
-                    .copied()
-                    .unwrap_or(BoardSide::Front),
+                side: *sides.get(footprint_index).ok_or_else(|| {
+                    format!("footprint {} has no valid layer", footprint.reference)
+                })?,
                 allowed_rotations: vec![0, 90, 180, 270],
                 allow_side_flip: true,
                 courtyard,
@@ -1300,12 +1319,7 @@ impl ImportedBoard {
                     component.rotation_deg
                 ),
             );
-            let source_side =
-                if child_atom(values, "layer").is_some_and(|layer| layer.starts_with("B.")) {
-                    BoardSide::Back
-                } else {
-                    BoardSide::Front
-                };
+            let source_side = footprint_side(values)?;
             if source_side != component.side {
                 replacement = swap_front_back_layers(&replacement);
             }
@@ -1484,7 +1498,7 @@ fn swap_front_back_layers(source: &str) -> String {
         .replace("\"__PCBEX_SIDE__.", "\"B.")
 }
 
-fn courtyard_polygon_local(footprint: &[Sexp]) -> Option<Vec<Point>> {
+fn courtyard_polygon_local(footprint: &[Sexp]) -> Result<Option<Vec<Point>>, String> {
     for item in footprint {
         let Some(values) = item.as_list() else {
             continue;
@@ -1497,23 +1511,30 @@ fn courtyard_polygon_local(footprint: &[Sexp]) -> Option<Vec<Point>> {
         {
             continue;
         }
-        let Some(points) = child_values(values, "pts") else {
-            continue;
+        let Some(points) =
+            unique_physical_child_values(values, "pts", "courtyard polygon point list")?
+        else {
+            return Err("courtyard polygon is missing its point list".into());
         };
-        let polygon: Vec<_> = points
-            .iter()
-            .skip(1)
-            .filter_map(|point| {
-                let xy = point.as_list()?;
-                if atom(xy.first()) != Some("xy") {
-                    return None;
-                }
-                Some(point_mm(number(xy.get(1))?, number(xy.get(2))?))
-            })
-            .collect();
-        if polygon.len() >= 3 {
-            return Some(polygon);
+        let mut polygon = Vec::new();
+        for point in points.iter().skip(1) {
+            let Some(xy) = point.as_list() else {
+                return Err("courtyard polygon points must be xy coordinates".into());
+            };
+            if atom(xy.first()) != Some("xy") || xy.len() != 3 {
+                return Err("courtyard polygon points must be xy coordinates".into());
+            }
+            let x = scalar_f64(xy.get(1), "courtyard polygon X coordinate")?;
+            let y = scalar_f64(xy.get(2), "courtyard polygon Y coordinate")?;
+            polygon.push(Point {
+                x_nm: checked_mm_to_nm(x, "courtyard polygon X coordinate", true, false)?,
+                y_nm: checked_mm_to_nm(y, "courtyard polygon Y coordinate", true, false)?,
+            });
         }
+        if polygon.len() >= 3 {
+            return Ok(Some(polygon));
+        }
+        return Err("courtyard polygon must contain at least three points".into());
     }
     let mut min_x = f64::INFINITY;
     let mut min_y = f64::INFINITY;
@@ -1532,26 +1553,45 @@ fn courtyard_polygon_local(footprint: &[Sexp]) -> Option<Vec<Point>> {
             continue;
         }
         for key in ["start", "end"] {
-            let Some(point) = child_values(values, key) else {
-                continue;
+            let Some(point) =
+                unique_physical_child_values(values, key, &format!("courtyard {key} point"))?
+            else {
+                return Err(format!("courtyard {key} point is missing"));
             };
-            let (Some(x), Some(y)) = (number(point.get(1)), number(point.get(2))) else {
-                continue;
-            };
+            if point.len() != 3 {
+                return Err(format!("courtyard {key} point is missing coordinates"));
+            }
+            let x = scalar_f64(point.get(1), &format!("courtyard {key} X coordinate"))?;
+            let y = scalar_f64(point.get(2), &format!("courtyard {key} Y coordinate"))?;
+            checked_mm_to_nm(x, &format!("courtyard {key} X coordinate"), true, false)?;
+            checked_mm_to_nm(y, &format!("courtyard {key} Y coordinate"), true, false)?;
             min_x = min_x.min(x);
             min_y = min_y.min(y);
             max_x = max_x.max(x);
             max_y = max_y.max(y);
         }
     }
-    min_x.is_finite().then(|| {
-        vec![
-            point_mm(min_x, min_y),
-            point_mm(max_x, min_y),
-            point_mm(max_x, max_y),
-            point_mm(min_x, max_y),
-        ]
-    })
+    if !min_x.is_finite() {
+        return Ok(None);
+    }
+    Ok(Some(vec![
+        Point {
+            x_nm: checked_mm_to_nm(min_x, "courtyard X coordinate", true, false)?,
+            y_nm: checked_mm_to_nm(min_y, "courtyard Y coordinate", true, false)?,
+        },
+        Point {
+            x_nm: checked_mm_to_nm(max_x, "courtyard X coordinate", true, false)?,
+            y_nm: checked_mm_to_nm(min_y, "courtyard Y coordinate", true, false)?,
+        },
+        Point {
+            x_nm: checked_mm_to_nm(max_x, "courtyard X coordinate", true, false)?,
+            y_nm: checked_mm_to_nm(max_y, "courtyard Y coordinate", true, false)?,
+        },
+        Point {
+            x_nm: checked_mm_to_nm(min_x, "courtyard X coordinate", true, false)?,
+            y_nm: checked_mm_to_nm(max_y, "courtyard Y coordinate", true, false)?,
+        },
+    ]))
 }
 
 fn polygon_size(polygon: &[Point]) -> Option<(i64, i64)> {
@@ -1685,10 +1725,13 @@ fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
         let mut rectangles = Vec::new();
         for item in top {
             let Some(xs) = item.as_list() else { continue };
-            if atom(xs.first()) == Some("gr_rect")
-                && child_atom(xs, "layer") == Some("Edge.Cuts")
-                && let (Some(start), Some(end)) = (child_point(xs, "start"), child_point(xs, "end"))
-            {
+            if atom(xs.first()) == Some("gr_rect") && child_atom(xs, "layer") == Some("Edge.Cuts") {
+                let start = edge_child_point(xs, "start")?.ok_or_else(|| {
+                    "Edge.Cuts rectangle requires start and end points".to_string()
+                })?;
+                let end = edge_child_point(xs, "end")?.ok_or_else(|| {
+                    "Edge.Cuts rectangle requires start and end points".to_string()
+                })?;
                 rectangles.push((start, end));
             }
         }
@@ -2301,13 +2344,20 @@ fn import_footprint(
     geometry: &mut FootprintGeometry,
     copper_layers: &[Layer],
 ) -> Result<(), String> {
-    let footprint_at = child_values(xs, "at");
-    let fx = footprint_at.and_then(|v| number(v.get(1))).unwrap_or(0.0);
-    let fy = footprint_at.and_then(|v| number(v.get(2))).unwrap_or(0.0);
-    let angle = footprint_at.and_then(|v| number(v.get(3))).unwrap_or(0.0);
+    let (fx, fy, angle) =
+        optional_position_angle(xs, "at", "footprint at")?.unwrap_or((0.0, 0.0, 0.0));
+    if !angle.is_finite() {
+        return Err("footprint rotation must be finite".into());
+    }
     let mut model = Footprint {
         reference: footprint_reference(xs),
-        position: relative(point_mm(fx, fy), origin),
+        position: relative(
+            Point {
+                x_nm: checked_mm_to_nm(fx, "footprint X coordinate", true, false)?,
+                y_nm: checked_mm_to_nm(fy, "footprint Y coordinate", true, false)?,
+            },
+            origin,
+        ),
         rotation_deg: angle,
         pads: Vec::new(),
     };
@@ -2316,39 +2366,63 @@ fn import_footprint(
         if atom(pad.first()) != Some("pad") {
             continue;
         }
-        let at = child_values(pad, "at");
-        let px = at.and_then(|v| number(v.get(1))).unwrap_or(0.0);
-        let py = at.and_then(|v| number(v.get(2))).unwrap_or(0.0);
+        if pad.len() < 4 {
+            return Err("KiCad pad header must contain number, type, and shape".into());
+        }
+        if atom(pad.get(1)).is_none() {
+            return Err("KiCad pad number must be scalar".into());
+        }
+        if !matches!(
+            atom(pad.get(2)),
+            Some("smd") | Some("thru_hole") | Some("np_thru_hole") | Some("connect")
+        ) {
+            return Err("KiCad pad type is unsupported".into());
+        }
+        let (px, py, pad_angle) =
+            optional_position_angle(pad, "at", "pad at")?.unwrap_or((0.0, 0.0, 0.0));
+        let total_rotation = angle + pad_angle;
+        if !total_rotation.is_finite() {
+            return Err("pad rotation must be finite".into());
+        }
         let (rx, ry) = rotate(px, py, angle);
-        let position = relative(point_mm(fx + rx, fy + ry), origin);
-        let layers = pad_layers(pad, copper_layers);
-        let size = child_values(pad, "size");
-        let width = size.and_then(|v| number(v.get(1))).unwrap_or(1.0);
-        let height = size.and_then(|v| number(v.get(2))).unwrap_or(width);
-        let pad_angle = at.and_then(|v| number(v.get(3))).unwrap_or(0.0);
+        let position = relative(
+            Point {
+                x_nm: checked_mm_to_nm(fx + rx, "pad X coordinate", true, false)?,
+                y_nm: checked_mm_to_nm(fy + ry, "pad Y coordinate", true, false)?,
+            },
+            origin,
+        );
+        let layers = pad_layers(pad, copper_layers)?;
+        let (width, height) = required_dimension_pair(pad, "size", "pad size")?;
         let shape = match atom(pad.get(3)) {
             Some("circle") => PadShape::Circle,
             Some("oval") => PadShape::Oval,
+            Some("rect") => PadShape::Rect,
             Some("roundrect") => PadShape::RoundRect,
             Some("trapezoid") => PadShape::Trapezoid,
             Some("custom") => PadShape::Custom,
-            _ => PadShape::Rect,
+            _ => return Err("KiCad pad shape is missing or unsupported".into()),
         };
-        let roundrect_ratio = child_values(pad, "roundrect_rratio")
-            .and_then(|values| number(values.get(1)))
-            .unwrap_or(0.25)
-            .clamp(0.0, 0.5);
-        let rect_delta = child_values(pad, "rect_delta")
-            .map(|values| {
-                (
-                    number(values.get(1)).unwrap_or(0.0),
-                    number(values.get(2)).unwrap_or(0.0),
-                )
-            })
-            .unwrap_or((0.0, 0.0));
-        let custom_polygon =
-            custom_pad_polygon(pad, position, angle + pad_angle).unwrap_or_default();
-        let (bbox_width, bbox_height) = rotated_size(width, height, angle + pad_angle);
+        let roundrect_ratio =
+            match unique_physical_child_values(pad, "roundrect_rratio", "pad roundrect ratio")? {
+                None => 0.25,
+                Some(values) if values.len() == 2 => {
+                    let ratio = scalar_f64(values.get(1), "pad roundrect ratio")?;
+                    if !ratio.is_finite() || !(0.0..=0.5).contains(&ratio) {
+                        return Err("pad roundrect ratio is outside the supported range".into());
+                    }
+                    ratio
+                }
+                Some(_) => return Err("pad roundrect ratio must contain one numeric value".into()),
+            };
+        let rect_delta =
+            optional_offset_pair(pad, "rect_delta", "pad trapezoid delta")?.unwrap_or((0.0, 0.0));
+        let custom_polygon = custom_pad_polygon(pad, position, total_rotation)?;
+        if shape == PadShape::Custom && custom_polygon.is_none() {
+            return Err("custom pad requires one supported gr_poly primitive".into());
+        }
+        let custom_polygon = custom_polygon.unwrap_or_default();
+        let (bbox_width, bbox_height) = rotated_size(width, height, total_rotation);
         let mut net_fields = pad.iter().filter_map(|value| {
             let values = value.as_list()?;
             (atom(values.first()) == Some("net")).then_some(values)
@@ -2404,55 +2478,95 @@ fn import_footprint(
                 ));
             }
         }
-        let drill = child_values(pad, "drill").and_then(|values| {
-            let (width, height) = if atom(values.get(1)) == Some("oval") {
-                (
-                    number(values.get(2))?,
-                    number(values.get(3)).or_else(|| number(values.get(2)))?,
-                )
-            } else {
-                let width = number(values.get(1))?;
-                (width, number(values.get(2)).unwrap_or(width))
-            };
-            let offset = child_values(values, "offset")
-                .map(|offset| {
-                    (
-                        number(offset.get(1)).unwrap_or(0.0),
-                        number(offset.get(2)).unwrap_or(0.0),
-                    )
-                })
-                .unwrap_or((0.0, 0.0));
-            Some((width, height, offset.0, offset.1))
-        });
+        let drill = unique_physical_child_values(pad, "drill", "pad drill")?
+            .map(|values| -> Result<(f64, f64, f64, f64), String> {
+                // KiCad permits child lists such as `(offset ...)` after the
+                // scalar drill dimensions.  Validate every child explicitly
+                // so an unknown child or an extra scalar cannot be ignored.
+                for value in values.iter().skip(1) {
+                    if let Some(child) = value.as_list()
+                        && atom(child.first()) != Some("offset")
+                    {
+                        return Err("pad drill contains an unsupported child".into());
+                    }
+                }
+                let scalars: Vec<_> = values
+                    .iter()
+                    .skip(1)
+                    .filter(|value| atom(Some(value)).is_some())
+                    .collect();
+                let (width, height) =
+                    if scalars.first().and_then(|value| atom(Some(value))) == Some("oval") {
+                        if scalars.len() != 3 {
+                            return Err("pad drill oval must contain two dimensions".into());
+                        }
+                        (
+                            scalar_f64(scalars.get(1).copied(), "pad drill width")?,
+                            scalar_f64(scalars.get(2).copied(), "pad drill height")?,
+                        )
+                    } else {
+                        if scalars.is_empty() || scalars.len() > 2 {
+                            return Err("pad drill must contain one or two dimensions".into());
+                        }
+                        let width = scalar_f64(scalars.first().copied(), "pad drill width")?;
+                        let height = scalars
+                            .get(1)
+                            .map(|value| scalar_f64(Some(*value), "pad drill height"))
+                            .transpose()?
+                            .unwrap_or(width);
+                        (width, height)
+                    };
+                checked_mm_to_nm(width, "pad drill width", false, true)?;
+                checked_mm_to_nm(height, "pad drill height", false, true)?;
+                let offset = optional_offset_pair(values, "offset", "pad drill offset")?
+                    .unwrap_or((0.0, 0.0));
+                Ok((width, height, offset.0, offset.1))
+            })
+            .transpose()?;
         model.pads.push(Pad {
             number: atom(pad.get(1)).unwrap_or("").to_string(),
             position,
-            width_nm: nm(bbox_width),
-            height_nm: nm(bbox_height),
-            source_width_nm: nm(width),
-            source_height_nm: nm(height),
-            rotation_deg: angle + pad_angle,
+            width_nm: checked_mm_to_nm(bbox_width, "pad bounding-box width", false, true)?,
+            height_nm: checked_mm_to_nm(bbox_height, "pad bounding-box height", false, true)?,
+            source_width_nm: checked_mm_to_nm(width, "pad width", false, true)?,
+            source_height_nm: checked_mm_to_nm(height, "pad height", false, true)?,
+            rotation_deg: total_rotation,
             shape,
             custom_polygon: custom_polygon.clone(),
             roundrect_radius_nm: if shape == PadShape::RoundRect {
-                nm(width.min(height) * roundrect_ratio)
+                checked_mm_to_nm(
+                    width.min(height) * roundrect_ratio,
+                    "pad roundrect radius",
+                    false,
+                    false,
+                )?
             } else {
                 0
             },
             trapezoid_delta_x_nm: if shape == PadShape::Trapezoid {
-                nm(rect_delta.0)
+                checked_mm_to_nm(rect_delta.0, "pad trapezoid X delta", true, false)?
             } else {
                 0
             },
             trapezoid_delta_y_nm: if shape == PadShape::Trapezoid {
-                nm(rect_delta.1)
+                checked_mm_to_nm(rect_delta.1, "pad trapezoid Y delta", true, false)?
             } else {
                 0
             },
-            drill_width_nm: drill.map(|(width, _, _, _)| nm(width)),
-            drill_height_nm: drill.map(|(_, height, _, _)| nm(height)),
-            drill_offset_x_nm: drill.map(|(_, _, x, _)| nm(x)).unwrap_or(0),
-            drill_offset_y_nm: drill.map(|(_, _, _, y)| nm(y)).unwrap_or(0),
+            drill_width_nm: drill
+                .map(|(width, _, _, _)| checked_mm_to_nm(width, "pad drill width", false, true))
+                .transpose()?,
+            drill_height_nm: drill
+                .map(|(_, height, _, _)| checked_mm_to_nm(height, "pad drill height", false, true))
+                .transpose()?,
+            drill_offset_x_nm: drill
+                .map(|(_, _, x, _)| checked_mm_to_nm(x, "pad drill X offset", true, false))
+                .transpose()?
+                .unwrap_or(0),
+            drill_offset_y_nm: drill
+                .map(|(_, _, _, y)| checked_mm_to_nm(y, "pad drill Y offset", true, false))
+                .transpose()?
+                .unwrap_or(0),
             plated: atom(pad.get(2)) != Some("np_thru_hole"),
             layers: layers.clone(),
             net_id,
@@ -2473,13 +2587,13 @@ fn import_footprint(
                 position,
                 width,
                 height,
-                angle + pad_angle,
+                total_rotation,
                 layers,
                 Some(id),
                 &mut geometry.round_obstacles,
                 &mut geometry.capsule_obstacles,
                 &mut geometry.polygon_obstacles,
-            );
+            )?;
             continue;
         }
         add_pad_obstacle(
@@ -2490,13 +2604,13 @@ fn import_footprint(
             position,
             width,
             height,
-            angle + pad_angle,
+            total_rotation,
             layers,
             None,
             &mut geometry.round_obstacles,
             &mut geometry.capsule_obstacles,
             &mut geometry.polygon_obstacles,
-        );
+        )?;
     }
     geometry.footprints.push(model);
     Ok(())
@@ -2515,6 +2629,20 @@ fn footprint_reference(xs: &[Sexp]) -> String {
         }
     }
     String::new()
+}
+
+fn footprint_side(xs: &[Sexp]) -> Result<BoardSide, String> {
+    let values = unique_physical_child_values(xs, "layer", "footprint layer")?
+        .ok_or_else(|| "footprint is missing its layer".to_string())?;
+    if values.len() != 2 {
+        return Err("footprint layer must contain one layer name".into());
+    }
+    match atom(values.get(1)) {
+        Some("F.Cu") => Ok(BoardSide::Front),
+        Some("B.Cu") => Ok(BoardSide::Back),
+        Some(layer) => Err(format!("footprint layer {layer} is not F.Cu or B.Cu")),
+        None => Err("footprint layer must contain a scalar layer name".into()),
+    }
 }
 
 fn validate_declared_copper_net(
@@ -2593,21 +2721,17 @@ fn import_segment(
     xs: &[Sexp],
     origin: Point,
     rules: &Rules,
+    copper_layers: &[Layer],
     obstacles: &mut Vec<Obstacle>,
     routes: &mut HashMap<u32, Route>,
-) {
-    let (Some(start), Some(end), Some(layer)) = (
-        child_point(xs, "start"),
-        child_point(xs, "end"),
-        child_atom(xs, "layer").and_then(parse_layer),
-    ) else {
-        return;
-    };
+) -> Result<(), String> {
+    let start = required_point_mm(xs, "start", "segment start")?;
+    let end = required_point_mm(xs, "end", "segment end")?;
+    let layer = declared_copper_layer(xs, "layer", "segment layer", copper_layers)?
+        .ok_or_else(|| "segment requires a valid copper layer".to_string())?;
     let a = relative(start, origin);
     let b = relative(end, origin);
-    let width = child_values(xs, "width")
-        .and_then(|v| number(v.get(1)))
-        .map(nm)
+    let width = optional_mm_field(xs, "width", "segment width", false, true)?
         .unwrap_or(rules.track_width_nm);
     let net_id = child_values(xs, "net").and_then(|v| number_u32(v.get(1)));
     obstacles.push(Obstacle {
@@ -2641,29 +2765,26 @@ fn import_segment(
                 width_nm: width,
             });
     }
+    Ok(())
 }
 
 fn import_route_arc(
     xs: &[Sexp],
     origin: Point,
     rules: &Rules,
+    copper_layers: &[Layer],
     obstacles: &mut Vec<Obstacle>,
     routes: &mut HashMap<u32, Route>,
-) {
-    let (Some(start), Some(mid), Some(end), Some(layer)) = (
-        child_point(xs, "start"),
-        child_point(xs, "mid"),
-        child_point(xs, "end"),
-        child_atom(xs, "layer").and_then(parse_layer),
-    ) else {
-        return;
-    };
+) -> Result<(), String> {
+    let start = required_point_mm(xs, "start", "route arc start")?;
+    let mid = required_point_mm(xs, "mid", "route arc midpoint")?;
+    let end = required_point_mm(xs, "end", "route arc end")?;
+    let layer = declared_copper_layer(xs, "layer", "route arc layer", copper_layers)?
+        .ok_or_else(|| "route arc requires a valid copper layer".to_string())?;
     let start = relative(start, origin);
     let mid = relative(mid, origin);
     let end = relative(end, origin);
-    let width = child_values(xs, "width")
-        .and_then(|values| number(values.get(1)))
-        .map(nm)
+    let width = optional_mm_field(xs, "width", "route arc width", false, true)?
         .unwrap_or(rules.track_width_nm);
     let net_id = child_values(xs, "net").and_then(|values| number_u32(values.get(1)));
     obstacles.push(Obstacle {
@@ -2714,6 +2835,7 @@ fn import_route_arc(
                 width_nm: width,
             });
     }
+    Ok(())
 }
 
 fn import_via(
@@ -2723,19 +2845,16 @@ fn import_via(
     obstacles: &mut Vec<Obstacle>,
     routes: &mut HashMap<u32, Route>,
     copper_layers: &[Layer],
-) {
-    let Some(at) = child_point(xs, "at") else {
-        return;
-    };
+) -> Result<(), String> {
+    let at = required_point_mm(xs, "at", "via position")?;
     let at = relative(at, origin);
-    let size = child_values(xs, "size")
-        .and_then(|v| number(v.get(1)))
-        .map(nm)
+    let size = optional_mm_field(xs, "size", "via diameter", false, true)?
         .unwrap_or(rules.via_diameter_nm);
-    let drill = child_values(xs, "drill")
-        .and_then(|v| number(v.get(1)))
-        .map(nm)
-        .unwrap_or(rules.via_drill_nm);
+    let drill =
+        optional_mm_field(xs, "drill", "via drill", false, true)?.unwrap_or(rules.via_drill_nm);
+    if drill >= size {
+        return Err("via drill must be smaller than via diameter".into());
+    }
     let net_id = child_values(xs, "net").and_then(|v| number_u32(v.get(1)));
     let kind = if xs.iter().any(|value| atom(Some(value)) == Some("micro")) {
         ViaKind::Micro
@@ -2744,13 +2863,29 @@ fn import_via(
     } else {
         ViaKind::Through
     };
-    let declared_layers: Vec<_> = child_values(xs, "layers")
-        .into_iter()
-        .flat_map(|values| values.iter().skip(1))
-        .filter_map(|value| atom(Some(value)).and_then(parse_layer))
-        .collect();
-    let start_layer = declared_layers.first().copied().unwrap_or(Layer::Front);
-    let end_layer = declared_layers.last().copied().unwrap_or(Layer::Back);
+    let (start_layer, end_layer) = match unique_physical_child_values(xs, "layers", "via layers")? {
+        None => (Layer::Front, Layer::Back),
+        Some(values) => {
+            if values.len() != 3 {
+                return Err("via layers must contain exactly two copper layers".into());
+            }
+            let mut declared = Vec::with_capacity(2);
+            for value in values.iter().skip(1) {
+                let name = atom(Some(value))
+                    .ok_or_else(|| "via layers must contain scalar layer names".to_string())?;
+                let layer = parse_layer(name)
+                    .ok_or_else(|| "via layers contain an invalid copper layer".to_string())?;
+                if !copper_layers.contains(&layer) {
+                    return Err("via layers reference an undeclared copper layer".into());
+                }
+                if declared.contains(&layer) {
+                    return Err("via layers contain a duplicate copper layer".into());
+                }
+                declared.push(layer);
+            }
+            (declared[0], declared[1])
+        }
+    };
     let via_layers: Vec<_> = copper_layers
         .iter()
         .copied()
@@ -2783,6 +2918,7 @@ fn import_via(
                 end_layer,
             });
     }
+    Ok(())
 }
 
 fn import_keepout(
@@ -2790,116 +2926,207 @@ fn import_keepout(
     origin: Point,
     keepouts: &mut Vec<Keepout>,
     copper_layers: &[Layer],
-) {
-    let Some(restrictions) = child_values(xs, "keepout") else {
-        return;
+) -> Result<(), String> {
+    let Some(restrictions) = unique_physical_child_values(xs, "keepout", "keepout field")? else {
+        return Ok(());
     };
-    let layers = if let Some(layer) = child_atom(xs, "layer").and_then(parse_layer) {
-        vec![layer]
-    } else if matches!(child_atom(xs, "layer"), Some("*.Cu") | Some("F&B.Cu")) {
-        copper_layers.to_vec()
-    } else if let Some(values) = child_values(xs, "layers") {
+    let singular = unique_physical_child_values(xs, "layer", "keepout layer")?;
+    let plural = unique_physical_child_values(xs, "layers", "keepout layers")?;
+    if singular.is_some() && plural.is_some() {
+        return Err("keepout layer and layers must not both be present".into());
+    }
+    let layers = if let Some(values) = singular {
+        if values.len() != 2 {
+            return Err("keepout layer must contain one layer name".into());
+        }
+        let name = atom(values.get(1))
+            .ok_or_else(|| "keepout layer must contain a scalar layer name".to_string())?;
+        if matches!(name, "*.Cu" | "F&B.Cu") {
+            copper_layers.to_vec()
+        } else {
+            let layer = parse_layer(name)
+                .ok_or_else(|| "keepout layer contains an invalid copper layer".to_string())?;
+            if !copper_layers.contains(&layer) {
+                return Err("keepout layer references an undeclared copper layer".into());
+            }
+            vec![layer]
+        }
+    } else if let Some(values) = plural {
+        if values.len() < 2 {
+            return Err("keepout layers must contain at least one layer".into());
+        }
         let mut layers = Vec::new();
-        for value in values.iter().skip(1).filter_map(|value| atom(Some(value))) {
+        for value in values.iter().skip(1) {
+            let value = atom(Some(value))
+                .ok_or_else(|| "keepout layers must contain scalar layer names".to_string())?;
             if matches!(value, "*.Cu" | "F&B.Cu") {
-                layers.extend_from_slice(copper_layers);
-            } else if let Some(layer) = parse_layer(value) {
+                for layer in copper_layers {
+                    if layers.contains(layer) {
+                        return Err("keepout layers contain a duplicate copper layer".into());
+                    }
+                    layers.push(*layer);
+                }
+            } else {
+                let layer = parse_layer(value)
+                    .ok_or_else(|| "keepout layers contain an invalid copper layer".to_string())?;
+                if !copper_layers.contains(&layer) {
+                    return Err("keepout layers reference an undeclared copper layer".into());
+                }
+                if layers.contains(&layer) {
+                    return Err("keepout layers contain a duplicate copper layer".into());
+                }
                 layers.push(layer);
             }
         }
+        if layers.is_empty() {
+            return Err("keepout layers must include at least one copper layer".into());
+        }
         layers.sort_by_key(|layer| layer.index());
-        layers.dedup();
         layers
     } else {
         copper_layers.to_vec()
     };
-    let Some(polygon) = child_values(xs, "polygon") else {
-        return;
+    let Some(polygon) = unique_physical_child_values(xs, "polygon", "keepout polygon")? else {
+        return Err("keepout is missing its polygon".into());
     };
-    let Some(values) = child_values(polygon, "pts") else {
-        return;
+    let Some(values) = unique_physical_child_values(polygon, "pts", "keepout point list")? else {
+        return Err("keepout polygon is missing its point list".into());
     };
-    let points: Vec<_> = values
-        .iter()
-        .skip(1)
-        .filter_map(|value| {
-            let xy = value.as_list()?;
-            if atom(xy.first()) != Some("xy") {
-                return None;
-            }
-            Some(relative(
-                point_mm(number(xy.get(1))?, number(xy.get(2))?),
-                origin,
-            ))
-        })
-        .collect();
+    let points = import_polygon_points(values, origin, "keepout polygon")?;
     if points.len() < 3 || layers.is_empty() {
-        return;
+        return Err("keepout polygon must contain at least three points and a layer".into());
     }
+    let restrictions = parse_keepout_restrictions(restrictions)?;
     keepouts.push(Keepout {
         polygon: points,
         layers,
         net_id: None,
-        tracks_not_allowed: child_atom(restrictions, "tracks") == Some("not_allowed"),
-        vias_not_allowed: child_atom(restrictions, "vias") == Some("not_allowed"),
-        zones_not_allowed: child_atom(restrictions, "copperpour") == Some("not_allowed"),
-        footprints_not_allowed: child_atom(restrictions, "footprints") == Some("not_allowed"),
+        tracks_not_allowed: restrictions.tracks,
+        vias_not_allowed: restrictions.vias,
+        zones_not_allowed: restrictions.copperpour,
+        footprints_not_allowed: restrictions.footprints,
         minimum_track_width_nm: None,
         minimum_clearance_nm: None,
     });
+    Ok(())
+}
+
+#[derive(Default)]
+struct KeepoutRestrictions {
+    tracks: bool,
+    vias: bool,
+    copperpour: bool,
+    footprints: bool,
+}
+
+fn parse_keepout_restrictions(values: &[Sexp]) -> Result<KeepoutRestrictions, String> {
+    let mut seen = HashSet::new();
+    let mut restrictions = KeepoutRestrictions::default();
+    for value in values.iter().skip(1) {
+        let child = value
+            .as_list()
+            .ok_or_else(|| "keepout restriction must be a list".to_string())?;
+        let name = atom(child.first())
+            .ok_or_else(|| "keepout restriction must have a scalar name".to_string())?;
+        if !matches!(
+            name,
+            "tracks" | "vias" | "copperpour" | "footprints" | "pads"
+        ) {
+            return Err(format!("keepout contains unknown restriction {name}"));
+        }
+        if !seen.insert(name) {
+            return Err(format!("keepout restriction {name} must not be repeated"));
+        }
+        if child.len() != 2 {
+            return Err(format!("keepout restriction {name} must contain one value"));
+        }
+        let value = atom(child.get(1))
+            .ok_or_else(|| format!("keepout restriction {name} must be scalar"))?;
+        if !matches!(value, "allowed" | "not_allowed") {
+            return Err(format!(
+                "keepout restriction {name} must be allowed or not_allowed"
+            ));
+        }
+        let not_allowed = value == "not_allowed";
+        match name {
+            "tracks" => restrictions.tracks = not_allowed,
+            "vias" => restrictions.vias = not_allowed,
+            "copperpour" => restrictions.copperpour = not_allowed,
+            "footprints" => restrictions.footprints = not_allowed,
+            "pads" if not_allowed => {
+                return Err("keepout pads restriction is unsupported".into());
+            }
+            "pads" => {}
+            _ => unreachable!(),
+        }
+    }
+    Ok(restrictions)
 }
 
 fn import_copper_zone(
     xs: &[Sexp],
     origin: Point,
+    copper_layers: &[Layer],
     polygon_obstacles: &mut Vec<PolygonObstacle>,
     routes: &mut HashMap<u32, Route>,
-) {
+) -> Result<(), String> {
     if child_values(xs, "keepout").is_some()
         || child_values(xs, "attr")
             .and_then(|attr| child_values(attr, "teardrop"))
             .is_some()
     {
-        return;
+        return Ok(());
     }
     let Some(net_id) = child_values(xs, "net").and_then(|values| number_u32(values.get(1))) else {
-        return;
+        return Err("copper zone is missing a valid net ID".into());
     };
+    let layer = declared_copper_layer(xs, "layer", "copper zone layer", copper_layers)?
+        .ok_or_else(|| "copper zone requires a valid copper layer".to_string())?;
     if net_id == 0 {
-        return;
+        return Ok(());
     }
-    let zone_layer = child_atom(xs, "layer").and_then(parse_layer);
-    let outline = child_values(xs, "polygon")
-        .and_then(|polygon| child_values(polygon, "pts"))
-        .map(|values| import_polygon_points(values, origin))
-        .unwrap_or_default();
-    if let Some(layer) = zone_layer
-        && outline.len() >= 3
+    let outline = unique_physical_child_values(xs, "polygon", "copper zone polygon")?
+        .ok_or_else(|| "copper zone is missing its polygon".to_string())?;
+    let outline_values = unique_physical_child_values(outline, "pts", "copper zone point list")?
+        .ok_or_else(|| "copper zone polygon is missing its point list".to_string())?;
+    let outline = import_polygon_points(outline_values, origin, "copper zone polygon")?;
+    if outline.len() < 3 {
+        return Err("copper zone polygon must contain at least three points".into());
+    }
     {
         polygon_obstacles.push(PolygonObstacle {
             polygon: outline.clone(),
             layers: vec![layer],
             net_id: Some(net_id),
         });
-        let clearance_nm = child_values(xs, "connect_pads")
-            .and_then(|connect| child_values(connect, "clearance"))
-            .and_then(|values| number(values.get(1)))
-            .map(nm)
+        let clearance_nm = unique_physical_child_values(xs, "connect_pads", "zone connect_pads")?
+            .map(|connect| optional_mm_field(connect, "clearance", "zone clearance", false, false))
+            .transpose()?
+            .flatten()
             .unwrap_or(0);
-        let minimum_thickness_nm = child_values(xs, "min_thickness")
-            .and_then(|values| number(values.get(1)))
-            .map(nm)
-            .unwrap_or(250_000);
-        let fill = child_values(xs, "fill");
+        let minimum_thickness_nm =
+            optional_mm_field(xs, "min_thickness", "zone minimum thickness", false, true)?
+                .unwrap_or(250_000);
+        let fill = unique_physical_child_values(xs, "fill", "zone fill")?;
         let thermal_gap_nm = fill
-            .and_then(|values| child_values(values, "thermal_gap"))
-            .and_then(|values| number(values.get(1)))
-            .map(nm)
+            .map(|values| {
+                optional_mm_field(values, "thermal_gap", "zone thermal gap", false, false)
+            })
+            .transpose()?
+            .flatten()
             .unwrap_or(200_000);
         let thermal_spoke_width_nm = fill
-            .and_then(|values| child_values(values, "thermal_bridge_width"))
-            .and_then(|values| number(values.get(1)))
-            .map(nm)
+            .map(|values| {
+                optional_mm_field(
+                    values,
+                    "thermal_bridge_width",
+                    "zone thermal spoke width",
+                    false,
+                    true,
+                )
+            })
+            .transpose()?
+            .flatten()
             .unwrap_or(250_000);
         routes
             .entry(net_id)
@@ -2930,46 +3157,62 @@ fn import_copper_zone(
         if atom(filled.first()) != Some("filled_polygon") {
             continue;
         }
-        let Some(layer) = child_atom(filled, "layer")
-            .and_then(parse_layer)
-            .or(zone_layer)
-        else {
-            continue;
-        };
-        let Some(values) = child_values(filled, "pts") else {
-            continue;
-        };
-        let polygon = import_polygon_points(values, origin);
-        if polygon.len() >= 3 {
-            if let Some(route) = routes.get_mut(&net_id)
-                && let Some(zone) = route.zones.iter_mut().find(|zone| zone.layer == layer)
-            {
-                zone.filled_polygons.push(polygon.clone());
+        let layer = match unique_physical_child_values(filled, "layer", "filled polygon layer")? {
+            None => layer,
+            Some(_values) => {
+                declared_copper_layer(filled, "layer", "filled polygon layer", copper_layers)?
+                    .ok_or_else(|| {
+                        "filled copper polygon requires a valid copper layer".to_string()
+                    })?
             }
-            polygon_obstacles.push(PolygonObstacle {
-                polygon,
-                layers: vec![layer],
-                net_id: Some(net_id),
-            });
+        };
+        let Some(values) =
+            unique_physical_child_values(filled, "pts", "filled polygon point list")?
+        else {
+            return Err("filled copper polygon is missing its point list".into());
+        };
+        let polygon = import_polygon_points(values, origin, "filled copper polygon")?;
+        if polygon.len() < 3 {
+            return Err("filled copper polygon must contain at least three points".into());
         }
+        if let Some(route) = routes.get_mut(&net_id)
+            && let Some(zone) = route.zones.iter_mut().find(|zone| zone.layer == layer)
+        {
+            zone.filled_polygons.push(polygon.clone());
+        }
+        polygon_obstacles.push(PolygonObstacle {
+            polygon,
+            layers: vec![layer],
+            net_id: Some(net_id),
+        });
     }
+    Ok(())
 }
 
-fn import_polygon_points(values: &[Sexp], origin: Point) -> Vec<Point> {
-    values
-        .iter()
-        .skip(1)
-        .filter_map(|value| {
-            let xy = value.as_list()?;
-            if atom(xy.first()) != Some("xy") {
-                return None;
-            }
-            Some(relative(
-                point_mm(number(xy.get(1))?, number(xy.get(2))?),
-                origin,
-            ))
-        })
-        .collect()
+fn import_polygon_points(
+    values: &[Sexp],
+    origin: Point,
+    field: &str,
+) -> Result<Vec<Point>, String> {
+    let mut points = Vec::new();
+    for value in values.iter().skip(1) {
+        let Some(xy) = value.as_list() else {
+            return Err(format!("{field} points must be xy coordinates"));
+        };
+        if atom(xy.first()) != Some("xy") || xy.len() != 3 {
+            return Err(format!("{field} points must be xy coordinates"));
+        }
+        let x = scalar_f64(xy.get(1), &format!("{field} X coordinate"))?;
+        let y = scalar_f64(xy.get(2), &format!("{field} Y coordinate"))?;
+        points.push(relative(
+            Point {
+                x_nm: checked_mm_to_nm(x, &format!("{field} X coordinate"), true, false)?,
+                y_nm: checked_mm_to_nm(y, &format!("{field} Y coordinate"), true, false)?,
+            },
+            origin,
+        ));
+    }
+    Ok(points)
 }
 
 fn rect_obstacle(
@@ -3008,11 +3251,11 @@ fn add_pad_obstacle(
     round_obstacles: &mut Vec<RoundObstacle>,
     capsule_obstacles: &mut Vec<CapsuleObstacle>,
     polygon_obstacles: &mut Vec<PolygonObstacle>,
-) {
+) -> Result<(), String> {
     match shape {
         PadShape::Circle => round_obstacles.push(RoundObstacle {
             center,
-            diameter_nm: nm(width_mm.max(height_mm)),
+            diameter_nm: checked_mm_to_nm(width_mm.max(height_mm), "pad diameter", false, true)?,
             layers,
             net_id,
         }),
@@ -3026,14 +3269,34 @@ fn add_pad_obstacle(
             let (dx, dy) = rotate(half_line, 0.0, angle);
             capsule_obstacles.push(CapsuleObstacle {
                 start: Point {
-                    x_nm: center.x_nm.saturating_sub(nm(dx)),
-                    y_nm: center.y_nm.saturating_sub(nm(dy)),
+                    x_nm: center.x_nm.saturating_sub(checked_mm_to_nm(
+                        dx,
+                        "pad oval X offset",
+                        true,
+                        false,
+                    )?),
+                    y_nm: center.y_nm.saturating_sub(checked_mm_to_nm(
+                        dy,
+                        "pad oval Y offset",
+                        true,
+                        false,
+                    )?),
                 },
                 end: Point {
-                    x_nm: center.x_nm.saturating_add(nm(dx)),
-                    y_nm: center.y_nm.saturating_add(nm(dy)),
+                    x_nm: center.x_nm.saturating_add(checked_mm_to_nm(
+                        dx,
+                        "pad oval X offset",
+                        true,
+                        false,
+                    )?),
+                    y_nm: center.y_nm.saturating_add(checked_mm_to_nm(
+                        dy,
+                        "pad oval Y offset",
+                        true,
+                        false,
+                    )?),
                 },
-                diameter_nm: nm(minor),
+                diameter_nm: checked_mm_to_nm(minor, "pad oval diameter", false, true)?,
                 layers,
                 net_id,
             });
@@ -3082,7 +3345,7 @@ fn add_pad_obstacle(
                         layers,
                         net_id,
                     });
-                    return;
+                    return Ok(());
                 }
                 _ => vec![
                     (-half_width, -half_height),
@@ -3093,14 +3356,24 @@ fn add_pad_obstacle(
             };
             let polygon = local_polygon
                 .into_iter()
-                .map(|(x, y)| {
+                .map(|(x, y)| -> Result<Point, String> {
                     let (x, y) = rotate(x, y, rotation_deg);
-                    Point {
-                        x_nm: center.x_nm.saturating_add(nm(x)),
-                        y_nm: center.y_nm.saturating_add(nm(y)),
-                    }
+                    Ok(Point {
+                        x_nm: center.x_nm.saturating_add(checked_mm_to_nm(
+                            x,
+                            "pad polygon X offset",
+                            true,
+                            false,
+                        )?),
+                        y_nm: center.y_nm.saturating_add(checked_mm_to_nm(
+                            y,
+                            "pad polygon Y offset",
+                            true,
+                            false,
+                        )?),
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, _>>()?;
             polygon_obstacles.push(PolygonObstacle {
                 polygon,
                 layers,
@@ -3108,36 +3381,68 @@ fn add_pad_obstacle(
             });
         }
     }
+    Ok(())
 }
 
-fn custom_pad_polygon(pad: &[Sexp], center: Point, rotation_deg: f64) -> Option<Vec<Point>> {
-    let primitives = child_values(pad, "primitives")?;
+fn custom_pad_polygon(
+    pad: &[Sexp],
+    center: Point,
+    rotation_deg: f64,
+) -> Result<Option<Vec<Point>>, String> {
+    let Some(primitives) =
+        unique_physical_child_values(pad, "primitives", "custom pad primitives")?
+    else {
+        return Ok(None);
+    };
+    let mut polygons = 0;
+    let mut valid_polygon = None;
     for primitive in primitives.iter().skip(1) {
-        let values = primitive.as_list()?;
+        let Some(values) = primitive.as_list() else {
+            return Err("unsupported custom pad primitive".into());
+        };
         if atom(values.first()) != Some("gr_poly") {
+            return Err("unsupported custom pad primitive".into());
+        }
+        polygons += 1;
+        if polygons > 1 {
+            return Err("unsupported custom pad primitive".into());
+        }
+        let Some(points) =
+            unique_physical_child_values(values, "pts", "custom pad polygon point list")?
+        else {
+            return Err("custom pad polygon is missing its point list".into());
+        };
+        let mut polygon = Vec::new();
+        for point in points.iter().skip(1) {
+            let Some(xy) = point.as_list() else {
+                return Err("custom pad polygon points must be xy coordinates".into());
+            };
+            if atom(xy.first()) != Some("xy") || xy.len() != 3 {
+                return Err("custom pad polygon points must be xy coordinates".into());
+            }
+            let x = scalar_f64(xy.get(1), "custom pad polygon X coordinate")?;
+            let y = scalar_f64(xy.get(2), "custom pad polygon Y coordinate")?;
+            if !x.is_finite() || !y.is_finite() {
+                return Err("custom pad polygon coordinates must be finite".into());
+            }
+            let (x, y) = rotate(x, y, rotation_deg);
+            let dx = checked_mm_to_nm(x, "custom pad polygon X offset", true, false)?;
+            let dy = checked_mm_to_nm(y, "custom pad polygon Y offset", true, false)?;
+            polygon.push(Point {
+                x_nm: center.x_nm.saturating_add(dx),
+                y_nm: center.y_nm.saturating_add(dy),
+            });
+        }
+        if polygon.len() >= 3 {
+            valid_polygon = Some(polygon);
             continue;
         }
-        let points = child_values(values, "pts")?;
-        let polygon: Vec<_> = points
-            .iter()
-            .skip(1)
-            .filter_map(|point| {
-                let xy = point.as_list()?;
-                if atom(xy.first()) != Some("xy") {
-                    return None;
-                }
-                let (x, y) = rotate(number(xy.get(1))?, number(xy.get(2))?, rotation_deg);
-                Some(Point {
-                    x_nm: center.x_nm.saturating_add(nm(x)),
-                    y_nm: center.y_nm.saturating_add(nm(y)),
-                })
-            })
-            .collect();
-        if polygon.len() >= 3 {
-            return Some(polygon);
-        }
+        return Err("custom pad polygon must contain at least three points".into());
     }
-    None
+    if polygons == 0 {
+        return Err("unsupported custom pad primitive".into());
+    }
+    Ok(valid_polygon)
 }
 
 fn rotate(x: f64, y: f64, degrees: f64) -> (f64, f64) {
@@ -3151,24 +3456,71 @@ fn rotated_size(width: f64, height: f64, degrees: f64) -> (f64, f64) {
         width * r.sin().abs() + height * r.cos().abs(),
     )
 }
-fn pad_layers(pad: &[Sexp], copper_layers: &[Layer]) -> Vec<Layer> {
-    let Some(v) = child_values(pad, "layers") else {
-        return copper_layers.to_vec();
+fn pad_layers(pad: &[Sexp], copper_layers: &[Layer]) -> Result<Vec<Layer>, String> {
+    let Some(v) = unique_physical_child_values(pad, "layers", "pad layers")? else {
+        return Ok(copper_layers.to_vec());
     };
+    if v.len() < 2 {
+        return Err("pad layers must contain at least one layer".into());
+    }
     let mut layers = Vec::new();
-    for value in v.iter().skip(1).filter_map(|value| atom(Some(value))) {
-        if value == "*.Cu" {
-            layers.extend_from_slice(copper_layers);
+    for value in v.iter().skip(1) {
+        let value = atom(Some(value))
+            .ok_or_else(|| "pad layers must contain scalar layer names".to_string())?;
+        if matches!(value, "*.Cu" | "F&B.Cu") {
+            for layer in copper_layers {
+                if layers.contains(layer) {
+                    return Err("pad layers contain a duplicate copper layer".into());
+                }
+                layers.push(*layer);
+            }
         } else if let Some(layer) = parse_layer(value) {
+            if !copper_layers.contains(&layer) {
+                return Err("pad layers reference an undeclared copper layer".into());
+            }
+            if layers.contains(&layer) {
+                return Err("pad layers contain a duplicate copper layer".into());
+            }
             layers.push(layer);
+        } else if !is_known_non_copper_pad_layer(value) {
+            return Err("pad layers contain an unknown layer".into());
         }
     }
-    layers.sort_by_key(|layer| layer.index());
-    layers.dedup();
     if layers.is_empty() {
-        layers.push(Layer::Front);
+        return Err("pad layers must include at least one copper layer".into());
     }
-    layers
+    layers.sort_by_key(|layer| layer.index());
+    Ok(layers)
+}
+
+fn is_known_non_copper_pad_layer(value: &str) -> bool {
+    matches!(
+        value,
+        "F.Mask"
+            | "B.Mask"
+            | "*.Mask"
+            | "F&B.Mask"
+            | "F.Paste"
+            | "B.Paste"
+            | "*.Paste"
+            | "F&B.Paste"
+            | "F.SilkS"
+            | "B.SilkS"
+            | "*.SilkS"
+            | "F&B.SilkS"
+            | "F.CrtYd"
+            | "B.CrtYd"
+            | "*.CrtYd"
+            | "F&B.CrtYd"
+            | "F.Fab"
+            | "B.Fab"
+            | "*.Fab"
+            | "F&B.Fab"
+            | "F.Adhes"
+            | "B.Adhes"
+            | "*.Adhes"
+            | "F&B.Adhes"
+    )
 }
 fn parse_layer(value: &str) -> Option<Layer> {
     match value {
@@ -3182,28 +3534,105 @@ fn parse_layer(value: &str) -> Option<Layer> {
         _ => None,
     }
 }
+
+fn declared_copper_layer(
+    values: &[Sexp],
+    name: &str,
+    field: &str,
+    copper_layers: &[Layer],
+) -> Result<Option<Layer>, String> {
+    let Some(layer_values) = unique_physical_child_values(values, name, field)? else {
+        return Ok(None);
+    };
+    if layer_values.len() != 2 {
+        return Err(format!("{field} must contain one layer name"));
+    }
+    let layer_name = atom(layer_values.get(1))
+        .ok_or_else(|| format!("{field} must contain a scalar layer name"))?;
+    let layer =
+        parse_layer(layer_name).ok_or_else(|| format!("{field} requires a valid copper layer"))?;
+    if !copper_layers.contains(&layer) {
+        return Err(format!("{field} references an undeclared copper layer"));
+    }
+    Ok(Some(layer))
+}
+
 fn layer_name(layer: Layer) -> String {
     layer.name()
 }
 
 fn board_copper_layers(top: &[Sexp]) -> Result<Vec<Layer>, String> {
-    let Some(values) = child_values(top, "layers") else {
+    let Some(values) = unique_physical_child_values(top, "layers", "board layers")? else {
         return Ok(vec![Layer::Front, Layer::Back]);
     };
-    let mut layers: Vec<_> = values
-        .iter()
-        .skip(1)
-        .filter_map(|item| {
-            let values = item.as_list()?;
-            parse_layer(atom(values.get(1))?)
-        })
-        .collect();
+    let mut layers = Vec::new();
+    let mut seen_names = HashSet::new();
+    let mut seen_ordinals = HashSet::new();
+    for item in values.iter().skip(1) {
+        let entry = item
+            .as_list()
+            .ok_or_else(|| "KiCad board layer entry must be a list".to_string())?;
+        if entry.len() < 2 {
+            return Err("KiCad board layer entry is missing its name".into());
+        }
+        let ordinal = atom(entry.first())
+            .ok_or_else(|| "KiCad board layer entry has an invalid ordinal".to_string())?
+            .parse::<u16>()
+            .map_err(|_| "KiCad board layer entry has an invalid ordinal".to_string())?;
+        if !seen_ordinals.insert(ordinal) {
+            return Err("KiCad board layer table contains a duplicate ordinal".into());
+        }
+        let name = atom(entry.get(1))
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| "KiCad board layer entry must contain a scalar name".to_string())?;
+        if !seen_names.insert(name) {
+            return Err("KiCad board layer table contains a duplicate layer".into());
+        }
+        if let Some(layer) = parse_layer(name) {
+            layers.push(layer);
+        } else if is_copper_like_layer_name(name) {
+            return Err("KiCad board layer table contains an invalid copper layer".into());
+        } else if !is_known_non_copper_board_layer(name) {
+            return Err("KiCad board layer table contains an unknown layer".into());
+        }
+    }
     layers.sort_by_key(|layer| layer.index());
-    layers.dedup();
     if layers.is_empty() {
         return Err("KiCad board has no copper layers".into());
     }
     Ok(layers)
+}
+
+fn is_copper_like_layer_name(name: &str) -> bool {
+    name == "*.Cu" || name.ends_with(".Cu")
+}
+
+fn is_known_non_copper_board_layer(name: &str) -> bool {
+    matches!(
+        name,
+        "B.Adhes"
+            | "F.Adhes"
+            | "B.Paste"
+            | "F.Paste"
+            | "B.SilkS"
+            | "F.SilkS"
+            | "B.Mask"
+            | "F.Mask"
+            | "B.CrtYd"
+            | "F.CrtYd"
+            | "B.Fab"
+            | "F.Fab"
+            | "Dwgs.User"
+            | "Cmts.User"
+            | "Eco1.User"
+            | "Eco2.User"
+            | "Edge.Cuts"
+            | "Margin"
+            | "User.Drawings"
+            | "User.Comments"
+            | "User.Eco1"
+            | "User.Eco2"
+    ) || name.starts_with("User.")
 }
 
 #[derive(Clone, Copy)]
@@ -3214,47 +3643,134 @@ struct ImportedStackEntry {
 }
 
 fn import_stackup(top: &[Sexp], copper_layers: &[Layer]) -> Result<Vec<StackupLayer>, String> {
-    let Some(setup) = child_values(top, "setup") else {
+    let Some(setup) = unique_physical_child_values(top, "setup", "KiCad setup")? else {
         return Ok(vec![]);
     };
-    let Some(stackup) = child_values(setup, "stackup") else {
+    let Some(stackup) = unique_physical_child_values(setup, "stackup", "KiCad setup stackup")?
+    else {
         return Ok(vec![]);
     };
     let mut entries = Vec::new();
+    let mut layer_names = HashSet::new();
+    let mut metadata_names = HashSet::new();
     for item in stackup.iter().skip(1) {
-        let Some(values) = item.as_list() else {
+        let values = item
+            .as_list()
+            .ok_or_else(|| "KiCad stackup entry must be a list".to_string())?;
+        let entry_name = atom(values.first())
+            .ok_or_else(|| "KiCad stackup entry must have a scalar name".to_string())?;
+        if !matches!(
+            entry_name,
+            "layer"
+                | "copper_finish"
+                | "dielectric_constraints"
+                | "edge_connector"
+                | "castellated_pads"
+                | "edge_plating"
+        ) {
+            return Err(format!("KiCad stackup contains unknown entry {entry_name}"));
+        }
+        if entry_name != "layer" {
+            if !metadata_names.insert(entry_name) {
+                return Err(format!(
+                    "KiCad stackup metadata {entry_name} must not be repeated"
+                ));
+            }
+            if values.len() != 2 {
+                return Err(format!(
+                    "KiCad stackup metadata {entry_name} must contain one value"
+                ));
+            }
+            let value = atom(values.get(1)).ok_or_else(|| {
+                format!("KiCad stackup metadata {entry_name} must contain a scalar value")
+            })?;
+            match entry_name {
+                "copper_finish" if value.trim().is_empty() => {
+                    return Err("KiCad stackup copper_finish must not be blank".into());
+                }
+                "dielectric_constraints" if !matches!(value, "yes" | "no") => {
+                    return Err("KiCad stackup dielectric_constraints must be yes or no".into());
+                }
+                "edge_connector" if !matches!(value, "yes" | "bevelled") => {
+                    return Err("KiCad stackup edge_connector must be yes or bevelled".into());
+                }
+                "castellated_pads" | "edge_plating" if value != "yes" => {
+                    return Err(format!(
+                        "KiCad stackup {entry_name} must be yes when present"
+                    ));
+                }
+                _ => {}
+            }
             continue;
-        };
-        if atom(values.first()) != Some("layer") {
-            continue;
+        }
+        if values.len() < 2 {
+            return Err("KiCad stackup layer is missing its name".into());
         }
         let Some(name) = atom(values.get(1)) else {
             return Err("KiCad stackup layer is missing its name".into());
         };
+        if !layer_names.insert(name) {
+            return Err(format!("KiCad stackup contains duplicate layer {name}"));
+        }
         let copper = parse_layer(name).filter(|layer| copper_layers.contains(layer));
-        let layer_type = child_atom(values, "type").unwrap_or_default();
+        let layer_type = match unique_physical_child_values(
+            values,
+            "type",
+            &format!("KiCad stackup layer {name} type"),
+        )? {
+            None => "",
+            Some(layer_type) => {
+                if layer_type.len() != 2 {
+                    return Err(format!(
+                        "KiCad stackup layer {name} type must contain one value"
+                    ));
+                }
+                atom(layer_type.get(1)).ok_or_else(|| {
+                    format!("KiCad stackup layer {name} type must contain a scalar value")
+                })?
+            }
+        };
         let is_dielectric = copper.is_none()
             && (name.starts_with("dielectric")
                 || matches!(layer_type, "core" | "prepreg" | "dielectric"));
-        if copper.is_none() && !is_dielectric {
-            continue;
+        if copper.is_none() && !is_dielectric && !is_known_non_copper_board_layer(name) {
+            return Err(format!("KiCad stackup contains unknown layer {name}"));
         }
-        let thickness = child_values(values, "thickness")
-            .and_then(|values| number(values.get(1)))
-            .unwrap_or(0.0);
-        if !thickness.is_finite() || thickness < 0.0 {
-            return Err(format!("KiCad stackup layer {name} has invalid thickness"));
-        }
-        let dielectric_constant =
-            child_values(values, "epsilon_r").and_then(|values| number(values.get(1)));
-        if dielectric_constant.is_some_and(|value| !value.is_finite() || value <= 1.0) {
-            return Err(format!(
-                "KiCad stackup layer {name} has invalid dielectric constant"
-            ));
-        }
+        let thickness_nm = optional_mm_field(
+            values,
+            "thickness",
+            &format!("KiCad stackup layer {name} thickness"),
+            false,
+            false,
+        )?
+        .unwrap_or(0);
+        let dielectric_constant = match unique_physical_child_values(
+            values,
+            "epsilon_r",
+            &format!("KiCad stackup layer {name} dielectric constant"),
+        )? {
+            None => None,
+            Some(epsilon) => {
+                if epsilon.len() != 2 {
+                    return Err(format!(
+                        "KiCad stackup layer {name} has invalid dielectric constant"
+                    ));
+                }
+                let epsilon = scalar_f64(
+                    epsilon.get(1),
+                    &format!("KiCad stackup layer {name} dielectric constant"),
+                )?;
+                if !epsilon.is_finite() || epsilon <= 1.0 {
+                    return Err(format!(
+                        "KiCad stackup layer {name} has invalid dielectric constant"
+                    ));
+                }
+                Some(epsilon)
+            }
+        };
         entries.push(ImportedStackEntry {
             copper,
-            thickness_nm: nm(thickness),
+            thickness_nm,
             dielectric_constant,
         });
     }
@@ -3319,24 +3835,29 @@ fn import_stackup(top: &[Sexp], copper_layers: &[Layer]) -> Result<Vec<StackupLa
     Ok(imported)
 }
 
+#[cfg(test)]
 fn point_mm(x: f64, y: f64) -> Point {
-    Point {
-        x_nm: nm(x),
-        y_nm: nm(y),
-    }
+    point_mm_checked(x, y).expect("point_mm is only used with validated internal coordinates")
+}
+fn point_mm_checked(x: f64, y: f64) -> Result<Point, String> {
+    Ok(Point {
+        x_nm: checked_mm_to_nm(x, "point X coordinate", true, false)?,
+        y_nm: checked_mm_to_nm(y, "point Y coordinate", true, false)?,
+    })
 }
 fn edge_point_mm(x: f64, y: f64) -> Result<Point, String> {
-    let convert = |value: f64| -> Result<i64, String> {
-        let nanometers = (value * NM_PER_MM).round();
-        if (i64::MIN as f64..-(i64::MIN as f64)).contains(&nanometers) {
-            Ok(nanometers as i64)
-        } else {
-            Err("Edge.Cuts coordinates exceed nanometer range".into())
-        }
+    let convert = |value: f64, field: &str| {
+        checked_mm_to_nm(value, field, true, false).map_err(|error| {
+            if error.ends_with("must be finite") {
+                "Edge.Cuts coordinates must be finite".to_string()
+            } else {
+                "Edge.Cuts coordinates exceed nanometer range".to_string()
+            }
+        })
     };
     Ok(Point {
-        x_nm: convert(x)?,
-        y_nm: convert(y)?,
+        x_nm: convert(x, "Edge.Cuts X coordinate")?,
+        y_nm: convert(y, "Edge.Cuts Y coordinate")?,
     })
 }
 fn relative(p: Point, origin: Point) -> Point {
@@ -3352,13 +3873,179 @@ fn relative_coordinate(value: i64, origin: i64) -> i64 {
     (i128::from(value) - i128::from(origin)).clamp(i128::from(i64::MIN), i128::from(i64::MAX))
         as i64
 }
-fn nm(value: f64) -> i64 {
-    (value * NM_PER_MM).round() as i64
+
+/// Convert an untrusted KiCad millimetre value to nanometres without relying
+/// on Rust's saturating float-to-integer cast semantics.
+///
+/// The representable interval is mathematically inclusive at `i64::MIN` and
+/// exclusive at `2^63`; `i64::MAX as f64` is itself rounded to `2^63`, so an
+/// inclusive comparison against that value would accept an unrepresentable
+/// endpoint.  `allow_negative` is used for coordinates and offsets, while
+/// dimensions pass `false`; `require_positive` additionally rejects zero.
+fn checked_mm_to_nm(
+    value: f64,
+    field: &str,
+    allow_negative: bool,
+    require_positive: bool,
+) -> Result<i64, String> {
+    if !value.is_finite() {
+        return Err(format!("{field} must be finite"));
+    }
+    if !allow_negative && value < 0.0 {
+        return Err(format!("{field} must be nonnegative"));
+    }
+    if require_positive && value <= 0.0 {
+        return Err(format!("{field} must be positive"));
+    }
+    let nanometers = value * NM_PER_MM;
+    if !nanometers.is_finite() {
+        return Err(format!("{field} is outside the supported range"));
+    }
+    let rounded = nanometers.round();
+    let upper_exclusive = -(i64::MIN as f64); // exactly 2^63
+    if rounded < i64::MIN as f64 || rounded >= upper_exclusive {
+        return Err(format!("{field} is outside the supported range"));
+    }
+    if !allow_negative && rounded < 0.0 {
+        return Err(format!("{field} must be nonnegative"));
+    }
+    if require_positive && rounded <= 0.0 {
+        return Err(format!("{field} must be positive"));
+    }
+    Ok(rounded as i64)
 }
+
+fn scalar_f64(value: Option<&Sexp>, field: &str) -> Result<f64, String> {
+    atom(value)
+        .ok_or_else(|| format!("{field} must contain one numeric value"))?
+        .parse::<f64>()
+        .map_err(|_| format!("{field} must contain one numeric value"))
+}
+
+fn unique_physical_child_values<'a>(
+    list: &'a [Sexp],
+    name: &str,
+    field: &str,
+) -> Result<Option<&'a [Sexp]>, String> {
+    let mut matches = list.iter().filter_map(|value| {
+        let values = value.as_list()?;
+        (atom(values.first()) == Some(name)).then_some(values)
+    });
+    let first = matches.next();
+    if matches.next().is_some() {
+        return Err(format!("{field} must not be repeated"));
+    }
+    Ok(first)
+}
+
+fn optional_mm_field(
+    list: &[Sexp],
+    name: &str,
+    field: &str,
+    allow_negative: bool,
+    require_positive: bool,
+) -> Result<Option<i64>, String> {
+    let Some(values) = unique_physical_child_values(list, name, field)? else {
+        return Ok(None);
+    };
+    if values.len() != 2 {
+        return Err(format!("{field} must contain one numeric value"));
+    }
+    Ok(Some(checked_mm_to_nm(
+        scalar_f64(values.get(1), field)?,
+        field,
+        allow_negative,
+        require_positive,
+    )?))
+}
+
+fn optional_point_mm(list: &[Sexp], name: &str, field: &str) -> Result<Option<Point>, String> {
+    let Some(values) = unique_physical_child_values(list, name, field)? else {
+        return Ok(None);
+    };
+    if values.len() != 3 {
+        return Err(format!("{field} must contain X and Y coordinates"));
+    }
+    Ok(Some(Point {
+        x_nm: checked_mm_to_nm(
+            scalar_f64(values.get(1), &format!("{field} X coordinate"))?,
+            &format!("{field} X coordinate"),
+            true,
+            false,
+        )?,
+        y_nm: checked_mm_to_nm(
+            scalar_f64(values.get(2), &format!("{field} Y coordinate"))?,
+            &format!("{field} Y coordinate"),
+            true,
+            false,
+        )?,
+    }))
+}
+
+fn required_point_mm(list: &[Sexp], name: &str, field: &str) -> Result<Point, String> {
+    optional_point_mm(list, name, field)?.ok_or_else(|| format!("{field} is missing"))
+}
+
+fn required_dimension_pair(list: &[Sexp], name: &str, field: &str) -> Result<(f64, f64), String> {
+    let Some(values) = unique_physical_child_values(list, name, field)? else {
+        return Err(format!("{field} is missing"));
+    };
+    if values.len() != 3 {
+        return Err(format!("{field} must contain exactly two numeric values"));
+    }
+    let width = scalar_f64(values.get(1), &format!("{field} width"))?;
+    let height = scalar_f64(values.get(2), &format!("{field} height"))?;
+    checked_mm_to_nm(width, &format!("{field} width"), false, true)?;
+    checked_mm_to_nm(height, &format!("{field} height"), false, true)?;
+    Ok((width, height))
+}
+
+fn optional_offset_pair(
+    list: &[Sexp],
+    name: &str,
+    field: &str,
+) -> Result<Option<(f64, f64)>, String> {
+    let Some(values) = unique_physical_child_values(list, name, field)? else {
+        return Ok(None);
+    };
+    if values.len() != 3 {
+        return Err(format!("{field} must contain exactly two numeric values"));
+    }
+    let x = scalar_f64(values.get(1), &format!("{field} X offset"))?;
+    let y = scalar_f64(values.get(2), &format!("{field} Y offset"))?;
+    checked_mm_to_nm(x, &format!("{field} X offset"), true, false)?;
+    checked_mm_to_nm(y, &format!("{field} Y offset"), true, false)?;
+    Ok(Some((x, y)))
+}
+
+fn optional_position_angle(
+    list: &[Sexp],
+    name: &str,
+    field: &str,
+) -> Result<Option<(f64, f64, f64)>, String> {
+    let Some(values) = unique_physical_child_values(list, name, field)? else {
+        return Ok(None);
+    };
+    if !matches!(values.len(), 3 | 4) {
+        return Err(format!("{field} must contain X, Y, and optional rotation"));
+    }
+    let x = scalar_f64(values.get(1), &format!("{field} X coordinate"))?;
+    let y = scalar_f64(values.get(2), &format!("{field} Y coordinate"))?;
+    checked_mm_to_nm(x, &format!("{field} X coordinate"), true, false)?;
+    checked_mm_to_nm(y, &format!("{field} Y coordinate"), true, false)?;
+    let angle = values
+        .get(3)
+        .map(|value| scalar_f64(Some(value), &format!("{field} rotation")))
+        .transpose()?
+        .unwrap_or(0.0);
+    if !angle.is_finite() {
+        return Err(format!("{field} rotation must be finite"));
+    }
+    Ok(Some((x, y, angle)))
+}
+
 fn checked_nonnegative_nm(value: f64) -> Option<i64> {
-    let nanometers = (value * NM_PER_MM).round();
-    (nanometers.is_finite() && (0.0..-(i64::MIN as f64)).contains(&nanometers))
-        .then_some(nanometers as i64)
+    checked_mm_to_nm(value, "dimension", false, false).ok()
 }
 fn mm(value: i64) -> f64 {
     value as f64 / NM_PER_MM
@@ -3411,10 +4098,6 @@ fn is_edge_cuts_primitive(list: &[Sexp]) -> Result<bool, String> {
 fn child_atom<'a>(list: &'a [Sexp], name: &str) -> Option<&'a str> {
     atom(child_values(list, name)?.get(1))
 }
-fn child_point(list: &[Sexp], name: &str) -> Option<Point> {
-    let xs = child_values(list, name)?;
-    Some(point_mm(number(xs.get(1))?, number(xs.get(2))?))
-}
 fn edge_child_point(list: &[Sexp], name: &str) -> Result<Option<Point>, String> {
     let mut matches = list.iter().filter_map(|value| {
         let values = value.as_list()?;
@@ -3426,15 +4109,11 @@ fn edge_child_point(list: &[Sexp], name: &str) -> Result<Option<Point>, String> 
     if matches.next().is_some() {
         return Err("Edge.Cuts point fields must not be repeated".into());
     }
-    if xs.len() > 3 {
+    if xs.len() != 3 {
         return Err("Edge.Cuts points must contain exactly two coordinates".into());
     }
-    let (Some(x), Some(y)) = (number(xs.get(1)), number(xs.get(2))) else {
-        return Ok(None);
-    };
-    if !x.is_finite() || !y.is_finite() {
-        return Err("Edge.Cuts coordinates must be finite".into());
-    }
+    let x = scalar_f64(xs.get(1), "Edge.Cuts X coordinate")?;
+    let y = scalar_f64(xs.get(2), "Edge.Cuts Y coordinate")?;
     Ok(Some(edge_point_mm(x, y)?))
 }
 fn atom(value: Option<&Sexp>) -> Option<&str> {
@@ -4104,6 +4783,22 @@ mod tests {
     }
 
     #[test]
+    fn checked_mm_conversion_rejects_nonfinite_and_exclusive_upper_bound() {
+        assert_eq!(
+            checked_mm_to_nm(i64::MIN as f64 / NM_PER_MM, "coordinate", true, false).unwrap(),
+            i64::MIN
+        );
+        assert!(
+            checked_mm_to_nm(-(i64::MIN as f64) / NM_PER_MM, "coordinate", true, false).is_err()
+        );
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 1e30] {
+            assert!(checked_mm_to_nm(value, "coordinate", true, false).is_err());
+        }
+        assert!(checked_mm_to_nm(-0.001, "dimension", false, false).is_err());
+        assert!(checked_mm_to_nm(0.0, "dimension", false, true).is_err());
+    }
+
+    #[test]
     fn absolute_coordinate_translation_saturates_at_signed_limits() {
         let positive_origin = import(PCB, rules()).unwrap();
         assert_eq!(
@@ -4199,6 +4894,28 @@ mod tests {
     }
 
     #[test]
+    fn placement_pad_bounds_reject_rotated_out_of_range_coordinate() {
+        let mut imported = import(PCB, rules()).unwrap();
+        imported.board.footprints[0].reference = "U1".into();
+        imported.board.footprints[1].reference = "U2".into();
+        let footprint = &mut imported.board.footprints[0];
+        footprint.position = Point {
+            x_nm: i64::MAX,
+            y_nm: i64::MAX,
+        };
+        footprint.rotation_deg = 45.0;
+        footprint.pads[0].position = Point {
+            x_nm: i64::MIN,
+            y_nm: i64::MIN,
+        };
+
+        let error = imported
+            .placement_problem(1)
+            .expect_err("rotating a full-range coordinate must return an error");
+        assert!(error.contains("point X coordinate is outside the supported range"));
+    }
+
+    #[test]
     fn imports_non_plated_oval_drill_dimensions() {
         let source = r#"(kicad_pcb
           (net 0 "")
@@ -4216,6 +4933,27 @@ mod tests {
         assert_eq!(pad.drill_offset_y_nm, -200_000);
         assert!(!pad.plated);
         assert_eq!(pad.rotation_deg, 120.0);
+    }
+
+    #[test]
+    fn rejects_malformed_or_extra_pad_drill_values() {
+        for drill in [
+            "oval 1.2 0.8 0.1",
+            "0.5 0.4 0.3",
+            "oval 1.2 0.8 (unknown 1)",
+            "0.5 (offset 0 0) (unknown 1)",
+        ] {
+            let source = format!(
+                r#"(kicad_pcb
+                  (net 0 "")
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                  (footprint "MountingHole" (layer "F.Cu") (at 10 10)
+                    (pad "" np_thru_hole oval (at 0 0) (size 3 2)
+                      (drill {drill})
+                      (layers "*.Cu" "*.Mask"))))"#
+            );
+            assert!(import(&source, rules()).unwrap_err().contains("pad drill"));
+        }
     }
 
     #[test]
@@ -5481,7 +6219,7 @@ mod tests {
     }
 
     #[test]
-    fn segment_obstacle_envelope_saturates_at_coordinate_limits() {
+    fn segment_rejects_out_of_range_coordinates() {
         let segment = parse(
             r#"(segment
               (start -1e30 -1e30)
@@ -5493,34 +6231,23 @@ mod tests {
         .unwrap();
         let mut obstacles = Vec::new();
         let mut routes = HashMap::new();
-        import_segment(
-            segment.as_list().unwrap(),
-            Point { x_nm: 0, y_nm: 0 },
-            &rules(),
-            &mut obstacles,
-            &mut routes,
+        assert!(
+            import_segment(
+                segment.as_list().unwrap(),
+                Point { x_nm: 0, y_nm: 0 },
+                &rules(),
+                &[Layer::Front, Layer::Back],
+                &mut obstacles,
+                &mut routes,
+            )
+            .is_err()
         );
-
-        assert_eq!(obstacles.len(), 1);
-        assert_eq!(
-            obstacles[0].min,
-            Point {
-                x_nm: i64::MIN,
-                y_nm: i64::MIN,
-            }
-        );
-        assert_eq!(
-            obstacles[0].max,
-            Point {
-                x_nm: i64::MAX,
-                y_nm: i64::MAX,
-            }
-        );
+        assert!(obstacles.is_empty());
         assert!(routes.is_empty());
     }
 
     #[test]
-    fn route_arc_obstacle_envelope_saturates_at_coordinate_limits() {
+    fn route_arc_rejects_out_of_range_coordinates() {
         let arc = parse(
             r#"(arc
               (start -1e30 -1e30)
@@ -5533,34 +6260,23 @@ mod tests {
         .unwrap();
         let mut obstacles = Vec::new();
         let mut routes = HashMap::new();
-        import_route_arc(
-            arc.as_list().unwrap(),
-            Point { x_nm: 0, y_nm: 0 },
-            &rules(),
-            &mut obstacles,
-            &mut routes,
+        assert!(
+            import_route_arc(
+                arc.as_list().unwrap(),
+                Point { x_nm: 0, y_nm: 0 },
+                &rules(),
+                &[Layer::Front, Layer::Back],
+                &mut obstacles,
+                &mut routes,
+            )
+            .is_err()
         );
-
-        assert_eq!(obstacles.len(), 1);
-        assert_eq!(
-            obstacles[0].min,
-            Point {
-                x_nm: i64::MIN,
-                y_nm: i64::MIN,
-            }
-        );
-        assert_eq!(
-            obstacles[0].max,
-            Point {
-                x_nm: i64::MAX,
-                y_nm: i64::MAX,
-            }
-        );
+        assert!(obstacles.is_empty());
         assert!(routes.is_empty());
     }
 
     #[test]
-    fn via_obstacle_envelope_saturates_at_coordinate_limits() {
+    fn via_rejects_out_of_range_coordinates() {
         let minimum_via = parse(
             r#"(via
               (at -1e30 -1e30)
@@ -5582,36 +6298,24 @@ mod tests {
         let mut obstacles = Vec::new();
         let mut routes = HashMap::new();
         for via in [&minimum_via, &maximum_via] {
-            import_via(
-                via.as_list().unwrap(),
-                Point { x_nm: 0, y_nm: 0 },
-                &rules(),
-                &mut obstacles,
-                &mut routes,
-                &[Layer::Front, Layer::Back],
+            assert!(
+                import_via(
+                    via.as_list().unwrap(),
+                    Point { x_nm: 0, y_nm: 0 },
+                    &rules(),
+                    &mut obstacles,
+                    &mut routes,
+                    &[Layer::Front, Layer::Back],
+                )
+                .is_err()
             );
         }
-
-        assert_eq!(obstacles.len(), 2);
-        assert_eq!(
-            obstacles[0].min,
-            Point {
-                x_nm: i64::MIN,
-                y_nm: i64::MIN,
-            }
-        );
-        assert_eq!(
-            obstacles[1].max,
-            Point {
-                x_nm: i64::MAX,
-                y_nm: i64::MAX,
-            }
-        );
+        assert!(obstacles.is_empty());
         assert!(routes.is_empty());
     }
 
     #[test]
-    fn oval_pad_capsule_endpoints_saturate_at_coordinate_limits() {
+    fn oval_pad_rejects_out_of_range_dimensions() {
         let mut round_obstacles = Vec::new();
         let mut capsule_obstacles = Vec::new();
         let mut polygon_obstacles = Vec::new();
@@ -5625,44 +6329,33 @@ mod tests {
                 y_nm: i64::MAX,
             },
         ] {
-            add_pad_obstacle(
-                PadShape::Oval,
-                0.0,
-                (0.0, 0.0),
-                &[],
-                center,
-                1e30,
-                1.0,
-                45.0,
-                vec![Layer::Front],
-                None,
-                &mut round_obstacles,
-                &mut capsule_obstacles,
-                &mut polygon_obstacles,
+            assert!(
+                add_pad_obstacle(
+                    PadShape::Oval,
+                    0.0,
+                    (0.0, 0.0),
+                    &[],
+                    center,
+                    1e30,
+                    1.0,
+                    45.0,
+                    vec![Layer::Front],
+                    None,
+                    &mut round_obstacles,
+                    &mut capsule_obstacles,
+                    &mut polygon_obstacles,
+                )
+                .is_err()
             );
         }
 
         assert!(round_obstacles.is_empty());
         assert!(polygon_obstacles.is_empty());
-        assert_eq!(capsule_obstacles.len(), 2);
-        assert_eq!(
-            capsule_obstacles[0].start,
-            Point {
-                x_nm: i64::MIN,
-                y_nm: i64::MIN,
-            }
-        );
-        assert_eq!(
-            capsule_obstacles[1].end,
-            Point {
-                x_nm: i64::MAX,
-                y_nm: i64::MAX,
-            }
-        );
+        assert!(capsule_obstacles.is_empty());
     }
 
     #[test]
-    fn rectangular_pad_polygon_vertices_saturate_at_coordinate_limits() {
+    fn rectangular_pad_rejects_out_of_range_dimensions() {
         let mut round_obstacles = Vec::new();
         let mut capsule_obstacles = Vec::new();
         let mut polygon_obstacles = Vec::new();
@@ -5676,44 +6369,33 @@ mod tests {
                 y_nm: i64::MAX,
             },
         ] {
-            add_pad_obstacle(
-                PadShape::Rect,
-                0.0,
-                (0.0, 0.0),
-                &[],
-                center,
-                1e30,
-                1e30,
-                0.0,
-                vec![Layer::Front],
-                None,
-                &mut round_obstacles,
-                &mut capsule_obstacles,
-                &mut polygon_obstacles,
+            assert!(
+                add_pad_obstacle(
+                    PadShape::Rect,
+                    0.0,
+                    (0.0, 0.0),
+                    &[],
+                    center,
+                    1e30,
+                    1e30,
+                    0.0,
+                    vec![Layer::Front],
+                    None,
+                    &mut round_obstacles,
+                    &mut capsule_obstacles,
+                    &mut polygon_obstacles,
+                )
+                .is_err()
             );
         }
 
         assert!(round_obstacles.is_empty());
         assert!(capsule_obstacles.is_empty());
-        assert_eq!(polygon_obstacles.len(), 2);
-        assert_eq!(
-            polygon_obstacles[0].polygon[0],
-            Point {
-                x_nm: i64::MIN,
-                y_nm: i64::MIN,
-            }
-        );
-        assert_eq!(
-            polygon_obstacles[1].polygon[2],
-            Point {
-                x_nm: i64::MAX,
-                y_nm: i64::MAX,
-            }
-        );
+        assert!(polygon_obstacles.is_empty());
     }
 
     #[test]
-    fn custom_pad_polygon_vertices_saturate_at_coordinate_limits() {
+    fn custom_pad_polygon_vertices_reject_out_of_range_coordinates() {
         let pad = parse(
             r#"(pad "1" smd custom
               (at 0 0)
@@ -5737,8 +6419,7 @@ mod tests {
                 y_nm: i64::MIN,
             },
             0.0,
-        )
-        .unwrap();
+        );
         let maximum = custom_pad_polygon(
             values,
             Point {
@@ -5746,24 +6427,9 @@ mod tests {
                 y_nm: i64::MAX,
             },
             0.0,
-        )
-        .unwrap();
-
-        assert_eq!(minimum.len(), 3);
-        assert_eq!(
-            minimum[0],
-            Point {
-                x_nm: i64::MIN,
-                y_nm: i64::MIN,
-            }
         );
-        assert_eq!(
-            maximum[2],
-            Point {
-                x_nm: i64::MAX,
-                y_nm: i64::MAX,
-            }
-        );
+        assert!(minimum.is_err());
+        assert!(maximum.is_err());
     }
 
     #[test]
@@ -5818,6 +6484,87 @@ mod tests {
         assert_eq!(inner.secondary_reference_layer, Some(Layer::Inner(2)));
         assert_eq!(inner.secondary_dielectric_height_nm, Some(800_000));
         assert_eq!(inner.secondary_dielectric_constant, Some(4.4));
+    }
+
+    #[test]
+    fn rejects_duplicate_and_unknown_stackup_entries() {
+        let duplicate_setup = r#"(kicad_pcb
+          (setup (stackup (layer "F.Cu" (type "copper"))))
+          (setup (stackup (layer "B.Cu" (type "copper"))))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts")))"#;
+        assert!(
+            import(duplicate_setup, rules())
+                .unwrap_err()
+                .contains("KiCad setup must not be repeated")
+        );
+
+        let duplicate_layer = r#"(kicad_pcb
+          (setup
+            (stackup
+              (layer "F.Cu" (type "copper"))
+              (layer "F.Cu" (type "copper"))))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts")))"#;
+        assert!(
+            import(duplicate_layer, rules())
+                .unwrap_err()
+                .contains("stackup contains duplicate layer")
+        );
+
+        let unknown_entry = r#"(kicad_pcb
+          (setup (stackup (unknown_physical_entry yes)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts")))"#;
+        assert!(
+            import(unknown_entry, rules())
+                .unwrap_err()
+                .contains("stackup contains unknown entry")
+        );
+    }
+
+    #[test]
+    fn accepts_edge_plating_and_validates_stackup_metadata() {
+        let valid = r#"(kicad_pcb
+          (layers
+            (0 "F.Cu" signal)
+            (31 "B.Cu" signal)
+            (44 "Edge.Cuts" user))
+          (setup
+            (stackup
+              (layer "F.Cu" (type "copper") (thickness 0.035))
+              (layer "dielectric 1" (type "core") (thickness 0.8) (epsilon_r 4.2))
+              (layer "B.Cu" (type "copper") (thickness 0.035))
+              (copper_finish "None")
+              (dielectric_constraints no)
+              (edge_connector bevelled)
+              (castellated_pads yes)
+              (edge_plating yes)))
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts")))"#;
+        assert!(import(valid, rules()).is_ok());
+
+        for metadata in [
+            "(edge_plating yes) (edge_plating yes)",
+            "(edge_plating yes extra)",
+            "(edge_plating (yes))",
+            "(edge_plating no)",
+            "(castellated_pads no)",
+            "(edge_connector no)",
+            "(dielectric_constraints maybe)",
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (layers
+                    (0 "F.Cu" signal)
+                    (31 "B.Cu" signal)
+                    (44 "Edge.Cuts" user))
+                  (setup
+                    (stackup
+                      (layer "F.Cu" (type "copper"))
+                      (layer "dielectric 1" (type "core") (thickness 0.8) (epsilon_r 4.2))
+                      (layer "B.Cu" (type "copper"))
+                      {metadata}))
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts")))"#
+            );
+            assert!(import(&pcb, rules()).is_err(), "metadata: {metadata}");
+        }
     }
 
     #[test]
@@ -7934,6 +8681,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_malformed_keepout_restrictions() {
+        for restriction in [
+            "(tracks allowed) (tracks not_allowed)",
+            "(unknown not_allowed)",
+            "(tracks (not_allowed))",
+            "(pads not_allowed)",
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                  (zone (net 0) (net_name "") (layer "F.Cu")
+                    (keepout {restriction})
+                    (polygon (pts (xy 4 5) (xy 9 5) (xy 9 11) (xy 4 11))))
+                )"#
+            );
+            assert!(import(&pcb, rules()).is_err(), "restriction: {restriction}");
+        }
+    }
+
+    #[test]
     fn imports_filled_copper_zone_as_net_owned_geometry() {
         let pcb = r#"(kicad_pcb
           (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
@@ -8019,6 +8786,170 @@ mod tests {
     }
 
     #[test]
+    fn rejects_malformed_pad_layers_and_unknown_shapes() {
+        for layers in [
+            r#"(layers "F.Unknown")"#,
+            r#"(layers "F.Mask")"#,
+            r#"(layers "F.Cu" (structured yes))"#,
+            r#"(layers "F.Cu") (layers "B.Cu")"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+                  (net 0 "")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (footprint "U1" (layer "F.Cu") (at 2 2)
+                    (pad "1" smd rect (at 0 0) (size 1 1) {layers}))
+                )"#
+            );
+            assert!(import(&pcb, rules()).is_err(), "layers: {layers}");
+        }
+
+        let unknown_shape = r#"(kicad_pcb
+          (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+          (net 0 "")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "U1" (layer "F.Cu") (at 2 2)
+            (pad "1" smd hexagon (at 0 0) (size 1 1) (layers "F.Cu"))))"#;
+        assert!(import(unknown_shape, rules()).is_err());
+    }
+
+    #[test]
+    fn rejects_undeclared_layers_for_copper_primitives_and_fills() {
+        let segment = r#"(kicad_pcb
+          (net 0 "")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (segment (start 1 1) (end 5 1) (layer "In1.Cu") (width 0.2) (net 0)))"#;
+        assert!(
+            import(segment, rules())
+                .unwrap_err()
+                .contains("segment layer references an undeclared copper layer")
+        );
+
+        let arc = r#"(kicad_pcb
+          (net 0 "")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (arc (start 1 1) (mid 3 3) (end 5 1) (layer "In1.Cu") (width 0.2) (net 0)))"#;
+        assert!(
+            import(arc, rules())
+                .unwrap_err()
+                .contains("route arc layer references an undeclared copper layer")
+        );
+
+        let zone = r#"(kicad_pcb
+          (net 0 "")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (zone (net 0) (net_name "") (layer "In1.Cu")
+            (polygon (pts (xy 1 1) (xy 8 1) (xy 8 8))))
+        )"#;
+        assert!(
+            import(zone, rules())
+                .unwrap_err()
+                .contains("copper zone layer references an undeclared copper layer")
+        );
+
+        let filled = r#"(kicad_pcb
+          (net 1 "GND")
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (zone (net 1) (net_name "GND") (layer "F.Cu")
+            (polygon (pts (xy 1 1) (xy 8 1) (xy 8 8)))
+            (filled_polygon (layer "In1.Cu")
+              (pts (xy 1 1) (xy 8 1) (xy 8 8))))
+        )"#;
+        assert!(
+            import(filled, rules())
+                .unwrap_err()
+                .contains("filled polygon layer references an undeclared copper layer")
+        );
+    }
+
+    #[test]
+    fn rejects_pads_with_missing_size() {
+        let pcb = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+          (footprint "U1" (layer "F.Cu") (at 2 2)
+            (property "Reference" "U1")
+            (pad "1" smd rect (at 0 0) (layers "F.Cu"))))"#;
+        assert!(
+            import(pcb, rules())
+                .unwrap_err()
+                .contains("pad size is missing")
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_via_layer_endpoints_and_keepout_layer_selection() {
+        for layers in [
+            r#"(layers "F.Cu")"#,
+            r#"(layers "F.Cu" "F.Cu")"#,
+            r#"(layers "F.Cu" "Unknown.Cu")"#,
+            r#"(layers "F.Cu" (invalid yes))"#,
+            r#"(layers "F.Cu" "B.Cu") (layers "F.Cu" "B.Cu")"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+                  (net 0 "")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (via (at 2 2) (size 0.6) (drill 0.3) {layers}))"#
+            );
+            assert!(import(&pcb, rules()).is_err(), "layers: {layers}");
+        }
+
+        for selection in [
+            r#"(layer "F.Cu") (layers "B.Cu")"#,
+            r#"(layer "Unknown.Cu")"#,
+            r#"(layers "F.Cu" "F.Cu")"#,
+            r#"(layers (invalid yes))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+                  (net 0 "")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (zone (net 0) (net_name "") {selection}
+                    (keepout (tracks not_allowed))
+                    (polygon (pts (xy 1 1) (xy 5 1) (xy 5 5))))"#
+            );
+            assert!(import(&pcb, rules()).is_err(), "selection: {selection}");
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_board_layer_tables_and_custom_primitives() {
+        for layers in [
+            r#"(layers (0 "F.Cu" signal) (2 "In0.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
+            r#"(layers (0 "F.Cu" signal) (2 "Unknown.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
+            r#"(layers (0 "F.Cu" signal) (bad) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
+            r#"(layers (0 "F.Cu" signal) (31 "B.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb {layers}
+                  (net 0 "")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts")))"#
+            );
+            assert!(import(&pcb, rules()).is_err(), "layers: {layers}");
+        }
+
+        for primitive in [
+            r#"(gr_poly (pts (xy -1 -1) (xy 1 -1) (xy 0 1))) (gr_line (start 0 0) (end 1 1))"#,
+            r#"(gr_poly (pts (xy -1 -1) (xy 1 -1) (xy 0 1))) (gr_poly (pts (xy -1 -1) (xy 1 -1) (xy 0 1)))"#,
+            "",
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (layers (0 "F.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))
+                  (net 0 "")
+                  (gr_rect (start 0 0) (end 10 10) (layer "Edge.Cuts"))
+                  (footprint "U1" (layer "F.Cu") (at 2 2)
+                    (pad "1" smd custom (at 0 0) (size 1 1) (layers "F.Cu")
+                      (primitives {primitive}))))"#
+            );
+            assert!(import(&pcb, rules()).is_err(), "primitive: {primitive}");
+        }
+    }
+
+    #[test]
     fn placement_uses_courtyard_and_board_side() {
         let pcb = r#"(kicad_pcb
           (gr_rect (start 0 0) (end 30 30) (layer "Edge.Cuts"))
@@ -8037,5 +8968,42 @@ mod tests {
         assert_eq!(component.side, BoardSide::Back);
         assert_eq!(component.allowed_rotations, vec![0, 90, 180, 270]);
         assert_eq!(component.courtyard.len(), 4);
+    }
+
+    #[test]
+    fn rejects_duplicate_references_and_invalid_placement_layers() {
+        let duplicate = r#"(kicad_pcb
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+          (footprint "A" (layer "F.Cu") (at 2 2)
+            (property "Reference" "U1")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu")))
+          (footprint "B" (layer "B.Cu") (at 8 8)
+            (property "Reference" "U1")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "B.Cu"))))"#;
+        assert!(
+            import(duplicate, rules())
+                .unwrap_err()
+                .contains("duplicate footprint reference")
+        );
+
+        for layer in [
+            r#"(layer "F.Cu") (layer "B.Cu")"#,
+            r#"(layer "Unknown")"#,
+            "",
+        ] {
+            let pcb = format!(
+                r#"(kicad_pcb
+                  (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
+                  (footprint "A" {layer} (at 2 2)
+                    (property "Reference" "U1")
+                    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))))
+                "#
+            );
+            let imported = import(&pcb, rules()).unwrap();
+            assert!(
+                imported.placement_problem(500_000).is_err(),
+                "layer: {layer}"
+            );
+        }
     }
 }

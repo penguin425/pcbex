@@ -455,6 +455,9 @@ simulated annealing. Its score covers weighted HPWL, overlap area, board
 boundary overflow, coarse routing congestion, and declarative constraints.
 Graph-clustered initialization uses saturating spacing and cursor arithmetic
 for extreme board grids and component dimensions.
+Untrusted KiCad coordinates and physical dimensions are checked before these
+derived internal operations; saturation here is not an input-normalization
+policy for malformed, non-finite, or out-of-range source values.
 Annealing moves also multiply grid steps and update coordinates with saturating
 arithmetic before clamping each component to the board.
 Placement HPWL scoring widens both coordinate differences and their Manhattan
@@ -2076,7 +2079,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.401.0
+    uses: penguin425/pcbex@v1.402.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2740,6 +2743,13 @@ custom rules are parsed as a no-copy sequence instead of wrapping the input in
 an additional allocation. Exact limits, error behavior, and the remaining CLI
 read boundary are documented in
 [`docs/KICAD_SEXP_LIMITS.md`](docs/KICAD_SEXP_LIMITS.md).
+
+After syntax parsing, physical values and statically derivable geometry work
+pass a second fail-closed boundary. It checks finite nanometre conversion,
+board/grid/layer products, polygon and checker pair work, raster edge visits,
+segment/via clearance scans, and atomic copper-zone work. The exact production
+ceilings and deliberately separate dynamic-search scope are documented in
+[`docs/NUMERIC_RASTER_LIMITS.md`](docs/NUMERIC_RASTER_LIMITS.md).
 
 Compare two schematic revisions by electrical intent rather than KiCad
 s-expression or drawing coordinates:
@@ -3976,7 +3986,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.401.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.402.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

@@ -524,6 +524,11 @@
     {
       "id": "bounded-kicad-sexp-parser",
       "release": "v1.401.0",
+      "status": "released"
+    },
+    {
+      "id": "fail-closed-numeric-raster-bounds",
+      "release": "v1.402.0",
       "status": "current"
     }
   ]
