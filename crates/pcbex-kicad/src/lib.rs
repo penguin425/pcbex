@@ -10,6 +10,9 @@ use pcbex_core::{
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 
+mod sexp;
+pub(crate) use sexp::{Sexp, list_spans, parse_document as parse, parse_sequence};
+
 mod anchor;
 pub use anchor::{
     ApprovalLogAnchorProof, ApprovalLogAnchorVerificationReport, ApprovalLogConsistencyProof,
@@ -262,12 +265,6 @@ const MAX_EDGE_CIRCLE_SEGMENTS: usize = 16_384;
 const MAX_EDGE_CURVE_SEGMENTS: usize = 16_384;
 const MAX_EDGE_POLYGON_POINTS: usize = 16_384;
 const MAX_EDGE_SEGMENTS: usize = 65_536;
-
-#[derive(Clone, Debug, PartialEq)]
-enum Sexp {
-    Atom(String),
-    List(Vec<Sexp>),
-}
 
 #[derive(Clone, Debug)]
 pub struct ImportedBoard {
@@ -684,10 +681,7 @@ fn compile_net_pattern(pattern: &str) -> Result<regex::Regex, String> {
 /// Apply the routing-relevant subset of KiCad custom design rules whose
 /// condition selects one NetClass. Unsupported rules remain KiCad's authority.
 pub fn apply_custom_design_rules(board: &mut Board, source: &str) -> Result<usize, String> {
-    let root = parse(&format!("({source})"))?;
-    let top = root
-        .as_list()
-        .ok_or_else(|| "KiCad custom rules are not an s-expression".to_string())?;
+    let top = parse_sequence(source)?;
     let mut net_classes = board.net_classes.clone();
     let mut applied = 0;
     let mut via_modified_classes = Vec::new();
@@ -1587,59 +1581,6 @@ fn top_level_list_spans(source: &str, name: &str) -> Result<Vec<(usize, usize)>,
 
 fn direct_child_list_span(source: &str, name: &str) -> Result<Option<(usize, usize)>, String> {
     Ok(list_spans(source, name, 2)?.into_iter().next())
-}
-
-fn list_spans(
-    source: &str,
-    name: &str,
-    target_depth: usize,
-) -> Result<Vec<(usize, usize)>, String> {
-    let bytes = source.as_bytes();
-    let mut depth = 0usize;
-    let mut stack = Vec::new();
-    let mut spans = Vec::new();
-    let mut index = 0usize;
-    let mut quoted = false;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'\\' if quoted => index += 1,
-            b'"' => quoted = !quoted,
-            b'(' if !quoted => {
-                depth += 1;
-                let mut atom_start = index + 1;
-                while atom_start < bytes.len() && bytes[atom_start].is_ascii_whitespace() {
-                    atom_start += 1;
-                }
-                let mut atom_end = atom_start;
-                while atom_end < bytes.len()
-                    && !bytes[atom_end].is_ascii_whitespace()
-                    && !matches!(bytes[atom_end], b'(' | b')')
-                {
-                    atom_end += 1;
-                }
-                stack.push((
-                    index,
-                    depth,
-                    source.get(atom_start..atom_end).unwrap_or_default() == name,
-                ));
-            }
-            b')' if !quoted => {
-                let Some((start, list_depth, matches)) = stack.pop() else {
-                    return Err("unbalanced KiCad document".into());
-                };
-                if matches && list_depth == target_depth {
-                    spans.push((start, index + 1));
-                }
-                depth = depth.checked_sub(1).ok_or("unbalanced KiCad document")?;
-            }
-            _ => {}
-        }
-        index += 1;
-    }
-    if quoted || depth != 0 {
-        return Err("unterminated KiCad document".into());
-    }
-    Ok(spans)
 }
 
 fn board_bounds(top: &[Sexp]) -> Result<BoardGeometry, String> {
@@ -3508,81 +3449,6 @@ fn number(value: Option<&Sexp>) -> Option<f64> {
 fn number_u32(value: Option<&Sexp>) -> Option<u32> {
     atom(value)?.parse().ok()
 }
-impl Sexp {
-    fn as_list(&self) -> Option<&[Sexp]> {
-        match self {
-            Sexp::List(x) => Some(x),
-            _ => None,
-        }
-    }
-}
-
-fn parse(input: &str) -> Result<Sexp, String> {
-    let tokens = tokenize(input)?;
-    let mut position = 0;
-    let value = parse_one(&tokens, &mut position)?;
-    if position != tokens.len() {
-        return Err("trailing tokens in KiCad document".into());
-    }
-    Ok(value)
-}
-fn tokenize(input: &str) -> Result<Vec<String>, String> {
-    let mut out = Vec::new();
-    let mut chars = input.chars().peekable();
-    while let Some(c) = chars.next() {
-        match c {
-            '(' | ')' => out.push(c.to_string()),
-            '"' => {
-                let mut value = String::new();
-                let mut closed = false;
-                while let Some(c) = chars.next() {
-                    match c {
-                        '"' => {
-                            closed = true;
-                            break;
-                        }
-                        '\\' => value.push(chars.next().ok_or("unterminated escape")?),
-                        _ => value.push(c),
-                    }
-                }
-                if !closed {
-                    return Err("unterminated string".into());
-                }
-                out.push(value);
-            }
-            c if c.is_whitespace() => {}
-            _ => {
-                let mut value = String::from(c);
-                while let Some(&c) = chars.peek() {
-                    if c.is_whitespace() || c == '(' || c == ')' {
-                        break;
-                    }
-                    value.push(c);
-                    chars.next();
-                }
-                out.push(value);
-            }
-        }
-    }
-    Ok(out)
-}
-fn parse_one(tokens: &[String], position: &mut usize) -> Result<Sexp, String> {
-    let token = tokens.get(*position).ok_or("unexpected end of document")?;
-    *position += 1;
-    if token == "(" {
-        let mut values = Vec::new();
-        while tokens.get(*position).map(String::as_str) != Some(")") {
-            values.push(parse_one(tokens, position)?);
-        }
-        *position += 1;
-        Ok(Sexp::List(values))
-    } else if token == ")" {
-        Err("unexpected ')'".into())
-    } else {
-        Ok(Sexp::Atom(token.clone()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

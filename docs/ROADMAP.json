@@ -519,6 +519,11 @@
     {
       "id": "github-actions-sha-pinning",
       "release": "v1.400.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-kicad-sexp-parser",
+      "release": "v1.401.0",
       "status": "current"
     }
   ]
