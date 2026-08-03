@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "multilayer-example-v1",
+  "revision": 1,
+  "description": "Physical constraints for the repository multilayer KiCad fixture",
+  "board_width_nm": 40000000,
+  "board_height_nm": 20000000,
+  "outline": [],
+  "fixed_components": [
+    {
+      "reference": "J1",
+      "x_nm": 5000000,
+      "y_nm": 10000000,
+      "rotation_mdeg": 0,
+      "tolerance_nm": 0,
+      "keepout_width_nm": 0,
+      "keepout_height_nm": 0
+    }
+  ],
+  "keepouts": [
+    {
+      "id": "center-route-keepout",
+      "polygon": [
+        {"x_nm": 18000000, "y_nm": 2000000},
+        {"x_nm": 22000000, "y_nm": 2000000},
+        {"x_nm": 22000000, "y_nm": 6000000},
+        {"x_nm": 18000000, "y_nm": 6000000}
+      ],
+      "layers": ["F.Cu", "B.Cu"],
+      "tracks_not_allowed": true,
+      "vias_not_allowed": true,
+      "zones_not_allowed": true,
+      "footprints_not_allowed": false,
+      "minimum_track_width_nm": null,
+      "minimum_clearance_nm": null
+    }
+  ],
+  "manufacturing_rules": {
+    "minimum_track_width_nm": 100000,
+    "minimum_clearance_nm": 100000,
+    "minimum_drill_nm": 150000,
+    "minimum_annular_ring_nm": 180000,
+    "minimum_copper_to_edge_nm": 200000,
+    "board_thickness_nm": 1600000,
+    "maximum_via_aspect_ratio": 10,
+    "minimum_drill_to_drill_nm": 200000,
+    "allow_via_in_pad": true,
+    "minimum_trace_angle_deg": 0
+  }
+}

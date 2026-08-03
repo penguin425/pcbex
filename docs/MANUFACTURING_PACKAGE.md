@@ -2,7 +2,10 @@
 
 `pcbex fabricate <board.kicad_pcb> --output-dir <directory>` is the headless
 manufacturing gate. It first runs KiCad DRC and stops on any DRC violation;
-only then are manufacturing artifacts published.
+only then are manufacturing artifacts published. With
+`--physical-profile <profile.json>`, pcbex also performs its internal profile
+check before creating the staging directory and binds that profile into the
+resulting package.
 
 The board and adjacent same-stem `.kicad_pro`/`.kicad_dru` inputs are copied to
 a private staging directory before KiCad is started. This preserves project
@@ -35,6 +38,13 @@ report remain in the manifest. With identical input bytes, filenames, pcbex
 version, and KiCad build, `manufacturing.zip` is byte-for-byte reproducible.
 The ZIP uses sorted names, fixed entry metadata, and contains `manifest.json`;
 the manifest's artifact array intentionally omits itself and the archive.
+
+No-profile packages retain manifest schema v1. A profile-aware package uses
+schema v2 and includes the profile ID/revision, its domain-separated canonical
+SHA-256, and a basename/byte-count/raw-SHA-256 source descriptor. The factory
+validator accepts both forms but rejects a v1 manifest carrying the new field
+or a v2 manifest without it. Factory feedback repair may update manufacturing
+artifacts but cannot add, drop, or substitute this binding.
 
 Generation occurs entirely in the private stage. Contents of files already
 present in the requested output directory are never read or added to the

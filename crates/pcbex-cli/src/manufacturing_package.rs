@@ -6,6 +6,7 @@ use crate::manufacturing_limits::{
     ManufacturingLimits, portable_manufacturing_name_key, scan_manufacturing_workspace,
     validate_manufacturing_basename,
 };
+use crate::physical_profile::{PhysicalProfileBinding, validate_physical_profile_binding};
 use anyhow::{Context, Result, bail};
 use pcbex_kicad::{MAX_MANUFACTURING_PARTS, ManufacturingPart};
 use serde::Serialize;
@@ -43,6 +44,8 @@ struct ManufacturingManifest {
     parts: ManufacturingCounts,
     artifacts: Vec<ArtifactDescriptor>,
     archive: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    physical_profile: Option<PhysicalProfileBinding>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -86,6 +89,7 @@ pub fn write_manufacturing_package(
         parts,
         exported_artifacts,
         kicad_identity,
+        None,
         0,
         0,
     )
@@ -102,6 +106,7 @@ pub(crate) fn write_manufacturing_package_with_workspace_reservation(
     parts: &[ManufacturingPart],
     exported_artifacts: &[PathBuf],
     kicad_identity: &KiCadIdentity,
+    physical_profile: Option<&PhysicalProfileBinding>,
     outside_bytes: u64,
     outside_entries: usize,
 ) -> Result<PathBuf> {
@@ -132,6 +137,7 @@ pub(crate) fn write_manufacturing_package_with_workspace_reservation(
         parts,
         exported_artifacts,
         kicad_identity,
+        physical_profile,
         limits,
     )
 }
@@ -145,6 +151,7 @@ fn write_manufacturing_package_with_limits(
     parts: &[ManufacturingPart],
     exported_artifacts: &[PathBuf],
     kicad_identity: &KiCadIdentity,
+    physical_profile: Option<&PhysicalProfileBinding>,
     limits: ManufacturingLimits,
 ) -> Result<PathBuf> {
     fs::create_dir_all(output_dir).with_context(|| format!("creating {}", output_dir.display()))?;
@@ -178,6 +185,10 @@ fn write_manufacturing_package_with_limits(
     validate_portable_name(input_name, limits, "manufacturing input")?;
     ensure_slice_within_file_limit(input_bytes, limits, "manufacturing input")?;
     validate_kicad_identity(kicad_identity)?;
+    if let Some(binding) = physical_profile {
+        validate_physical_profile_binding(binding)
+            .context("validating manufacturing physical profile binding")?;
+    }
     let (mut files, _exported_bytes) =
         validate_exported_artifacts(output_dir, exported_artifacts, limits)?;
     if !files
@@ -245,7 +256,7 @@ fn write_manufacturing_package_with_limits(
         .map(|path| descriptor_for_file(output_dir, path, limits))
         .collect::<Result<Vec<_>>>()?;
     let manifest = ManufacturingManifest {
-        schema_version: 1,
+        schema_version: if physical_profile.is_some() { 2 } else { 1 },
         engine: "pcbex",
         engine_version: env!("CARGO_PKG_VERSION"),
         tools: kicad_identity.clone(),
@@ -259,6 +270,7 @@ fn write_manufacturing_package_with_limits(
         },
         artifacts,
         archive: ARCHIVE_NAME.to_string(),
+        physical_profile: physical_profile.cloned(),
     };
     let manifest_path = output_dir.join(MANIFEST_NAME);
     let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
@@ -2052,6 +2064,20 @@ mod tests {
         }
     }
 
+    fn physical_profile_binding() -> PhysicalProfileBinding {
+        PhysicalProfileBinding {
+            schema_version: 1,
+            id: "fixture-v1".into(),
+            revision: 1,
+            canonical_sha256: "b".repeat(64),
+            source: crate::physical_profile::PhysicalProfileSource {
+                path: "profile.json".into(),
+                bytes: 1,
+                sha256: "c".repeat(64),
+            },
+        }
+    }
+
     #[test]
     fn writes_grouped_bom_and_only_explicit_artifacts() {
         let staging = tempdir().unwrap();
@@ -2569,6 +2595,7 @@ mod tests {
             &[part("R1", "10k", true, true, true)],
             &artifacts,
             &identity(),
+            None,
             exact,
         )
         .unwrap();
@@ -2583,6 +2610,7 @@ mod tests {
             &[part("R1", "10k", true, true, true)],
             &artifacts,
             &identity(),
+            None,
             one_over,
         )
         .unwrap_err();
@@ -2590,6 +2618,50 @@ mod tests {
         assert_eq!(
             fs::read(staging.path().join(MANIFEST_NAME)).unwrap(),
             known_good
+        );
+    }
+
+    #[test]
+    fn physical_profile_binding_selects_manifest_schema_v2() {
+        let staging = tempdir().unwrap();
+        let drc = staging.path().join("drc.rpt");
+        fs::write(&drc, b"DRC clean\n").unwrap();
+
+        write_manufacturing_package(
+            staging.path(),
+            Path::new("board.kicad_pcb"),
+            b"board",
+            &[],
+            &[],
+            std::slice::from_ref(&drc),
+            &identity(),
+        )
+        .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(staging.path().join(MANIFEST_NAME)).unwrap()).unwrap();
+        assert_eq!(manifest["schema_version"], 1);
+        assert!(manifest.get("physical_profile").is_none());
+
+        let binding = physical_profile_binding();
+        write_manufacturing_package_with_workspace_reservation(
+            staging.path(),
+            Path::new("board.kicad_pcb"),
+            b"board",
+            &[],
+            &[],
+            std::slice::from_ref(&drc),
+            &identity(),
+            Some(&binding),
+            0,
+            0,
+        )
+        .unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(staging.path().join(MANIFEST_NAME)).unwrap()).unwrap();
+        assert_eq!(manifest["schema_version"], 2);
+        assert_eq!(
+            manifest["physical_profile"],
+            serde_json::to_value(binding).unwrap()
         );
     }
 
@@ -2633,6 +2705,7 @@ mod tests {
             &parts,
             &artifacts,
             &identity(),
+            None,
             exact,
         )
         .unwrap();
@@ -2648,6 +2721,7 @@ mod tests {
             &parts,
             &artifacts,
             &identity(),
+            None,
             one_under,
         )
         .unwrap_err();

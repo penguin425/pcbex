@@ -123,6 +123,7 @@ auditable release.
 | v1.411.0 | Rust-gated natural-language circuit generation | Generate a closed circuit-spec v2 through a bounded correction loop and accept only the existing immutable native ERC floor |
 | v1.412.0 | Digest-bound catalog selection | Resolve MPNs from a bounded local catalog snapshot, retain a closed selection receipt, and run a second Rust ERC gate on the resolved circuit |
 | v1.412.1 | Hardened manufacturing filesystem boundaries | Pin manufacturing publication directories, double-read bounded sources, stream BOM/CPL output, cap extracted parts, and reserve complete-workspace quotas before package creation |
+| v1.413.0 | Digest-bound physical-profile injection | Apply one bounded geometry/DFM authority across placement, routing, analysis, and fabrication while binding its exact and canonical digests through manufacturing and pipeline verification |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -131,14 +132,15 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current maintenance release hardens the manufacturing and factory
-filesystem boundary. Generic and package reads compare two passes through the
-same opened descriptor; Unix publication creates, removes, and renames files
-relative to a pinned directory; Windows retains a directory handle around its
-guarded replacement. BOM/CPL output is preflighted and streamed, footprint
-extraction is capped at 100,000 parts, and package creation reserves the bytes
-and entries already consumed by the complete private workspace.
+The current release adds a closed physical constraint profile for board
+dimensions/outlines, fixed components, keepouts, and manufacturing minima.
+Profile loading is size- and topology-bounded, rejects duplicate JSON keys,
+applies atomically, and cannot relax existing manufacturing rules. Exact-source
+and domain-separated canonical SHA-256 identities are carried by schema-v2
+analysis and manufacturing manifests; pipeline verification reopens the
+authorized profile and rejects source, semantic, or cross-phase substitution.
+No-profile schema-v1 artifacts remain compatible.
 
-The next roadmap work is physical-profile injection, followed by a verified
-circuit-to-KiCad handoff and a headless schematic-to-manufacturing
-orchestrator.
+The next roadmap work is a verified circuit-to-KiCad handoff, followed by a
+headless schematic-to-manufacturing orchestrator and qualified live supplier
+selection.

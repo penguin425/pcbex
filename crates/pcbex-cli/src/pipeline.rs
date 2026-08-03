@@ -9,11 +9,15 @@ use crate::firmware::{
     FirmwareManifest, MAX_FIRMWARE_ARTIFACT_BYTES,
 };
 use crate::manufacturing_limits::MAX_PACKAGE_BYTES;
+use crate::physical_profile::{
+    MAX_PHYSICAL_PROFILE_BYTES, PhysicalProfileBinding, binding_matches_profile,
+    load_physical_profile, validate_physical_profile_binding,
+};
 use crate::policy_pack::parse_policy_pack;
 use pcbex_core::{
-    DfmProfile, Rules, apply_dfm_profile, checking::CheckReport, checking::check_board,
-    parse_external_dfm_profile, quality::RoutingQuality, quality::routing_quality,
-    validate_dfm_profile,
+    DfmProfile, PhysicalConstraintProfile, Rules, apply_dfm_profile, apply_physical_profile,
+    checking::CheckReport, checking::check_board, parse_external_dfm_profile,
+    quality::RoutingQuality, quality::routing_quality, validate_dfm_profile,
 };
 use pcbex_kicad::{
     ElectricalPolicy, ElectricalReview, apply_custom_design_rules, apply_project_net_settings,
@@ -68,6 +72,7 @@ pub struct PipelineInputs<'a> {
     pub analysis_rules: Option<&'a Path>,
     pub analysis_dfm_profile: Option<&'a Path>,
     pub analysis_policy_pack: Option<&'a Path>,
+    pub analysis_physical_profile: Option<&'a Path>,
     pub manufacturing_package: &'a Path,
     pub firmware_manifest: &'a Path,
     pub factory_receipt: Option<&'a Path>,
@@ -121,6 +126,8 @@ impl PipelinePhase {
 pub struct PipelineIdentities {
     pub schematic_sha256: Option<String>,
     pub board_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub physical_profile_sha256: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -156,6 +163,7 @@ struct ManufacturingIdentity {
 struct AnalysisBinding {
     result: AnalysisResult,
     recomputed_quality: RoutingQuality,
+    physical_profile: Option<PhysicalProfileBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -186,6 +194,7 @@ struct AnalysisConfiguration {
     applied_custom_rules: usize,
     dfm_profile: Option<DfmProfile>,
     organization_policy_pack: Option<String>,
+    physical_profile: Option<PhysicalConstraintProfile>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
@@ -211,6 +220,7 @@ struct AnalysisManifest {
     rules_file: Option<AnalysisDescriptor>,
     dfm_profile_file: Option<AnalysisDescriptor>,
     policy_pack_file: Option<AnalysisDescriptor>,
+    physical_profile: Option<PhysicalProfileBinding>,
     configuration: AnalysisConfiguration,
     result: AnalysisResult,
     artifacts: Vec<String>,
@@ -221,8 +231,11 @@ pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
     let (electrical, schematic_sha256) = electrical_phase(inputs);
     let (analysis, board_identity, analysis_binding) = analysis_phase(inputs);
     let quality = quality_phase(inputs, analysis_binding.as_ref());
+    let expected_physical_profile = analysis_binding
+        .as_ref()
+        .and_then(|binding| binding.physical_profile.as_ref());
     let (manufacturing, manufacturing_identity) =
-        manufacturing_phase(inputs, board_identity.as_ref());
+        manufacturing_phase(inputs, board_identity.as_ref(), expected_physical_profile);
     let firmware = firmware_phase(inputs, schematic_sha256.as_deref());
     let factory_enabled = inputs.require_factory || inputs.factory_receipt.is_some();
     let mut phases = vec![electrical, analysis, quality, manufacturing, firmware];
@@ -251,6 +264,8 @@ pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
         identities: PipelineIdentities {
             schematic_sha256,
             board_sha256: board_identity.map(|identity| identity.sha256),
+            physical_profile_sha256: expected_physical_profile
+                .map(|binding| binding.canonical_sha256.clone()),
         },
         passed: failures.is_empty(),
         phases,
@@ -363,6 +378,10 @@ fn pipeline_gate_schema_for(include_factory: bool) -> Value {
                     },
                     "board_sha256": {
                         "type": ["string", "null"],
+                        "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "physical_profile_sha256": {
+                        "type": "string",
                         "pattern": "^[0-9a-f]{64}$"
                     }
                 }
@@ -625,6 +644,7 @@ fn analysis_phase(
             binding = Some(AnalysisBinding {
                 result: manifest.result.clone(),
                 recomputed_quality,
+                physical_profile: manifest.physical_profile.clone(),
             });
         }
     }
@@ -723,6 +743,12 @@ fn recompute_analysis(
         }
     }
 
+    let physical_profile = capture_optional_physical_profile_snapshot(
+        phase,
+        manifest.physical_profile.as_ref(),
+        inputs.analysis_physical_profile,
+    )?;
+
     let policy_pack = capture_optional_descriptor_snapshot(
         phase,
         manifest.policy_pack_file.as_ref(),
@@ -753,6 +779,13 @@ fn recompute_analysis(
 
     if let Some(profile) = &manifest.configuration.dfm_profile {
         apply_dfm_profile(&mut imported.board, profile);
+    }
+    if let Some(loaded) = physical_profile {
+        if let Err(error) = apply_physical_profile(&mut imported.board, &loaded.profile) {
+            phase.fail(format!("cannot apply analysis physical profile: {error}"));
+            return None;
+        }
+        phase.check("physical-profile-applied");
     }
     let recomputed_checks = check_board(&imported.board);
     let recomputed_quality = routing_quality(&imported.board);
@@ -810,6 +843,63 @@ fn capture_optional_descriptor_snapshot(
         phase.check(format!("{role}-bound"));
         Some(Some(snapshot))
     }
+}
+
+fn capture_optional_physical_profile_snapshot(
+    phase: &mut PipelinePhase,
+    binding: Option<&PhysicalProfileBinding>,
+    supplied_path: Option<&Path>,
+) -> Option<Option<crate::physical_profile::LoadedPhysicalProfile>> {
+    let (binding, supplied_path) = match (binding, supplied_path) {
+        (None, None) => return Some(None),
+        (Some(_), None) => {
+            phase.fail(
+                "analysis physical profile: manifest declares this input but no explicit CLI path was supplied",
+            );
+            return None;
+        }
+        (None, Some(_)) => {
+            phase.fail(
+                "analysis physical profile: explicit CLI input is not declared by the analysis manifest",
+            );
+            return None;
+        }
+        (Some(binding), Some(supplied_path)) => (binding, supplied_path),
+    };
+
+    let loaded = match load_physical_profile(supplied_path) {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            phase.fail(format!("cannot load analysis physical profile: {error}"));
+            return None;
+        }
+    };
+    let snapshot = capture_snapshot(
+        phase,
+        supplied_path,
+        "analysis-physical-profile",
+        MAX_PHYSICAL_PROFILE_BYTES,
+    )?;
+    if snapshot.evidence.bytes != binding.source.bytes
+        || snapshot.evidence.sha256 != binding.source.sha256
+    {
+        phase.fail(
+            "analysis physical profile source does not match its manifest byte/SHA-256 descriptor",
+        );
+        return None;
+    }
+    if loaded.binding != *binding {
+        phase.fail("analysis physical profile binding does not match its exact source file");
+        return None;
+    }
+    if let Err(error) = binding_matches_profile(binding, &loaded.profile) {
+        phase.fail(format!(
+            "analysis physical profile binding is invalid: {error}"
+        ));
+        return None;
+    }
+    phase.check("analysis-physical-profile-bound");
+    Some(Some(loaded))
 }
 
 fn snapshot_utf8<'a>(
@@ -901,6 +991,7 @@ fn quality_phase(inputs: &PipelineInputs<'_>, analysis: Option<&AnalysisBinding>
 fn manufacturing_phase(
     inputs: &PipelineInputs<'_>,
     board: Option<&BoardIdentity>,
+    expected_physical_profile: Option<&PhysicalProfileBinding>,
 ) -> (PipelinePhase, Option<ManufacturingIdentity>) {
     let mut phase = PipelinePhase::new("manufacturing-package");
     let mut manufacturing_identity = None;
@@ -918,6 +1009,13 @@ fn manufacturing_phase(
         match validate_manufacturing_package(&package.bytes) {
             Ok(identity) => {
                 phase.check("complete-package-validated");
+                if identity.physical_profile.as_ref() != expected_physical_profile {
+                    phase.fail(
+                        "manufacturing package physical profile binding does not match the analysis profile",
+                    );
+                } else {
+                    phase.check("manufacturing-physical-profile-bound");
+                }
                 if let Some(board) = board {
                     if identity.input_bytes != board.bytes || identity.input_sha256 != board.sha256
                     {
@@ -1279,11 +1377,43 @@ fn parse_json<T: DeserializeOwned>(bytes: &[u8], label: &str) -> Result<T, Strin
 }
 
 fn validate_analysis_manifest(manifest: &AnalysisManifest) -> Result<(), String> {
-    if manifest.schema_version != 1
+    if !matches!(manifest.schema_version, 1 | 2)
         || manifest.engine != "pcbex"
         || manifest.command != "analyze-kicad"
     {
-        return Err("analysis manifest is not a pcbex analyze-kicad v1 report".into());
+        return Err("analysis manifest is not a supported pcbex analyze-kicad report".into());
+    }
+    match (
+        manifest.schema_version,
+        manifest.physical_profile.is_some(),
+        manifest.configuration.physical_profile.is_some(),
+    ) {
+        (1, false, false) => {}
+        (1, _, _) => {
+            return Err(
+                "analysis manifest v1 must omit top-level and configuration physical_profile"
+                    .into(),
+            );
+        }
+        (2, true, true) => {
+            if manifest.dfm_profile_file.is_some()
+                || manifest.policy_pack_file.is_some()
+                || manifest.configuration.dfm_profile.is_some()
+                || manifest.configuration.organization_policy_pack.is_some()
+            {
+                return Err(
+                    "analysis manifest v2 physical_profile cannot coexist with DFM or policy-pack inputs"
+                        .into(),
+                );
+            }
+        }
+        (2, _, _) => {
+            return Err(
+                "analysis manifest v2 requires both top-level and configuration physical_profile"
+                    .into(),
+            );
+        }
+        _ => unreachable!("schema version was checked above"),
     }
     validate_text(&manifest.engine_version, "analysis engine version")?;
     validate_analysis_descriptor(&manifest.input, "analysis input", MAX_BOARD_BYTES)?;
@@ -1318,6 +1448,20 @@ fn validate_analysis_manifest(manifest: &AnalysisManifest) -> Result<(), String>
     if let Some(profile) = &manifest.configuration.dfm_profile {
         validate_dfm_profile(profile)
             .map_err(|error| format!("invalid analysis DFM profile: {error}"))?;
+    }
+    match (
+        manifest.physical_profile.as_ref(),
+        manifest.configuration.physical_profile.as_ref(),
+    ) {
+        (Some(binding), Some(profile)) => {
+            validate_physical_profile_binding(binding)
+                .map_err(|error| format!("invalid analysis physical profile binding: {error}"))?;
+            binding_matches_profile(binding, profile).map_err(|error| {
+                format!("analysis physical profile binding does not match configuration: {error}")
+            })?;
+        }
+        (None, None) => {}
+        _ => unreachable!("physical profile version invariant was checked above"),
     }
     if !manifest
         .artifacts
@@ -1685,6 +1829,7 @@ mod tests {
             analysis_rules: None,
             analysis_dfm_profile: None,
             analysis_policy_pack: None,
+            analysis_physical_profile: None,
             manufacturing_package: path,
             firmware_manifest: path,
             factory_receipt: None,
@@ -1702,6 +1847,7 @@ mod tests {
         assert!(report.phases.iter().all(|phase| !phase.passed));
         assert_eq!(report.identities.schematic_sha256, None);
         assert_eq!(report.identities.board_sha256, None);
+        assert_eq!(report.identities.physical_profile_sha256, None);
         let rendered = serde_json::to_string(&report).unwrap();
         assert!(!rendered.contains(directory.path().to_string_lossy().as_ref()));
         assert!(!rendered.contains("secret-missing-input"));
@@ -2059,6 +2205,14 @@ mod tests {
             0
         );
         assert_eq!(schema["$defs"]["evidence"]["additionalProperties"], false);
+        assert_eq!(
+            schema["$defs"]["identities"]["required"],
+            json!(["schematic_sha256", "board_sha256"])
+        );
+        assert_eq!(
+            schema["$defs"]["identities"]["properties"]["physical_profile_sha256"]["pattern"],
+            "^[0-9a-f]{64}$"
+        );
         for phase in schema["properties"]["phases"]["prefixItems"]
             .as_array()
             .unwrap()
@@ -2072,6 +2226,148 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn analysis_manifest_accepts_v1_without_physical_profile_and_rejects_mixed_versions() {
+        let descriptor = json!({
+            "path": "board.kicad_pcb",
+            "bytes": 1,
+            "sha256": "a".repeat(64)
+        });
+        let mut manifest = json!({
+            "schema_version": 1,
+            "engine": "pcbex",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "command": "analyze-kicad",
+            "input": descriptor,
+            "project": null,
+            "rules_file": null,
+            "dfm_profile_file": null,
+            "policy_pack_file": null,
+            "configuration": {
+                "rules": {
+                    "grid_nm": 250000,
+                    "track_width_nm": 250000,
+                    "clearance_nm": 200000,
+                    "via_diameter_nm": 600000,
+                    "via_drill_nm": 300000,
+                    "bend_cost": 5,
+                    "via_cost": 20
+                },
+                "project_settings_loaded": false,
+                "applied_custom_rules": 0,
+                "dfm_profile": null,
+                "organization_policy_pack": null
+            },
+            "result": {
+                "clean": true,
+                "violations": 0,
+                "routed_nets": 0,
+                "unrouted_nets": 0,
+                "total_length_nm": 0,
+                "total_vias": 0
+            },
+            "artifacts": ANALYSIS_ARTIFACTS
+        });
+        let parsed: AnalysisManifest = serde_json::from_value(manifest.clone()).unwrap();
+        assert!(validate_analysis_manifest(&parsed).is_ok());
+
+        manifest["schema_version"] = json!(2);
+        let parsed: AnalysisManifest = serde_json::from_value(manifest.clone()).unwrap();
+        let error = validate_analysis_manifest(&parsed).unwrap_err();
+        assert!(error.contains("v2 requires both"));
+
+        manifest["schema_version"] = json!(1);
+        manifest["physical_profile"] = json!({
+            "schema_version": 1,
+            "id": "fixture-v1",
+            "revision": 1,
+            "canonical_sha256": "b".repeat(64),
+            "source": {
+                "path": "physical-profile.json",
+                "bytes": 1,
+                "sha256": "c".repeat(64)
+            }
+        });
+        let parsed: AnalysisManifest = serde_json::from_value(manifest).unwrap();
+        let error = validate_analysis_manifest(&parsed).unwrap_err();
+        assert!(error.contains("v1 must omit"));
+    }
+
+    #[test]
+    fn analysis_manifest_v2_physical_profile_is_sole_physical_source() {
+        let profile = pcbex_core::parse_physical_profile(
+            r#"{
+                "schema_version": 1,
+                "id": "fixture-v1",
+                "revision": 1,
+                "description": "fixture",
+                "board_width_nm": 60000000,
+                "board_height_nm": 40000000,
+                "outline": [],
+                "fixed_components": [],
+                "keepouts": [],
+                "manufacturing_rules": null
+            }"#,
+        )
+        .unwrap();
+        let canonical_sha256 = crate::physical_profile::canonical_profile_sha256(&profile).unwrap();
+        let mut manifest = json!({
+            "schema_version": 2,
+            "engine": "pcbex",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "command": "analyze-kicad",
+            "input": {"path": "board.kicad_pcb", "bytes": 1, "sha256": "a".repeat(64)},
+            "project": null,
+            "rules_file": null,
+            "dfm_profile_file": null,
+            "policy_pack_file": null,
+            "physical_profile": {
+                "schema_version": 1,
+                "id": "fixture-v1",
+                "revision": 1,
+                "canonical_sha256": canonical_sha256,
+                "source": {
+                    "path": "physical-profile.json",
+                    "bytes": 1,
+                    "sha256": "b".repeat(64)
+                }
+            },
+            "configuration": {
+                "rules": {
+                    "grid_nm": 250000,
+                    "track_width_nm": 250000,
+                    "clearance_nm": 200000,
+                    "via_diameter_nm": 600000,
+                    "via_drill_nm": 300000,
+                    "bend_cost": 5,
+                    "via_cost": 20
+                },
+                "project_settings_loaded": false,
+                "applied_custom_rules": 0,
+                "dfm_profile": null,
+                "organization_policy_pack": null,
+                "physical_profile": profile
+            },
+            "result": {
+                "clean": true,
+                "violations": 0,
+                "routed_nets": 0,
+                "unrouted_nets": 0,
+                "total_length_nm": 0,
+                "total_vias": 0
+            },
+            "artifacts": ANALYSIS_ARTIFACTS
+        });
+        let parsed: AnalysisManifest = serde_json::from_value(manifest.clone()).unwrap();
+        assert!(validate_analysis_manifest(&parsed).is_ok());
+
+        manifest["configuration"]["dfm_profile"] =
+            serde_json::to_value(pcbex_core::dfm_profile("jlcpcb-2layer").unwrap()).unwrap();
+        let parsed: AnalysisManifest = serde_json::from_value(manifest).unwrap();
+        let error = validate_analysis_manifest(&parsed).unwrap_err();
+        assert!(error.contains("cannot coexist with DFM"));
     }
 
     #[test]

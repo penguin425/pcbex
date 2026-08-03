@@ -403,7 +403,9 @@ pub fn place(
         temperature *= options.cooling;
     }
     for c in &mut best {
-        if let Some(p) = &mut c.position {
+        if !c.fixed
+            && let Some(p) = &mut c.position
+        {
             p.x_nm = snap(p.x_nm, problem.grid_nm);
             p.y_nm = snap(p.y_nm, problem.grid_nm);
         }
@@ -1607,6 +1609,49 @@ mod tests {
         };
         let r = place(&p, &PlacementOptions::default()).unwrap();
         assert_eq!(r.components[0].position, p.components[0].position);
+    }
+
+    #[test]
+    fn fixed_component_keeps_non_grid_position_with_movable_component() {
+        let mut fixed = component(
+            "J1",
+            Some(Point {
+                x_nm: 1_234_567,
+                y_nm: 2_345_678,
+            }),
+        );
+        fixed.fixed = true;
+        let movable = component(
+            "U1",
+            Some(Point {
+                x_nm: 8_123_457,
+                y_nm: 7_765_432,
+            }),
+        );
+        let problem = PlacementProblem {
+            width_nm: 20_000_000,
+            height_nm: 20_000_000,
+            grid_nm: 500_000,
+            components: vec![fixed, movable],
+            connections: vec![],
+            constraints: vec![],
+        };
+        let result = place(
+            &problem,
+            &PlacementOptions {
+                iterations: 8,
+                ..PlacementOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.components[0].position,
+            problem.components[0].position
+        );
+        let movable_position = result.components[1].position.unwrap();
+        assert_eq!(movable_position.x_nm % problem.grid_nm, 0);
+        assert_eq!(movable_position.y_nm % problem.grid_nm, 0);
     }
 
     #[test]
