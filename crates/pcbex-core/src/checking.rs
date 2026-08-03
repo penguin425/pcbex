@@ -28,6 +28,11 @@ impl CheckReport {
 }
 
 pub fn check_board(board: &Board) -> CheckReport {
+    if let Err(message) = crate::validate_routing_resource_bounds(board) {
+        let mut report = CheckReport::default();
+        report.push("resource_limits", message, vec![]);
+        return report;
+    }
     if board.routes.iter().any(|route| {
         !route.arcs.is_empty()
             || !route.teardrops.is_empty()

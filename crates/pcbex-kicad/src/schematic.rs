@@ -550,17 +550,12 @@ fn import_symbol(
     if unit == 0 {
         return Err(format!("schematic symbol {uuid} has invalid unit 0"));
     }
-    let position = required_point(values, "at")?;
-    let at = unique_child_values(values, "at")?.expect("required point exists");
-    let rotation_deg = atom(at.get(3))
-        .unwrap_or("0")
-        .parse::<u16>()
-        .map_err(|_| format!("schematic symbol {uuid} has invalid rotation"))?;
-    if !matches!(rotation_deg, 0 | 90 | 180 | 270) {
-        return Err(format!(
-            "schematic symbol {uuid} rotation must be 0, 90, 180, or 270 degrees"
-        ));
-    }
+    let (position, rotation_deg) = required_point_with_rotation(
+        values,
+        "at",
+        PointArity::OptionalRotation,
+        &format!("schematic symbol {uuid}"),
+    )?;
     let mirror = optional_atom(values, "mirror")?;
     if mirror.is_some_and(|value| value != "x" && value != "y") {
         return Err(format!("schematic symbol {uuid} has invalid mirror axis"));
@@ -690,7 +685,7 @@ fn import_library_pin(values: &[Sexp]) -> Result<LibraryPin, String> {
         "no_connect" => ElectricalPinType::NoConnect,
         value => return Err(format!("unknown symbol pin electrical type {value}")),
     };
-    let position = required_point(values, "at")?;
+    let position = required_point(values, "at", PointArity::RequiredRotation, "library pin")?;
     let name = unique_child_values(values, "name")?
         .and_then(|child| atom(child.get(1)))
         .ok_or_else(|| "library pin is missing a name".to_string())?
@@ -731,7 +726,12 @@ fn import_label(values: &[Sexp], kind: SchematicLabelKind) -> Result<SchematicLa
         uuid: Some(required_atom(values, "uuid")?.to_string()),
         name: name.to_string(),
         kind,
-        position: required_point(values, "at")?,
+        position: required_point(
+            values,
+            "at",
+            PointArity::OptionalRotation,
+            "schematic label",
+        )?,
         net_id: 0,
     })
 }
@@ -739,7 +739,7 @@ fn import_label(values: &[Sexp], kind: SchematicLabelKind) -> Result<SchematicLa
 fn import_marker(values: &[Sexp]) -> Result<SchematicMarker, String> {
     Ok(SchematicMarker {
         uuid: required_atom(values, "uuid")?.to_string(),
-        position: required_point(values, "at")?,
+        position: required_point(values, "at", PointArity::Plain, "schematic marker")?,
     })
 }
 
@@ -996,32 +996,96 @@ fn checked_i64(value: i128, description: &str) -> Result<i64, String> {
     i64::try_from(value).map_err(|_| format!("{description} is outside the supported range"))
 }
 
-fn required_point(values: &[Sexp], name: &str) -> Result<Point, String> {
+#[derive(Clone, Copy)]
+enum PointArity {
+    Plain,
+    OptionalRotation,
+    RequiredRotation,
+}
+
+fn required_point(
+    values: &[Sexp],
+    name: &str,
+    arity: PointArity,
+    context: &str,
+) -> Result<Point, String> {
+    required_point_with_rotation(values, name, arity, context).map(|(point, _)| point)
+}
+
+fn required_point_with_rotation(
+    values: &[Sexp],
+    name: &str,
+    arity: PointArity,
+    context: &str,
+) -> Result<(Point, u16), String> {
     let child =
         unique_child_values(values, name)?.ok_or_else(|| format!("missing {name} coordinate"))?;
-    if child.len() < 3 {
-        return Err(format!("{name} coordinate must contain X and Y"));
+    let valid_arity = match arity {
+        PointArity::Plain => child.len() == 3,
+        PointArity::OptionalRotation => matches!(child.len(), 3 | 4),
+        PointArity::RequiredRotation => child.len() == 4,
+    };
+    if !valid_arity {
+        return Err(match arity {
+            PointArity::Plain | PointArity::RequiredRotation => {
+                format!("{context} {name} coordinate must contain exactly X and Y")
+            }
+            PointArity::OptionalRotation => {
+                format!("{context} {name} coordinate must contain X, Y, and optional rotation")
+            }
+        });
     }
-    Ok(Point {
-        x_nm: coordinate_nm(child.get(1), name)?,
-        y_nm: coordinate_nm(child.get(2), name)?,
-    })
+    let rotation = if matches!(
+        arity,
+        PointArity::OptionalRotation | PointArity::RequiredRotation
+    ) {
+        child
+            .get(3)
+            .map(|value| parse_rotation(value, context))
+            .transpose()?
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    Ok((
+        Point {
+            x_nm: coordinate_nm(child.get(1), name)?,
+            y_nm: coordinate_nm(child.get(2), name)?,
+        },
+        rotation,
+    ))
+}
+
+fn parse_rotation(value: &Sexp, context: &str) -> Result<u16, String> {
+    let value = atom(Some(value)).ok_or_else(|| format!("{context} rotation must be scalar"))?;
+    let rotation = value
+        .parse::<u16>()
+        .map_err(|_| format!("{context} rotation must be a numeric scalar"))?;
+    if !matches!(rotation, 0 | 90 | 180 | 270) {
+        return Err(format!(
+            "{context} rotation must be 0, 90, 180, or 270 degrees"
+        ));
+    }
+    Ok(rotation)
 }
 
 fn point_list(values: &[Sexp]) -> Result<Vec<Point>, String> {
     let points = unique_child_values(values, "pts")?
         .ok_or_else(|| "schematic wire is missing its point list".to_string())?;
-    direct_lists(points, "xy")
-        .map(|point| {
-            if point.len() != 3 {
-                return Err("schematic wire point must contain exactly X and Y".into());
-            }
-            Ok(Point {
-                x_nm: coordinate_nm(point.get(1), "wire")?,
-                y_nm: coordinate_nm(point.get(2), "wire")?,
-            })
-        })
-        .collect()
+    let mut result = Vec::new();
+    for value in points.iter().skip(1) {
+        let point = value
+            .as_list()
+            .ok_or_else(|| "schematic wire point must be an xy coordinate".to_string())?;
+        if atom(point.first()) != Some("xy") || point.len() != 3 {
+            return Err("schematic wire point must contain exactly X and Y".into());
+        }
+        result.push(Point {
+            x_nm: coordinate_nm(point.get(1), "wire")?,
+            y_nm: coordinate_nm(point.get(2), "wire")?,
+        });
+    }
+    Ok(result)
 }
 
 fn coordinate_nm(value: Option<&Sexp>, description: &str) -> Result<i64, String> {
@@ -1030,12 +1094,22 @@ fn coordinate_nm(value: Option<&Sexp>, description: &str) -> Result<i64, String>
         .parse::<f64>()
         .map_err(|_| format!("{description} coordinate is not numeric"))?;
     let nanometers = value * NM_PER_MM;
-    if !nanometers.is_finite() || nanometers < i64::MIN as f64 || nanometers > i64::MAX as f64 {
+    // `i64::MAX as f64` rounds to 2^63, so comparing against it with an
+    // inclusive upper bound accidentally accepts values which cannot be
+    // represented by an i64.  The mathematical interval is
+    // [i64::MIN, 2^63), with 2^63 intentionally exclusive.
+    let rounded = nanometers.round();
+    let upper_exclusive = -(i64::MIN as f64); // exactly 2^63
+    if !value.is_finite()
+        || !nanometers.is_finite()
+        || rounded < i64::MIN as f64
+        || rounded >= upper_exclusive
+    {
         return Err(format!(
             "{description} coordinate is outside the supported range"
         ));
     }
-    Ok(nanometers.round() as i64)
+    Ok(rounded as i64)
 }
 
 fn properties(values: &[Sexp]) -> Result<BTreeMap<String, String>, String> {
@@ -1279,6 +1353,46 @@ mod tests {
     }
 
     #[test]
+    fn rejects_malformed_at_rotation_and_wire_points() {
+        let malformed_symbol = SIMPLE.replace(
+            "(symbol (lib_id \"MCU:Chip\") (at 12.54 20 0)",
+            "(symbol (lib_id \"MCU:Chip\") (at 12.54 20 (bad))",
+        );
+        let error = import_schematic(&malformed_symbol).unwrap_err();
+        assert!(error.contains("rotation must be scalar"), "{error}");
+
+        let malformed_label = SIMPLE.replace(
+            "(label \"SIGNAL\" (at 30 20 0)",
+            "(label \"SIGNAL\" (at 30 20 45)",
+        );
+        let error = import_schematic(&malformed_label).unwrap_err();
+        assert!(
+            error.contains("rotation must be 0, 90, 180, or 270"),
+            "{error}"
+        );
+
+        let malformed_wire = SIMPLE.replace(
+            "(wire (pts (xy 10 20) (xy 30 20)) (uuid wire-1))",
+            "(wire (pts (xy 10 20) stray (xy 30 20)) (uuid wire-1))",
+        );
+        let error = import_schematic(&malformed_wire).unwrap_err();
+        assert!(
+            error.contains("wire point must be an xy coordinate"),
+            "{error}"
+        );
+
+        let malformed_marker = SIMPLE.replace(
+            "(junction (at 30 20) (diameter 0) (uuid junction-1))",
+            "(junction (at 30 20 0) (diameter 0) (uuid junction-1))",
+        );
+        let error = import_schematic(&malformed_marker).unwrap_err();
+        assert!(
+            error.contains("schematic marker at coordinate must contain exactly X and Y"),
+            "{error}"
+        );
+    }
+
+    #[test]
     fn connects_crossings_only_when_a_junction_exists() {
         let source = SIMPLE
             .replace("(junction (at 30 20) (diameter 0) (uuid junction-1))", "")
@@ -1483,5 +1597,16 @@ mod tests {
                 .to_string()
                 .contains("unknown field")
         );
+    }
+
+    #[test]
+    fn coordinate_conversion_rejects_the_mathematical_i64_upper_endpoint() {
+        let lower = Sexp::Atom((i64::MIN as f64 / NM_PER_MM).to_string());
+        assert_eq!(coordinate_nm(Some(&lower), "coordinate").unwrap(), i64::MIN);
+
+        // `i64::MAX as f64` is 2^63.  It must remain exclusive even though a
+        // naïve `<= i64::MAX as f64` comparison would accept it.
+        let upper = Sexp::Atom((-(i64::MIN as f64) / NM_PER_MM).to_string());
+        assert!(coordinate_nm(Some(&upper), "coordinate").is_err());
     }
 }

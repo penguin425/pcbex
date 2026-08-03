@@ -9,6 +9,7 @@ mod geometry;
 pub mod impedance;
 pub mod placement;
 pub mod quality;
+pub mod resource_limits;
 pub mod routing_candidates;
 pub mod schema;
 
@@ -19,6 +20,14 @@ pub use dfm_profiles::{
 };
 pub use impedance::{ImpedanceReport, impedance_report};
 pub use quality::{DifferentialQuality, NetQuality, RoutingQuality, routing_quality};
+pub use resource_limits::{
+    MAX_BOARD_ABSOLUTE_COORDINATE_NM, MAX_BOARD_EXTENT_NM, MAX_CELL_LAYER_SLOTS,
+    MAX_INFLATE_RADIUS_CELLS, MAX_PLANE_GRID_CELLS, MAX_POLYGON_VERTICES,
+    MAX_RASTER_CANDIDATE_VISITS, MAX_RASTER_GEOMETRY_EDGE_WORK, MAX_RASTER_LINE_CELLS,
+    MAX_TOPOLOGY_EDGE_PAIR_WORK, MAX_TOTAL_POLYGON_VERTICES, MAX_ZONE_BLOCKER_WORK,
+    MAX_ZONE_CANDIDATE_CELLS, RoutingResourceLimits, validate_routing_resource_bounds,
+    validate_routing_resource_bounds_with_limits,
+};
 pub use routing_candidates::{
     RoutingCandidate, RoutingCandidateObjective, RoutingCandidateOptions, RoutingCandidateSet,
     route_candidates,
@@ -1114,6 +1123,7 @@ pub struct Router<'a> {
     occupied_by: HashMap<(i32, i32, u8), u32>,
     congestion: HashMap<(i32, i32, u8), u16>,
     rasterized_candidate_cells: usize,
+    raster_candidate_visits: usize,
     search_variant: u8,
 }
 
@@ -1133,6 +1143,7 @@ impl<'a> Router<'a> {
     }
 
     fn new_with_variant(board: &'a Board, search_variant: u8) -> Result<Self, String> {
+        validate_routing_resource_bounds(board)?;
         if board.rules.grid_nm <= 0 {
             return Err("grid_nm must be positive".into());
         }
@@ -1477,46 +1488,60 @@ impl<'a> Router<'a> {
             occupied_by: HashMap::new(),
             congestion: HashMap::new(),
             rasterized_candidate_cells: 0,
+            raster_candidate_visits: 0,
             search_variant,
         };
-        router.rasterize_obstacles();
+        router.rasterize_obstacles()?;
         Ok(router)
     }
 
-    fn rasterize_obstacles(&mut self) {
+    fn rasterize_obstacles(&mut self) -> Result<(), String> {
         let g = self.board.rules.grid_nm;
         let (maximum_diameter, maximum_clearance) = self.board.maximum_routing_envelope();
-        let edge_envelope = maximum_diameter + 2 * maximum_clearance;
+        let edge_envelope =
+            Nm::try_from(i128::from(maximum_diameter) + 2 * i128::from(maximum_clearance))
+                .map_err(|_| "resource limit exceeded: inflate_radius_cells".to_string())?;
         let max_x = self.board.width_nm / g;
         let max_y = self.board.height_nm / g;
         for y in 0..=max_y {
             for x in 0..=max_x {
-                self.rasterized_candidate_cells += 1;
+                self.bump_raster_candidate()?;
                 let point = Point {
-                    x_nm: x as Nm * g,
-                    y_nm: y as Nm * g,
+                    x_nm: Nm::try_from(i128::from(x) * i128::from(g))
+                        .map_err(|_| "resource limit exceeded: raster_window".to_string())?,
+                    y_nm: Nm::try_from(i128::from(y) * i128::from(g))
+                        .map_err(|_| "resource limit exceeded: raster_window".to_string())?,
                 };
                 if !self.board.point_inside_board(point, edge_envelope) {
+                    let x_cell = i32::try_from(x)
+                        .map_err(|_| "resource limit exceeded: raster_window_cells".to_string())?;
+                    let y_cell = i32::try_from(y)
+                        .map_err(|_| "resource limit exceeded: raster_window_cells".to_string())?;
                     self.blocked.extend(
                         self.board
                             .copper_layers
                             .iter()
-                            .map(|layer| (x as i32, y as i32, layer_index(*layer))),
+                            .map(|layer| (x_cell, y_cell, layer_index(*layer))),
                     );
                 }
             }
         }
-        let inflate = maximum_diameter / 2 + maximum_clearance;
+        let inflate = i128::from(maximum_diameter) / 2 + i128::from(maximum_clearance);
         for o in &self.board.obstacles {
-            let min_x = ((o.min.x_nm - inflate).max(0) / g) as i32;
-            let min_y = ((o.min.y_nm - inflate).max(0) / g) as i32;
-            let max_x = ((o.max.x_nm + inflate).min(self.board.width_nm) / g) as i32;
-            let max_y = ((o.max.y_nm + inflate).min(self.board.height_nm) / g) as i32;
+            let (min_x, max_x, min_y, max_y) = cell_window(
+                i128::from(o.min.x_nm) - inflate,
+                i128::from(o.max.x_nm) + inflate,
+                i128::from(o.min.y_nm) - inflate,
+                i128::from(o.max.y_nm) + inflate,
+                i128::from(g),
+                i128::from(self.board.width_nm),
+                i128::from(self.board.height_nm),
+            )?;
             for layer in &o.layers {
                 let l = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
-                        self.rasterized_candidate_cells += 1;
+                        self.bump_raster_candidate()?;
                         let cell = (x, y, l);
                         if let Some(net_id) = o.net_id {
                             if self
@@ -1534,27 +1559,35 @@ impl<'a> Router<'a> {
             }
         }
         for obstacle in &self.board.round_obstacles {
-            let distance_twice = obstacle.diameter_nm + maximum_diameter + 2 * maximum_clearance;
+            let distance_twice = i128::from(obstacle.diameter_nm)
+                + i128::from(maximum_diameter)
+                + 2 * i128::from(maximum_clearance);
+            let distance_twice_nm = Nm::try_from(distance_twice)
+                .map_err(|_| "resource limit exceeded: inflate_radius_cells".to_string())?;
             let radius = (distance_twice + 1) / 2;
             let (min_x, max_x, min_y, max_y) = cell_window(
-                obstacle.center.x_nm - radius,
-                obstacle.center.x_nm + radius,
-                obstacle.center.y_nm - radius,
-                obstacle.center.y_nm + radius,
-                g,
-                self.board.width_nm,
-                self.board.height_nm,
-            );
+                i128::from(obstacle.center.x_nm) - radius,
+                i128::from(obstacle.center.x_nm) + radius,
+                i128::from(obstacle.center.y_nm) - radius,
+                i128::from(obstacle.center.y_nm) + radius,
+                i128::from(g),
+                i128::from(self.board.width_nm),
+                i128::from(self.board.height_nm),
+            )?;
             for layer in &obstacle.layers {
                 let layer = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
-                        self.rasterized_candidate_cells += 1;
+                        self.bump_raster_candidate()?;
                         let point = Point {
-                            x_nm: x as Nm * g,
-                            y_nm: y as Nm * g,
+                            x_nm: Nm::try_from(i128::from(x) * i128::from(g)).map_err(|_| {
+                                "resource limit exceeded: raster_window".to_string()
+                            })?,
+                            y_nm: Nm::try_from(i128::from(y) * i128::from(g)).map_err(|_| {
+                                "resource limit exceeded: raster_window".to_string()
+                            })?,
                         };
-                        if !geometry::points_within(point, obstacle.center, distance_twice) {
+                        if !geometry::points_within(point, obstacle.center, distance_twice_nm) {
                             continue;
                         }
                         let cell = (x, y, layer);
@@ -1574,31 +1607,39 @@ impl<'a> Router<'a> {
             }
         }
         for obstacle in &self.board.capsule_obstacles {
-            let distance_twice = obstacle.diameter_nm + maximum_diameter + 2 * maximum_clearance;
+            let distance_twice = i128::from(obstacle.diameter_nm)
+                + i128::from(maximum_diameter)
+                + 2 * i128::from(maximum_clearance);
+            let distance_twice_nm = Nm::try_from(distance_twice)
+                .map_err(|_| "resource limit exceeded: inflate_radius_cells".to_string())?;
             let radius = (distance_twice + 1) / 2;
             let (min_x, max_x, min_y, max_y) = cell_window(
-                obstacle.start.x_nm.min(obstacle.end.x_nm) - radius,
-                obstacle.start.x_nm.max(obstacle.end.x_nm) + radius,
-                obstacle.start.y_nm.min(obstacle.end.y_nm) - radius,
-                obstacle.start.y_nm.max(obstacle.end.y_nm) + radius,
-                g,
-                self.board.width_nm,
-                self.board.height_nm,
-            );
+                i128::from(obstacle.start.x_nm.min(obstacle.end.x_nm)) - radius,
+                i128::from(obstacle.start.x_nm.max(obstacle.end.x_nm)) + radius,
+                i128::from(obstacle.start.y_nm.min(obstacle.end.y_nm)) - radius,
+                i128::from(obstacle.start.y_nm.max(obstacle.end.y_nm)) + radius,
+                i128::from(g),
+                i128::from(self.board.width_nm),
+                i128::from(self.board.height_nm),
+            )?;
             for layer in &obstacle.layers {
                 let layer = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
-                        self.rasterized_candidate_cells += 1;
+                        self.bump_raster_candidate()?;
                         let point = Point {
-                            x_nm: x as Nm * g,
-                            y_nm: y as Nm * g,
+                            x_nm: Nm::try_from(i128::from(x) * i128::from(g)).map_err(|_| {
+                                "resource limit exceeded: raster_window".to_string()
+                            })?,
+                            y_nm: Nm::try_from(i128::from(y) * i128::from(g)).map_err(|_| {
+                                "resource limit exceeded: raster_window".to_string()
+                            })?,
                         };
                         if !geometry::point_segment_within(
                             point,
                             obstacle.start,
                             obstacle.end,
-                            distance_twice,
+                            distance_twice_nm,
                         ) {
                             continue;
                         }
@@ -1618,7 +1659,10 @@ impl<'a> Router<'a> {
                 }
             }
         }
-        let keepout_distance_twice = maximum_diameter + 2 * maximum_clearance;
+        let keepout_distance_twice =
+            i128::from(maximum_diameter) + 2 * i128::from(maximum_clearance);
+        let keepout_distance_twice_nm = Nm::try_from(keepout_distance_twice)
+            .map_err(|_| "resource limit exceeded: inflate_radius_cells".to_string())?;
         for obstacle in &self.board.polygon_obstacles {
             let Some((min_x_nm, max_x_nm, min_y_nm, max_y_nm)) = polygon_bounds(&obstacle.polygon)
             else {
@@ -1626,28 +1670,32 @@ impl<'a> Router<'a> {
             };
             let radius = (keepout_distance_twice + 1) / 2;
             let (min_x, max_x, min_y, max_y) = cell_window(
-                min_x_nm - radius,
-                max_x_nm + radius,
-                min_y_nm - radius,
-                max_y_nm + radius,
-                g,
-                self.board.width_nm,
-                self.board.height_nm,
-            );
+                i128::from(min_x_nm) - radius,
+                i128::from(max_x_nm) + radius,
+                i128::from(min_y_nm) - radius,
+                i128::from(max_y_nm) + radius,
+                i128::from(g),
+                i128::from(self.board.width_nm),
+                i128::from(self.board.height_nm),
+            )?;
             for layer in &obstacle.layers {
                 let layer = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
-                        self.rasterized_candidate_cells += 1;
+                        self.bump_raster_candidate()?;
                         let point = Point {
-                            x_nm: x as Nm * g,
-                            y_nm: y as Nm * g,
+                            x_nm: Nm::try_from(i128::from(x) * i128::from(g)).map_err(|_| {
+                                "resource limit exceeded: raster_window".to_string()
+                            })?,
+                            y_nm: Nm::try_from(i128::from(y) * i128::from(g)).map_err(|_| {
+                                "resource limit exceeded: raster_window".to_string()
+                            })?,
                         };
                         if geometry::point_in_polygon(point, &obstacle.polygon)
                             || geometry::point_polygon_closer_than(
                                 point,
                                 &obstacle.polygon,
-                                keepout_distance_twice,
+                                keepout_distance_twice_nm,
                             )
                         {
                             let cell = (x, y, layer);
@@ -1677,28 +1725,32 @@ impl<'a> Router<'a> {
             };
             let radius = (keepout_distance_twice + 1) / 2;
             let (min_x, max_x, min_y, max_y) = cell_window(
-                min_x_nm - radius,
-                max_x_nm + radius,
-                min_y_nm - radius,
-                max_y_nm + radius,
-                g,
-                self.board.width_nm,
-                self.board.height_nm,
-            );
+                i128::from(min_x_nm) - radius,
+                i128::from(max_x_nm) + radius,
+                i128::from(min_y_nm) - radius,
+                i128::from(max_y_nm) + radius,
+                i128::from(g),
+                i128::from(self.board.width_nm),
+                i128::from(self.board.height_nm),
+            )?;
             for layer in &keepout.layers {
                 let layer = layer_index(*layer);
                 for y in min_y..=max_y {
                     for x in min_x..=max_x {
-                        self.rasterized_candidate_cells += 1;
+                        self.bump_raster_candidate()?;
                         let point = Point {
-                            x_nm: x as Nm * g,
-                            y_nm: y as Nm * g,
+                            x_nm: Nm::try_from(i128::from(x) * i128::from(g)).map_err(|_| {
+                                "resource limit exceeded: raster_window".to_string()
+                            })?,
+                            y_nm: Nm::try_from(i128::from(y) * i128::from(g)).map_err(|_| {
+                                "resource limit exceeded: raster_window".to_string()
+                            })?,
                         };
                         if geometry::point_in_polygon(point, &keepout.polygon)
                             || geometry::point_polygon_closer_than(
                                 point,
                                 &keepout.polygon,
-                                keepout_distance_twice,
+                                keepout_distance_twice_nm,
                             )
                         {
                             let cell = (x, y, layer);
@@ -1718,6 +1770,38 @@ impl<'a> Router<'a> {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn bump_raster_candidate(&mut self) -> Result<(), String> {
+        self.bump_raster_visit()?;
+        self.rasterized_candidate_cells = self
+            .rasterized_candidate_cells
+            .checked_add(1)
+            .ok_or_else(|| {
+                format!(
+                    "resource limit exceeded: raster_candidate_visits (limit {} visits)",
+                    MAX_RASTER_CANDIDATE_VISITS
+                )
+            })?;
+        Ok(())
+    }
+
+    fn bump_raster_visit(&mut self) -> Result<(), String> {
+        let next = self.raster_candidate_visits.checked_add(1).ok_or_else(|| {
+            format!(
+                "resource limit exceeded: raster_candidate_visits (limit {} visits)",
+                MAX_RASTER_CANDIDATE_VISITS
+            )
+        })?;
+        if next > MAX_RASTER_CANDIDATE_VISITS {
+            return Err(format!(
+                "resource limit exceeded: raster_candidate_visits (limit {} visits)",
+                MAX_RASTER_CANDIDATE_VISITS
+            ));
+        }
+        self.raster_candidate_visits = next;
+        Ok(())
     }
 
     pub fn route_all(self) -> (Vec<Route>, RouteReport) {
@@ -1725,7 +1809,50 @@ impl<'a> Router<'a> {
         self.route_all_with_workers(worker_limit)
     }
 
-    pub fn route_all_with_workers(mut self, worker_limit: usize) -> (Vec<Route>, RouteReport) {
+    /// Route while preserving the historical report-only public API.
+    ///
+    /// Resource failures are converted to the same fail-closed partial result
+    /// shape used for an unrouted board.  `route_board*` uses the checked
+    /// internal variant below and returns the distinct error instead.
+    pub fn route_all_with_workers(self, worker_limit: usize) -> (Vec<Route>, RouteReport) {
+        let fallback = self.resource_failure_fallback();
+        match self.try_route_all_with_workers(worker_limit) {
+            Ok(result) => result,
+            Err(_) => fallback,
+        }
+    }
+
+    fn resource_failure_fallback(&self) -> (Vec<Route>, RouteReport) {
+        let fixed_net_ids: HashSet<u32> =
+            self.board.routes.iter().map(|route| route.net_id).collect();
+        let preserved = self
+            .board
+            .nets
+            .iter()
+            .filter(|net| fixed_net_ids.contains(&net.id))
+            .map(|net| net.name.clone())
+            .collect();
+        let unrouted = self
+            .board
+            .nets
+            .iter()
+            .filter(|net| !fixed_net_ids.contains(&net.id))
+            .map(|net| net.name.clone())
+            .collect();
+        (
+            self.board.routes.clone(),
+            RouteReport {
+                preserved,
+                unrouted,
+                ..RouteReport::default()
+            },
+        )
+    }
+
+    fn try_route_all_with_workers(
+        mut self,
+        worker_limit: usize,
+    ) -> Result<(Vec<Route>, RouteReport), String> {
         let fixed_net_ids: HashSet<u32> =
             self.board.routes.iter().map(|route| route.net_id).collect();
         let preserved: Vec<String> = self
@@ -1763,10 +1890,10 @@ impl<'a> Router<'a> {
             self.occupied.clear();
             self.occupied_by.clear();
             for route in &self.board.routes {
-                self.commit(route);
+                self.commit(route)?;
             }
             for route in &accepted {
-                self.commit(route);
+                self.commit(route)?;
             }
             let mut attempt_nets: Vec<_> = nets
                 .iter()
@@ -1836,7 +1963,7 @@ impl<'a> Router<'a> {
                 match result {
                     Ok((route, expanded)) => {
                         total_expanded += expanded;
-                        self.commit(&route);
+                        self.commit(&route)?;
                         validation.routes.push(route.clone());
                         accepted.push(route);
                     }
@@ -1903,7 +2030,7 @@ impl<'a> Router<'a> {
                 report.expanded_states = total_expanded;
                 report.rasterized_candidate_cells = self.rasterized_candidate_cells;
                 report.reroute_passes = attempt + 1;
-                return (routes, report);
+                return Ok((routes, report));
             }
             let rip_ids: HashSet<u32> = blockers
                 .into_iter()
@@ -1920,7 +2047,7 @@ impl<'a> Router<'a> {
                     .collect();
                 best_report.ripup_events = ripup_events;
                 best_report.shove_events = shove_events;
-                return (best_routes, best_report);
+                return Ok((best_routes, best_report));
             }
             for (&cell, owner) in &self.occupied_by {
                 if !rip_ids.contains(owner) {
@@ -1946,7 +2073,7 @@ impl<'a> Router<'a> {
             .collect();
         best_report.ripup_events = ripup_events;
         best_report.shove_events = shove_events;
-        (best_routes, best_report)
+        Ok((best_routes, best_report))
     }
 
     fn route_net(&self, net: &Net) -> Result<(Route, usize), RouteFailure> {
@@ -2484,22 +2611,45 @@ impl<'a> Router<'a> {
         }
         p
     }
-    fn commit(&mut self, route: &Route) {
+    fn commit(&mut self, route: &Route) -> Result<(), String> {
         let g = self.board.rules.grid_nm;
         let (maximum_diameter, maximum_clearance) = self.board.maximum_routing_envelope();
         for s in &route.segments {
-            let clearance_radius =
-                (s.width_nm / 2 + maximum_diameter / 2 + maximum_clearance + g - 1) / g;
+            let clearance_radius = (i128::from(s.width_nm) / 2
+                + i128::from(maximum_diameter) / 2
+                + i128::from(maximum_clearance)
+                + i128::from(g)
+                - 1)
+                / i128::from(g);
+            let clearance_radius: i32 = clearance_radius.try_into().map_err(|_| {
+                format!(
+                    "resource limit exceeded: inflate_radius_cells (limit {} cells)",
+                    MAX_INFLATE_RADIUS_CELLS
+                )
+            })?;
             for (x, y) in raster_line_cells(
                 s.start.x_nm / g,
                 s.start.y_nm / g,
                 s.end.x_nm / g,
                 s.end.y_nm / g,
-            ) {
+            )? {
+                let x = i32::try_from(x)
+                    .map_err(|_| "resource limit exceeded: raster_line_cells".to_string())?;
+                let y = i32::try_from(y)
+                    .map_err(|_| "resource limit exceeded: raster_line_cells".to_string())?;
                 for oy in -clearance_radius..=clearance_radius {
                     for ox in -clearance_radius..=clearance_radius {
+                        self.bump_raster_visit()?;
                         if ox * ox + oy * oy <= clearance_radius * clearance_radius {
-                            let cell = ((x + ox) as i32, (y + oy) as i32, layer_index(s.layer));
+                            let cell = (
+                                x.checked_add(ox).ok_or_else(|| {
+                                    "resource limit exceeded: raster_line_cells".to_string()
+                                })?,
+                                y.checked_add(oy).ok_or_else(|| {
+                                    "resource limit exceeded: raster_line_cells".to_string()
+                                })?,
+                                layer_index(s.layer),
+                            );
                             self.occupied.insert(cell);
                             self.occupied_by.insert(cell, route.net_id);
                         }
@@ -2508,10 +2658,24 @@ impl<'a> Router<'a> {
             }
         }
         for via in &route.vias {
-            let clearance_radius =
-                (via.diameter_nm / 2 + maximum_diameter / 2 + maximum_clearance + g - 1) / g;
-            let center_x = via.position.x_nm / g;
-            let center_y = via.position.y_nm / g;
+            let clearance_radius = (i128::from(via.diameter_nm) / 2
+                + i128::from(maximum_diameter) / 2
+                + i128::from(maximum_clearance)
+                + i128::from(g)
+                - 1)
+                / i128::from(g);
+            let clearance_radius: i32 = clearance_radius.try_into().map_err(|_| {
+                format!(
+                    "resource limit exceeded: inflate_radius_cells (limit {} cells)",
+                    MAX_INFLATE_RADIUS_CELLS
+                )
+            })?;
+            let center_x: i32 = (i128::from(via.position.x_nm) / i128::from(g))
+                .try_into()
+                .map_err(|_| "resource limit exceeded: raster_window_cells".to_string())?;
+            let center_y: i32 = (i128::from(via.position.y_nm) / i128::from(g))
+                .try_into()
+                .map_err(|_| "resource limit exceeded: raster_window_cells".to_string())?;
             for layer in self
                 .board
                 .copper_layers
@@ -2520,14 +2684,19 @@ impl<'a> Router<'a> {
             {
                 for offset_y in -clearance_radius..=clearance_radius {
                     for offset_x in -clearance_radius..=clearance_radius {
+                        self.bump_raster_visit()?;
                         if offset_x * offset_x + offset_y * offset_y
                             > clearance_radius * clearance_radius
                         {
                             continue;
                         }
                         let cell = (
-                            (center_x + offset_x) as i32,
-                            (center_y + offset_y) as i32,
+                            center_x.checked_add(offset_x).ok_or_else(|| {
+                                "resource limit exceeded: raster_window_cells".to_string()
+                            })?,
+                            center_y.checked_add(offset_y).ok_or_else(|| {
+                                "resource limit exceeded: raster_window_cells".to_string()
+                            })?,
                             layer_index(*layer),
                         );
                         self.occupied.insert(cell);
@@ -2543,32 +2712,62 @@ impl<'a> Router<'a> {
                 }
             }
         }
+        Ok(())
     }
 }
 
-fn raster_line_cells(mut x: Nm, mut y: Nm, end_x: Nm, end_y: Nm) -> Vec<(Nm, Nm)> {
-    let dx = (end_x - x).abs();
-    let step_x = (end_x - x).signum();
-    let dy = -(end_y - y).abs();
-    let step_y = (end_y - y).signum();
+fn raster_line_cells(x: Nm, y: Nm, end_x: Nm, end_y: Nm) -> Result<Vec<(Nm, Nm)>, String> {
+    let mut x_wide = i128::from(x);
+    let mut y_wide = i128::from(y);
+    let end_x_wide = i128::from(end_x);
+    let end_y_wide = i128::from(end_y);
+    let dx = (end_x_wide - x_wide).abs();
+    let step_x = (end_x_wide - x_wide).signum();
+    let dy = -(end_y_wide - y_wide).abs();
+    let step_y = (end_y_wide - y_wide).signum();
+    let line_cells = dx.max(-dy).checked_add(1).ok_or_else(|| {
+        format!(
+            "resource limit exceeded: raster_line_cells (limit {} cells)",
+            MAX_RASTER_LINE_CELLS
+        )
+    })?;
+    let line_cells: usize = line_cells.try_into().map_err(|_| {
+        format!(
+            "resource limit exceeded: raster_line_cells (limit {} cells)",
+            MAX_RASTER_LINE_CELLS
+        )
+    })?;
+    if line_cells > MAX_RASTER_LINE_CELLS {
+        return Err(format!(
+            "resource limit exceeded: raster_line_cells (limit {} cells)",
+            MAX_RASTER_LINE_CELLS
+        ));
+    }
     let mut error = dx + dy;
-    let mut cells = Vec::new();
+    let mut cells = Vec::with_capacity(line_cells);
     loop {
-        cells.push((x, y));
-        if x == end_x && y == end_y {
+        cells.push((
+            Nm::try_from(x_wide)
+                .map_err(|_| "resource limit exceeded: raster_line_cells".to_string())?,
+            Nm::try_from(y_wide)
+                .map_err(|_| "resource limit exceeded: raster_line_cells".to_string())?,
+        ));
+        if x_wide == end_x_wide && y_wide == end_y_wide {
             break;
         }
-        let twice_error = 2 * error;
+        let twice_error = error.checked_mul(2).ok_or_else(|| {
+            "resource limit exceeded: raster_line_cells (checked arithmetic)".to_string()
+        })?;
         if twice_error >= dy {
             error += dy;
-            x += step_x;
+            x_wide += step_x;
         }
         if twice_error <= dx {
             error += dx;
-            y += step_y;
+            y_wide += step_y;
         }
     }
-    cells
+    Ok(cells)
 }
 
 fn polygon_bounds(polygon: &[Point]) -> Option<(Nm, Nm, Nm, Nm)> {
@@ -2581,20 +2780,33 @@ fn polygon_bounds(polygon: &[Point]) -> Option<(Nm, Nm, Nm, Nm)> {
 }
 
 fn cell_window(
-    min_x_nm: Nm,
-    max_x_nm: Nm,
-    min_y_nm: Nm,
-    max_y_nm: Nm,
-    grid_nm: Nm,
-    board_width_nm: Nm,
-    board_height_nm: Nm,
-) -> (i32, i32, i32, i32) {
-    (
-        (min_x_nm.max(0) / grid_nm) as i32,
-        (max_x_nm.min(board_width_nm) / grid_nm) as i32,
-        (min_y_nm.max(0) / grid_nm) as i32,
-        (max_y_nm.min(board_height_nm) / grid_nm) as i32,
-    )
+    min_x_nm: i128,
+    max_x_nm: i128,
+    min_y_nm: i128,
+    max_y_nm: i128,
+    grid_nm: i128,
+    board_width_nm: i128,
+    board_height_nm: i128,
+) -> Result<(i32, i32, i32, i32), String> {
+    if grid_nm <= 0 || board_width_nm <= 0 || board_height_nm <= 0 {
+        return Err(
+            "resource limit exceeded: raster_window_cells (grid and board must be positive)".into(),
+        );
+    }
+    let min_x = min_x_nm.max(0) / grid_nm;
+    let max_x = max_x_nm.min(board_width_nm) / grid_nm;
+    let min_y = min_y_nm.max(0) / grid_nm;
+    let max_y = max_y_nm.min(board_height_nm) / grid_nm;
+    Ok((
+        i32::try_from(min_x)
+            .map_err(|_| "resource limit exceeded: raster_window_cells".to_string())?,
+        i32::try_from(max_x)
+            .map_err(|_| "resource limit exceeded: raster_window_cells".to_string())?,
+        i32::try_from(min_y)
+            .map_err(|_| "resource limit exceeded: raster_window_cells".to_string())?,
+        i32::try_from(max_y)
+            .map_err(|_| "resource limit exceeded: raster_window_cells".to_string())?,
+    ))
 }
 
 fn heuristic(x: i32, y: i32, gx: i32, gy: i32) -> u64 {
@@ -2859,6 +3071,7 @@ pub(crate) fn route_board_with_variant(
     if worker_limit == 0 {
         return Err("worker limit must be at least 1".into());
     }
+    validate_routing_resource_bounds(board)?;
     let (mut seeded, escape_stubs) = prepare_escape_routing(board)?;
     let mut coupled = Vec::new();
     let mut paired_expanded = 0;
@@ -2898,8 +3111,8 @@ pub(crate) fn route_board_with_variant(
             paired_expanded += expanded;
         }
     }
-    let (routes, mut report) =
-        Router::new_with_variant(&seeded, search_variant)?.route_all_with_workers(worker_limit);
+    let (routes, mut report) = Router::new_with_variant(&seeded, search_variant)?
+        .try_route_all_with_workers(worker_limit)?;
     let mut out = seeded;
     out.routes = routes;
     couple_differential_pairs(&mut out, &mut report);
@@ -2931,7 +3144,7 @@ pub(crate) fn route_board_with_variant(
     report.optimized_segments = optimize_routes(&mut out, &mutable_net_ids);
     report.rounded_corners = round_route_corners(&mut out, &mutable_net_ids, board.rules.grid_nm);
     report.generated_teardrops = generate_route_teardrops(&mut out);
-    fill_copper_zones(&mut out);
+    try_fill_copper_zones(&mut out)?;
     report.expanded_states += paired_expanded;
     report.coupled_differential_pairs.extend(coupled);
     report.coupled_differential_pairs.sort();
@@ -3150,7 +3363,7 @@ pub fn repair_routes(
             route.zones = saved.clone();
         }
     }
-    fill_copper_zones(&mut repaired);
+    try_fill_copper_zones(&mut repaired)?;
     for (net_id, original) in locked {
         if repaired.routes.iter().find(|route| route.net_id == net_id) != Some(&original) {
             return Err(format!("local repair changed locked net {net_id}"));
@@ -3579,42 +3792,55 @@ pub fn optimize_routes(board: &mut Board, net_ids: &HashSet<u32>) -> usize {
     removed
 }
 
+/// Fill copper zones, preserving the historical count-only API.
+///
+/// New callers should use [`try_fill_copper_zones`].  On a resource or
+/// arithmetic failure this compatibility wrapper performs an atomic no-op and
+/// returns zero; it never leaves a partially filled board behind.
 pub fn fill_copper_zones(board: &mut Board) -> usize {
-    let snapshot = board.clone();
+    try_fill_copper_zones(board).unwrap_or(0)
+}
+
+/// Fill copper zones after validating every candidate window up front.
+///
+/// The operation is atomic: a resource or arithmetic failure leaves all
+/// `filled_polygons` exactly as they were on entry.
+pub fn try_fill_copper_zones(board: &mut Board) -> Result<usize, String> {
+    validate_routing_resource_bounds(board)?;
+    if board.width_nm <= 0 || board.height_nm <= 0 {
+        return Err(
+            "resource limit exceeded: zone_board_extent_nm (dimensions must be positive)".into(),
+        );
+    }
     let grid = board.rules.grid_nm;
-    let mut total_cells = 0;
-    for route in &mut board.routes {
-        for zone in &mut route.zones {
-            zone.filled_polygons.clear();
+    if grid <= 0 {
+        return Err("resource limit exceeded: zone_grid_nm (grid must be positive)".into());
+    }
+    let snapshot = board.clone();
+    let mut total_cells = 0_usize;
+    let mut fills = Vec::with_capacity(board.routes.len());
+    for route in &board.routes {
+        let mut route_fills = Vec::with_capacity(route.zones.len());
+        for zone in &route.zones {
             let Some((min_x, max_x, min_y, max_y)) = polygon_bounds(&zone.polygon) else {
+                route_fills.push(Vec::new());
                 continue;
             };
+            let (min_x, max_x, min_y, max_y) = checked_zone_cell_window(
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+                grid,
+                board.width_nm,
+                board.height_nm,
+            )?;
             let mut cells = HashSet::new();
-            for y in (min_y / grid)..=(max_y / grid) {
-                for x in (min_x / grid)..=(max_x / grid) {
-                    let center = Point {
-                        x_nm: x * grid,
-                        y_nm: y * grid,
-                    };
+            for y in min_y..=max_y {
+                for x in min_x..=max_x {
+                    let center = checked_grid_point(x, y, grid)?;
                     let half = grid / 2;
-                    let corners = [
-                        Point {
-                            x_nm: center.x_nm - half,
-                            y_nm: center.y_nm - half,
-                        },
-                        Point {
-                            x_nm: center.x_nm + half,
-                            y_nm: center.y_nm - half,
-                        },
-                        Point {
-                            x_nm: center.x_nm + half,
-                            y_nm: center.y_nm + half,
-                        },
-                        Point {
-                            x_nm: center.x_nm - half,
-                            y_nm: center.y_nm + half,
-                        },
-                    ];
+                    let corners = checked_grid_corners(center, half)?;
                     if corners
                         .iter()
                         .all(|point| geometry::point_in_polygon(*point, &zone.polygon))
@@ -3625,38 +3851,99 @@ pub fn fill_copper_zones(board: &mut Board) -> usize {
                 }
             }
             let cells = connected_zone_cells(&snapshot, route.net_id, cells, grid);
-            total_cells += cells.len();
+            total_cells = total_cells.checked_add(cells.len()).ok_or_else(|| {
+                format!(
+                    "resource limit exceeded: zone_candidate_cells (limit {} cells)",
+                    MAX_ZONE_CANDIDATE_CELLS
+                )
+            })?;
+            if total_cells > MAX_ZONE_CANDIDATE_CELLS {
+                return Err(format!(
+                    "resource limit exceeded: zone_candidate_cells (limit {} cells)",
+                    MAX_ZONE_CANDIDATE_CELLS
+                ));
+            }
             let mut cells: Vec<_> = cells.into_iter().collect();
             cells.sort_unstable();
-            zone.filled_polygons = cells
-                .into_iter()
-                .map(|(x, y)| {
-                    let center_x = x * grid;
-                    let center_y = y * grid;
-                    let half = grid / 2;
-                    vec![
-                        Point {
-                            x_nm: center_x - half,
-                            y_nm: center_y - half,
-                        },
-                        Point {
-                            x_nm: center_x + half,
-                            y_nm: center_y - half,
-                        },
-                        Point {
-                            x_nm: center_x + half,
-                            y_nm: center_y + half,
-                        },
-                        Point {
-                            x_nm: center_x - half,
-                            y_nm: center_y + half,
-                        },
-                    ]
-                })
-                .collect();
+            route_fills.push(
+                cells
+                    .into_iter()
+                    .map(|(x, y)| {
+                        let center = checked_grid_point(x, y, grid)?;
+                        let half = grid / 2;
+                        Ok(checked_grid_corners(center, half)?.to_vec())
+                    })
+                    .collect::<Result<Vec<_>, String>>()?,
+            );
+        }
+        fills.push(route_fills);
+    }
+    for (route, route_fills) in board.routes.iter_mut().zip(fills) {
+        for (zone, fill) in route.zones.iter_mut().zip(route_fills) {
+            zone.filled_polygons = fill;
         }
     }
-    total_cells
+    Ok(total_cells)
+}
+
+fn checked_zone_cell_window(
+    min_x: Nm,
+    max_x: Nm,
+    min_y: Nm,
+    max_y: Nm,
+    grid: Nm,
+    board_width: Nm,
+    board_height: Nm,
+) -> Result<(Nm, Nm, Nm, Nm), String> {
+    let grid = i128::from(grid);
+    let min_x = (i128::from(min_x).max(0) / grid).min(i128::from(board_width) / grid);
+    let max_x = (i128::from(max_x).min(i128::from(board_width)) / grid).max(-1);
+    let min_y = (i128::from(min_y).max(0) / grid).min(i128::from(board_height) / grid);
+    let max_y = (i128::from(max_y).min(i128::from(board_height)) / grid).max(-1);
+    if min_x > max_x || min_y > max_y {
+        return Ok((1, 0, 1, 0));
+    }
+    Ok((
+        Nm::try_from(min_x).map_err(|_| "resource limit exceeded: zone_cell_index".to_string())?,
+        Nm::try_from(max_x).map_err(|_| "resource limit exceeded: zone_cell_index".to_string())?,
+        Nm::try_from(min_y).map_err(|_| "resource limit exceeded: zone_cell_index".to_string())?,
+        Nm::try_from(max_y).map_err(|_| "resource limit exceeded: zone_cell_index".to_string())?,
+    ))
+}
+
+fn checked_grid_point(x: Nm, y: Nm, grid: Nm) -> Result<Point, String> {
+    let x_nm = i128::from(x)
+        .checked_mul(i128::from(grid))
+        .ok_or_else(|| "resource limit exceeded: zone_grid_coordinate".to_string())?;
+    let y_nm = i128::from(y)
+        .checked_mul(i128::from(grid))
+        .ok_or_else(|| "resource limit exceeded: zone_grid_coordinate".to_string())?;
+    Ok(Point {
+        x_nm: Nm::try_from(x_nm)
+            .map_err(|_| "resource limit exceeded: zone_grid_coordinate".to_string())?,
+        y_nm: Nm::try_from(y_nm)
+            .map_err(|_| "resource limit exceeded: zone_grid_coordinate".to_string())?,
+    })
+}
+
+fn checked_grid_corners(center: Point, half: Nm) -> Result<[Point; 4], String> {
+    let x = i128::from(center.x_nm);
+    let y = i128::from(center.y_nm);
+    let h = i128::from(half);
+    let point = |x: i128, y: i128| -> Result<Point, String> {
+        Ok(Point {
+            x_nm: Nm::try_from(x)
+                .map_err(|_| "resource limit exceeded: zone_grid_coordinate".to_string())?,
+            y_nm: Nm::try_from(y)
+                .map_err(|_| "resource limit exceeded: zone_grid_coordinate".to_string())?,
+        })
+    };
+    Ok([
+        point(x - h, y - h)?,
+        point(x + h, y - h)?,
+        point(x + h, y + h)?,
+        point(x - h, y + h)?,
+    ])
 }
 
 fn zone_cell_blocked(
@@ -4607,6 +4894,30 @@ mod tests {
     }
 
     #[test]
+    fn route_report_public_struct_literal_shape_remains_stable() {
+        let _report = RouteReport {
+            preserved: vec![],
+            routed: vec![],
+            rerouted: vec![],
+            unrouted: vec![],
+            expanded_states: 0,
+            rasterized_candidate_cells: 0,
+            reroute_passes: 0,
+            ripup_events: 0,
+            shove_events: 0,
+            coupled_differential_pairs: vec![],
+            generated_teardrops: 0,
+            optimized_segments: 0,
+            rounded_corners: 0,
+            escaped_nets: 0,
+            parallel_candidates: 0,
+            parallel_fallbacks: 0,
+            parallel_workers: 0,
+            generated_return_vias: 0,
+        };
+    }
+
+    #[test]
     fn router_rejects_invalid_base_routing_rules() {
         let mut invalid = board();
         invalid.rules.via_diameter_nm = invalid.rules.via_drill_nm;
@@ -5208,7 +5519,8 @@ mod tests {
         assert_eq!(
             cell_window(
                 -1_000_000, 2_100_000, 8_000_000, 12_000_000, 500_000, 10_000_000, 10_000_000,
-            ),
+            )
+            .expect("window"),
             (0, 4, 16, 20)
         );
     }
