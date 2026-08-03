@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from typing import Any
@@ -170,7 +171,7 @@ def _run_provider(
     command: list[str],
     prompt: str,
     *,
-    timeout_seconds: int,
+    timeout_seconds: float,
     max_output_bytes: int,
 ) -> str:
     prompt_bytes = _encode_provider_prompt(prompt)
@@ -214,6 +215,55 @@ def _run_provider(
         return completed.stdout.decode("utf-8")
     except UnicodeDecodeError as error:
         raise ProviderError("provider stdout is not valid UTF-8") from error
+
+
+def run_provider_command(
+    command: list[str],
+    prompt: str,
+    *,
+    timeout_seconds: float = 120.0,
+    max_output_bytes: int = 1024 * 1024,
+) -> str:
+    """Run a bounded, shell-free provider for structured agent contracts.
+
+    The schematic-review adapter above has its own receipt contract.  Circuit
+    generation only needs the provider response, but must share the same
+    process boundary.  ``timeout_seconds`` is deliberately a finite float so
+    callers can pass the remaining portion of one aggregate monotonic
+    deadline between correction attempts.
+    """
+
+    if not command or not isinstance(command[0], str) or not command[0].strip():
+        raise ProviderError("provider command must not be empty")
+    try:
+        timeout = float(timeout_seconds)
+    except (TypeError, ValueError, OverflowError):
+        timeout = math.nan
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, (int, float))
+        or not math.isfinite(timeout)
+        or not 0 < timeout <= MAXIMUM_TIMEOUT_SECONDS
+    ):
+        raise ProviderError(
+            f"timeout must be a finite number greater than 0 and at most "
+            f"{MAXIMUM_TIMEOUT_SECONDS} seconds"
+        )
+    if (
+        isinstance(max_output_bytes, bool)
+        or not isinstance(max_output_bytes, int)
+        or not 1 <= max_output_bytes <= MAXIMUM_PROVIDER_OUTPUT_BYTES
+    ):
+        raise ProviderError(
+            "maximum output must be between 1 and "
+            f"{MAXIMUM_PROVIDER_OUTPUT_BYTES} bytes"
+        )
+    return _run_provider(
+        command,
+        prompt,
+        timeout_seconds=timeout,
+        max_output_bytes=max_output_bytes,
+    )
 
 
 def _descriptor(path: Path, value: bytes) -> dict[str, Any]:

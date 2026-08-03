@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.410.0
+    uses: penguin425/pcbex@v1.411.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2749,6 +2749,34 @@ pcbex-agent repair-kicad input.kicad_pcb \
 
 The JSON report records every iteration, remaining errors and warnings, repair
 actions, the stop reason, and the best observed error count.
+
+## Rust-gated circuit generation
+
+The agent can turn bounded natural-language requirements into a closed
+`circuit-spec-v2` candidate without allowing the model to emit Python or edit
+KiCad files. Every raw candidate is normalized by the Rust engine, converted
+to the canonical schematic IR, and checked by the same immutable ERC safety
+floor used for imported schematics. Repeated or non-improving candidates stop
+the correction loop, and only a native zero-error review publishes the
+digest-bound JSON bundle and namespace-isolated SKiDL source.
+
+```sh
+pcbex check-circuit-spec examples/circuit-spec-v2.json \
+  --output circuit-check.json --require-approved
+
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
+  examples/circuit-requirements.txt \
+  --output circuit-generation.json \
+  --skidl-output circuit.py \
+  --pcbex target/release/pcbex \
+  --provider-command ./structured-circuit-provider
+```
+
+The provider command is shell-free and must be the final option. Schema
+loading, provider calls, and native checks share one monotonic deadline and
+bounded process-tree/output policy. See
+[`docs/CIRCUIT_GENERATION.md`](docs/CIRCUIT_GENERATION.md) for the v2 contract,
+correction rules, evidence digests, and remaining trust boundaries.
 
 ## Schematic electrical IR
 
@@ -4042,7 +4070,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.410.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.411.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
@@ -4163,7 +4191,10 @@ a versioned KiCad schematic electrical IR. It supports polygonal multilayer
 boards, differential pairs, length tuning, copper zones, partial-span vias,
 exact KiCad pad geometry, placement optimization, DFM reporting, and headless
 or IPC-assisted KiCad workflows. The companion agent can render a validated,
-closed circuit specification as executable SKiDL and deterministically select
-parts from a normalized catalog input. It does not yet replace complete
-electrical design, analog or signal-integrity simulation, final KiCad ERC/DRC,
-or fabrication review.
+closed circuit specification as executable SKiDL, deterministically select
+parts from a normalized catalog input, and run bounded natural-language
+candidate correction against the native immutable ERC floor. Declared power
+metadata is still input evidence rather than verified datasheet truth. pcbex
+does not yet replace complete electrical design, live supplier qualification,
+analog or signal-integrity simulation, final KiCad ERC/DRC, or fabrication
+review.

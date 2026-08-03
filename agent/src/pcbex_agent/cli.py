@@ -5,7 +5,13 @@ import json
 import os
 from pathlib import Path
 
-from .bounded_io import BoundedIOError, atomic_write, read_text
+from .bounded_io import (
+    BoundedIOError,
+    atomic_write,
+    atomic_write_text_no_clobber,
+    read_text,
+    validate_no_clobber_path,
+)
 from .catalog import catalog_parts_from_json
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
@@ -20,6 +26,13 @@ from .provider import (
     ProviderError,
     provider_receipt_json_schema,
     review_schematic_with_command,
+)
+from .circuit_generation import (
+    CircuitGenerationError,
+    circuit_generation_json_schema,
+    fetch_circuit_spec_check_schema,
+    fetch_circuit_spec_v2_schema,
+    generate_circuit_with_command,
 )
 from .repair import propose_repairs
 from .repair_loop import repair_kicad_board, write_repair_report
@@ -144,6 +157,31 @@ def main() -> None:
         "circuit-spec-schema", help="write the closed Text-to-Circuit JSON Schema"
     )
     skidl_schema.add_argument("-o", "--output", type=Path)
+    generate_circuit = sub.add_parser(
+        "generate-circuit",
+        help="convert bounded natural-language requirements into a checked circuit bundle",
+    )
+    generate_circuit.add_argument("requirements", type=Path)
+    generate_circuit.add_argument("-o", "--output", type=Path, required=True)
+    generate_circuit.add_argument("--skidl-output", type=Path)
+    generate_circuit.add_argument("--pcbex", default="pcbex")
+    generate_circuit.add_argument("--max-attempts", type=int, default=3)
+    generate_circuit.add_argument("--timeout-seconds", type=float, default=120.0)
+    generate_circuit.add_argument(
+        "--maximum-output-bytes", type=int, default=1024 * 1024
+    )
+    generate_circuit.add_argument(
+        "--provider-command",
+        nargs=argparse.REMAINDER,
+        required=True,
+        help="provider executable and arguments; must be the final pcbex-agent option",
+    )
+    generation_schema = sub.add_parser(
+        "circuit-generation-schema",
+        help="write the closed bounded circuit-generation bundle schema",
+    )
+    generation_schema.add_argument("--pcbex", default=None)
+    generation_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -274,6 +312,69 @@ def main() -> None:
             _write_text(args.output, rendered)
         else:
             print(rendered, end="")
+    elif args.command == "generate-circuit":
+        try:
+            output_paths = [args.output]
+            if args.skidl_output:
+                output_paths.append(args.skidl_output)
+            normalized_paths: list[Path] = []
+            for path in output_paths:
+                if any(_paths_are_same(path, other) for other in normalized_paths):
+                    raise CircuitGenerationError(
+                        "circuit bundle and SKiDL output paths must differ"
+                    )
+                validate_no_clobber_path(path)
+                normalized_paths.append(path)
+            requirements = _read_text(args.requirements)
+            bundle = generate_circuit_with_command(
+                requirements,
+                args.pcbex,
+                args.provider_command,
+                max_attempts=args.max_attempts,
+                timeout_seconds=args.timeout_seconds,
+                maximum_output_bytes=args.maximum_output_bytes,
+            )
+            rendered = json.dumps(bundle, indent=2, ensure_ascii=False) + "\n"
+            atomic_write_text_no_clobber(
+                args.output,
+                rendered,
+                max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+            )
+            if args.skidl_output:
+                atomic_write_text_no_clobber(
+                    args.skidl_output,
+                    bundle["skidl"],
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+        except (
+            OSError,
+            BoundedIOError,
+            CircuitGenerationError,
+            ProviderError,
+        ) as error:
+            raise SystemExit(f"circuit generation failed: {error}") from error
+    elif args.command == "circuit-generation-schema":
+        try:
+            if args.output:
+                validate_no_clobber_path(args.output)
+            if args.pcbex:
+                schema = circuit_generation_json_schema(
+                    native_spec_schema=fetch_circuit_spec_v2_schema(args.pcbex),
+                    native_check_schema=fetch_circuit_spec_check_schema(args.pcbex),
+                )
+            else:
+                schema = circuit_generation_json_schema()
+            rendered = json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
+            if args.output:
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitGenerationError) as error:
+            raise SystemExit(f"circuit generation schema failed: {error}") from error
     else:
         if _paths_are_same(args.output, args.report):
             raise SystemExit("repair board output and report paths must differ")

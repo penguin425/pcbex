@@ -78,7 +78,8 @@ use pcbex_kicad::{
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
     approval_public_key, approval_transparency_log_json_schema, approval_transparency_log_sha256,
     audit_approval_log_gossip_organization_registry_history, build_ai_review_request,
-    build_ai_review_session, check_schematic, compare_electrical_reviews, compare_schematics,
+    build_ai_review_session, check_schematic, circuit_spec_check_json_schema,
+    circuit_spec_v2_json_schema, compare_electrical_reviews, compare_schematics,
     create_approval_log_anchor_proof, create_approval_log_consistency_proof,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
@@ -89,7 +90,8 @@ use pcbex_kicad::{
     new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
-    parse_electrical_policy, parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
+    parse_and_check_circuit_spec_v2, parse_electrical_policy,
+    parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
     record_simulation_evidence, render_ai_approval_quorum_summary, render_human_escalation_summary,
     render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
     render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
@@ -743,6 +745,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed text-to-circuit specification v2 JSON Schema.
+    CircuitSpecV2Schema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed circuit-spec immutable ERC check JSON Schema.
+    CircuitSpecCheckSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed schematic semantic-diff JSON Schema.
     SchematicDiffSchema {
         #[arg(short, long)]
@@ -951,6 +963,15 @@ enum Command {
         #[arg(long, value_name = "PATH", conflicts_with = "policy")]
         policy_pack: Option<PathBuf>,
         /// Fail after writing the report when error-severity findings remain.
+        #[arg(long)]
+        require_approved: bool,
+    },
+    /// Normalize a circuit-spec v2 and run the immutable electrical ERC floor.
+    CheckCircuitSpec {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Fail after writing the report when immutable electrical errors remain.
         #[arg(long)]
         require_approved: bool,
     },
@@ -4823,6 +4844,8 @@ fn capabilities_report() -> CapabilitiesReport {
             "C11 firmware source bundle",
             "C++17 firmware source bundle",
             "Python host pinout helper",
+            "Circuit specification v2",
+            "Circuit-spec immutable ERC check v1",
             "SPDX JSON",
         ],
     }
@@ -4892,6 +4915,12 @@ fn run_cli() -> Result<()> {
             } else {
                 println!("{schema}");
             }
+        }
+        Command::CircuitSpecV2Schema { output } => {
+            write_or_print_json(&circuit_spec_v2_json_schema(), output.as_ref())?;
+        }
+        Command::CircuitSpecCheckSchema { output } => {
+            write_or_print_json(&circuit_spec_check_json_schema(), output.as_ref())?;
         }
         Command::SchematicDiffSchema { output } => {
             write_or_print_json(&schematic_diff_json_schema(), output.as_ref())?;
@@ -5309,6 +5338,52 @@ fn run_cli() -> Result<()> {
                     "electrical approval rejected by policy {} with {} error(s)",
                     review.policy_id,
                     review.counts.errors
+                );
+            }
+        }
+        Command::CheckCircuitSpec {
+            input,
+            output,
+            require_approved,
+        } => {
+            if let Some(path) = output.as_ref() {
+                let normalized_output = normalize_destination(path)?;
+                let normalized_input = normalize_destination(&input)?;
+                if destinations_alias(&normalized_output, &normalized_input) {
+                    bail!(
+                        "circuit-spec output must not alias input {}",
+                        input.display()
+                    );
+                }
+            }
+            let source_bytes = fs::read_with_limit(&input, pcbex_kicad::CIRCUIT_SPEC_V2_MAX_BYTES)
+                .with_context(|| format!("reading circuit spec {}", input.display()))?;
+            let source = String::from_utf8(source_bytes)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("decoding circuit spec {} as UTF-8", input.display()))?;
+            let check = parse_and_check_circuit_spec_v2(&source).map_err(anyhow::Error::msg)?;
+            let rendered = serde_json::to_string_pretty(&check)?;
+            if let Some(path) = output {
+                fs::write(&path, format!("{rendered}\n"))
+                    .with_context(|| format!("writing circuit-spec check {}", path.display()))?;
+            } else {
+                println!("{rendered}");
+            }
+            eprintln!(
+                "circuit-spec electrical review: {}; {} error(s), {} warning(s), {} info finding(s)",
+                if check.electrical_review.approved {
+                    "approved"
+                } else {
+                    "rejected"
+                },
+                check.electrical_review.counts.errors,
+                check.electrical_review.counts.warnings,
+                check.electrical_review.counts.info
+            );
+            if require_approved && !check.electrical_review.approved {
+                bail!(
+                    "circuit-spec electrical approval rejected with {} error(s)",
+                    check.electrical_review.counts.errors
                 );
             }
         }
