@@ -53,8 +53,10 @@ The C and C++ smoke programs verify the exported count, lookup behavior, and
 the net, physical-pin, and GPIO strings for every generated descriptor.
 
 Compiler and Python invocations are argv-only subprocesses: pcbex does not
-insert a command shell, and it discards child stdout and stderr instead of
-buffering them. `--cc`, `--cxx`, and `--python` accept printable-ASCII bare
+insert a command shell. It concurrently drains stdout and stderr up to 1 MiB
+each, then discards those bytes after recording the process status. The next
+byte fails that validation command without changing the closed manifest
+schema. `--cc`, `--cxx`, and `--python` accept printable-ASCII bare
 executable names resolved through `PATH`; paths and path separators are
 rejected so host-local directories are not embedded in the published command
 evidence. Validation runs against disposable copies in a separate private
@@ -62,12 +64,16 @@ directory, and pcbex rejects any tool that changes those source copies. The
 canonical source stage is never the compiler/interpreter working directory.
 The compiler command line uses GCC/Clang-compatible flags; native MSVC `cl.exe`
 syntax is not supported by this v2 generator.
-`--timeout-seconds` selects a bounded 1–3600 second deadline per direct child
-(120 seconds by default). The timeout kills and waits for that
-direct child; it is not a process-tree sandbox and does not guarantee that
-descendants created by a selected tool are terminated. Use trusted toolchain
-executables inside a job-level sandbox when descendant containment matters. A
-failed compile, link, smoke test, or Python check is retained as failed
+`--timeout-seconds` selects a bounded 1–3600 second deadline per child
+(120 seconds by default). On Unix the child leads a fresh process group; on
+Windows it is assigned to a kill-on-close Job Object immediately after spawn,
+which leaves a short pre-assignment race. Timeout, output overflow, and
+direct-child completion terminate and reap ordinary managed descendants. This
+is not an operating-system sandbox: a Unix descendant can deliberately create
+a new session, and CPU, memory, filesystem, network, syscall, and privilege use
+remain outside this boundary. Use trusted toolchain executables inside a
+job-level sandbox when stronger containment matters. A failed compile, link,
+smoke test, or Python check is retained as failed
 evidence in the manifest; the downstream pipeline gate rejects any such
 manifest. Source-copy mutation is an integrity failure rather than ordinary
 build evidence and aborts publication entirely.
@@ -94,5 +100,5 @@ local execution evidence produced by this command, not signed attestations.
 `engine_version` records a bounded semantic producer version; the v2 schema is
 stable across pcbex releases that keep this manifest contract unchanged.
 The generator does not claim signatures, compiler/toolchain provenance,
-process-tree containment, or cross-compilation; those are later trust
+full operating-system containment, or cross-compilation; those are later trust
 boundaries.

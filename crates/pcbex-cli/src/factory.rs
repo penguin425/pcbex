@@ -5,6 +5,7 @@
 //! into a stable receipt.  Provider-specific authentication and endpoint paths
 //! remain configuration, never source-code secrets.
 
+use crate::bounded_process::{ProcessError, ProcessLimits, run_bounded_with_stdin_file};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -14,8 +15,7 @@ use std::{
     fs::{self, File},
     io::{Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    thread,
+    process::Command,
     time::{Duration, Instant},
 };
 use tempfile::{Builder as TempfileBuilder, NamedTempFile};
@@ -38,7 +38,8 @@ const MAX_FACTORY_STATUS_CHARS: usize = 4096;
 const MAX_FACTORY_SEVERITY_CHARS: usize = 64;
 const MAX_FACTORY_FINDING_CODE_CHARS: usize = 256;
 const MAX_FACTORY_FINDING_MESSAGE_CHARS: usize = 4096;
-const REPAIR_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const FACTORY_REPAIR_PROCESS_STDOUT_LIMIT_BYTES: usize = 1024 * 1024;
+const FACTORY_REPAIR_PROCESS_STDERR_LIMIT_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -294,7 +295,6 @@ pub fn run_factory_feedback_loop(
 struct FactoryLoopLimits {
     total: Duration,
     repair: Duration,
-    repair_poll_interval: Duration,
 }
 
 impl FactoryLoopLimits {
@@ -302,7 +302,6 @@ impl FactoryLoopLimits {
         Self {
             total: Duration::from_secs(FACTORY_LOOP_TIMEOUT_SECONDS),
             repair: Duration::from_secs(REPAIR_TIMEOUT_SECONDS),
-            repair_poll_interval: REPAIR_WAIT_POLL_INTERVAL,
         }
     }
 }
@@ -485,7 +484,6 @@ fn run_factory_feedback_loop_with_limits(
                 .expect("a repair is attempted only after a receipt"),
             workspace.path(),
             repair_timeout,
-            limits.repair_poll_interval,
             bearer_token_env,
         );
         attempt.repair_command_ran = repair.command_ran;
@@ -566,7 +564,6 @@ fn run_repair_command(
     receipt: &FactorySubmissionReceipt,
     workspace: &Path,
     timeout: Duration,
-    poll_interval: Duration,
     _bearer_token_env: Option<&str>,
 ) -> RepairCommandOutcome {
     let deadline = match Instant::now().checked_add(timeout) {
@@ -632,10 +629,7 @@ fn run_repair_command(
         .current_dir(workspace)
         .env("PCBEX_FACTORY_REPAIR_INPUT_PACKAGE", current_package.path())
         .env("PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE", output_package.path())
-        .env("PCBEX_FACTORY_REPAIR_RECEIPT_JSON", "stdin")
-        .stdin(Stdio::from(receipt_file))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .env("PCBEX_FACTORY_REPAIR_RECEIPT_JSON", "stdin");
     #[cfg(unix)]
     command.env("PATH", "/usr/bin:/bin").env("LC_ALL", "C");
     #[cfg(windows)]
@@ -655,96 +649,106 @@ fn run_repair_command(
         }
     }
 
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            return RepairCommandOutcome {
-                command_ran: false,
-                result: Err(format!("starting factory repair command: {error}")),
-            };
-        }
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+        return RepairCommandOutcome {
+            command_ran: false,
+            result: Err(format!(
+                "factory repair command exceeded {}",
+                display_duration(timeout)
+            )),
+        };
     };
-    let process_result = wait_for_repair_command(&mut child, deadline, timeout, poll_interval);
+    if remaining.is_zero() {
+        return RepairCommandOutcome {
+            command_ran: false,
+            result: Err(format!(
+                "factory repair command exceeded {}",
+                display_duration(timeout)
+            )),
+        };
+    }
+
+    let process_result = run_bounded_with_stdin_file(
+        &mut command,
+        receipt_file,
+        ProcessLimits {
+            timeout: remaining,
+            stdout_bytes: FACTORY_REPAIR_PROCESS_STDOUT_LIMIT_BYTES,
+            stderr_bytes: FACTORY_REPAIR_PROCESS_STDERR_LIMIT_BYTES,
+        },
+        None,
+    );
+    let command_ran = !matches!(
+        &process_result,
+        Err(ProcessError::InvalidTimeout { .. } | ProcessError::Spawn(_))
+    );
+    if !command_ran {
+        let error = match process_result {
+            Err(error @ ProcessError::InvalidTimeout { .. }) => error,
+            Err(error @ ProcessError::Spawn(_)) => error,
+            _ => unreachable!("the process error was classified as pre-spawn"),
+        };
+        return RepairCommandOutcome {
+            command_ran: false,
+            result: Err(map_repair_process_error(error, timeout)),
+        };
+    }
     if let Err(mutation) = verify_repair_input_unchanged(current_package) {
         let error = match process_result {
-            Ok(()) => mutation,
-            Err(process_error) => format!("{mutation}; {process_error}"),
+            Ok(output) if output.status.success() => mutation,
+            Ok(output) => format!(
+                "{mutation}; factory repair command failed with {}",
+                output.status
+            ),
+            Err(process_error) => {
+                format!(
+                    "{mutation}; {}",
+                    map_repair_process_error(process_error, timeout)
+                )
+            }
         };
         return RepairCommandOutcome {
             command_ran: true,
             result: Err(error),
         };
     }
-    if let Err(error) = process_result {
-        return RepairCommandOutcome {
+    match process_result {
+        Ok(output) if output.status.success() => RepairCommandOutcome {
             command_ran: true,
-            result: Err(error),
-        };
+            result: read_validated_repair_output(output_package.path()),
+        },
+        Ok(output) => RepairCommandOutcome {
+            command_ran: true,
+            result: Err(format!(
+                "factory repair command failed with {}",
+                output.status
+            )),
+        },
+        Err(process_error) => RepairCommandOutcome {
+            command_ran: true,
+            result: Err(map_repair_process_error(process_error, timeout)),
+        },
     }
-    RepairCommandOutcome {
-        command_ran: true,
-        result: read_validated_repair_output(output_package.path()),
+}
+
+fn map_repair_process_error(error: ProcessError, timeout_label: Duration) -> String {
+    match error {
+        ProcessError::InvalidTimeout { timeout } => format!(
+            "factory repair command failed: subprocess timeout must be positive and representable: {}",
+            display_duration(timeout)
+        ),
+        ProcessError::Spawn(source) => format!("starting factory repair command: {source}"),
+        ProcessError::Timeout { .. } => format!(
+            "factory repair command exceeded {}",
+            display_duration(timeout_label)
+        ),
+        error => format!("factory repair command failed: {error}"),
     }
 }
 
 #[cfg(any(windows, test))]
 fn windows_environment_name_matches(left: &str, right: &str) -> bool {
     left.eq_ignore_ascii_case(right)
-}
-
-fn wait_for_repair_command(
-    child: &mut std::process::Child,
-    deadline: Instant,
-    timeout_label: Duration,
-    poll_interval: Duration,
-) -> Result<(), String> {
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => return Err(format!("factory repair command failed with {status}")),
-            Ok(None) if Instant::now() >= deadline => {
-                let cleanup = kill_and_wait(child);
-                let mut error = format!(
-                    "factory repair command exceeded {}",
-                    display_duration(timeout_label)
-                );
-                if let Some(cleanup) = cleanup {
-                    error.push_str("; ");
-                    error.push_str(&cleanup);
-                }
-                return Err(error);
-            }
-            Ok(None) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                let sleep_for = poll_interval.min(remaining);
-                if !sleep_for.is_zero() {
-                    thread::sleep(sleep_for);
-                }
-            }
-            Err(error) => {
-                let cleanup = kill_and_wait(child);
-                let mut message = format!("waiting for factory repair command: {error}");
-                if let Some(cleanup) = cleanup {
-                    message.push_str("; ");
-                    message.push_str(&cleanup);
-                }
-                return Err(message);
-            }
-        }
-    }
-}
-
-fn kill_and_wait(child: &mut std::process::Child) -> Option<String> {
-    let kill_error = child.kill().err();
-    let wait_error = child.wait().err();
-    match (kill_error, wait_error) {
-        (None, None) => None,
-        (Some(kill), None) => Some(format!("killing factory repair command: {kill}")),
-        (None, Some(wait)) => Some(format!("reaping factory repair command: {wait}")),
-        (Some(kill), Some(wait)) => Some(format!(
-            "killing factory repair command: {kill}; reaping factory repair command: {wait}"
-        )),
-    }
 }
 
 fn verify_repair_input_unchanged(snapshot: &PackageSnapshot) -> Result<(), String> {
@@ -3307,6 +3311,82 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn repair_nonzero_exit_preserves_known_good_package_and_status_evidence() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) =
+            spawn_http_fixture(200, "application/json", failed, &[]);
+        let script = write_repair_script(temporary.path(), "exit-seven.sh", "exit 7");
+
+        let outcome = run_factory_feedback_loop(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            Some(&script),
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(!outcome.report.passed);
+        assert_eq!(outcome.report.attempts.len(), 1);
+        let attempt = &outcome.report.attempts[0];
+        assert!(attempt.receipt.is_some());
+        assert!(attempt.repair_command_ran);
+        assert_eq!(
+            attempt.error.as_deref(),
+            Some("factory repair command failed with exit status: 7")
+        );
+        assert_eq!(outcome.final_package, package);
+        assert_eq!(outcome.report.final_package_sha256, sha256(&package));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_missing_executable_reports_spawn_without_running_command() {
+        let temporary = tempdir().unwrap();
+        let package = manufacturing_package();
+        let snapshot = snapshot_known_good(temporary.path(), "initial-", package).unwrap();
+        let receipt = receipt_for_response(json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": []
+        }));
+        let missing = temporary.path().join("missing-repair-command");
+
+        let outcome = run_repair_command(
+            &missing,
+            &snapshot,
+            &receipt,
+            temporary.path(),
+            Duration::from_secs(1),
+            None,
+        );
+
+        assert!(!outcome.command_ran);
+        assert!(
+            outcome
+                .result
+                .as_ref()
+                .unwrap_err()
+                .starts_with("starting factory repair command:")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn repair_timeout_is_bounded_by_internal_short_limit_and_keeps_input() {
         let temporary = tempdir().unwrap();
         let package_path = temporary.path().join("manufacturing.zip");
@@ -3324,7 +3404,6 @@ mod tests {
         let limits = FactoryLoopLimits {
             total: Duration::from_secs(3),
             repair: Duration::from_millis(100),
-            repair_poll_interval: Duration::from_millis(5),
         };
 
         let started = Instant::now();
@@ -3353,6 +3432,168 @@ mod tests {
                 .contains("exceeded")
         );
         assert_eq!(outcome.final_package, package);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_success_kills_background_descendant() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": []
+        }))
+        .unwrap();
+        let passed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": true,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) = spawn_http_sequence(vec![failed, passed]);
+        let marker = temporary.path().join("success-descendant-marker");
+        let script = write_repair_script(
+            temporary.path(),
+            "success-descendant.sh",
+            &format!(
+                "(sleep 0.25; printf leaked > '{}') >/dev/null 2>&1 &\ncp \"$PCBEX_FACTORY_REPAIR_INPUT_PACKAGE\" \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"",
+                marker.display()
+            ),
+        );
+
+        let outcome = run_factory_feedback_loop(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            Some(&script),
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(outcome.report.passed);
+        assert!(outcome.report.attempts[0].repair_command_ran);
+        assert_eq!(outcome.final_package, package);
+        thread::sleep(Duration::from_millis(350));
+        assert!(
+            !marker.exists(),
+            "successful repair left a descendant running"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_timeout_kills_background_descendant() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) =
+            spawn_http_fixture(200, "application/json", failed, &[]);
+        let marker = temporary.path().join("timeout-descendant-marker");
+        let script = write_repair_script(
+            temporary.path(),
+            "timeout-descendant.sh",
+            &format!(
+                "(sleep 0.25; printf leaked > '{}') >/dev/null 2>&1 &\nwhile :; do :; done",
+                marker.display()
+            ),
+        );
+        let limits = FactoryLoopLimits {
+            total: Duration::from_secs(3),
+            repair: Duration::from_millis(100),
+        };
+
+        let outcome = run_factory_feedback_loop_with_limits(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            Some(&script),
+            limits,
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(!outcome.report.passed);
+        assert!(outcome.report.attempts[0].repair_command_ran);
+        assert!(
+            outcome.report.attempts[0]
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("factory repair command exceeded 100 milliseconds")
+        );
+        assert_eq!(outcome.final_package, package);
+        thread::sleep(Duration::from_millis(350));
+        assert!(
+            !marker.exists(),
+            "timed-out repair left a descendant running"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_output_limit_preserves_known_good_package_and_error_evidence() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) =
+            spawn_http_fixture(200, "application/json", failed, &[]);
+        let script = write_repair_script(
+            temporary.path(),
+            "stdout-limit.sh",
+            "head -c 1048577 /dev/zero",
+        );
+
+        let outcome = run_factory_feedback_loop(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            Some(&script),
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(!outcome.report.passed);
+        assert_eq!(outcome.report.attempts.len(), 1);
+        let attempt = &outcome.report.attempts[0];
+        assert!(attempt.receipt.is_some());
+        assert!(attempt.repair_command_ran);
+        assert!(
+            attempt.error.as_deref().unwrap().contains(
+                "factory repair command failed: subprocess stdout exceeded 1048576 bytes"
+            )
+        );
+        assert_eq!(outcome.final_package, package);
+        assert_eq!(outcome.report.final_package_sha256, sha256(&package));
     }
 
     #[test]

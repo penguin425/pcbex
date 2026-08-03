@@ -6,6 +6,7 @@
 //! process cleanup.
 
 use std::fmt;
+use std::fs::File;
 use std::io::{self, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,6 +60,9 @@ pub enum ProcessError {
         timeout: Duration,
     },
     Spawn(io::Error),
+    /// The child was spawned, but post-spawn process supervision setup failed.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    PostSpawnSetup(io::Error),
     Wait(io::Error),
     Read {
         stream: ProcessStream,
@@ -85,6 +89,9 @@ impl fmt::Display for ProcessError {
                 display_duration(*timeout)
             ),
             Self::Spawn(source) => write!(formatter, "spawning subprocess: {source}"),
+            Self::PostSpawnSetup(source) => {
+                write!(formatter, "configuring subprocess after spawn: {source}")
+            }
             Self::Wait(source) => write!(formatter, "waiting for subprocess: {source}"),
             Self::Read { stream, source } => {
                 write!(formatter, "reading subprocess {stream}: {source}")
@@ -110,7 +117,7 @@ impl fmt::Display for ProcessError {
 impl std::error::Error for ProcessError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Spawn(source) | Self::Wait(source) => Some(source),
+            Self::Spawn(source) | Self::PostSpawnSetup(source) | Self::Wait(source) => Some(source),
             Self::Read { source, .. } => Some(source),
             Self::InvalidTimeout { .. }
             | Self::Timeout { .. }
@@ -137,12 +144,37 @@ enum ReaderEvent {
 /// The command is never run through a shell.  Standard input is always
 /// replaced with `null`, and standard output/error are always piped and read
 /// concurrently in fixed-size chunks.  On Unix, the child becomes the leader
-/// of a fresh process group so a timeout or cancellation also terminates its
-/// descendants.  On Windows, the optional Job Object implementation provides
-/// the equivalent kill-on-close behavior once the crate's `windows-sys`
-/// dependency is enabled (see [`windows_job`] below).
+/// of a fresh process group so timeout, cancellation, output failure, or
+/// direct-child completion also terminates its ordinary descendants.  On
+/// Windows, the optional Job Object implementation provides the equivalent
+/// kill-on-close behavior once the crate's `windows-sys` dependency is enabled
+/// (see [`windows_job`] below).
 pub fn run_bounded(
     command: &mut Command,
+    limits: ProcessLimits,
+    cancellation: Option<&AtomicBool>,
+) -> Result<ProcessOutput, ProcessError> {
+    run_bounded_inner(command, Stdio::null(), limits, cancellation)
+}
+
+/// Run a command with bounded output and an exact file-backed standard input.
+///
+/// The supplied file is passed directly to the child.  Its current cursor
+/// position is preserved, so callers must seek it to the desired starting
+/// offset before invoking this function.  The file is consumed by the child
+/// process and is closed when the child is reaped.
+pub fn run_bounded_with_stdin_file(
+    command: &mut Command,
+    stdin: File,
+    limits: ProcessLimits,
+    cancellation: Option<&AtomicBool>,
+) -> Result<ProcessOutput, ProcessError> {
+    run_bounded_inner(command, Stdio::from(stdin), limits, cancellation)
+}
+
+fn run_bounded_inner(
+    command: &mut Command,
+    stdin: Stdio,
     limits: ProcessLimits,
     cancellation: Option<&AtomicBool>,
 ) -> Result<ProcessOutput, ProcessError> {
@@ -162,7 +194,7 @@ pub fn run_bounded(
             })?;
     configure_command(command);
     command
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -174,7 +206,7 @@ pub fn run_bounded(
         Err(source) => {
             let cleanup = terminate_and_reap(&mut child, None);
             return Err(match cleanup {
-                Ok(()) => ProcessError::Spawn(source),
+                Ok(()) => ProcessError::PostSpawnSetup(source),
                 Err(cleanup) => ProcessError::Wait(cleanup),
             });
         }
@@ -252,6 +284,7 @@ pub fn run_bounded(
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
     let mut failure = None;
+    let mut tree_termination_attempted = false;
 
     loop {
         if let Some(error) = cancellation_error(cancellation) {
@@ -262,9 +295,18 @@ pub fn run_bounded(
             });
         }
 
-        if failure.is_none() {
+        if failure.is_none() && status.is_none() {
             match child.try_wait() {
-                Ok(Some(child_status)) => status = Some(child_status),
+                Ok(Some(child_status)) => {
+                    status = Some(child_status);
+                    // Once the direct child has exited, descendants that
+                    // inherited its output pipes must be terminated before
+                    // waiting for reader EOF. Otherwise a successful command
+                    // can consume the entire timeout while waiting on a
+                    // background process that no longer has useful work.
+                    tree_termination_attempted = true;
+                    terminate_remaining_descendants(&child, terminate_handle(&job));
+                }
                 Ok(None) => {}
                 Err(source) => failure = Some(ProcessError::Wait(source)),
             }
@@ -336,7 +378,16 @@ pub fn run_bounded(
     }
 
     if let Some(error) = failure {
-        let cleanup = terminate_and_reap(&mut child, terminate_handle(&job));
+        // A direct-child status observation already attempted process-tree
+        // termination.  Repeating a group/Job termination after a long pipe
+        // drain can race PID/PGID reuse, so only reap the already-observed
+        // child on this path.  Before status observation, retain the normal
+        // tree-kill cleanup.
+        let cleanup = if tree_termination_attempted {
+            reap_only(&mut child)
+        } else {
+            terminate_and_reap(&mut child, terminate_handle(&job))
+        };
         // Closing the receiver releases any blocked sends. Do not join on a
         // failure path: an adversarial descendant can escape a Unix process
         // group and retain inherited pipe descriptors. Normal completion
@@ -362,10 +413,6 @@ pub fn run_bounded(
             source: io::Error::other("stderr reader thread panicked"),
         });
     }
-
-    // A successful direct child must not be able to leave ordinary background
-    // descendants running after it closes the captured streams and exits.
-    terminate_remaining_descendants(&child, terminate_handle(&job));
 
     Ok(ProcessOutput {
         status,
@@ -456,6 +503,10 @@ fn cleanup_error(original: ProcessError, cleanup: io::Result<()>) -> ProcessErro
         Ok(()) => original,
         Err(source) => ProcessError::Wait(source),
     }
+}
+
+fn reap_only(child: &mut Child) -> io::Result<()> {
+    child.wait().map(|_| ())
 }
 
 #[cfg(unix)]
@@ -625,6 +676,7 @@ mod windows_job {
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::{Seek, SeekFrom, Write};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::thread;
 
@@ -652,6 +704,51 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(output.stdout, b"out");
         assert_eq!(output.stderr, b"err");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_exact_file_stdin() {
+        let mut stdin = tempfile::tempfile().expect("temporary stdin file");
+        let input = b"exact stdin\0bytes\n";
+        stdin.write_all(input).expect("write stdin bytes");
+        stdin.seek(SeekFrom::Start(0)).expect("rewind stdin file");
+
+        let mut command = shell("cat");
+        let output = run_bounded_with_stdin_file(
+            &mut command,
+            stdin,
+            limits(Duration::from_secs(1), input.len(), 32),
+            None,
+        )
+        .expect("file-backed stdin command succeeds");
+
+        assert!(output.status.success());
+        assert_eq!(output.stdout, input);
+        assert!(output.stderr.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn large_file_stdin_does_not_block_a_child_that_exits_without_reading() {
+        let mut stdin = tempfile::tempfile().expect("temporary stdin file");
+        stdin
+            .write_all(&vec![b'x'; 256 * 1024])
+            .expect("write large stdin file");
+        stdin.seek(SeekFrom::Start(0)).expect("rewind stdin file");
+
+        let mut command = shell(":");
+        let output = run_bounded_with_stdin_file(
+            &mut command,
+            stdin,
+            limits(Duration::from_secs(1), 32, 32),
+            None,
+        )
+        .expect("child that ignores stdin should still complete");
+
+        assert!(output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(output.stderr.is_empty());
     }
 
     #[cfg(unix)]
@@ -787,10 +884,14 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         let marker = directory.path().join("background-marker");
         let marker_arg = marker.to_string_lossy().into_owned();
-        let mut command = shell("(sleep 1; printf leaked > \"$1\") >/dev/null 2>&1 &");
+        let mut command = shell("(sleep 1; printf leaked > \"$1\") &");
         command.arg("pcbex-test").arg(&marker_arg);
-        let output = run_bounded(&mut command, limits(Duration::from_secs(1), 32, 32), None)
-            .expect("direct child succeeds");
+        let output = run_bounded(
+            &mut command,
+            limits(Duration::from_millis(200), 32, 32),
+            None,
+        )
+        .expect("direct child succeeds");
         assert!(output.status.success());
         thread::sleep(Duration::from_millis(1_200));
         assert!(

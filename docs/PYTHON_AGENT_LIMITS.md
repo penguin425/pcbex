@@ -94,7 +94,8 @@ the external process is running.
 ## Scope
 
 Managed HTTPS AI providers already have their own response byte and end-to-end
-time limits; this release routes their local request and evidence files through
-the shared facade. Rust firmware/factory subprocesses, manufacturing ZIP and
-artifact walkers, release helpers, and CI shell/background processes remain
-separate follow-up boundaries.
+time limits; their local request and evidence files use the shared Python
+facade. Rust firmware and factory-repair subprocesses now use the Rust process
+supervisor documented in [`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). Manufacturing
+ZIP and artifact walkers, release helpers, and CI shell/background processes
+remain separate follow-up boundaries.

@@ -90,9 +90,10 @@ artifact-digest validation again before that candidate may replace the
 known-good package or reach the network. The original input is never a repair
 output or fallback target.
 
-The wrapper is launched directly without a shell, with stdout and stderr
-discarded. It receives the normalized failed receipt as JSON on stdin and
-these environment variables:
+The wrapper is launched directly without a shell. pcbex concurrently drains
+stdout and stderr up to 1 MiB each and discards the captured bytes after the
+status decision. It receives the normalized failed receipt from a seek-rewound
+temporary file on stdin and these environment variables:
 
 - `PCBEX_FACTORY_REPAIR_INPUT_PACKAGE`: current ZIP path, which must remain
   unchanged;
@@ -109,17 +110,21 @@ Wrappers needing credentials, proxy settings, `HOME`, or other configuration
 must obtain them through a deployment-owned mechanism rather than expecting
 ambient inheritance. This is a narrow secret boundary, not a claim that
 arbitrary repair programs are safe: the wrapper remains trusted deployment
-code, and the timeout/process controls apply to the direct child. pcbex does
-not provide a full OS sandbox for the wrapper or guarantee control of processes
-that it starts. Deploy it with appropriate operating-system identity,
-filesystem, network, and process restrictions.
+code. On Unix the wrapper leads a fresh process group; on Windows it is assigned
+to a kill-on-close Job Object immediately after spawn, which leaves a short
+pre-assignment race. Timeout, output overflow, and direct-child completion
+terminate and reap ordinary managed descendants. pcbex does not provide a full
+OS sandbox: a Unix descendant can deliberately create another session, and CPU,
+memory, filesystem, network, syscall, and privilege use remain outside this
+boundary. Deploy it with appropriate operating-system identity, filesystem,
+network, and process restrictions.
 
 The wrapper must produce a complete, non-empty manifest ZIP no larger than 128
 MiB. It cannot emit only changed Gerbers or copy a package and replace an
 artifact without also rebuilding the ZIP's `manifest.json` sizes and SHA-256
-digests. A missing output, input mutation, non-zero exit, direct-child timeout,
-or invalid candidate stops the loop and retains the last fully validated
-package as the fallback.
+digests. A missing output, input mutation, non-zero exit, timeout, output
+overflow, or invalid candidate stops the loop and retains the last fully
+validated package as the fallback.
 
 Once the initial package validates, submission, transport, repair, and
 candidate-validation failures are captured in the closed loop report instead
