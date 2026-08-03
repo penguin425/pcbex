@@ -126,6 +126,17 @@ digests. A missing output, input mutation, non-zero exit, timeout, output
 overflow, or invalid candidate stops the loop and retains the last fully
 validated package as the fallback.
 
+After a successful wrapper exit, pcbex scans the complete private repair
+workspace without following links. The same production manufacturing contract
+limits it to 4,096 descendant entries, depth 16, 128 MiB per file and candidate
+ZIP, 512 MiB expanded ZIP artifacts, 1 MiB manifests/Gerber jobs, 1 GiB total
+bytes, and portable UTF-8 basenames of at most 255 bytes. Symlinks, sockets,
+other non-regular entries, non-portable/colliding names, and a quota overage
+reject the candidate before it can replace the last known-good package. This
+scan occurs after the managed process has terminated; the operating-system
+sandbox remains responsible for preventing live disk exhaustion or mutation
+races during execution.
+
 Once the initial package validates, submission, transport, repair, and
 candidate-validation failures are captured in the closed loop report instead
 of discarding the available evidence. `factory-feedback-loop-schema` prints

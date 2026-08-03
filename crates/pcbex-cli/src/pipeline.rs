@@ -8,6 +8,7 @@ use crate::firmware::{
     FIRMWARE_ARTIFACTS, FIRMWARE_SCHEMA_VERSION, FirmwareBuildEvidence, FirmwareCommandEvidence,
     FirmwareManifest, MAX_FIRMWARE_ARTIFACT_BYTES,
 };
+use crate::manufacturing_limits::MAX_PACKAGE_BYTES;
 use crate::policy_pack::parse_policy_pack;
 use pcbex_core::{
     DfmProfile, Rules, apply_dfm_profile, checking::CheckReport, checking::check_board,
@@ -33,7 +34,6 @@ const MAX_POLICY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_REVIEW_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BOARD_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_ANALYSIS_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
 // A receipt repeats normalized quote/findings beside the bounded raw response,
 // and pretty JSON can be substantially larger than the provider's 8 MiB body.
 const MAX_FACTORY_RECEIPT_BYTES: u64 = 64 * 1024 * 1024;

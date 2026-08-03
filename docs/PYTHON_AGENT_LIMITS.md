@@ -96,6 +96,7 @@ the external process is running.
 Managed HTTPS AI providers already have their own response byte and end-to-end
 time limits; their local request and evidence files use the shared Python
 facade. Rust firmware and factory-repair subprocesses now use the Rust process
-supervisor documented in [`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). Manufacturing
-ZIP and artifact walkers, release helpers, and CI shell/background processes
-remain separate follow-up boundaries.
+supervisor documented in [`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). Rust
+manufacturing ZIP, artifact, and repair-workspace walkers now share a finite
+quota contract. Python external-child filesystem growth, release helpers, and
+CI shell/background processes remain separate follow-up boundaries.

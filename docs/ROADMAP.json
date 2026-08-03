@@ -559,6 +559,11 @@
     {
       "id": "supervised-firmware-factory-subprocesses",
       "release": "v1.408.0",
+      "status": "released"
+    },
+    {
+      "id": "manufacturing-package-workspace-quotas",
+      "release": "v1.409.0",
       "status": "current"
     }
   ]

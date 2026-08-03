@@ -353,7 +353,9 @@ cargo run -p pcbex -- fabricate multilayer.routed.kicad_pcb \
 Source boards are not modified, and pre-existing output file contents are not
 read or included in the package. See [the manufacturing package
 contract](docs/MANUFACTURING_PACKAGE.md) for metadata validation and the
-vendor-neutral CPL coordinate convention.
+vendor-neutral CPL coordinate convention. Manufacturing staging, normalization,
+ZIP creation, factory repair, and publication share finite file-count, depth,
+per-file, aggregate-workspace, archive, and portable-name quotas.
 
 Submit that exact archive to a deployment-owned JLCPCB, PCBWay, or generic
 quote/DFM adapter without putting credentials in argv:
@@ -2106,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.408.0
+    uses: penguin425/pcbex@v1.409.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -4033,7 +4035,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.408.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.409.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

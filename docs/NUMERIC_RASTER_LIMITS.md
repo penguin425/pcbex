@@ -90,8 +90,8 @@ portfolio.
 Generic Rust CLI files and the doctor, KiCad, and MCP subprocess paths now have
 separate dynamic controls documented in
 [`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). Repeated routing-candidate portfolios,
-aggregate arc linearization, placement/optimization passes, specialized
-manufacturing artifact walkers, and Python or CI subprocesses still require
-their own aggregate controls. Keeping those boundaries explicit prevents this
-static preflight from claiming a whole-command wall-clock guarantee it does not
-provide.
+aggregate arc linearization, placement/optimization passes, and Python or CI
+subprocesses still require their own aggregate controls. Rust manufacturing
+artifact and repair workspaces use the separate quota contract documented
+there. Keeping those boundaries explicit prevents this static preflight from
+claiming a whole-command wall-clock guarantee it does not provide.

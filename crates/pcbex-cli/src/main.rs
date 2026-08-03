@@ -161,6 +161,7 @@ mod canary_completion;
 mod factory;
 mod firmware;
 mod manufacturing_feedback;
+mod manufacturing_limits;
 mod manufacturing_package;
 mod mcp;
 mod pipeline;
@@ -201,6 +202,7 @@ use canary_completion::{
 use factory::{
     FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
     factory_submission_json_schema, run_factory_feedback_loop, submit_factory_package,
+    validate_manufacturing_package,
 };
 use firmware::{
     FIRMWARE_ARTIFACTS, FirmwareBuildOptions, FirmwareManifest, firmware_bundle_schema,
@@ -215,6 +217,7 @@ use manufacturing_feedback::{
     render_manufacturing_feedback_comparison_summary, render_manufacturing_feedback_summary,
     verify_analysis_manifest_board,
 };
+use manufacturing_limits::{ManufacturingLimits, scan_manufacturing_workspace};
 use manufacturing_package::{
     KiCadIdentity, KiCadProjectInput, collect_staged_artifacts, normalize_kicad_artifacts,
     prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
@@ -14716,8 +14719,11 @@ fn run_cli() -> Result<()> {
                 .with_context(|| format!("creating {}", staging_dir.display()))?;
             let (staged_input, project_inputs) =
                 stage_kicad_project(&input, &input_bytes, &source_dir)?;
+            enforce_manufacturing_workspace_quota(staging.path(), "project staging")?;
             let drc_report = staging_dir.join("drc.rpt");
             run_kicad_drc_to(&staged_input, &drc_report, &kicad_environment)?;
+            verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
+            enforce_manufacturing_workspace_quota(staging.path(), "KiCad DRC")?;
             run_kicad_export(
                 &[
                     "pcb",
@@ -14732,17 +14738,24 @@ fn run_cli() -> Result<()> {
                 &staged_input,
                 &kicad_environment,
             )?;
+            verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
+            enforce_manufacturing_workspace_quota(staging.path(), "KiCad Gerber export")?;
             run_kicad_export(
                 &["pcb", "export", "drill", "--output"],
                 &staging_dir,
                 &staged_input,
                 &kicad_environment,
             )?;
+            verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
+            enforce_manufacturing_workspace_quota(staging.path(), "KiCad drill export")?;
             let exported_artifacts = collect_staged_artifacts(&staging_dir)?;
             validate_exported_layer_set(&exported_artifacts, &gerber_layers)?;
             normalize_kicad_artifacts(&exported_artifacts)?;
+            enforce_manufacturing_workspace_quota(staging.path(), "artifact normalization")?;
             let kicad_identity = kicad_cli_identity(&kicad_environment)?;
-            write_manufacturing_package(
+            verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
+            enforce_manufacturing_workspace_quota(staging.path(), "KiCad identity")?;
+            let staged_archive = write_manufacturing_package(
                 &staging_dir,
                 &input,
                 &input_bytes,
@@ -14751,6 +14764,16 @@ fn run_cli() -> Result<()> {
                 &exported_artifacts,
                 &kicad_identity,
             )?;
+            let staged_package = fs::read(&staged_archive).with_context(|| {
+                format!(
+                    "reading generated manufacturing archive {}",
+                    staged_archive.display()
+                )
+            })?;
+            validate_manufacturing_package(&staged_package)
+                .map_err(anyhow::Error::msg)
+                .context("validating generated manufacturing package")?;
+            enforce_manufacturing_workspace_quota(staging.path(), "package creation")?;
             let archive = publish_staged_package(&staging_dir, &output_dir)?;
             eprintln!(
                 "manufacturing files written to {}; archive: {}",
@@ -15822,6 +15845,15 @@ fn run_kicad_drc(board: &Path) -> Result<PathBuf> {
     Ok(report)
 }
 
+fn enforce_manufacturing_workspace_quota(workspace: &Path, phase: &str) -> Result<()> {
+    scan_manufacturing_workspace(
+        workspace,
+        ManufacturingLimits::production(),
+        &format!("manufacturing workspace after {phase}"),
+    )?;
+    Ok(())
+}
+
 fn run_kicad_drc_to(board: &Path, report: &Path, environment: &Path) -> Result<()> {
     let output_directory = environment.join("drc-output");
     fs::create_dir_all(&output_directory).with_context(|| {
@@ -15966,6 +15998,44 @@ fn stage_kicad_project(
     Ok((staged_input, project_inputs))
 }
 
+fn verify_staged_kicad_project(
+    staged_input: &Path,
+    expected_input: &[u8],
+    project_inputs: &[KiCadProjectInput],
+) -> Result<()> {
+    let staged_input_bytes = fs::read(staged_input)
+        .with_context(|| format!("re-reading staged KiCad board {}", staged_input.display()))?;
+    if staged_input_bytes != expected_input {
+        bail!(
+            "staged KiCad board changed during manufacturing: {}",
+            staged_input.display()
+        );
+    }
+    let source_dir = staged_input
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("staged KiCad board is missing its source directory"))?;
+    for project_input in project_inputs {
+        let name = project_input
+            .path
+            .file_name()
+            .ok_or_else(|| anyhow::anyhow!("KiCad project input is missing its staged filename"))?;
+        let staged_project_input = source_dir.join(name);
+        let staged_bytes = fs::read(&staged_project_input).with_context(|| {
+            format!(
+                "re-reading staged KiCad project input {}",
+                staged_project_input.display()
+            )
+        })?;
+        if staged_bytes != project_input.bytes {
+            bail!(
+                "staged KiCad project input changed during manufacturing: {}",
+                staged_project_input.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn kicad_cli_identity(environment: &Path) -> Result<KiCadIdentity> {
     let mut command = kicad_command(environment)?;
     command.args(["version", "--format", "about"]);
@@ -16064,6 +16134,35 @@ mod tests {
 
         let error = stage_kicad_project(&board, b"(kicad_pcb)", &source_dir).unwrap_err();
         assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    #[test]
+    fn manufacturing_staging_verification_rejects_same_size_mutation() {
+        let workspace = tempfile::tempdir().unwrap();
+        let source_dir = workspace.path().join("staged");
+        fs::create_dir(&source_dir).unwrap();
+        let board = workspace.path().join("board.kicad_pcb");
+        let project = workspace.path().join("board.kicad_pro");
+        fs::write(&board, b"board-one").unwrap();
+        fs::write(&project, b"project-one").unwrap();
+
+        let (staged_board, project_inputs) =
+            stage_kicad_project(&board, b"board-one", &source_dir).unwrap();
+        verify_staged_kicad_project(&staged_board, b"board-one", &project_inputs).unwrap();
+
+        fs::write(&staged_board, b"board-two").unwrap();
+        let error =
+            verify_staged_kicad_project(&staged_board, b"board-one", &project_inputs).unwrap_err();
+        assert!(error.to_string().contains("board changed"), "{error:#}");
+
+        fs::write(&staged_board, b"board-one").unwrap();
+        fs::write(source_dir.join("board.kicad_pro"), b"project-two").unwrap();
+        let error =
+            verify_staged_kicad_project(&staged_board, b"board-one", &project_inputs).unwrap_err();
+        assert!(
+            error.to_string().contains("project input changed"),
+            "{error:#}"
+        );
     }
 
     #[test]
