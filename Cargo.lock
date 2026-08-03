@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex"
-version = "1.404.0"
+version = "1.405.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -703,12 +703,13 @@ dependencies = [
  "sha2",
  "tempfile",
  "ureq",
+ "windows-sys 0.61.2",
  "zip",
 ]
 
 [[package]]
 name = "pcbex-core"
-version = "1.404.0"
+version = "1.405.0"
 dependencies = [
  "criterion",
  "proptest",
@@ -718,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-kicad"
-version = "1.404.0"
+version = "1.405.0"
 dependencies = [
  "ed25519-dalek",
  "hex",

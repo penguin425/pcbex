@@ -23,7 +23,7 @@ separate no-copy sequence mode that preserves its existing empty or multiple
 top-level rule behavior without adding a virtual list depth.
 
 These limits bound parser amplification after a caller has supplied a `&str`.
-Some generic CLI paths still read a complete file before entering the parser;
-bounded metadata checks and file reads at that outer I/O boundary are a
-separate hardening step. KiCad's own DRC and format validation remain the final
-authority for supported documents.
+The Rust CLI's outer file boundary now rejects non-regular or symlinked inputs,
+checks file identity around a bounded 128 MiB read, and decodes text strictly;
+see [`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). KiCad's own DRC and format
+validation remain the final authority for supported documents.

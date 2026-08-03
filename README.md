@@ -138,6 +138,13 @@ pcbex schema --output board-v2.schema.json
 pcbex migrate old-board.json --output board-v2.json
 ```
 
+The Rust CLI reads generic inputs through a shared 128 MiB, regular-file-only
+boundary and publishes generic outputs with per-file atomic replacement.
+Symlink path components are rejected. Purpose-specific pipeline, firmware, and
+factory limits may be smaller; see
+[`docs/CLI_IO_LIMITS.md`](docs/CLI_IO_LIMITS.md) for exact subprocess and MCP
+limits as well as the explicit sandbox exclusions.
+
 Optional `net_classes` define per-class track width, clearance, via dimensions,
 and allowed layers. Assign a class by setting a net's `class` field. Routing and
 internal rule checking both apply the class; unspecified nets use board defaults.
@@ -2094,7 +2101,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.404.0
+    uses: penguin425/pcbex@v1.405.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2240,6 +2247,9 @@ capture stdout and stderr so the stdio transport emits only newline-delimited
 JSON-RPC messages. Expected analysis or regression gate failures use
 `isError: true` while retaining structured manifests and artifact paths;
 malformed requests remain JSON-RPC errors so an agent can correct its call.
+Each request and serialized response is capped at 16 MiB. Tool subprocesses
+have a 600-second deadline, 8 MiB stdout ceiling, and 1 MiB stderr ceiling;
+expired tasks actively cancel their running child.
 
 For 2025-11-25 clients, the server also implements the experimental MCP Tasks
 API. Board analysis/comparison/routing, manufacturing-feedback tools, and
@@ -2266,9 +2276,10 @@ Use `tasks/get` to poll, `tasks/result` to retrieve the original tool result,
 `tasks/list` to inspect retained jobs, and `tasks/cancel` to terminate work.
 Tasks are process-local, default to a 10-minute lifetime, and permit a requested
 TTL up to 24 hours. The server retains at most 32 tasks and executes at most
-four concurrently. Older negotiated protocol versions continue to execute
-calls synchronously and ignore task augmentation as required by their
-capability model.
+four concurrently. A task watchdog actively cancels bounded child work at TTL
+expiry. Older negotiated protocol versions continue to execute calls
+synchronously and ignore task augmentation as required by their capability
+model.
 
 Analysis and routing tools require explicit output paths and may overwrite
 files there. MCP hosts should retain their normal user-approval prompt for
@@ -4001,7 +4012,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.404.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.405.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
@@ -4067,6 +4078,9 @@ text or assuming compatibility from the executable version alone.
 The command always emits a versioned JSON report. Optional integrations are
 reported without failing the command; `--require-kicad` promotes KiCad CLI
 availability to a required readiness check.
+Each version check has a 10-second deadline and captures at most 64 KiB from
+each output stream, so a missing, hung, or noisy executable cannot block the
+readiness report indefinitely.
 
 Pushing a semantic-version tag from `main` creates a GitHub Release:
 

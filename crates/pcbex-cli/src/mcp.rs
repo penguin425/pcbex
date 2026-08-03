@@ -4,9 +4,9 @@ use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
-    io::{self, BufRead, Read, Write},
+    io::{self, BufRead, Write},
     path::Path,
-    process::{Command, Stdio},
+    process::Command,
     sync::{
         Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
@@ -23,6 +23,9 @@ const MAX_TASK_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
 const TASK_POLL_INTERVAL_MS: u64 = 250;
 const MAX_TASKS: usize = 32;
 const MAX_CONCURRENT_TASKS: usize = 4;
+const MAX_MCP_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+const MAX_MCP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_MCP_PROCESS_MESSAGE_BYTES: usize = 4 * 1024;
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -35,20 +38,147 @@ enum Lifecycle {
 
 pub fn serve_stdio() -> Result<()> {
     let stdin = io::stdin();
+    let mut stdin = io::BufReader::new(stdin.lock());
     let mut stdout = io::stdout().lock();
     let mut server = McpServer::default();
-    for line in stdin.lock().lines() {
-        let line = line.context("reading MCP stdio request")?;
-        if line.is_empty() {
-            continue;
-        }
-        if let Some(response) = server.handle_line(&line) {
-            serde_json::to_writer(&mut stdout, &response)?;
-            stdout.write_all(b"\n")?;
-            stdout.flush()?;
+    loop {
+        let line = read_bounded_line(&mut stdin).context("reading MCP stdio request")?;
+        let Some(line) = line else { break };
+        let response = match line {
+            BoundedLine::Line(line) if line.is_empty() => None,
+            BoundedLine::Line(line) => server.handle_line(&line),
+            BoundedLine::Oversized => Some(error_response(
+                Value::Null,
+                -32600,
+                "Invalid Request",
+                Some(json!({
+                    "detail": format!(
+                        "MCP request exceeds {MAX_MCP_REQUEST_BYTES} bytes"
+                    )
+                })),
+            )),
+        };
+        if let Some(response) = response {
+            write_bounded_response(&mut stdout, &response).context("writing MCP stdio response")?;
         }
     }
     Ok(())
+}
+
+enum BoundedLine {
+    Line(String),
+    Oversized,
+}
+
+/// Read one newline-delimited request while keeping both allocation and
+/// protocol framing bounded.  Once a line exceeds the limit, all remaining
+/// bytes through its newline (or EOF) are drained before returning so the
+/// next request starts at a known frame boundary.
+fn read_bounded_line<R: BufRead>(reader: &mut R) -> io::Result<Option<BoundedLine>> {
+    let mut bytes = Vec::new();
+    let mut oversized = false;
+
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            if oversized {
+                return Ok(Some(BoundedLine::Oversized));
+            }
+            if bytes.is_empty() {
+                return Ok(None);
+            }
+            return decode_bounded_line(bytes).map(BoundedLine::Line).map(Some);
+        }
+
+        let newline = chunk.iter().position(|byte| *byte == b'\n');
+        let content_len = newline.unwrap_or(chunk.len());
+        if !oversized {
+            if content_len > MAX_MCP_REQUEST_BYTES.saturating_sub(bytes.len()) {
+                oversized = true;
+                bytes.clear();
+            } else {
+                bytes.extend_from_slice(&chunk[..content_len]);
+            }
+        }
+        let consumed = newline.map_or(chunk.len(), |index| index + 1);
+        reader.consume(consumed);
+
+        if newline.is_some() {
+            if oversized {
+                return Ok(Some(BoundedLine::Oversized));
+            }
+            return decode_bounded_line(bytes).map(BoundedLine::Line).map(Some);
+        }
+    }
+}
+
+fn decode_bounded_line(mut bytes: Vec<u8>) -> io::Result<String> {
+    if bytes.last() == Some(&b'\r') {
+        bytes.pop();
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("MCP request is not valid UTF-8: {error}"),
+        )
+    })
+}
+
+struct BoundedResponseWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl BoundedResponseWriter {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+}
+
+impl Write for BoundedResponseWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "MCP response exceeds the byte limit",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn bounded_json_line(value: &Value) -> Option<Vec<u8>> {
+    // Reserve one byte for the protocol newline so the complete frame remains
+    // within MAX_MCP_RESPONSE_BYTES.
+    let mut output = BoundedResponseWriter::new(MAX_MCP_RESPONSE_BYTES.saturating_sub(1));
+    serde_json::to_writer(&mut output, value).ok()?;
+    output.bytes.push(b'\n');
+    Some(output.bytes)
+}
+
+fn response_bytes(value: &Value) -> Vec<u8> {
+    bounded_json_line(value).unwrap_or_else(|| {
+        let fallback = error_response(
+            Value::Null,
+            -32603,
+            "Internal error",
+            Some(json!({"detail": "MCP response exceeds 16 MiB"})),
+        );
+        bounded_json_line(&fallback).expect("bounded MCP internal-error response serializes")
+    })
+}
+
+fn write_bounded_response<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> {
+    writer.write_all(&response_bytes(value))?;
+    writer.flush()
 }
 
 struct McpServer {
@@ -403,8 +533,18 @@ impl McpServer {
         });
         // CreateTaskResult must describe the initial state even when a very
         // short operation reaches a terminal state before this method returns.
-        let create_result = success_response(id, json!({"task": task_json(&record)}));
+        let create_result = success_response(id.clone(), json!({"task": task_json(&record)}));
         self.tasks.insert(task_id, Arc::clone(&record));
+        if let Err(error) = arm_task_expiration(&record) {
+            self.tasks.remove(&record.task_id);
+            self.active_tasks.fetch_sub(1, Ordering::SeqCst);
+            return error_response(
+                id,
+                -32000,
+                "Task execution unavailable",
+                Some(json!({"detail": format!("starting task TTL monitor: {error}")})),
+            );
+        }
         let params = Value::Object(params.clone());
         let active_tasks = Arc::clone(&self.active_tasks);
         thread::spawn(move || {
@@ -539,9 +679,43 @@ impl McpServer {
     }
 
     fn remove_expired_tasks(&mut self) {
-        self.tasks
-            .retain(|_, record| record.created.elapsed() < Duration::from_millis(record.ttl_ms));
+        self.tasks.retain(|_, record| {
+            if record.created.elapsed() < Duration::from_millis(record.ttl_ms) {
+                return true;
+            }
+            expire_working_task(record);
+            false
+        });
     }
+}
+
+fn arm_task_expiration(record: &Arc<TaskRecord>) -> io::Result<()> {
+    let ttl = Duration::from_millis(record.ttl_ms);
+    let record = Arc::downgrade(record);
+    thread::Builder::new()
+        .name("pcbex-mcp-task-ttl".to_string())
+        .spawn(move || {
+            thread::sleep(ttl);
+            if let Some(record) = record.upgrade() {
+                expire_working_task(&record);
+            }
+        })?;
+    Ok(())
+}
+
+fn expire_working_task(record: &TaskRecord) {
+    let mut state = record.state.lock().expect("task state lock");
+    if state.status != TaskStatus::Working {
+        return;
+    }
+    record.cancellation.store(true, Ordering::SeqCst);
+    state.status = TaskStatus::Cancelled;
+    state.status_message = "task TTL expired".to_string();
+    state.last_updated_at = iso8601_now();
+    state.result = Some(TaskOutcome::Result(tool_error_result(
+        json!({"detail": "task TTL expired"}),
+    )));
+    record.changed.notify_all();
 }
 
 fn task_json(record: &TaskRecord) -> Value {
@@ -4206,6 +4380,11 @@ fn call_tool(
     params: Option<&Value>,
     cancellation: Option<&AtomicBool>,
 ) -> std::result::Result<Value, Value> {
+    if cancellation.is_some_and(|cancelled| cancelled.load(Ordering::SeqCst)) {
+        return Ok(tool_error_result(
+            json!({"detail": "task execution cancelled"}),
+        ));
+    }
     let params = params
         .and_then(Value::as_object)
         .ok_or_else(|| json!({"detail": "params must be an object"}))?;
@@ -11480,45 +11659,44 @@ fn execute(
 ) -> std::result::Result<Execution, Value> {
     let executable = env::current_exe()
         .map_err(|error| json!({"detail": format!("locating pcbex executable: {error}")}))?;
-    let mut child = Command::new(executable)
-        .args(arguments)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| json!({"detail": format!("starting pcbex tool process: {error}")}))?;
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-    let stdout_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = io::BufReader::new(stdout).read_to_end(&mut bytes);
-        bytes
-    });
-    let stderr_reader = thread::spawn(move || {
-        let mut bytes = Vec::new();
-        let _ = io::BufReader::new(stderr).read_to_end(&mut bytes);
-        bytes
-    });
-    let status = loop {
-        if cancellation.is_some_and(|cancelled| cancelled.load(Ordering::SeqCst)) {
-            let _ = child.kill();
-            break child.wait().map_err(|error| {
-                json!({"detail": format!("waiting for cancelled pcbex tool process: {error}")})
-            })?;
-        }
-        match child.try_wait().map_err(
-            |error| json!({"detail": format!("waiting for pcbex tool process: {error}")}),
-        )? {
-            Some(status) => break status,
-            None => thread::sleep(Duration::from_millis(10)),
-        }
-    };
-    let _stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
+    let mut command = Command::new(executable);
+    command.args(arguments);
+    let output = crate::bounded_process::run_bounded(
+        &mut command,
+        crate::bounded_process::ProcessLimits {
+            timeout: Duration::from_secs(600),
+            stdout_bytes: 8 * 1024 * 1024,
+            stderr_bytes: 1024 * 1024,
+        },
+        cancellation,
+    )
+    .map_err(|error| json!({"detail": format!("running pcbex tool process: {error}")}))?;
     Ok(Execution {
-        success: status.success(),
-        exit_code: status.code(),
-        stderr: String::from_utf8_lossy(&stderr).trim().to_string(),
+        success: output.status.success(),
+        exit_code: output.status.code(),
+        stderr: bounded_process_message(&output.stderr),
     })
+}
+
+fn bounded_process_message(bytes: &[u8]) -> String {
+    const SUFFIX: &str = "\n[stderr truncated]";
+
+    let prefix = &bytes[..bytes.len().min(MAX_MCP_PROCESS_MESSAGE_BYTES)];
+    let decoded = String::from_utf8_lossy(prefix);
+    let message = decoded.trim();
+    let truncated = bytes.len() > prefix.len() || message.len() > MAX_MCP_PROCESS_MESSAGE_BYTES;
+    if !truncated {
+        return message.to_string();
+    }
+
+    let budget = MAX_MCP_PROCESS_MESSAGE_BYTES.saturating_sub(SUFFIX.len());
+    let mut end = message.len().min(budget);
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut bounded = message[..end].trim_end().to_string();
+    bounded.push_str(SUFFIX);
+    bounded
 }
 
 fn execution_result(execution: Execution, fields: Value) -> Value {
@@ -11535,9 +11713,9 @@ fn execution_result(execution: Execution, fields: Value) -> Value {
 }
 
 fn read_json_if_present(path: &Path) -> Value {
-    std::fs::read_to_string(path)
+    crate::bounded_io::read_with_limit(path, MAX_MCP_RESPONSE_BYTES as u64)
         .ok()
-        .and_then(|source| serde_json::from_str(&source).ok())
+        .and_then(|source| serde_json::from_slice(&source).ok())
         .unwrap_or(Value::Null)
 }
 
@@ -11698,6 +11876,158 @@ fn reject_unknown(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_line_accepts_exact_limit_and_drains_oversized_frames() {
+        let mut exact = vec![b'a'; MAX_MCP_REQUEST_BYTES];
+        exact.extend_from_slice(b"\n{\"next\":true}\n");
+        let mut reader = std::io::Cursor::new(exact);
+        let line = read_bounded_line(&mut reader).unwrap().unwrap();
+        match line {
+            BoundedLine::Line(line) => assert_eq!(line.len(), MAX_MCP_REQUEST_BYTES),
+            BoundedLine::Oversized => panic!("exactly bounded request was rejected"),
+        }
+        assert!(matches!(
+            read_bounded_line(&mut reader).unwrap().unwrap(),
+            BoundedLine::Line(line) if line == "{\"next\":true}"
+        ));
+
+        let mut oversized = vec![b'b'; MAX_MCP_REQUEST_BYTES + 1];
+        oversized.extend_from_slice(b"\n{\"after\":true}\n");
+        let mut reader = std::io::Cursor::new(oversized);
+        assert!(matches!(
+            read_bounded_line(&mut reader).unwrap().unwrap(),
+            BoundedLine::Oversized
+        ));
+        assert!(matches!(
+            read_bounded_line(&mut reader).unwrap().unwrap(),
+            BoundedLine::Line(line) if line == "{\"after\":true}"
+        ));
+    }
+
+    #[test]
+    fn oversized_response_becomes_small_internal_error_without_partial_output() {
+        let base = serde_json::to_vec(&json!({"payload": ""})).unwrap().len();
+        let exact_payload = "a".repeat(MAX_MCP_RESPONSE_BYTES - 1 - base);
+        let exact = bounded_json_line(&json!({"payload": exact_payload})).unwrap();
+        assert_eq!(exact.len(), MAX_MCP_RESPONSE_BYTES);
+
+        let oversized = json!({
+            "payload": "a".repeat(MAX_MCP_RESPONSE_BYTES - base)
+        });
+        assert!(bounded_json_line(&oversized).is_none());
+        let fallback: Value = serde_json::from_slice(&response_bytes(&oversized)).unwrap();
+        assert_eq!(fallback["error"]["code"], -32603);
+        assert!(response_bytes(&oversized).len() < 1024);
+    }
+
+    #[test]
+    fn expired_working_tasks_are_cancelled_before_removal() {
+        let mut server = McpServer::default();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let created_at = iso8601_now();
+        let task_id = "expired-task".to_string();
+        server.tasks.insert(
+            task_id.clone(),
+            Arc::new(TaskRecord {
+                task_id,
+                created_at: created_at.clone(),
+                created: Instant::now() - Duration::from_secs(1),
+                ttl_ms: 1,
+                cancellation: Arc::clone(&cancellation),
+                state: Mutex::new(TaskState {
+                    status: TaskStatus::Working,
+                    status_message: "working".to_string(),
+                    last_updated_at: created_at,
+                    result: None,
+                }),
+                changed: Condvar::new(),
+            }),
+        );
+
+        server.remove_expired_tasks();
+        assert!(cancellation.load(Ordering::SeqCst));
+        assert!(server.tasks.is_empty());
+    }
+
+    #[test]
+    fn task_ttl_watchdog_actively_cancels_working_task() {
+        let created_at = iso8601_now();
+        let record = Arc::new(TaskRecord {
+            task_id: "watchdog-task".to_string(),
+            created_at: created_at.clone(),
+            created: Instant::now(),
+            ttl_ms: 10,
+            cancellation: Arc::new(AtomicBool::new(false)),
+            state: Mutex::new(TaskState {
+                status: TaskStatus::Working,
+                status_message: "working".to_string(),
+                last_updated_at: created_at,
+                result: None,
+            }),
+            changed: Condvar::new(),
+        });
+        arm_task_expiration(&record).unwrap();
+
+        let state = record.state.lock().unwrap();
+        let (state, timeout) = record
+            .changed
+            .wait_timeout_while(state, Duration::from_secs(1), |state| {
+                !state.status.is_terminal()
+            })
+            .unwrap();
+        assert!(!timeout.timed_out(), "TTL watchdog did not fire");
+        assert!(matches!(state.status, TaskStatus::Cancelled));
+        assert!(record.cancellation.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn pre_cancelled_tool_call_returns_tool_error_without_dispatch() {
+        let cancelled = AtomicBool::new(true);
+        let params = json!({"name": "list_dfm_profiles", "arguments": {}});
+        let result = call_tool(Some(&params), Some(&cancelled)).unwrap();
+        assert_eq!(result["isError"], true);
+        assert_eq!(
+            result["structuredContent"]["error"]["detail"],
+            "task execution cancelled"
+        );
+    }
+
+    #[test]
+    fn process_diagnostics_are_trimmed_and_bounded() {
+        assert_eq!(
+            bounded_process_message(b"  concise error \n"),
+            "concise error"
+        );
+
+        let oversized = vec![b'x'; MAX_MCP_PROCESS_MESSAGE_BYTES + 1];
+        let message = bounded_process_message(&oversized);
+        assert!(message.len() <= MAX_MCP_PROCESS_MESSAGE_BYTES);
+        assert!(message.ends_with("[stderr truncated]"));
+
+        let invalid = vec![0xff; MAX_MCP_PROCESS_MESSAGE_BYTES];
+        assert!(bounded_process_message(&invalid).len() <= MAX_MCP_PROCESS_MESSAGE_BYTES);
+    }
+
+    #[test]
+    fn bounded_json_file_reader_rejects_symlink_and_oversized_inputs() {
+        let directory = tempfile::tempdir().unwrap();
+        let valid = directory.path().join("valid.json");
+        std::fs::write(&valid, br#"{"ok":true}"#).unwrap();
+        assert_eq!(read_json_if_present(&valid), json!({"ok": true}));
+
+        let oversized = directory.path().join("oversized.json");
+        let file = std::fs::File::create(&oversized).unwrap();
+        file.set_len(MAX_MCP_RESPONSE_BYTES as u64 + 1).unwrap();
+        assert_eq!(read_json_if_present(&oversized), Value::Null);
+
+        #[cfg(unix)]
+        {
+            let link = directory.path().join("link.json");
+            std::os::unix::fs::symlink(&valid, &link).unwrap();
+            assert_eq!(read_json_if_present(&link), Value::Null);
+        }
+    }
 
     fn request(id: i64, method: &str, params: Value) -> Value {
         json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params})

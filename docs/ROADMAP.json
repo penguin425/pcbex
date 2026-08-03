@@ -539,6 +539,11 @@
     {
       "id": "bounded-deterministic-zone-fill-work",
       "release": "v1.404.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-cli-io-subprocess-execution",
+      "release": "v1.405.0",
       "status": "current"
     }
   ]
