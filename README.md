@@ -2076,7 +2076,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.400.0
+    uses: penguin425/pcbex@v1.401.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2730,6 +2730,16 @@ library symbols, and hierarchical sheets/labels are retained as explicit
 coverage gaps rather than silently approved. `--require-complete` writes the
 inspectable IR first and then fails if any such gap exists. The included
 example is also parsed by KiCad 10 in CI-facing verification.
+
+PCB, schematic, manufacturing, placement, and custom-rule paths share a typed,
+iterative KiCad S-expression parser. It rejects documents larger than 128 MiB,
+more than 4,000,000 lexical tokens, atoms larger than 4 MiB, nesting deeper than
+128 lists, and lists with more than 1,000,000 direct elements before the AST can
+grow without bound. Quoted parentheses remain data rather than syntax, and
+custom rules are parsed as a no-copy sequence instead of wrapping the input in
+an additional allocation. Exact limits, error behavior, and the remaining CLI
+read boundary are documented in
+[`docs/KICAD_SEXP_LIMITS.md`](docs/KICAD_SEXP_LIMITS.md).
 
 Compare two schematic revisions by electrical intent rather than KiCad
 s-expression or drawing coordinates:
@@ -3966,7 +3976,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.400.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.401.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
