@@ -120,6 +120,7 @@ auditable release.
 | v1.408.0 | Supervised firmware and factory subprocesses | Run firmware validation and factory repair children through one deadline- and output-bounded process-tree supervisor while preserving deterministic evidence and last-known-good manufacturing packages |
 | v1.409.0 | Manufacturing package and workspace quotas | Bound manufacturing file count, depth, per-file, aggregate, archive, normalization, repair-workspace, and publication work while preserving deterministic atomic packages and last-known-good evidence |
 | v1.410.0 | Bounded release and CI execution | Enforce workflow time and parallelism policy, supervise composite-action and audit children, bound release/API/file work, and gate publication on finite output trees |
+| v1.411.0 | Rust-gated natural-language circuit generation | Generate a closed circuit-spec v2 through a bounded correction loop and accept only the existing immutable native ERC floor |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -128,15 +129,17 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release applies explicit timeouts and concurrency policy to every
-GitHub Actions job, limits every matrix to two concurrent variants, bounds
-fuzz time/RSS/input size, and supervises composite-action, release-audit, and
-completion-audit child processes. Release metadata, downloaded assets, direct
-comment API responses, and action output trees now have finite count, depth,
-per-file, aggregate, and output ceilings before publication. These are
-application-level checkpoints rather than live OS CPU, memory, disk, network,
-or syscall isolation; hardened runners must provide those controls.
+The current release adds a closed, resource-bounded circuit-spec v2 with
+explicit pin electrical types and integer-microvolt power metadata. A
+shell-free provider may propose candidates, but the Rust engine normalizes
+each candidate into the canonical schematic IR and runs the existing 16-rule
+electrical checker with its immutable safety floor. One aggregate deadline,
+finite attempts and output, repeated-candidate detection, strict error-count
+improvement, and digest-bound attempt history keep the correction loop bounded
+and auditable. Only a native zero-error approval can publish the normalized
+specification and namespace-isolated SKiDL source.
 
-The next roadmap work is bounded natural-language circuit generation with a
-deterministic ERC correction loop, followed by inventory-aware supplier
-selection and a headless schematic-to-manufacturing orchestrator.
+The next roadmap work is inventory-aware supplier selection with bounded,
+digest-bound catalog receipts, followed by physical-profile injection, a
+verified circuit-to-KiCad handoff, and a headless schematic-to-manufacturing
+orchestrator.

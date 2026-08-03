@@ -569,6 +569,11 @@
     {
       "id": "bounded-release-ci-execution",
       "release": "v1.410.0",
+      "status": "released"
+    },
+    {
+      "id": "rust-gated-natural-language-circuit-generation",
+      "release": "v1.411.0",
       "status": "current"
     }
   ]

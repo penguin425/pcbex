@@ -202,6 +202,21 @@ pub use electrical::{
     electrical_review_json_schema, electrical_review_to_junit, electrical_review_to_sarif,
     explain_electrical_review, is_electrical_safety_floor_rule, parse_electrical_policy,
 };
+mod circuit_spec;
+pub use circuit_spec::{
+    CIRCUIT_SPEC_CHECK_SCHEMA_VERSION, CIRCUIT_SPEC_V2_MAX_BYTES,
+    CIRCUIT_SPEC_V2_MAX_CONNECTIONS_PER_NET, CIRCUIT_SPEC_V2_MAX_FOOTPRINT_BYTES,
+    CIRCUIT_SPEC_V2_MAX_LIB_ID_BYTES, CIRCUIT_SPEC_V2_MAX_MPN_BYTES,
+    CIRCUIT_SPEC_V2_MAX_NET_NAME_BYTES, CIRCUIT_SPEC_V2_MAX_NETS, CIRCUIT_SPEC_V2_MAX_PARTS,
+    CIRCUIT_SPEC_V2_MAX_PIN_NAME_BYTES, CIRCUIT_SPEC_V2_MAX_PIN_NUMBER_BYTES,
+    CIRCUIT_SPEC_V2_MAX_PINS_PER_PART, CIRCUIT_SPEC_V2_MAX_REFERENCE_BYTES,
+    CIRCUIT_SPEC_V2_MAX_TOTAL_CONNECTIONS, CIRCUIT_SPEC_V2_MAX_TOTAL_PINS,
+    CIRCUIT_SPEC_V2_MAX_VALUE_BYTES, CIRCUIT_SPEC_V2_SCHEMA_VERSION, CircuitConnectionV2,
+    CircuitNetV2, CircuitPartV2, CircuitPinV2, CircuitPowerV2, CircuitSpecCheck, CircuitSpecV2,
+    check_circuit_spec, circuit_spec_check_json_schema, circuit_spec_v2_json_schema,
+    circuit_spec_v2_sha256, circuit_spec_v2_to_schematic, normalize_circuit_spec_v2,
+    parse_and_check_circuit_spec_v2, parse_circuit_spec_v2,
+};
 mod manufacturing;
 pub use manufacturing::{ManufacturingPart, manufacturing_gerber_layers, manufacturing_parts};
 mod electrical_comparison;

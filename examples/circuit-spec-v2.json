@@ -1,0 +1,106 @@
+{
+  "schema_version": 2,
+  "parts": [
+    {
+      "reference": "C1",
+      "lib_id": "Device:C",
+      "value": "100nF",
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "mpn": null,
+      "power": {
+        "rail_voltage_uv": null,
+        "max_voltage_uv": null,
+        "requires_decoupling": false,
+        "decoupling": true
+      },
+      "pins": [
+        {"number": "1", "name": "1", "net": "VCC_3V3", "electrical_type": "passive"},
+        {"number": "2", "name": "2", "net": "GND", "electrical_type": "passive"}
+      ]
+    },
+    {
+      "reference": "C2",
+      "lib_id": "Device:C",
+      "value": "1uF",
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "mpn": null,
+      "power": {
+        "rail_voltage_uv": null,
+        "max_voltage_uv": null,
+        "requires_decoupling": false,
+        "decoupling": true
+      },
+      "pins": [
+        {"number": "1", "name": "1", "net": "VIN_5V", "electrical_type": "passive"},
+        {"number": "2", "name": "2", "net": "GND", "electrical_type": "passive"}
+      ]
+    },
+    {
+      "reference": "J1",
+      "lib_id": "Connector_Generic:Conn_01x02",
+      "value": "POWER_IN",
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+      "mpn": null,
+      "power": {
+        "rail_voltage_uv": null,
+        "max_voltage_uv": null,
+        "requires_decoupling": false,
+        "decoupling": false
+      },
+      "pins": [
+        {"number": "1", "name": "VIN", "net": "VIN_5V", "electrical_type": "power_output"},
+        {"number": "2", "name": "GND", "net": "GND", "electrical_type": "power_output"}
+      ]
+    },
+    {
+      "reference": "U1",
+      "lib_id": "Regulator_Linear:AP2112K-3.3",
+      "value": "AP2112K-3.3",
+      "footprint": "Package_TO_SOT_SMD:SOT-23-5",
+      "mpn": "AP2112K-3.3TRG1",
+      "power": {
+        "rail_voltage_uv": 3300000,
+        "max_voltage_uv": 6000000,
+        "requires_decoupling": true,
+        "decoupling": false
+      },
+      "pins": [
+        {"number": "1", "name": "VIN", "net": "VIN_5V", "electrical_type": "power_input"},
+        {"number": "2", "name": "GND", "net": "GND", "electrical_type": "power_input"},
+        {"number": "3", "name": "EN", "net": "VIN_5V", "electrical_type": "input"},
+        {"number": "4", "name": "NC", "net": null, "electrical_type": "no_connect"},
+        {"number": "5", "name": "VOUT", "net": "VCC_3V3", "electrical_type": "power_output"}
+      ]
+    }
+  ],
+  "nets": [
+    {
+      "name": "GND",
+      "voltage_uv": 0,
+      "connections": [
+        {"reference": "C1", "pin": "2"},
+        {"reference": "C2", "pin": "2"},
+        {"reference": "J1", "pin": "2"},
+        {"reference": "U1", "pin": "2"}
+      ]
+    },
+    {
+      "name": "VCC_3V3",
+      "voltage_uv": 3300000,
+      "connections": [
+        {"reference": "C1", "pin": "1"},
+        {"reference": "U1", "pin": "5"}
+      ]
+    },
+    {
+      "name": "VIN_5V",
+      "voltage_uv": 5000000,
+      "connections": [
+        {"reference": "C2", "pin": "1"},
+        {"reference": "J1", "pin": "1"},
+        {"reference": "U1", "pin": "1"},
+        {"reference": "U1", "pin": "3"}
+      ]
+    }
+  ]
+}

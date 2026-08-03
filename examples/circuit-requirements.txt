@@ -1,0 +1,5 @@
+Create a 5 V input to 3.3 V regulator circuit using an AP2112K-3.3.
+Expose VIN and GND on a two-pin connector. Add input and output decoupling
+capacitors, tie enable to VIN, mark the NC pin explicitly, use SMD footprints,
+and record explicit power pin types, nominal rail voltages, the regulator input
+rating, and the regulator MPN.
