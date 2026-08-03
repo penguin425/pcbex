@@ -310,12 +310,14 @@ class CircuitGenerationV1411Tests(unittest.TestCase):
 
     def test_generation_schema_closes_recursive_bundle_shapes(self):
         schema = circuit_generation_json_schema()
-        self.assertEqual(schema["$id"].rsplit("/", 1)[-1], "circuit-generation-v1.json")
+        self.assertEqual(schema["$id"].rsplit("/", 1)[-1], "circuit-generation-v2.json")
         self.assertFalse(schema["properties"]["attempt_history"]["items"]["additionalProperties"])
         self.assertFalse(schema["properties"]["spec"]["additionalProperties"])
         self.assertFalse(schema["properties"]["check"]["additionalProperties"])
         findings = schema["properties"]["check"]["properties"]["electrical_review"]["properties"]["findings"]
         self.assertFalse(findings["items"]["additionalProperties"])
+        receipt = schema["properties"]["catalog_receipt"]["anyOf"][0]
+        self.assertFalse(receipt["additionalProperties"])
 
     def test_schema_cli_preflights_output_before_native_subprocess(self):
         from pcbex_agent import cli

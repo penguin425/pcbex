@@ -574,6 +574,11 @@
     {
       "id": "rust-gated-natural-language-circuit-generation",
       "release": "v1.411.0",
+      "status": "released"
+    },
+    {
+      "id": "digest-bound-catalog-selection",
+      "release": "v1.412.0",
       "status": "current"
     }
   ]
