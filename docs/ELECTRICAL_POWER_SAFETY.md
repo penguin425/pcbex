@@ -32,12 +32,16 @@ reinterpreted as positive voltages. The deterministic gate reports:
   no capacitor on its power net. One finding is emitted per affected symbol and
   net, even when the symbol has multiple power-input pins on that net.
 
-All findings are policy-controlled, digest-bound, and included in the existing
-JSON, JUnit, and SARIF reports. `--require-approved` therefore blocks a CI
-pipeline on an error-severity power-safety finding without involving an AI
-model in the electrical decision.
+All findings are digest-bound and included in the existing JSON, JUnit, and
+SARIF reports. The four power-safety rules above are members of the immutable
+ERC safety floor: policy cannot disable them, demote them below `error`, or
+waive their findings. `--require-approved` therefore blocks a CI pipeline on a
+power-safety finding without involving an AI model in the electrical decision.
 
 Electrical policy documents remain partial overrides: omitted built-in rules
 receive their release defaults before checking, and the review's
 `policy_sha256` binds that complete effective 16-rule policy. The example
 organization policy lists all rules explicitly so its signed intent is clear.
+All 12 default-error rules must remain enabled at error severity; the four
+default-warning rules remain configurable. See
+[`ERC_SAFETY_FLOOR.md`](ERC_SAFETY_FLOOR.md) for the complete contract.

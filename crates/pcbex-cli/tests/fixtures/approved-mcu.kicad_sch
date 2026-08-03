@@ -1,0 +1,150 @@
+(kicad_sch
+  (version 20231120)
+  (generator eeschema)
+  (generator_version "8.0")
+  (uuid 00000000-0000-0000-0000-000000000001)
+  (paper "A4")
+  (lib_symbols
+    (symbol "power:VCC"
+      (power)
+      (pin_names (offset 0))
+      (in_bom no)
+      (on_board no)
+      (symbol "VCC_1_1"
+        (pin power_out line
+          (at 0 0 0)
+          (length 0)
+          (name "VCC" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))))
+    (symbol "Device:R"
+      (pin_names (offset 0))
+      (in_bom yes)
+      (on_board yes)
+      (symbol "R_1_1"
+        (pin passive line
+          (at -2.54 0 0)
+          (length 2.54)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))
+        (pin passive line
+          (at 2.54 0 180)
+          (length 2.54)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27)))))))
+    (symbol "MCU:Chip"
+      (pin_names (offset 0))
+      (in_bom yes)
+      (on_board yes)
+      (symbol "Chip_1_1"
+        (pin output line
+          (at -2.54 0 0)
+          (length 2.54)
+          (name "OUT" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27)))))
+        (pin power_in line
+          (at 0 2.54 270)
+          (length 2.54)
+          (name "VCC" (effects (font (size 1.27 1.27))))
+          (number "2" (effects (font (size 1.27 1.27))))))))
+  (junction
+    (at 30 20)
+    (diameter 0)
+    (color 0 0 0 0)
+    (uuid 00000000-0000-0000-0000-000000000010))
+  (wire
+    (pts (xy 10 20) (xy 30 20))
+    (stroke (width 0) (type default))
+    (uuid 00000000-0000-0000-0000-000000000011))
+  (wire
+    (pts (xy 30 20) (xy 40 20))
+    (stroke (width 0) (type default))
+    (uuid 00000000-0000-0000-0000-000000000012))
+  (label "SIGNAL"
+    (at 30 20 0)
+    (effects (font (size 1.27 1.27)) (justify left bottom))
+    (uuid 00000000-0000-0000-0000-000000000013))
+  (global_label "VCC"
+    (shape input)
+    (at 12.54 22.54 0)
+    (effects (font (size 1.27 1.27)) (justify left))
+    (uuid 00000000-0000-0000-0000-000000000014)
+    (property "Intersheetrefs" "${INTERSHEET_REFS}"
+      (at 12.54 22.54 0)
+      (effects (font (size 1.27 1.27)) hide)))
+  (no_connect
+    (at 42.54 20)
+    (uuid 00000000-0000-0000-0000-000000000015))
+  (symbol
+    (lib_id "MCU:Chip")
+    (at 12.54 20 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid 00000000-0000-0000-0000-000000000020)
+    (property "Reference" "U1"
+      (at 12.54 15 0)
+      (effects (font (size 1.27 1.27))))
+    (property "Value" "Chip"
+      (at 12.54 17.5 0)
+      (effects (font (size 1.27 1.27))))
+    (property "Footprint" "Package:QFN"
+      (at 12.54 20 0)
+      (effects (font (size 1.27 1.27)) hide))
+    (pin "1" (uuid 00000000-0000-0000-0000-000000000021))
+    (pin "2" (uuid 00000000-0000-0000-0000-000000000022))
+    (instances
+      (project "simple"
+        (path "/00000000-0000-0000-0000-000000000001"
+          (reference "U1")
+          (unit 1)))))
+  (symbol
+    (lib_id "Device:R")
+    (at 40 20 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid 00000000-0000-0000-0000-000000000030)
+    (property "Reference" "R1"
+      (at 40 15 0)
+      (effects (font (size 1.27 1.27))))
+    (property "Value" "10k"
+      (at 40 17.5 0)
+      (effects (font (size 1.27 1.27))))
+    (property "Footprint" "Resistor_SMD:R_0603"
+      (at 40 20 0)
+      (effects (font (size 1.27 1.27)) hide))
+    (pin "1" (uuid 00000000-0000-0000-0000-000000000031))
+    (pin "2" (uuid 00000000-0000-0000-0000-000000000032))
+    (instances
+      (project "simple"
+        (path "/00000000-0000-0000-0000-000000000001"
+          (reference "R1")
+          (unit 1)))))
+  (symbol
+    (lib_id "power:VCC")
+    (at 12.54 22.54 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom no)
+    (on_board no)
+    (dnp no)
+    (uuid 00000000-0000-0000-0000-000000000040)
+    (property "Reference" "#PWR01"
+      (at 12.54 26.35 0)
+      (effects (font (size 1.27 1.27)) hide))
+    (property "Value" "VCC"
+      (at 12.54 24.27 0)
+      (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 00000000-0000-0000-0000-000000000041))
+    (instances
+      (project "approved-mcu"
+        (path "/00000000-0000-0000-0000-000000000001"
+          (reference "#PWR01")
+          (unit 1)))))
+  (sheet_instances
+    (path "/"
+      (page "1"))))

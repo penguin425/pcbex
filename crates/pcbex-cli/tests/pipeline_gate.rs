@@ -122,6 +122,13 @@ fn example(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn fixture(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(name)
+}
+
 fn make_approved_electrical_review(
     directory: &Path,
     schematic: &Path,
@@ -134,14 +141,6 @@ fn make_approved_electrical_review(
         .output()
         .unwrap();
     assert_success(&policy_output, "electrical-policy");
-
-    let mut policy = read_json(&policy_path);
-    for rule in policy["rules"].as_object_mut().unwrap().values_mut() {
-        if rule["severity"] == "error" {
-            rule["enabled"] = Value::Bool(false);
-        }
-    }
-    write_json(&policy_path, &policy);
 
     let review_path = directory.join("electrical-review.json");
     let review_output = Command::new(binary())
@@ -371,7 +370,7 @@ fn write_firmware_manifest(directory: &Path, schematic_sha256: &str) -> PathBuf 
 }
 
 fn passing_inputs(directory: &Path) -> (PipelineInputs, String, String) {
-    let schematic = example("simple.kicad_sch");
+    let schematic = fixture("approved-mcu.kicad_sch");
     let board_input = example("simple.kicad_pcb");
     let (electrical_policy, electrical_review, schematic_sha256) =
         make_approved_electrical_review(directory, &schematic);

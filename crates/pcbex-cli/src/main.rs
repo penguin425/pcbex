@@ -941,7 +941,7 @@ enum Command {
         /// Write SARIF 2.1.0 findings for code-scanning integrations.
         #[arg(long, value_name = "PATH")]
         sarif_output: Option<PathBuf>,
-        /// Override built-in rule enablement and severities with a JSON policy.
+        /// Override advisory rules with JSON; immutable error rules cannot be weakened.
         #[arg(long, conflicts_with = "policy_pack")]
         policy: Option<PathBuf>,
         /// Apply the electrical policy from an organization policy pack.
@@ -957,11 +957,11 @@ enum Command {
         current: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
-        /// Fail after writing the report when a new or escalated error is found.
+        /// Fail for a new/escalated error or any current immutable-floor error.
         #[arg(long)]
         require_no_new_errors: bool,
     },
-    /// Apply explicit, expiring waivers to a deterministic electrical review.
+    /// Apply explicit, expiring waivers to non-floor electrical findings.
     ApplyElectricalWaivers {
         electrical_review: PathBuf,
         waiver_set: PathBuf,

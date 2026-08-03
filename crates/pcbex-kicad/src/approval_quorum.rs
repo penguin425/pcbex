@@ -436,26 +436,18 @@ mod tests {
     use super::*;
     use crate::{
         AiModelIdentity, AiRequirement, AiRequirementAssessment, AiRequirementStatus,
-        AiReviewDecision, ElectricalPolicy, ElectricalRulePolicy, ElectricalSeverity,
-        build_ai_review_request, check_schematic, import_schematic, sign_ai_review,
+        AiReviewDecision, ElectricalPolicy, build_ai_review_request, check_schematic,
+        import_schematic, sign_ai_review,
     };
     use ed25519_dalek::SigningKey;
-    use std::collections::BTreeMap;
 
     fn request_and_response(provider: &str, model: &str) -> (AiReviewRequest, AiReviewResponse) {
-        let schematic =
+        let mut schematic =
             import_schematic(include_str!("../../../examples/simple.kicad_sch")).unwrap();
-        let mut policy = ElectricalPolicy::default();
-        policy.rules = policy
-            .rules
-            .into_iter()
-            .map(|(id, mut setting)| {
-                if setting.severity == ElectricalSeverity::Error {
-                    setting.enabled = false;
-                }
-                (id, setting)
-            })
-            .collect::<BTreeMap<String, ElectricalRulePolicy>>();
+        for symbol in &mut schematic.symbols {
+            symbol.dnp = true;
+        }
+        let policy = ElectricalPolicy::default();
         let review = check_schematic(&schematic, &policy).unwrap();
         let request = build_ai_review_request(
             schematic,

@@ -116,6 +116,7 @@ auditable release.
 | v1.404.0 | Deterministic zone-fill work budget | Bound aggregate queue-pop and successful-discovery work across every zone in one atomic fill while eliminating duplicate queue entries and preserving deterministic output |
 | v1.405.0 | Bounded CLI I/O and subprocess execution | Limit generic Rust CLI files and MCP frames, atomically publish per-file outputs, and enforce deadlines, output ceilings, cancellation, and process-tree cleanup for doctor, KiCad, and MCP children |
 | v1.406.0 | Bounded Python agent I/O and subprocess execution | Route every Python agent file through regular-file, link-safe, size-limited atomic I/O; cap provider input and all child output; reject ambiguous KiCad DRC reports; and supervise provider, pcbex, and KiCad process trees under one deadline |
+| v1.407.0 | Immutable ERC safety floor | Keep every built-in error rule enabled at error severity across direct policies and signed packs, reject waivers for floor findings, and prevent baseline gates from accepting retained floor errors |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -124,14 +125,15 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release extends the same fail-closed boundary to the Python agent:
-generic files are capped at 32 MiB, KiCad candidates at 128 MiB, outputs are
-atomic, provider prompts are capped at 32 MiB, and provider, pcbex, and KiCad
-children receive concurrent output ceilings, one deadline, and process-tree
-cleanup. Empty, malformed, or unexplained nonzero KiCad DRC reports fail
-closed. Exact limits, atomicity scope, platform behavior, and exclusions are documented in
-[`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md). The next roadmap work is to
-unify specialized manufacturing, firmware, factory, release, and CI execution
-boundaries, close the remaining static resource-accounting gaps, enforce an
-immutable ERC safety floor, and then add bounded natural-language circuit
-generation with a deterministic ERC correction loop.
+The current release makes the deterministic ERC error contract an immutable
+safety floor. All 12 built-in error rules remain enabled at error severity
+through direct policy files and signed organization packs; floor findings
+cannot be waived or retained behind a passing baseline comparison. Advisory
+rules remain configurable and promoted advisory errors remain eligible for
+audited, expiring waivers. The exact rule set and gate behavior are documented
+in [`ERC_SAFETY_FLOOR.md`](ERC_SAFETY_FLOOR.md).
+
+The next roadmap work is to converge the remaining firmware and factory repair
+children on the shared process-tree supervisor, add manufacturing package and
+workspace quotas, then contain release/CI execution and add bounded
+natural-language circuit generation with a deterministic ERC correction loop.

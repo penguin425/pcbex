@@ -138,25 +138,16 @@ pub fn ai_review_session_json_schema() -> Value {
 mod tests {
     use super::*;
     use crate::{
-        AiRequirement, ElectricalPolicy, ElectricalRulePolicy, ElectricalSeverity,
-        build_ai_review_request, check_schematic, import_schematic,
+        AiRequirement, ElectricalPolicy, build_ai_review_request, check_schematic, import_schematic,
     };
-    use std::collections::BTreeMap;
 
     fn request() -> AiReviewRequest {
-        let schematic =
+        let mut schematic =
             import_schematic(include_str!("../../../examples/simple.kicad_sch")).unwrap();
-        let mut policy = ElectricalPolicy::default();
-        policy.rules = policy
-            .rules
-            .into_iter()
-            .map(|(id, mut setting)| {
-                if setting.severity == ElectricalSeverity::Error {
-                    setting.enabled = false;
-                }
-                (id, setting)
-            })
-            .collect::<BTreeMap<String, ElectricalRulePolicy>>();
+        for symbol in &mut schematic.symbols {
+            symbol.dnp = true;
+        }
+        let policy = ElectricalPolicy::default();
         let review = check_schematic(&schematic, &policy).unwrap();
         build_ai_review_request(
             schematic,

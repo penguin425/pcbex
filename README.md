@@ -2106,7 +2106,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.406.0
+    uses: penguin425/pcbex@v1.407.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2836,6 +2836,10 @@ decoupling. DNP symbols are excluded. Every finding has a stable identity and
 structured symbol/pin references. Power-safety metadata and inference rules are
 documented in
 [`docs/ELECTRICAL_POWER_SAFETY.md`](docs/ELECTRICAL_POWER_SAFETY.md).
+The 12 rules whose release default is `error` form an immutable safety floor:
+policy files and signed packs cannot disable or demote them. The exact floor,
+waiver behavior, and baseline semantics are documented in
+[`docs/ERC_SAFETY_FLOOR.md`](docs/ERC_SAFETY_FLOOR.md).
 
 `--explain` writes a separate policy-bound report covering all 16 rules,
 including each rule's purpose, exact trigger, remediation guidance, effective
@@ -2845,10 +2849,10 @@ AI hand-offs directly explainable.
 
 `--junit-output` emits one testcase for each built-in electrical rule. Enabled
 rules with error findings produce failures, warning and informational findings
-remain visible in `system-out`, and policy-disabled rules are explicitly
-skipped. Suite properties retain the schematic and policy SHA-256 identities,
-so Jenkins, GitLab, Buildkite, and other JUnit-aware CI systems can display the
-same approval evidence without changing the canonical JSON review.
+remain visible in `system-out`, and policy-disabled advisory rules are
+explicitly skipped. Suite properties retain the schematic and policy SHA-256
+identities, so Jenkins, GitLab, Buildkite, and other JUnit-aware CI systems can
+display the same approval evidence without changing the canonical JSON review.
 
 `--sarif-output` emits SARIF 2.1.0 for GitHub Code Scanning and other
 SARIF-aware review tools. Every finding carries its severity, source schematic,
@@ -2868,12 +2872,15 @@ pcbex electrical-review-comparison-schema \
 ```
 
 The comparison uses stable finding IDs instead of aggregate counts. Existing
-baseline errors do not fail the gate, while a new error or a warning/info
-finding escalated to error returns nonzero after writing the report. New,
-resolved, unchanged, and severity-changed findings are counted separately;
-actionable summaries and canonical SHA-256 identities for both reviews are
-retained. Duplicate or malformed finding IDs, inconsistent counts or approval
-flags, blank policy identities, and future schema versions fail closed.
+non-floor baseline errors do not fail the regression gate, while a current
+immutable-floor error, a new error, or a warning/info finding escalated to
+error returns nonzero after writing the report. New, resolved, unchanged, and
+severity-changed findings are counted separately; actionable summaries and
+canonical SHA-256 identities for both reviews are retained. Duplicate or
+malformed finding IDs, inconsistent counts or approval flags, blank policy
+identities, and future schema versions fail closed. A comparison does not
+recompute the schematic and must not replace the absolute
+`check-schematic --require-approved` gate.
 
 Temporary exceptions are represented separately from the immutable electrical
 review. Every waiver targets one stable finding ID and requires a non-empty
@@ -2884,9 +2891,9 @@ reason, approver identity, and expiration date:
   "schema_version": 1,
   "id": "prototype-v1",
   "waivers": [{
-    "id": "temporary-power-source",
+    "id": "temporary-footprint-metadata",
     "finding_id": "pcbex-er-0123456789abcdef",
-    "reason": "External bench supply is used for prototype validation",
+    "reason": "Prototype footprint metadata is tracked for the next revision",
     "approved_by": "hardware-lead",
     "expires_on": "2026-08-31"
   }]
@@ -2905,16 +2912,21 @@ pcbex apply-electrical-waivers \
 ```
 
 Unknown findings, duplicate waiver IDs or targets, invalid dates, blank audit
-fields, and expired waivers fail closed. The result binds canonical SHA-256
-identities for the source review and waiver set. Closed contracts are emitted
-by `electrical-waiver-set-schema` and `electrical-waiver-report-schema`.
+fields, expired waivers, and attempts to waive an immutable-floor finding fail
+closed. The result binds canonical SHA-256 identities for the source review and
+waiver set. Closed contracts are emitted by `electrical-waiver-set-schema` and
+`electrical-waiver-report-schema`. The waiver command does not recompute the
+schematic or policy, so supply only a review produced by a trusted
+`check-schematic`, pipeline, or AI-review gate and retain its digest.
 
 Reports are deterministic and contain canonical SHA-256 identities for both
 the normalized schematic and effective policy. An approval is granted only
 when no enabled error-severity finding remains. A policy may explicitly
-disable or change the severity of known rules; unknown rules, fields, and
-schema versions fail closed. `--require-approved` writes the report before
-returning nonzero so CI and later AI-review stages retain evidence.
+disable or change the severity of advisory rules, but every built-in
+error-severity rule must remain enabled at error severity. Unknown rules,
+unsafe floor overrides, fields, and schema versions fail closed.
+`--require-approved` writes the review before returning nonzero for findings;
+an invalid policy is rejected before a review can be produced.
 
 Closed Draft 2020-12 contracts are available through
 `electrical-policy-schema`, `electrical-review-schema`, and
@@ -4021,7 +4033,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.406.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.407.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

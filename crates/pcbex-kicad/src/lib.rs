@@ -195,11 +195,12 @@ pub use transparency::{
 };
 mod electrical;
 pub use electrical::{
-    ElectricalExplanationReport, ElectricalFinding, ElectricalFindingCounts, ElectricalPolicy,
-    ElectricalReview, ElectricalRuleExplanation, ElectricalRulePolicy, ElectricalSeverity,
-    ElectricalSymbolRef, check_schematic, electrical_explanation_json_schema,
-    electrical_policy_json_schema, electrical_review_json_schema, electrical_review_to_junit,
-    electrical_review_to_sarif, explain_electrical_review, parse_electrical_policy,
+    ELECTRICAL_SAFETY_FLOOR_RULES, ElectricalExplanationReport, ElectricalFinding,
+    ElectricalFindingCounts, ElectricalPolicy, ElectricalReview, ElectricalRuleExplanation,
+    ElectricalRulePolicy, ElectricalSeverity, ElectricalSymbolRef, check_schematic,
+    electrical_explanation_json_schema, electrical_policy_json_schema,
+    electrical_review_json_schema, electrical_review_to_junit, electrical_review_to_sarif,
+    explain_electrical_review, is_electrical_safety_floor_rule, parse_electrical_policy,
 };
 mod manufacturing;
 pub use manufacturing::{ManufacturingPart, manufacturing_gerber_layers, manufacturing_parts};

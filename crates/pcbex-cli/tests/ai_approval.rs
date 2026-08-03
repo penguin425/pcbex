@@ -32,20 +32,14 @@ fn temp_dir() -> PathBuf {
 fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
     let directory = temp_dir();
     let schematic =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/simple.kicad_sch");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/approved-empty.kicad_sch");
     let policy = directory.join("policy.json");
     assert!(
         run(&["electrical-policy", "--output", path(&policy)])
             .status
             .success()
     );
-    let mut policy_value: Value = serde_json::from_slice(&fs::read(&policy).unwrap()).unwrap();
-    for setting in policy_value["rules"].as_object_mut().unwrap().values_mut() {
-        if setting["severity"] == "error" {
-            setting["enabled"] = Value::Bool(false);
-        }
-    }
-    fs::write(&policy, serde_json::to_vec_pretty(&policy_value).unwrap()).unwrap();
+    let policy_value: Value = serde_json::from_slice(&fs::read(&policy).unwrap()).unwrap();
     let review = directory.join("electrical-review.json");
     assert!(
         run(&[

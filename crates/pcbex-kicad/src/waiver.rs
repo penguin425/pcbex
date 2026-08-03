@@ -1,4 +1,4 @@
-use super::{ElectricalReview, ElectricalSeverity};
+use super::{ElectricalReview, ElectricalSeverity, electrical::is_electrical_safety_floor_rule};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -90,6 +90,19 @@ pub fn apply_electrical_waivers(
             "waiver {} references unknown finding {}",
             unknown.id, unknown.finding_id
         ));
+    }
+    for waiver in &waiver_set.waivers {
+        let finding = review
+            .findings
+            .iter()
+            .find(|finding| finding.id == waiver.finding_id)
+            .expect("unknown finding waivers are rejected above");
+        if is_electrical_safety_floor_rule(&finding.rule) {
+            return Err(format!(
+                "immutable safety floor violation: waiver {} targets rule {}",
+                waiver.id, finding.rule
+            ));
+        }
     }
 
     let review_bytes = serde_json::to_vec(review)
@@ -347,9 +360,42 @@ mod tests {
         }
     }
 
+    fn non_floor_error_review() -> ElectricalReview {
+        ElectricalReview {
+            schema_version: 1,
+            schematic_sha256: "a".repeat(64),
+            policy_sha256: "b".repeat(64),
+            policy_id: "non-floor-error".into(),
+            approved: false,
+            counts: crate::ElectricalFindingCounts {
+                errors: 1,
+                warnings: 0,
+                info: 0,
+            },
+            findings: vec![crate::ElectricalFinding {
+                id: "pcbex-er-1111111111111111".into(),
+                rule: "input_not_driven".into(),
+                severity: ElectricalSeverity::Error,
+                message: "promoted input rule".into(),
+                net_id: None,
+                symbols: Vec::new(),
+                pins: Vec::new(),
+            }],
+        }
+    }
+
     #[test]
-    fn active_waivers_approve_and_expired_waivers_fail_closed() {
+    fn floor_rule_waivers_are_rejected() {
         let review = review();
+        let waivers = waiver_set(&review);
+        assert!(!waivers.waivers.is_empty());
+        let error = apply_electrical_waivers(&review, &waivers, "2026-08-31").unwrap_err();
+        assert!(error.contains("immutable safety floor"));
+    }
+
+    #[test]
+    fn non_floor_error_waivers_approve_and_expired_waivers_fail_closed() {
+        let review = non_floor_error_review();
         let waivers = waiver_set(&review);
         let active = apply_electrical_waivers(&review, &waivers, "2026-08-31").unwrap();
         assert!(active.approved);

@@ -29,9 +29,45 @@ fn temp_dir() -> PathBuf {
 }
 
 #[test]
-fn gates_only_new_or_escalated_electrical_errors() {
+fn keeps_the_safety_floor_absolute_while_baselining_advisory_findings() {
     let directory = temp_dir();
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/simple.kicad_sch");
+    let floor_source =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/simple.kicad_sch");
+    let floor_review = directory.join("floor-review.json");
+    assert!(
+        run(&[
+            "check-schematic",
+            path(&floor_source),
+            "--output",
+            path(&floor_review),
+        ])
+        .status
+        .success()
+    );
+    let retained_floor = directory.join("retained-floor.json");
+    let retained_floor_gate = run(&[
+        "compare-electrical-reviews",
+        path(&floor_review),
+        path(&floor_review),
+        "--output",
+        path(&retained_floor),
+        "--require-no-new-errors",
+    ]);
+    assert!(!retained_floor_gate.status.success());
+    let retained_floor_report: Value =
+        serde_json::from_slice(&fs::read(&retained_floor).unwrap()).unwrap();
+    assert_eq!(retained_floor_report["passed"], false);
+    assert_eq!(retained_floor_report["counts"]["new_errors"], 0);
+    assert_eq!(retained_floor_report["counts"]["escalated_errors"], 0);
+    assert!(
+        retained_floor_report["counts"]["error_regressions"]
+            .as_u64()
+            .unwrap()
+            > 0
+    );
+
+    let source =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/approved-empty.kicad_sch");
     let baseline = directory.join("baseline.json");
     assert!(
         run(&[
@@ -44,13 +80,19 @@ fn gates_only_new_or_escalated_electrical_errors() {
         .success()
     );
     let mut baseline_value: Value = serde_json::from_slice(&fs::read(&baseline).unwrap()).unwrap();
-    baseline_value["findings"][0]["severity"] = Value::String("warning".into());
-    baseline_value["counts"]["errors"] =
-        Value::from(baseline_value["counts"]["errors"].as_u64().unwrap() - 1);
-    baseline_value["counts"]["warnings"] =
-        Value::from(baseline_value["counts"]["warnings"].as_u64().unwrap() + 1);
-    baseline_value["approved"] =
-        Value::Bool(baseline_value["counts"]["errors"].as_u64().unwrap() == 0);
+    baseline_value["findings"] = serde_json::json!([{
+        "id": "pcbex-er-1111111111111111",
+        "rule": "missing_footprint",
+        "severity": "warning",
+        "message": "advisory footprint metadata finding",
+        "net_id": null,
+        "symbols": [],
+        "pins": []
+    }]);
+    baseline_value["counts"]["errors"] = Value::from(0);
+    baseline_value["counts"]["warnings"] = Value::from(1);
+    baseline_value["counts"]["info"] = Value::from(0);
+    baseline_value["approved"] = Value::Bool(true);
     fs::write(
         &baseline,
         serde_json::to_vec_pretty(&baseline_value).unwrap(),

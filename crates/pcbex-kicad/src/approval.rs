@@ -935,23 +935,15 @@ pub fn signed_ai_approval_json_schema() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ElectricalRulePolicy, ElectricalSeverity, import_schematic};
-    use std::collections::BTreeMap;
+    use crate::import_schematic;
 
     fn approved_request() -> AiReviewRequest {
-        let schematic =
+        let mut schematic =
             import_schematic(include_str!("../../../examples/simple.kicad_sch")).unwrap();
-        let mut policy = ElectricalPolicy::default();
-        policy.rules = policy
-            .rules
-            .into_iter()
-            .map(|(id, mut setting)| {
-                if setting.severity == ElectricalSeverity::Error {
-                    setting.enabled = false;
-                }
-                (id, setting)
-            })
-            .collect::<BTreeMap<String, ElectricalRulePolicy>>();
+        for symbol in &mut schematic.symbols {
+            symbol.dnp = true;
+        }
+        let policy = ElectricalPolicy::default();
         let review = check_schematic(&schematic, &policy).unwrap();
         build_ai_review_request(
             schematic,

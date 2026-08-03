@@ -108,25 +108,41 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
             .success()
     );
     let mut policy_value: Value = serde_json::from_slice(&fs::read(&policy).unwrap()).unwrap();
-    for setting in policy_value["rules"].as_object_mut().unwrap().values_mut() {
-        if setting["severity"] == "error" {
-            setting["enabled"] = Value::Bool(false);
-        }
-    }
+    policy_value["rules"]["power_input_not_driven"]["enabled"] = Value::Bool(false);
     fs::write(&policy, serde_json::to_vec_pretty(&policy_value).unwrap()).unwrap();
+    let unsafe_output = directory.join("unsafe-policy-review.json");
+    let unsafe_policy = run(&[
+        "check-schematic",
+        path(&source),
+        "--output",
+        path(&unsafe_output),
+        "--policy",
+        path(&policy),
+        "--require-approved",
+    ]);
+    assert!(!unsafe_policy.status.success());
+    assert!(String::from_utf8_lossy(&unsafe_policy.stderr).contains("immutable safety floor"));
+    assert!(!unsafe_output.exists());
+
+    policy_value["rules"]["power_input_not_driven"]["enabled"] = Value::Bool(true);
+    policy_value["rules"]["missing_footprint"]["enabled"] = Value::Bool(false);
+    fs::write(&policy, serde_json::to_vec_pretty(&policy_value).unwrap()).unwrap();
+    let approved_source =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/approved-empty.kicad_sch");
     let approved = directory.join("approved.json");
+    let safe_advisory_override = run(&[
+        "check-schematic",
+        path(&approved_source),
+        "--output",
+        path(&approved),
+        "--policy",
+        path(&policy),
+        "--require-approved",
+    ]);
     assert!(
-        run(&[
-            "check-schematic",
-            path(&source),
-            "--output",
-            path(&approved),
-            "--policy",
-            path(&policy),
-            "--require-approved",
-        ])
-        .status
-        .success()
+        safe_advisory_override.status.success(),
+        "{}",
+        String::from_utf8_lossy(&safe_advisory_override.stderr)
     );
     let approved_review: Value = serde_json::from_slice(&fs::read(&approved).unwrap()).unwrap();
     assert_eq!(approved_review["approved"], true);
