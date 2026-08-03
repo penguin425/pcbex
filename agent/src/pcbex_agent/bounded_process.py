@@ -429,13 +429,16 @@ def _cleanup_process(
     streams: Sequence[Any],
     threads: Sequence[threading.Thread],
     argv: tuple[str, ...],
+    *,
+    terminate_tree: bool = True,
+    prior_termination_failures: Sequence[str] = (),
 ) -> ProcessCleanupError | None:
     if process is None:
         return None
     stop_event.set()
-    for stream in streams:
-        _close_stream(stream)
-    termination_failures = _kill_process_tree(process, job)
+    termination_failures = list(prior_termination_failures)
+    if terminate_tree:
+        termination_failures.extend(_kill_process_tree(process, job))
     cleanup_error = (
         ProcessCleanupError("; ".join(termination_failures), argv=argv)
         if termination_failures
@@ -462,10 +465,18 @@ def _cleanup_process(
         )
     for thread in threads:
         thread.join(timeout=_THREAD_JOIN_SECONDS)
-    if cleanup_error is None and any(thread.is_alive() for thread in threads):
+    workers_alive = any(thread.is_alive() for thread in threads)
+    if cleanup_error is None and workers_alive:
         cleanup_error = ProcessCleanupError(
             "a process pipe worker did not terminate", argv=argv
         )
+    if not workers_alive:
+        # Workers close their own streams. This also covers partially-started
+        # supervision where no worker took ownership. Never call close while
+        # a worker may hold a buffered stream lock: a failed tree kill could
+        # otherwise turn cleanup itself into an unbounded wait.
+        for stream in streams:
+            _close_stream(stream)
     return cleanup_error
 
 
@@ -645,7 +656,8 @@ def run_bounded(
     stderr_state = _PipeState("stderr", stderr_limit, bytearray(), threading.Event())
     writer_state = _WriterState(threading.Event())
     threads: list[threading.Thread] = []
-    tree_cleaned = False
+    tree_terminated = False
+    tree_termination_failures: list[str] = []
     primary_error: BaseException | None = None
     cleanup_error: ProcessCleanupError | None = None
 
@@ -730,9 +742,15 @@ def run_bounded(
 
             returncode = process.poll()
             if returncode is not None:
-                if not tree_cleaned:
-                    _kill_process_tree(process, job)
-                    tree_cleaned = True
+                if not tree_terminated:
+                    # Terminate any descendants that inherited the completed
+                    # leader's pipes.  Retain failures for the single cleanup
+                    # pass below instead of sending a second kill to a process
+                    # group whose numeric id may already have been reused.
+                    tree_termination_failures.extend(
+                        _kill_process_tree(process, job)
+                    )
+                    tree_terminated = True
                 if (
                     stdout_state.done.is_set()
                     and stderr_state.done.is_set()
@@ -765,9 +783,6 @@ def run_bounded(
         raise
     finally:
         if process is not None:
-            if not tree_cleaned:
-                _kill_process_tree(process, job)
-                tree_cleaned = True
             cleanup_error = _cleanup_process(
                 process,
                 job,
@@ -779,6 +794,8 @@ def run_bounded(
                 ),
                 threads,
                 normalized_argv,
+                terminate_tree=not tree_terminated,
+                prior_termination_failures=tree_termination_failures,
             )
             if job is not None:
                 try:

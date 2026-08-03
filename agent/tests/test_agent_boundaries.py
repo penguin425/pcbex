@@ -36,7 +36,7 @@ def _symlink_or_skip(case: unittest.TestCase, target: Path, link: Path) -> None:
 class AgentBoundaryTests(unittest.TestCase):
     def test_command_provider_rejects_symlink_request_without_artifacts(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             real_request = root / "real-request.json"
             linked_request = root / "request.json"
             response = root / "response.json"
@@ -57,7 +57,7 @@ class AgentBoundaryTests(unittest.TestCase):
 
     def test_managed_provider_rejects_symlink_before_network(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             real_request = root / "real-request.json"
             linked_request = root / "request.json"
             real_request.write_text(json.dumps(_review_request()), encoding="utf-8")
@@ -77,7 +77,7 @@ class AgentBoundaryTests(unittest.TestCase):
 
     def test_repair_loop_rejects_symlink_source_and_preserves_output(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             real_source = root / "real.kicad_pcb"
             linked_source = root / "source.kicad_pcb"
             output = root / "output.kicad_pcb"
@@ -98,7 +98,7 @@ class AgentBoundaryTests(unittest.TestCase):
 
     def test_repair_loop_rejects_symlink_candidate_before_drc(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             source = root / "source.kicad_pcb"
             output = root / "output.kicad_pcb"
             source.write_text("board", encoding="utf-8")
@@ -122,7 +122,7 @@ class AgentBoundaryTests(unittest.TestCase):
 class AgentProcessIntegrationTests(unittest.TestCase):
     def test_repair_cli_rejects_board_report_aliases_before_tools(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             source = root / "source.kicad_pcb"
             output = root / "output.kicad_pcb"
             source.write_text("source", encoding="utf-8")
@@ -151,7 +151,7 @@ class AgentProcessIntegrationTests(unittest.TestCase):
 
     def test_generic_agent_output_limit_preserves_existing_file(self):
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "output.json"
+            output = Path(directory).resolve(strict=True) / "output.json"
             output.write_text("sentinel", encoding="utf-8")
             with (
                 patch.object(agent_cli, "MAXIMUM_AGENT_FILE_BYTES", 4),
@@ -162,7 +162,7 @@ class AgentProcessIntegrationTests(unittest.TestCase):
 
     def test_command_provider_requires_utf8_request(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             request = root / "request.json"
             response = root / "response.json"
             receipt = root / "receipt.json"
@@ -210,7 +210,7 @@ class AgentProcessIntegrationTests(unittest.TestCase):
 
     def test_oversized_repair_candidate_preserves_existing_output(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             source = root / "source.kicad_pcb"
             output = root / "output.kicad_pcb"
             source.write_bytes(b"src")

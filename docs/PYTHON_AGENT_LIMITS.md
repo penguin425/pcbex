@@ -20,6 +20,12 @@ without following the final symlink where the platform permits,
 checks the descriptor, reads at most the limit plus one byte, and rechecks both
 the descriptor and path before returning. Text is decoded as strict UTF-8.
 
+The repair loop canonicalizes only the trusted temporary root selected for the
+process before creating its private workspace. Caller-provided paths
+remain lexical and therefore still reject every direct or ancestor symlink.
+This distinction is required on macOS, where the standard temporary area is
+normally exposed through the system-managed `/var` symlink.
+
 Outputs are size-checked in memory, written to a private sibling file, flushed
 and synchronized, and then atomically replaced. Existing Unix mode bits are
 preserved; new Unix outputs use mode `0644`. Provider responses and receipts

@@ -342,6 +342,10 @@ def _open_read_descriptor(path: Path, expected: os.stat_result) -> tuple[int, os
         | getattr(os, "O_CLOEXEC", 0)
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_NONBLOCK", 0)
+        # Windows file descriptors otherwise use text mode, so ``os.read``
+        # can translate CRLF to LF and make the byte count disagree with
+        # ``st_size``.  Bounded I/O must always count the bytes on disk.
+        | getattr(os, "O_BINARY", 0)
     )
     try:
         descriptor = os.open(path, flags)

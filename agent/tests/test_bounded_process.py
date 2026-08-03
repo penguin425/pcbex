@@ -32,19 +32,19 @@ class BoundedProcessTests(unittest.TestCase):
         script = (
             "import os, sys; "
             "data = sys.stdin.buffer.read(); "
-            "print(repr(sys.argv[1:])); "
-            "print(len(data)); "
-            "print(os.environ['PCBEX_BOUNDED_TEST']); "
-            "print(os.getcwd())"
+            "text = '\\n'.join((repr(sys.argv[1:]), str(len(data)), "
+            "os.environ['PCBEX_BOUNDED_TEST'], os.getcwd())) + '\\n'; "
+            "sys.stdout.buffer.write(text.encode('utf-8'))"
         )
         with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(strict=True)
             result = run_bounded(
                 _python(script, "literal; echo should-not-run", "日本語"),
                 timeout_seconds=5,
                 max_stdout_bytes=1024,
                 max_stderr_bytes=1024,
                 env={**os.environ, "PCBEX_BOUNDED_TEST": "ok"},
-                cwd=directory,
+                cwd=root,
             )
         self.assertIsInstance(result, BoundedProcessResult)
         self.assertEqual(result.returncode, 0)
@@ -52,7 +52,7 @@ class BoundedProcessTests(unittest.TestCase):
         self.assertEqual(lines[0], repr(["literal; echo should-not-run", "日本語"]))
         self.assertEqual(lines[1], "0")
         self.assertEqual(lines[2], "ok")
-        self.assertEqual(lines[3], str(Path(directory)))
+        self.assertEqual(lines[3], str(root))
         self.assertEqual(result.stderr, b"")
 
     def test_exact_output_limits_are_allowed(self):
@@ -220,6 +220,22 @@ class BoundedProcessTests(unittest.TestCase):
                 max_stderr_bytes=1024,
             )
 
+    def test_process_tree_is_terminated_only_once(self):
+        real_kill = bounded_process._kill_process_tree
+        with patch.object(
+            bounded_process,
+            "_kill_process_tree",
+            wraps=real_kill,
+        ) as kill:
+            result = run_bounded(
+                _python("pass"),
+                timeout_seconds=5,
+                max_stdout_bytes=1024,
+                max_stderr_bytes=1024,
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(kill.call_count, 1)
+
     def test_cleanup_failure_chains_unexpected_primary_exception(self):
         real_cleanup = bounded_process._cleanup_process
         primary = ValueError("unexpected supervisor failure")
@@ -264,7 +280,7 @@ class BoundedProcessTests(unittest.TestCase):
     )
     def test_descendant_is_killed_with_process_tree(self):
         with tempfile.TemporaryDirectory() as directory:
-            marker = Path(directory) / "descendant-ran"
+            marker = Path(directory).resolve(strict=True) / "descendant-ran"
             descendant_script = (
                 "import pathlib, sys, time; "
                 "time.sleep(0.6); "

@@ -34,7 +34,7 @@ def _tool_side_effect(
 class RepairLoopReportBoundaryTests(unittest.TestCase):
     def _paths(self) -> tuple[tempfile.TemporaryDirectory[str], Path, Path]:
         directory = tempfile.TemporaryDirectory()
-        root = Path(directory.name)
+        root = Path(directory.name).resolve(strict=True)
         source = root / "source.kicad_pcb"
         output = root / "output.kicad_pcb"
         source.write_text("source", encoding="utf-8")
@@ -70,7 +70,7 @@ class RepairLoopReportBoundaryTests(unittest.TestCase):
     def test_generator_cannot_redirect_kicad_report_through_symlink(self):
         directory, source, output = self._paths()
         self.addCleanup(directory.cleanup)
-        victim = Path(directory.name) / "victim"
+        victim = Path(directory.name).resolve(strict=True) / "victim"
         victim.write_text("sentinel", encoding="utf-8")
         calls = 0
 
@@ -280,7 +280,7 @@ class RepairLoopReportBoundaryTests(unittest.TestCase):
 
     def test_same_source_and_output_path_is_rejected_before_generation(self):
         with tempfile.TemporaryDirectory() as directory:
-            board = Path(directory) / "board.kicad_pcb"
+            board = Path(directory).resolve(strict=True) / "board.kicad_pcb"
             board.write_text("source", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "different paths"):
                 run_repair_loop(
@@ -290,6 +290,43 @@ class RepairLoopReportBoundaryTests(unittest.TestCase):
                     generate_candidate=lambda *_args: self.fail("generator ran"),
                     inspect_drc=lambda *_args: [],
                 )
+
+    @unittest.skipUnless(hasattr(os, "symlink"), "symbolic links are unavailable")
+    def test_private_workspace_canonicalizes_trusted_temporary_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(strict=True)
+            temporary_root = root / "real-temporary-root"
+            temporary_root.mkdir()
+            temporary_alias = root / "temporary-alias"
+            try:
+                os.symlink(temporary_root, temporary_alias, target_is_directory=True)
+            except (OSError, NotImplementedError) as error:
+                self.skipTest(f"symbolic links are unavailable: {error}")
+
+            source = root / "source.kicad_pcb"
+            output = root / "output.kicad_pcb"
+            source.write_text("source", encoding="utf-8")
+            candidate_parents: list[Path] = []
+
+            def generate(_source, candidate, _iteration, _actions):
+                candidate_parents.append(candidate.parent)
+                candidate.write_text("candidate", encoding="utf-8")
+
+            with patch(
+                "pcbex_agent.repair_loop.tempfile.gettempdir",
+                return_value=str(temporary_alias),
+            ):
+                result = run_repair_loop(
+                    source,
+                    output,
+                    max_iterations=1,
+                    generate_candidate=generate,
+                    inspect_drc=lambda *_args: [],
+                )
+
+            self.assertTrue(result.success)
+            self.assertEqual(candidate_parents[0].parent, temporary_root)
+            self.assertEqual(output.read_text(encoding="utf-8"), "candidate")
 
 
 if __name__ == "__main__":

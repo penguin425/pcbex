@@ -28,7 +28,10 @@ def _symlink_or_skip(case: unittest.TestCase, target: Path, link: Path) -> None:
 class BoundedIOTests(unittest.TestCase):
     def setUp(self):
         self._temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self._temporary.name)
+        # macOS's default temporary path is lexically below ``/var``, which is
+        # itself a system symlink.  The test owns this root, so use its trusted
+        # canonical spelling before exercising strict descendant checks.
+        self.root = Path(self._temporary.name).resolve(strict=True)
 
     def tearDown(self):
         self._temporary.cleanup()

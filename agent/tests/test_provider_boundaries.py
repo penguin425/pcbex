@@ -35,8 +35,9 @@ def _symlink_or_skip(case: unittest.TestCase, target: Path, link: Path) -> None:
 
 class ProviderBoundaryTests(unittest.TestCase):
     def test_absolute_and_relative_artifact_aliases_are_rejected(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+        # Keep the relative alias on the same Windows drive as the checkout.
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory).resolve(strict=True)
             request = _write_request(root)
             output = root / "same.json"
             with self.assertRaisesRegex(ProviderError, "paths must differ"):
@@ -89,7 +90,7 @@ class ProviderBoundaryTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, "symlink"), "symbolic links are unavailable")
     def test_command_provider_rejects_dangling_output_before_spawn(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             request = _write_request(root)
             output = root / "response.json"
             marker = root / "provider-ran"
@@ -113,7 +114,7 @@ class ProviderBoundaryTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(os, "symlink"), "symbolic links are unavailable")
     def test_managed_provider_rejects_linked_parent_before_network(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             request = _write_request(root)
             linked_parent = root / "linked"
             _symlink_or_skip(self, root, linked_parent)
@@ -133,7 +134,7 @@ class ProviderBoundaryTests(unittest.TestCase):
 
     def test_command_receipt_failure_retains_published_response(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             request = _write_request(root)
             output = root / "response.json"
             receipt = root / "receipt.json"
@@ -188,7 +189,7 @@ class ProviderBoundaryTests(unittest.TestCase):
             return {"decision": "approve"}
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             request = _write_request(root)
             output = root / "response.json"
             receipt = root / "receipt.json"

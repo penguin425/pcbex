@@ -58,10 +58,13 @@ def _decode_tool_stream(stream: bytes | str) -> str:
 
     if isinstance(stream, str):
         return stream
-    # Keep every bounded byte (including trailing newlines) so callers can
-    # inspect ``CalledProcessError.output``/``stderr`` exactly as they can for
-    # the routing subprocess.
-    return stream.decode("utf-8", errors="replace")
+    # Preserve trailing text while matching ``subprocess.run(text=True)``
+    # universal-newline behavior used by the previous implementation.
+    return (
+        stream.decode("utf-8", errors="replace")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
 
 
 def _is_kicad_drc_report(report: str) -> bool:
@@ -174,7 +177,14 @@ def run_repair_loop(
     actions: list[RepairAction] = []
     best_error_count = 2**31 - 1
     seen: set[tuple[str, tuple[tuple[str, str, str], ...]]] = set()
-    with tempfile.TemporaryDirectory(prefix="pcbex-repair-") as directory:
+    # macOS exposes its default temporary area through the system-managed
+    # ``/var`` symlink. Canonicalize this trusted process-selected root once so
+    # strict descendant symlink checks remain useful without rejecting our own
+    # private workspace.
+    trusted_temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+    with tempfile.TemporaryDirectory(
+        prefix="pcbex-repair-", dir=trusted_temporary_root
+    ) as directory:
         workspace = Path(directory)
         for iteration in range(max_iterations):
             candidate = workspace / f"candidate-{iteration}.kicad_pcb"
@@ -295,8 +305,8 @@ def repair_kicad_board(
             raise subprocess.CalledProcessError(
                 completed.returncode,
                 command,
-                output=completed.stdout.decode("utf-8", errors="replace"),
-                stderr=completed.stderr.decode("utf-8", errors="replace"),
+                output=_decode_tool_stream(completed.stdout),
+                stderr=_decode_tool_stream(completed.stderr),
             )
 
     def inspect(candidate: Path, report: Path) -> list[DrcViolation]:
@@ -333,7 +343,7 @@ def repair_kicad_board(
         except BoundedIOError as error:
             raise RuntimeError(
                 "KiCad DRC did not produce a readable bounded report: "
-                + completed.stderr.decode("utf-8", errors="replace").strip()
+                + _decode_tool_stream(completed.stderr).strip()
             ) from error
         return _parse_kicad_drc_report(
             report_text,

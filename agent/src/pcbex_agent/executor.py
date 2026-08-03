@@ -20,6 +20,16 @@ MAXIMUM_PCBEX_STDOUT_BYTES = 8 * 1024 * 1024
 MAXIMUM_PCBEX_STDERR_BYTES = 1024 * 1024
 
 
+def _decode_process_text(stream: bytes) -> str:
+    """Match ``subprocess.run(text=True)`` universal-newline decoding."""
+
+    return (
+        stream.decode("utf-8", errors="replace")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+    )
+
+
 @dataclass(frozen=True)
 class ScoreComparison:
     before: float
@@ -76,8 +86,8 @@ def run_pcbex(
     # pcbex itself emits UTF-8, but platform tools and localized diagnostics
     # may not. Preserve the bounded diagnostic contract instead of leaking a
     # decode failure after the child has already completed.
-    stdout = completed.stdout.decode("utf-8", errors="replace")
-    stderr = completed.stderr.decode("utf-8", errors="replace")
+    stdout = _decode_process_text(completed.stdout)
+    stderr = _decode_process_text(completed.stderr)
     if completed.returncode != 0:
         raise subprocess.CalledProcessError(
             completed.returncode,
