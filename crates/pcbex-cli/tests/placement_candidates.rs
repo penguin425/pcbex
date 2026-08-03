@@ -27,6 +27,20 @@ fn run(arguments: &[&Path]) {
     );
 }
 
+fn run_failure(arguments: &[&Path]) -> std::process::Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_pcbex"));
+    for argument in arguments {
+        command.arg(argument);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        !output.status.success(),
+        "pcbex unexpectedly succeeded: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    output
+}
+
 #[test]
 fn writes_deterministic_json_and_kicad_candidate_bundles() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -106,4 +120,41 @@ fn writes_deterministic_json_and_kicad_candidate_bundles() {
     fs::remove_dir_all(sequential).unwrap();
     fs::remove_dir_all(parallel).unwrap();
     fs::remove_dir_all(kicad).unwrap();
+}
+
+#[test]
+fn rejects_physical_profile_outline_drift_before_publishing_placement() {
+    let repository = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let temporary = temporary_directory("placement-profile-outline");
+    fs::create_dir_all(&temporary).unwrap();
+    let profile_path = temporary.join("profile.json");
+    let output_path = temporary.join("placed.kicad_pcb");
+    let mut profile: Value = serde_json::from_slice(
+        &fs::read(repository.join("examples/multilayer-physical-profile.json")).unwrap(),
+    )
+    .unwrap();
+    profile["outline"] = serde_json::json!([
+        {"x_nm": 0, "y_nm": 0},
+        {"x_nm": 40_000_000, "y_nm": 0},
+        {"x_nm": 0, "y_nm": 20_000_000}
+    ]);
+    fs::write(&profile_path, serde_json::to_vec_pretty(&profile).unwrap()).unwrap();
+
+    let output = run_failure(&[
+        Path::new("place-kicad"),
+        &repository.join("examples/simple.kicad_pcb"),
+        Path::new("--output"),
+        &output_path,
+        Path::new("--physical-profile"),
+        &profile_path,
+        Path::new("--iterations"),
+        Path::new("1"),
+    ]);
+
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("board outline does not match physical constraint profile")
+    );
+    assert!(!output_path.exists());
+    fs::remove_dir_all(temporary).unwrap();
 }

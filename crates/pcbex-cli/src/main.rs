@@ -9,11 +9,13 @@ use pcbex_core::placement::{
     PlacementProblem, place, place_candidates,
 };
 use pcbex_core::{
-    AnalysisDelta, Board, CURRENT_SCHEMA_VERSION, DfmProfile, RoutingCandidateObjective,
-    RoutingCandidateOptions, RoutingCandidateSet, RoutingQuality, Rules, analysis_delta_to_sarif,
-    apply_dfm_profile, board_json_schema, dfm_profile, dfm_profile_json_schema, dfm_profiles,
-    impedance_report, migrate_board_json, parse_board_json, parse_external_dfm_profile, render_svg,
-    repair_routes, repairable_net_ids, route_board, route_candidates, routing_quality,
+    AnalysisDelta, Board, CURRENT_SCHEMA_VERSION, DfmProfile, PhysicalConstraintProfile,
+    RoutingCandidateObjective, RoutingCandidateOptions, RoutingCandidateSet, RoutingQuality, Rules,
+    analysis_delta_to_sarif, apply_dfm_profile, apply_physical_profile,
+    apply_physical_profile_to_placement, board_json_schema, dfm_profile, dfm_profile_json_schema,
+    dfm_profiles, impedance_report, migrate_board_json, parse_board_json,
+    parse_external_dfm_profile, physical_profile_json_schema, render_svg, repair_routes,
+    repairable_net_ids, route_board, route_candidates, routing_quality,
     solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
@@ -167,6 +169,7 @@ mod manufacturing_feedback;
 mod manufacturing_limits;
 mod manufacturing_package;
 mod mcp;
+mod physical_profile;
 mod pipeline;
 mod policy_deployment;
 mod policy_deployment_rollback;
@@ -196,6 +199,7 @@ mod remote_policy_lifecycle_witness;
 mod remote_witness;
 
 use bounded_io as fs;
+use physical_profile::{PhysicalProfileBinding, load_physical_profile};
 
 use canary_completion::{
     CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
@@ -668,6 +672,8 @@ struct AnalysisConfiguration {
     applied_custom_rules: usize,
     dfm_profile: Option<DfmProfile>,
     organization_policy_pack: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    physical_profile: Option<PhysicalConstraintProfile>,
 }
 
 #[derive(Debug, Serialize)]
@@ -691,6 +697,8 @@ struct RunManifest {
     rules_file: Option<InputDescriptor>,
     dfm_profile_file: Option<InputDescriptor>,
     policy_pack_file: Option<InputDescriptor>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    physical_profile: Option<PhysicalProfileBinding>,
     configuration: AnalysisConfiguration,
     result: AnalysisResult,
     artifacts: Vec<String>,
@@ -814,6 +822,9 @@ enum Command {
         /// Organization policy pack declared by `run.json`; required only when declared there.
         #[arg(long)]
         analysis_policy_pack: Option<PathBuf>,
+        /// Physical profile bound by a schema-v2 `run.json`; required only when declared there.
+        #[arg(long)]
+        analysis_physical_profile: Option<PathBuf>,
         /// Final manufacturing ZIP whose complete embedded manifest is revalidated.
         #[arg(long)]
         manufacturing_package: PathBuf,
@@ -4125,6 +4136,24 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Write the strict JSON Schema for physical constraint profiles.
+    PhysicalProfileSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Validate a physical constraint profile and print its normalized form and binding.
+    ValidatePhysicalProfile {
+        input: PathBuf,
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Apply a physical constraint profile to a board JSON document.
+    ApplyPhysicalProfile {
+        board: PathBuf,
+        profile: PathBuf,
+        #[arg(short, long)]
+        output: PathBuf,
+    },
     /// Write the closed organization policy-pack JSON Schema.
     PolicyPackSchema {
         #[arg(short, long)]
@@ -4213,6 +4242,9 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
+        /// Apply one strict physical constraint profile before routing.
+        #[arg(long, value_name = "PATH")]
+        physical_profile: Option<PathBuf>,
         #[arg(long)]
         svg: Option<PathBuf>,
         #[arg(long)]
@@ -4223,6 +4255,9 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output_dir: PathBuf,
+        /// Apply one strict physical constraint profile to every candidate.
+        #[arg(long, value_name = "PATH")]
+        physical_profile: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         candidates: usize,
         #[arg(long, default_value_t = 4)]
@@ -4286,14 +4321,17 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
         /// Built-in fabrication profile ID or stable alias.
-        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack"])]
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack", "physical_profile"])]
         fab: Option<String>,
         /// Strict external DFM profile JSON.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack", "physical_profile"])]
         fab_profile: Option<PathBuf>,
         /// Apply the DFM profile from an organization policy pack.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "physical_profile"])]
         policy_pack: Option<PathBuf>,
+        /// Bind and apply board dimensions, fixed components, keepouts, and DFM rules.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
+        physical_profile: Option<PathBuf>,
         /// Write all reports before exiting unsuccessfully on violations.
         #[arg(long)]
         fail_on_violations: bool,
@@ -4334,14 +4372,17 @@ enum Command {
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
         /// Built-in fabrication profile ID or stable alias.
-        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack"])]
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack", "physical_profile"])]
         fab: Option<String>,
         /// Strict external DFM profile JSON.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack", "physical_profile"])]
         fab_profile: Option<PathBuf>,
         /// Apply the DFM profile from an organization policy pack.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "physical_profile"])]
         policy_pack: Option<PathBuf>,
+        /// Apply one strict physical constraint profile before routing.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
+        physical_profile: Option<PathBuf>,
         #[arg(long)]
         svg: Option<PathBuf>,
         /// Also write routed items as JSON for the KiCad IPC adapter.
@@ -4376,14 +4417,17 @@ enum Command {
         bend_cost: u32,
         #[arg(long, default_value_t = 20)]
         via_cost: u32,
-        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack"])]
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack", "physical_profile"])]
         fab: Option<String>,
         /// Strict external DFM profile JSON.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack", "physical_profile"])]
         fab_profile: Option<PathBuf>,
         /// Apply the DFM profile from an organization policy pack.
-        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "physical_profile"])]
         policy_pack: Option<PathBuf>,
+        /// Apply one strict physical constraint profile to every routing candidate.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
+        physical_profile: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         candidates: usize,
         #[arg(long, default_value_t = 4)]
@@ -4451,6 +4495,8 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        physical_profile: Option<PathBuf>,
         #[arg(long)]
         iterations: Option<usize>,
         #[arg(long)]
@@ -4461,6 +4507,8 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output_dir: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        physical_profile: Option<PathBuf>,
         #[arg(long, default_value_t = 5)]
         candidates: usize,
         #[arg(long, default_value_t = 4)]
@@ -4483,6 +4531,9 @@ enum Command {
         seed: Option<u64>,
         #[arg(long)]
         json_output: Option<PathBuf>,
+        /// Inject and lock fixed component positions before placement.
+        #[arg(long, value_name = "PATH")]
+        physical_profile: Option<PathBuf>,
     },
     /// Generate Pareto-ranked footprint placements directly from a KiCad board.
     PlaceKicadCandidates {
@@ -4499,12 +4550,18 @@ enum Command {
         iterations: Option<usize>,
         #[arg(long)]
         seed: Option<u64>,
+        /// Inject and lock fixed component positions in every candidate.
+        #[arg(long, value_name = "PATH")]
+        physical_profile: Option<PathBuf>,
     },
     /// Run KiCad DRC and publish a reproducible Gerber/BOM/CPL manufacturing package.
     Fabricate {
         input: PathBuf,
         #[arg(short, long)]
         output_dir: PathBuf,
+        /// Revalidate the board against this profile and bind it into the package manifest.
+        #[arg(long, value_name = "PATH")]
+        physical_profile: Option<PathBuf>,
     },
     /// Print the JSON Schema for factory submission receipts.
     FactorySchema {
@@ -4965,6 +5022,7 @@ fn run_cli() -> Result<()> {
             analysis_rules,
             analysis_dfm_profile,
             analysis_policy_pack,
+            analysis_physical_profile,
             manufacturing_package,
             firmware_manifest,
             factory_receipt,
@@ -4992,6 +5050,7 @@ fn run_cli() -> Result<()> {
                 analysis_rules.as_deref(),
                 analysis_dfm_profile.as_deref(),
                 analysis_policy_pack.as_deref(),
+                analysis_physical_profile.as_deref(),
             ]
             .into_iter()
             .flatten()
@@ -5011,6 +5070,7 @@ fn run_cli() -> Result<()> {
                 analysis_rules: analysis_rules.as_deref(),
                 analysis_dfm_profile: analysis_dfm_profile.as_deref(),
                 analysis_policy_pack: analysis_policy_pack.as_deref(),
+                analysis_physical_profile: analysis_physical_profile.as_deref(),
                 manufacturing_package: &manufacturing_package,
                 firmware_manifest: &firmware_manifest,
                 factory_receipt: factory_receipt.as_deref(),
@@ -13643,6 +13703,32 @@ fn run_cli() -> Result<()> {
                 println!("{normalized}");
             }
         }
+        Command::PhysicalProfileSchema { output } => {
+            write_or_print_json(&physical_profile_json_schema(), output.as_ref())?;
+        }
+        Command::ValidatePhysicalProfile { input, output } => {
+            let loaded = load_physical_profile(&input)?;
+            write_or_print_json(
+                &serde_json::json!({
+                    "profile": loaded.profile,
+                    "binding": loaded.binding,
+                }),
+                output.as_ref(),
+            )?;
+        }
+        Command::ApplyPhysicalProfile {
+            board,
+            profile,
+            output,
+        } => {
+            let mut board_value = read(&board)?;
+            let loaded = load_physical_profile(&profile)?;
+            apply_physical_profile(&mut board_value, &loaded.profile)
+                .map_err(anyhow::Error::msg)
+                .with_context(|| format!("applying physical profile {}", profile.display()))?;
+            fs::write(&output, serde_json::to_string_pretty(&board_value)?)
+                .with_context(|| format!("writing {}", output.display()))?;
+        }
         Command::PolicyPackSchema { output } => {
             write_or_print_json(&policy_pack_json_schema(), output.as_ref())?;
         }
@@ -13817,10 +13903,18 @@ fn run_cli() -> Result<()> {
         Command::Route {
             input,
             output,
+            physical_profile,
             svg,
             allow_unrouted,
         } => {
-            let (board, report) = route_board(&read(&input)?).map_err(anyhow::Error::msg)?;
+            let mut input_board = read(&input)?;
+            if let Some(path) = physical_profile {
+                let loaded = load_physical_profile(&path)?;
+                apply_physical_profile(&mut input_board, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("applying physical profile {}", path.display()))?;
+            }
+            let (board, report) = route_board(&input_board).map_err(anyhow::Error::msg)?;
             fs::write(&output, serde_json::to_string_pretty(&board)?)?;
             if let Some(path) = svg {
                 fs::write(path, render_svg(&board))?;
@@ -13851,13 +13945,21 @@ fn run_cli() -> Result<()> {
         Command::RouteCandidates {
             input,
             output_dir,
+            physical_profile,
             candidates,
             workers,
             router_workers,
             allow_unrouted,
         } => {
+            let mut input_board = read(&input)?;
+            if let Some(path) = physical_profile {
+                let loaded = load_physical_profile(&path)?;
+                apply_physical_profile(&mut input_board, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("applying physical profile {}", path.display()))?;
+            }
             let results = route_candidates(
-                &read(&input)?,
+                &input_board,
                 &RoutingCandidateOptions {
                     candidates,
                     workers,
@@ -13993,6 +14095,7 @@ fn run_cli() -> Result<()> {
             fab,
             fab_profile,
             policy_pack,
+            physical_profile,
             fail_on_violations,
         } => {
             let input_bytes =
@@ -14064,6 +14167,15 @@ fn run_cli() -> Result<()> {
             if let Some(profile) = &dfm_profile {
                 apply_dfm_profile(&mut imported.board, profile);
             }
+            let physical_profile = physical_profile
+                .as_deref()
+                .map(load_physical_profile)
+                .transpose()?;
+            if let Some(loaded) = &physical_profile {
+                apply_physical_profile(&mut imported.board, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .context("applying analysis physical profile")?;
+            }
 
             let report = check_board(&imported.board);
             let quality = routing_quality(&imported.board);
@@ -14098,7 +14210,7 @@ fn run_cli() -> Result<()> {
             )?;
             fs::write(output_dir.join("summary.md"), summary)?;
             let manifest = RunManifest {
-                schema_version: 1,
+                schema_version: if physical_profile.is_some() { 2 } else { 1 },
                 engine: "pcbex".to_string(),
                 engine_version: env!("CARGO_PKG_VERSION").to_string(),
                 command: "analyze-kicad".to_string(),
@@ -14111,12 +14223,18 @@ fn run_cli() -> Result<()> {
                     bytes: value.1.bytes,
                     sha256: value.1.sha256.clone(),
                 }),
+                physical_profile: physical_profile
+                    .as_ref()
+                    .map(|loaded| loaded.binding.clone()),
                 configuration: AnalysisConfiguration {
                     rules: imported.board.rules.clone(),
                     project_settings_loaded: project.is_some(),
                     applied_custom_rules,
                     dfm_profile,
                     organization_policy_pack: policy_pack.as_ref().map(|value| value.0.id.clone()),
+                    physical_profile: physical_profile
+                        .as_ref()
+                        .map(|loaded| loaded.profile.clone()),
                 },
                 result: AnalysisResult {
                     clean: report.is_clean(),
@@ -14237,6 +14355,7 @@ fn run_cli() -> Result<()> {
             fab,
             fab_profile,
             policy_pack,
+            physical_profile,
             svg,
             json_output,
             drc,
@@ -14291,6 +14410,18 @@ fn run_cli() -> Result<()> {
             if let Some(profile) = profile {
                 apply_dfm_profile(&mut imported.board, &profile);
                 eprintln!("applied fabrication profile {}", profile.id);
+            }
+            if let Some(path) = physical_profile {
+                let loaded = load_physical_profile(&path)?;
+                apply_physical_profile(&mut imported.board, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("applying physical profile {}", path.display()))?;
+                eprintln!(
+                    "applied physical profile {} revision {} ({})",
+                    loaded.binding.id,
+                    loaded.binding.revision,
+                    loaded.binding.canonical_sha256
+                );
             }
             let (board, report) = route_board(&imported.board).map_err(anyhow::Error::msg)?;
             fs::write(
@@ -14357,6 +14488,7 @@ fn run_cli() -> Result<()> {
             fab,
             fab_profile,
             policy_pack,
+            physical_profile,
             candidates,
             workers,
             router_workers,
@@ -14406,6 +14538,12 @@ fn run_cli() -> Result<()> {
             };
             if let Some(profile) = profile {
                 apply_dfm_profile(&mut imported.board, &profile);
+            }
+            if let Some(path) = physical_profile {
+                let loaded = load_physical_profile(&path)?;
+                apply_physical_profile(&mut imported.board, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("applying physical profile {}", path.display()))?;
             }
             let results = route_candidates(
                 &imported.board,
@@ -14609,14 +14747,21 @@ fn run_cli() -> Result<()> {
         Command::Place {
             input,
             output,
+            physical_profile,
             iterations,
             seed,
         } => {
-            let problem: PlacementProblem = serde_json::from_str(
+            let mut problem: PlacementProblem = serde_json::from_str(
                 &fs::read_to_string(&input)
                     .with_context(|| format!("reading {}", input.display()))?,
             )
             .with_context(|| format!("parsing {}", input.display()))?;
+            if let Some(path) = physical_profile {
+                let loaded = load_physical_profile(&path)?;
+                apply_physical_profile_to_placement(&mut problem, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("applying physical profile {}", path.display()))?;
+            }
             let mut options = PlacementOptions::default();
             if let Some(value) = iterations {
                 options.iterations = value;
@@ -14635,16 +14780,23 @@ fn run_cli() -> Result<()> {
         Command::PlaceCandidates {
             input,
             output_dir,
+            physical_profile,
             candidates,
             workers,
             iterations,
             seed,
         } => {
-            let problem: PlacementProblem = serde_json::from_str(
+            let mut problem: PlacementProblem = serde_json::from_str(
                 &fs::read_to_string(&input)
                     .with_context(|| format!("reading {}", input.display()))?,
             )
             .with_context(|| format!("parsing {}", input.display()))?;
+            if let Some(path) = physical_profile {
+                let loaded = load_physical_profile(&path)?;
+                apply_physical_profile_to_placement(&mut problem, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("applying physical profile {}", path.display()))?;
+            }
             let options = placement_candidate_options(candidates, workers, iterations, seed);
             let results = place_candidates(&problem, &options).map_err(anyhow::Error::msg)?;
             write_candidate_reports(&output_dir, &results)?;
@@ -14662,25 +14814,24 @@ fn run_cli() -> Result<()> {
             iterations,
             seed,
             json_output,
+            physical_profile,
         } => {
             let source = fs::read_to_string(&input)
                 .with_context(|| format!("reading {}", input.display()))?;
-            let imported = import_kicad(
-                &source,
-                Rules {
-                    grid_nm: 250_000,
-                    track_width_nm: 250_000,
-                    clearance_nm: 200_000,
-                    via_diameter_nm: 600_000,
-                    via_drill_nm: 300_000,
-                    bend_cost: 5,
-                    via_cost: 20,
-                },
-            )
-            .map_err(anyhow::Error::msg)?;
-            let problem = imported
+            let import_rules = placement_kicad_rules();
+            let imported = import_kicad(&source, import_rules.clone()).map_err(anyhow::Error::msg)?;
+            let mut problem = imported
                 .placement_problem(to_nm(grid_mm, "placement grid")?)
                 .map_err(anyhow::Error::msg)?;
+            let physical_profile = physical_profile
+                .as_deref()
+                .map(load_physical_profile)
+                .transpose()?;
+            if let Some(loaded) = &physical_profile {
+                apply_physical_profile_to_placement(&mut problem, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .context("applying physical profile to KiCad placement")?;
+            }
             let mut options = PlacementOptions::default();
             if let Some(value) = iterations {
                 options.iterations = value;
@@ -14692,6 +14843,13 @@ fn run_cli() -> Result<()> {
             let placed = imported
                 .write_placements(&result.components)
                 .map_err(anyhow::Error::msg)?;
+            if let Some(loaded) = &physical_profile {
+                validate_placed_kicad_physical_profile(
+                    &placed,
+                    import_rules,
+                    &loaded.profile,
+                )?;
+            }
             fs::write(&output, placed).with_context(|| format!("writing {}", output.display()))?;
             if let Some(path) = json_output {
                 fs::write(&path, serde_json::to_string_pretty(&result)?)
@@ -14710,25 +14868,24 @@ fn run_cli() -> Result<()> {
             workers,
             iterations,
             seed,
+            physical_profile,
         } => {
             let source = fs::read_to_string(&input)
                 .with_context(|| format!("reading {}", input.display()))?;
-            let imported = import_kicad(
-                &source,
-                Rules {
-                    grid_nm: 250_000,
-                    track_width_nm: 250_000,
-                    clearance_nm: 200_000,
-                    via_diameter_nm: 600_000,
-                    via_drill_nm: 300_000,
-                    bend_cost: 5,
-                    via_cost: 20,
-                },
-            )
-            .map_err(anyhow::Error::msg)?;
-            let problem = imported
+            let import_rules = placement_kicad_rules();
+            let imported = import_kicad(&source, import_rules.clone()).map_err(anyhow::Error::msg)?;
+            let mut problem = imported
                 .placement_problem(to_nm(grid_mm, "placement grid")?)
                 .map_err(anyhow::Error::msg)?;
+            let physical_profile = physical_profile
+                .as_deref()
+                .map(load_physical_profile)
+                .transpose()?;
+            if let Some(loaded) = &physical_profile {
+                apply_physical_profile_to_placement(&mut problem, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .context("applying physical profile to KiCad placement candidates")?;
+            }
             let options = placement_candidate_options(candidates, workers, iterations, seed);
             let results = place_candidates(&problem, &options).map_err(anyhow::Error::msg)?;
             fs::create_dir_all(&output_dir)
@@ -14737,6 +14894,13 @@ fn run_cli() -> Result<()> {
                 let board = imported
                     .write_placements(&candidate.result.components)
                     .map_err(anyhow::Error::msg)?;
+                if let Some(loaded) = &physical_profile {
+                    validate_placed_kicad_physical_profile(
+                        &board,
+                        import_rules.clone(),
+                        &loaded.profile,
+                    )?;
+                }
                 let path = output_dir.join(format!(
                     "{}-{}.kicad_pcb",
                     candidate.id,
@@ -14747,6 +14911,13 @@ fn run_cli() -> Result<()> {
             let selected_board = imported
                 .write_placements(&results.selected().result.components)
                 .map_err(anyhow::Error::msg)?;
+            if let Some(loaded) = &physical_profile {
+                validate_placed_kicad_physical_profile(
+                    &selected_board,
+                    import_rules,
+                    &loaded.profile,
+                )?;
+            }
             fs::write(output_dir.join("selected.kicad_pcb"), selected_board)?;
             write_candidate_reports(&output_dir, &results)?;
             eprintln!(
@@ -14756,15 +14927,44 @@ fn run_cli() -> Result<()> {
                 results.selected_candidate_id
             );
         }
-        Command::Fabricate { input, output_dir } => {
+        Command::Fabricate {
+            input,
+            output_dir,
+            physical_profile,
+        } => {
+            let physical_profile = physical_profile
+                .as_deref()
+                .map(load_physical_profile)
+                .transpose()?;
             if output_dir.file_name().is_none() {
                 bail!("manufacturing output must name a directory below its parent")
             }
-            let output_dir = prepare_manufacturing_output_directory(&output_dir)?;
             let input_bytes = fs::read(&input)
                 .with_context(|| format!("reading {}", input.display()))?;
             let source = std::str::from_utf8(&input_bytes)
                 .with_context(|| format!("decoding {} as UTF-8", input.display()))?;
+            if let Some(loaded) = &physical_profile {
+                let mut imported = import_kicad(
+                    source,
+                    Rules {
+                        grid_nm: 250_000,
+                        track_width_nm: 250_000,
+                        clearance_nm: 200_000,
+                        via_diameter_nm: 600_000,
+                        via_drill_nm: 300_000,
+                        bend_cost: 5,
+                        via_cost: 20,
+                    },
+                )
+                .map_err(anyhow::Error::msg)
+                .context("importing board for physical-profile manufacturing gate")?;
+                apply_physical_profile(&mut imported.board, &loaded.profile)
+                    .map_err(anyhow::Error::msg)
+                    .context("applying manufacturing physical profile")?;
+                ensure_clean(&imported.board)
+                    .context("physical-profile manufacturing gate rejected the board")?;
+            }
+            let output_dir = prepare_manufacturing_output_directory(&output_dir)?;
             let parts = manufacturing_parts(source)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| {
@@ -14858,6 +15058,7 @@ fn run_cli() -> Result<()> {
                 &parts,
                 &exported_artifacts,
                 &kicad_identity,
+                physical_profile.as_ref().map(|loaded| &loaded.binding),
                 outside_package_bytes,
                 outside_package_entries,
             )?;
@@ -15027,6 +15228,32 @@ fn run_cli() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn placement_kicad_rules() -> Rules {
+    Rules {
+        grid_nm: 250_000,
+        track_width_nm: 250_000,
+        clearance_nm: 200_000,
+        via_diameter_nm: 600_000,
+        via_drill_nm: 300_000,
+        bend_cost: 5,
+        via_cost: 20,
+    }
+}
+
+fn validate_placed_kicad_physical_profile(
+    source: &str,
+    rules: Rules,
+    profile: &PhysicalConstraintProfile,
+) -> Result<()> {
+    let mut board = import_kicad(source, rules)
+        .map_err(anyhow::Error::msg)
+        .context("reimporting placed KiCad board for physical-profile validation")?
+        .board;
+    apply_physical_profile(&mut board, profile)
+        .map_err(anyhow::Error::msg)
+        .context("validating placed KiCad board against physical profile")
 }
 
 fn placement_candidate_options(
@@ -16573,6 +16800,81 @@ exit 9
                 "jlcpcb-2layer",
                 "--fab-profile",
                 "acme-profile.json",
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn parses_physical_profile_consumers_and_rejects_multiple_authorities() {
+        let analyze = parse_cli(&[
+            "pcbex",
+            "analyze-kicad",
+            "board.kicad_pcb",
+            "--output-dir",
+            "analysis",
+            "--physical-profile",
+            "physical.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *analyze.command,
+            Command::AnalyzeKicad {
+                physical_profile: Some(path),
+                fab: None,
+                fab_profile: None,
+                policy_pack: None,
+                ..
+            } if path.as_os_str() == "physical.json"
+        ));
+
+        let placement = parse_cli(&[
+            "pcbex",
+            "place-kicad",
+            "board.kicad_pcb",
+            "--output",
+            "placed.kicad_pcb",
+            "--physical-profile",
+            "physical.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *placement.command,
+            Command::PlaceKicad {
+                physical_profile: Some(path),
+                ..
+            } if path.as_os_str() == "physical.json"
+        ));
+
+        let fabrication = parse_cli(&[
+            "pcbex",
+            "fabricate",
+            "board.kicad_pcb",
+            "--output-dir",
+            "manufacturing",
+            "--physical-profile",
+            "physical.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *fabrication.command,
+            Command::Fabricate {
+                physical_profile: Some(path),
+                ..
+            } if path.as_os_str() == "physical.json"
+        ));
+
+        assert!(
+            parse_cli(&[
+                "pcbex",
+                "route-kicad",
+                "board.kicad_pcb",
+                "--output",
+                "routed.kicad_pcb",
+                "--fab",
+                "jlcpcb-2layer",
+                "--physical-profile",
+                "physical.json",
             ])
             .is_err()
         );

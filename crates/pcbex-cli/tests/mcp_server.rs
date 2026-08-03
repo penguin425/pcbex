@@ -149,3 +149,81 @@ fn stdio_server_negotiates_and_returns_failed_gate_artifacts() {
 
     fs::remove_dir_all(output).unwrap();
 }
+
+#[test]
+fn physical_profile_is_forwarded_and_cli_rejects_conflicting_fabrication_profile() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = root.join("examples/simple.kicad_pcb");
+    let output = temporary_directory("mcp-physical-profile-conflict");
+    fs::create_dir_all(&output).unwrap();
+    let profile = output.join("physical-profile.json");
+    fs::write(&profile, b"{}").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "physical-profile-test", "version": "1"}
+            }
+        }),
+    );
+    send(
+        &mut stdin,
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    );
+    let initialized = receive(&mut stdout);
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "conflict",
+            "method": "tools/call",
+            "params": {
+                "name": "analyze_kicad",
+                "arguments": {
+                    "input": input,
+                    "output_dir": output.join("artifacts"),
+                    "fab": "jlcpcb-2layer",
+                    "physical_profile": profile
+                }
+            }
+        }),
+    );
+    let response = receive(&mut stdout);
+    drop(stdin);
+    assert_eq!(response["id"], "conflict");
+    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(response["result"]["structuredContent"]["ok"], false);
+    assert!(
+        response["result"]["structuredContent"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("cannot be used with"))
+    );
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+
+    fs::remove_dir_all(output).unwrap();
+}

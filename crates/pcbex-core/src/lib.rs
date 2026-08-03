@@ -7,6 +7,7 @@ pub mod checking;
 pub mod dfm_profiles;
 mod geometry;
 pub mod impedance;
+pub mod physical_profile;
 pub mod placement;
 pub mod quality;
 pub mod resource_limits;
@@ -19,6 +20,11 @@ pub use dfm_profiles::{
     dfm_profile_json_schema, dfm_profiles, parse_external_dfm_profile, validate_dfm_profile,
 };
 pub use impedance::{ImpedanceReport, impedance_report};
+pub use physical_profile::{
+    FixedComponent, PHYSICAL_PROFILE_SCHEMA_VERSION, PhysicalConstraintProfile, ProfileKeepout,
+    apply_physical_profile, apply_physical_profile_to_placement, parse_physical_profile,
+    physical_profile_json_schema, validate_physical_profile,
+};
 pub use quality::{DifferentialQuality, NetQuality, RoutingQuality, routing_quality};
 pub use resource_limits::{
     MAX_BOARD_ABSOLUTE_COORDINATE_NM, MAX_BOARD_EXTENT_NM, MAX_CELL_LAYER_SLOTS,

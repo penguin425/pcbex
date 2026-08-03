@@ -62,6 +62,7 @@ struct PipelineInputs {
     analysis_rules: Option<PathBuf>,
     analysis_dfm_profile: Option<PathBuf>,
     analysis_policy_pack: Option<PathBuf>,
+    analysis_physical_profile: Option<PathBuf>,
     manufacturing_package: PathBuf,
     firmware_manifest: PathBuf,
     factory_receipt: Option<PathBuf>,
@@ -83,6 +84,10 @@ impl PipelineInputs {
             ("--analysis-rules", self.analysis_rules.as_ref()),
             ("--analysis-dfm-profile", self.analysis_dfm_profile.as_ref()),
             ("--analysis-policy-pack", self.analysis_policy_pack.as_ref()),
+            (
+                "--analysis-physical-profile",
+                self.analysis_physical_profile.as_ref(),
+            ),
         ] {
             if let Some(path) = path {
                 command.arg(flag).arg(path);
@@ -204,6 +209,14 @@ fn make_clean_analysis(directory: &Path, board: &Path) -> (PathBuf, PathBuf, Pat
 }
 
 fn write_manufacturing_package(path: &Path, board: &Path) {
+    write_manufacturing_package_with_profile(path, board, None);
+}
+
+fn write_manufacturing_package_with_profile(
+    path: &Path,
+    board: &Path,
+    physical_profile: Option<&Value>,
+) {
     let board_bytes = fs::read(board).unwrap();
     let board_name = board.file_name().unwrap().to_str().unwrap();
     let gerber_job = serde_json::to_vec(&json!({
@@ -233,8 +246,8 @@ fn write_manufacturing_package(path: &Path, board: &Path) {
         ("bom.csv", b"Comment,Designator\n".to_vec()),
         ("cpl.csv", b"Designator,Mid X (mm)\n".to_vec()),
     ];
-    let manifest = json!({
-        "schema_version": 1,
+    let mut manifest = json!({
+        "schema_version": if physical_profile.is_some() { 2 } else { 1 },
         "engine": "pcbex",
         "engine_version": env!("CARGO_PKG_VERSION"),
         "tools": {
@@ -255,6 +268,9 @@ fn write_manufacturing_package(path: &Path, board: &Path) {
         })).collect::<Vec<_>>(),
         "archive": "manufacturing.zip"
     });
+    if let Some(binding) = physical_profile {
+        manifest["physical_profile"] = binding.clone();
+    }
     let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
@@ -395,6 +411,7 @@ fn passing_inputs(directory: &Path) -> (PipelineInputs, String, String) {
             analysis_rules: None,
             analysis_dfm_profile: None,
             analysis_policy_pack: None,
+            analysis_physical_profile: None,
             manufacturing_package,
             firmware_manifest,
             factory_receipt: None,
@@ -418,6 +435,7 @@ fn missing_inputs(directory: &Path) -> PipelineInputs {
         analysis_rules: None,
         analysis_dfm_profile: None,
         analysis_policy_pack: None,
+        analysis_physical_profile: None,
         manufacturing_package: directory.join("missing-manufacturing.zip"),
         firmware_manifest: directory.join("missing-firmware.json"),
         factory_receipt: None,
@@ -438,6 +456,7 @@ fn one_dummy_input(path: &Path) -> PipelineInputs {
         analysis_rules: None,
         analysis_dfm_profile: None,
         analysis_policy_pack: None,
+        analysis_physical_profile: None,
         manufacturing_package: path.to_path_buf(),
         firmware_manifest: path.to_path_buf(),
         factory_receipt: None,
@@ -641,6 +660,86 @@ fn pipeline_verify_accepts_a_digest_bound_end_to_end_pipeline() {
     assert_eq!(report["identities"]["schematic_sha256"], schematic_sha256);
     assert_eq!(report["identities"]["board_sha256"], board_sha256);
     assert_evidence_descriptors(&report);
+}
+
+#[test]
+fn pipeline_verify_binds_one_physical_profile_through_analysis_and_manufacturing() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (mut inputs, _, _) = passing_inputs(temporary.path());
+    let imported_board = read_json(&temporary.path().join("analysis/board.json"));
+    let profile_path = temporary.path().join("physical-profile.json");
+    write_json(
+        &profile_path,
+        &json!({
+            "schema_version": 1,
+            "id": "pipeline-fixture-v1",
+            "revision": 1,
+            "description": "pipeline physical profile fixture",
+            "board_width_nm": imported_board["width_nm"],
+            "board_height_nm": imported_board["height_nm"],
+            "outline": [],
+            "fixed_components": [],
+            "keepouts": [],
+            "manufacturing_rules": null
+        }),
+    );
+    let analysis = temporary.path().join("analysis-physical");
+    let output = Command::new(binary())
+        .arg("analyze-kicad")
+        .arg(&inputs.board)
+        .arg("--physical-profile")
+        .arg(&profile_path)
+        .arg("--output-dir")
+        .arg(&analysis)
+        .arg("--fail-on-violations")
+        .output()
+        .unwrap();
+    assert_success(&output, "profile-aware analyze-kicad");
+    inputs.analysis_manifest = analysis.join("run.json");
+    inputs.analysis_checks = analysis.join("checks.json");
+    inputs.quality = analysis.join("quality.json");
+    inputs.analysis_physical_profile = Some(profile_path.clone());
+    let run = read_json(&inputs.analysis_manifest);
+    assert_eq!(run["schema_version"], 2);
+    let binding = run["physical_profile"].clone();
+    write_manufacturing_package_with_profile(
+        &inputs.manufacturing_package,
+        &inputs.board,
+        Some(&binding),
+    );
+
+    let report_path = temporary.path().join("pipeline-physical.json");
+    let output = inputs.command(&report_path).output().unwrap();
+    assert_success(&output, "profile-bound pipeline-verify");
+    let report = read_json(&report_path);
+    assert_eq!(report["passed"], true);
+    assert_eq!(
+        report["identities"]["physical_profile_sha256"],
+        binding["canonical_sha256"]
+    );
+    assert_eq!(phase(&report, "analysis-drc")["passed"], true);
+    assert_eq!(phase(&report, "manufacturing-package")["passed"], true);
+
+    let mut substituted = binding;
+    substituted["canonical_sha256"] = Value::String("d".repeat(64));
+    write_manufacturing_package_with_profile(
+        &inputs.manufacturing_package,
+        &inputs.board,
+        Some(&substituted),
+    );
+    let rejection_path = temporary.path().join("pipeline-physical-substitution.json");
+    let output = inputs.command(&rejection_path).output().unwrap();
+    assert!(!output.status.success());
+    let rejection = read_json(&rejection_path);
+    assert_eq!(phase(&rejection, "analysis-drc")["passed"], true);
+    assert_eq!(phase(&rejection, "manufacturing-package")["passed"], false);
+    assert!(
+        phase(&rejection, "manufacturing-package")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("does not match"))
+    );
 }
 
 #[test]

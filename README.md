@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.412.1
+    uses: penguin425/pcbex@v1.413.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2458,6 +2458,29 @@ routing, route-candidate generation, board DFM checks, the composite Action,
 and the corresponding MCP analysis and routing tools. Analysis manifests bind
 both the normalized resolved profile and the source file's path, byte length,
 and SHA-256 digest.
+
+### Physical constraint profiles
+
+Use one closed physical profile when automation must also bind board geometry,
+fixed connector/component coordinates, keepouts, and manufacturing minima:
+
+```sh
+pcbex physical-profile-schema --output physical-profile.schema.json
+pcbex validate-physical-profile examples/nes-60pin-physical-profile.json
+pcbex analyze-kicad board.kicad_pcb --output-dir build/analysis \
+  --physical-profile examples/nes-60pin-physical-profile.json
+pcbex fabricate board.kicad_pcb --output-dir build/manufacturing \
+  --physical-profile examples/nes-60pin-physical-profile.json
+```
+
+The profile is applied by JSON/KiCad placement and routing as well as analysis
+and fabrication. Profile-aware analysis and manufacturing manifests use schema
+v2 and carry the same raw-source and domain-separated canonical SHA-256
+binding; `pipeline-verify --analysis-physical-profile` recomputes and compares
+that binding across both phases. Existing no-profile schema-v1 artifacts remain
+valid. See [the physical-profile contract](docs/PHYSICAL_CONSTRAINT_PROFILE.md)
+for limits, fail-closed behavior, GitHub Action/MCP usage, and the complete
+pipeline example.
 
 ### Organization policy packs
 
@@ -4094,7 +4117,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.412.1
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.413.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

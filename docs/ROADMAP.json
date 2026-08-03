@@ -584,6 +584,11 @@
     {
       "id": "hardened-manufacturing-filesystem-boundaries",
       "release": "v1.412.1",
+      "status": "released"
+    },
+    {
+      "id": "digest-bound-physical-profile-injection",
+      "release": "v1.413.0",
       "status": "current"
     }
   ]

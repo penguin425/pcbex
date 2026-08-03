@@ -20,6 +20,7 @@ pcbex pipeline-verify \
   --analysis-manifest build/analysis/run.json \
   --analysis-checks build/analysis/checks.json \
   --quality build/analysis/quality.json \
+  --analysis-physical-profile config/physical-profile.json \
   --manufacturing-package build/manufacturing/manufacturing.zip \
   --firmware-manifest build/firmware/manifest.json \
   --factory-receipt build/factory-receipt.json \
@@ -28,9 +29,10 @@ pcbex pipeline-verify \
 ```
 
 `--electrical-policy` is independently optional; omit it to recompute the
-review with pcbex's built-in default policy. Four analysis inputs are
+review with pcbex's built-in default policy. Five analysis inputs are
 conditionally required: pass `--analysis-project`, `--analysis-rules`,
-`--analysis-dfm-profile`, and/or `--analysis-policy-pack` exactly when
+`--analysis-dfm-profile`, `--analysis-policy-pack`, and/or
+`--analysis-physical-profile` exactly when
 `run.json` declares the corresponding source. pcbex never dereferences the
 descriptor paths embedded in `run.json`; the explicit CLI paths authorize the
 files that may be read and their bytes and SHA-256 must match the descriptors.
@@ -53,10 +55,14 @@ unchanged and appends `factory-dfm` as a strict sixth phase:
    policy is rejected.
 2. **analysis-drc** binds `run.json` to the exact board's byte count and
    SHA-256, safely reloads and hash-checks any explicitly supplied project,
-   custom-rule, external-DFM-profile, and organization-policy inputs, then
+   custom-rule, external-DFM-profile, organization-policy, and physical-profile
+   inputs, then
    reimports the board with that effective configuration. A declared source
    without its matching CLI argument, or an argument without a matching
-   declaration, fails closed. Its recomputed `checks.json` must exactly match
+   declaration, fails closed. A physical-profile analysis manifest uses schema
+   v2, requires that profile to be its sole physical/DFM source, checks both
+   its exact-source and normalized canonical digests, and applies it during
+   recomputation. Its recomputed `checks.json` must exactly match
    the supplied closed report and be clean with zero violations. The remaining
    named presentation artifacts (`board.json`, SVG, SARIF, and summary) are not
    trust inputs and are not opened by this gate.
@@ -68,7 +74,8 @@ unchanged and appends `factory-dfm` as a strict sixth phase:
    over the exact ZIP bytes. The ZIP's embedded `manifest.json`, every declared
    entry's byte count and SHA-256, required BOM/CPL/DRC, drill output, Gerber
    job, and complete declared layer set must validate. The embedded input
-   descriptor must identify the exact board passed with `--board`. This proves
+   descriptor must identify the exact board passed with `--board`. Its optional
+   physical-profile binding must exactly equal the analysis binding. This proves
    internal ZIP integrity and manifest identity binding; it does not regenerate
    Gerber/BOM/CPL from the board or establish signed producer provenance.
 5. **firmware-build** strictly validates the generated firmware manifest,
@@ -91,6 +98,9 @@ The command therefore records two identity chains:
 ```text
 schematic bytes -> canonical imported IR identity -> recomputed review
                                                   `-> firmware manifest -> source artifact digests
+
+physical profile bytes -> canonical profile identity
+                    `-> analysis run -> manufacturing manifest
 
 board bytes -> analysis run -> checks + routing quality
           `-> manufacturing manifest -> exact final ZIP digest
@@ -115,7 +125,7 @@ the values actually produced; the commands below show POSIX output):
 {
   "schema_version": 2,
   "engine": "pcbex",
-  "engine_version": "1.412.1",
+  "engine_version": "1.413.0",
   "schematic_sha256": "<canonical IR SHA-256>",
   "artifacts": [
     {"path": "pinout.h", "bytes": 123, "sha256": "<sha256>"},
@@ -237,8 +247,9 @@ prove factory authenticity or signature validity.
 ## Report and filesystem contract
 
 The v1 report has `schema_version: 1`, `pipeline: "pcbex-hardware-v1"`, nullable
-`identities.schematic_sha256` and `identities.board_sha256`, exactly five phase
-objects, and top-level `passed` and `failures`. The v2 report has
+`identities.schematic_sha256` and `identities.board_sha256`, an optional
+`identities.physical_profile_sha256`, exactly five phase objects, and top-level
+`passed` and `failures`. The v2 report has
 `schema_version: 2`, `pipeline: "pcbex-hardware-v2"`, and exactly those five
 phases plus `factory-dfm` at the end. Each phase contains its name, pass
 decision, checks, failures, and digest evidence; host input paths are not
@@ -247,9 +258,10 @@ serialized. A report evidence descriptor has the exact shape
 the byte count and digest of the exact content read without copying a host path
 into the descriptor. This differs intentionally from firmware artifact
 descriptors, whose closed shape is
-`{"path":"...","bytes":123,"sha256":"..."}`. The identity fields remain
-`null` when the corresponding source cannot be established safely. `passed` is
-true only when every phase passes.
+`{"path":"...","bytes":123,"sha256":"..."}`. The schematic/board identity
+fields remain `null` when their corresponding source cannot be established
+safely; the physical-profile identity is omitted when no profile was declared.
+`passed` is true only when every phase passes.
 
 All phases are evaluated so a rejection report retains independent failures
 instead of stopping at the first bad artifact. On a normal phase rejection the

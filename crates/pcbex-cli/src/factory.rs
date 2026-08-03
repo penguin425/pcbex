@@ -11,6 +11,7 @@ use crate::manufacturing_limits::{
     ManufacturingLimits, portable_manufacturing_name_key, scan_manufacturing_workspace,
     validate_manufacturing_basename,
 };
+use crate::physical_profile::{PhysicalProfileBinding, validate_physical_profile_binding};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -362,7 +363,8 @@ fn run_factory_feedback_loop_with_limits(
     // Snapshot one bounded read from one handle, validate those exact bytes,
     // and never consult the caller-controlled source path again.
     let initial_package = read_package(package_path)?;
-    validate_manufacturing_package(&initial_package)?;
+    let initial_identity = validate_manufacturing_package(&initial_package)?;
+    let initial_physical_profile = initial_identity.physical_profile.clone();
     let workspace = TempfileBuilder::new()
         .prefix("pcbex-factory-loop-")
         .tempdir()
@@ -373,7 +375,12 @@ fn run_factory_feedback_loop_with_limits(
     for attempt_number in 1..=max_attempts {
         let package_sha256 = sha256(&current.bytes);
         let package_bytes = current.bytes.len() as u64;
-        if let Err(error) = validate_manufacturing_package(&current.bytes) {
+        let current_validation =
+            validate_manufacturing_package(&current.bytes).and_then(|identity| {
+                validate_expected_physical_profile(&identity, initial_physical_profile.as_ref())
+                    .map(|()| identity)
+            });
+        if let Err(error) = current_validation {
             let attempt = FactoryLoopAttempt {
                 attempt: attempt_number,
                 package_sha256,
@@ -476,18 +483,19 @@ fn run_factory_feedback_loop_with_limits(
                 current,
             ));
         }
-        let repair = run_repair_command(
-            repair_executable,
-            &current,
-            attempt
+        let repair = run_repair_command(RepairCommandRequest {
+            executable: repair_executable,
+            current_package: &current,
+            receipt: attempt
                 .receipt
                 .as_ref()
                 .expect("a repair is attempted only after a receipt"),
-            workspace.path(),
-            repair_timeout,
+            workspace: workspace.path(),
+            timeout: repair_timeout,
             bearer_token_env,
-            limits.manufacturing,
-        );
+            manufacturing_limits: limits.manufacturing,
+            expected_physical_profile: initial_physical_profile.as_ref(),
+        });
         attempt.repair_command_ran = repair.command_ran;
         let candidate = match repair.result {
             Ok(candidate) => candidate,
@@ -560,15 +568,28 @@ fn validate_repair_executable(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn run_repair_command(
-    executable: &Path,
-    current_package: &PackageSnapshot,
-    receipt: &FactorySubmissionReceipt,
-    workspace: &Path,
+struct RepairCommandRequest<'a> {
+    executable: &'a Path,
+    current_package: &'a PackageSnapshot,
+    receipt: &'a FactorySubmissionReceipt,
+    workspace: &'a Path,
     timeout: Duration,
-    _bearer_token_env: Option<&str>,
+    bearer_token_env: Option<&'a str>,
     manufacturing_limits: ManufacturingLimits,
-) -> RepairCommandOutcome {
+    expected_physical_profile: Option<&'a PhysicalProfileBinding>,
+}
+
+fn run_repair_command(request: RepairCommandRequest<'_>) -> RepairCommandOutcome {
+    let RepairCommandRequest {
+        executable,
+        current_package,
+        receipt,
+        workspace,
+        timeout,
+        bearer_token_env: _bearer_token_env,
+        manufacturing_limits,
+        expected_physical_profile,
+    } = request;
     let deadline = match Instant::now().checked_add(timeout) {
         Some(deadline) => deadline,
         None => {
@@ -729,7 +750,11 @@ fn run_repair_command(
             }
             RepairCommandOutcome {
                 command_ran: true,
-                result: read_validated_repair_output(output_package.path(), manufacturing_limits),
+                result: read_validated_repair_output(
+                    output_package.path(),
+                    manufacturing_limits,
+                    expected_physical_profile,
+                ),
             }
         }
         Ok(output) => RepairCommandOutcome {
@@ -793,6 +818,7 @@ fn verify_repair_input_unchanged(snapshot: &PackageSnapshot) -> Result<(), Strin
 fn read_validated_repair_output(
     path: &Path,
     manufacturing_limits: ManufacturingLimits,
+    expected_physical_profile: Option<&PhysicalProfileBinding>,
 ) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("factory repair command did not write output package: {error}"))?;
@@ -820,7 +846,10 @@ fn read_validated_repair_output(
             "factory repair output exceeded its manufacturing byte quota while being read".into(),
         );
     }
-    validate_manufacturing_package(&package).map_err(|error| {
+    let identity = validate_manufacturing_package(&package).map_err(|error| {
+        format!("factory repair output is not a valid manufacturing package: {error}")
+    })?;
+    validate_expected_physical_profile(&identity, expected_physical_profile).map_err(|error| {
         format!("factory repair output is not a valid manufacturing package: {error}")
     })?;
     Ok(package)
@@ -1113,6 +1142,8 @@ struct ManufacturingManifest {
     parts: ManufacturingCounts,
     artifacts: Vec<ManufacturingDescriptor>,
     archive: String,
+    #[serde(default)]
+    physical_profile: Option<PhysicalProfileBinding>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1120,6 +1151,17 @@ pub(crate) struct ManufacturingPackageIdentity {
     pub(crate) input_path: String,
     pub(crate) input_bytes: u64,
     pub(crate) input_sha256: String,
+    pub(crate) physical_profile: Option<PhysicalProfileBinding>,
+}
+
+fn validate_expected_physical_profile(
+    identity: &ManufacturingPackageIdentity,
+    expected: Option<&PhysicalProfileBinding>,
+) -> Result<(), String> {
+    if identity.physical_profile.as_ref() != expected {
+        return Err("factory package physical profile binding changed during repair".into());
+    }
+    Ok(())
 }
 
 fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
@@ -1194,11 +1236,47 @@ fn validate_manufacturing_package_with_expanded_limit(
             "factory package manifest.json must contain 1 to {MAX_MANIFEST_BYTES} bytes"
         ));
     }
-    let manifest: ManufacturingManifest = serde_json::from_slice(&manifest_bytes)
+    let manifest_value: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| format!("factory package manifest.json is not valid JSON: {error}"))?;
-    if manifest.schema_version != 1 {
-        return Err("factory package manifest.json must use schema_version 1".into());
-    }
+    let manifest: ManufacturingManifest = serde_json::from_value(manifest_value.clone())
+        .map_err(|error| format!("factory package manifest.json is not valid JSON: {error}"))?;
+    let physical_profile_present = manifest_value
+        .as_object()
+        .is_some_and(|object| object.contains_key("physical_profile"));
+    let physical_profile = match (
+        manifest.schema_version,
+        physical_profile_present,
+        manifest.physical_profile.as_ref(),
+    ) {
+        (1, false, None) => None,
+        (1, true, _) => {
+            return Err(
+                "factory package manifest.json schema_version 1 must omit physical_profile".into(),
+            );
+        }
+        (2, false, _) => {
+            return Err(
+                "factory package manifest.json schema_version 2 requires physical_profile".into(),
+            );
+        }
+        (2, true, Some(binding)) => {
+            validate_physical_profile_binding(binding).map_err(|error| {
+                format!("factory package manifest.json physical_profile is invalid: {error:#}")
+            })?;
+            Some(binding.clone())
+        }
+        (2, true, None) => {
+            return Err(
+                "factory package manifest.json schema_version 2 requires physical_profile".into(),
+            );
+        }
+        _ => {
+            return Err(
+                "factory package manifest.json schema_version must be 1 without physical_profile or 2 with physical_profile"
+                    .into(),
+            );
+        }
+    };
     if manifest.engine != "pcbex" {
         return Err("factory package manifest.json must name pcbex as its engine".into());
     }
@@ -1224,6 +1302,7 @@ fn validate_manufacturing_package_with_expanded_limit(
         input_path: manifest.input.path.clone(),
         input_bytes: manifest.input.bytes,
         input_sha256: manifest.input.sha256.clone(),
+        physical_profile,
     };
     let mut provenance_paths = BTreeSet::from([manifest.input.path.clone()]);
     let mut provenance_portable_paths =
@@ -2052,6 +2131,15 @@ mod tests {
         front_copper: Vec<u8>,
         compression_method: CompressionMethod,
     ) -> Vec<u8> {
+        manufacturing_package_with_profile(front_copper, compression_method, 1, None)
+    }
+
+    fn manufacturing_package_with_profile(
+        front_copper: Vec<u8>,
+        compression_method: CompressionMethod,
+        schema_version: u32,
+        physical_profile: Option<&PhysicalProfileBinding>,
+    ) -> Vec<u8> {
         let board = b"board-bytes";
         let job = serde_json::to_vec(&json!({
             "GeneralSpecs": {"LayerNumber": 2},
@@ -2080,8 +2168,8 @@ mod tests {
             ("bom.csv", b"Comment,Designator\n".to_vec()),
             ("cpl.csv", b"Designator,Mid X (mm)\n".to_vec()),
         ];
-        let manifest = json!({
-            "schema_version": 1,
+        let mut manifest = json!({
+            "schema_version": schema_version,
             "engine": "pcbex",
             "engine_version": env!("CARGO_PKG_VERSION"),
             "tools": {"kicad_cli": "10.0.5", "kicad_cli_about_sha256": "a".repeat(64)},
@@ -2099,6 +2187,9 @@ mod tests {
             })).collect::<Vec<_>>(),
             "archive": "manufacturing.zip"
         });
+        if let Some(binding) = physical_profile {
+            manifest["physical_profile"] = serde_json::to_value(binding).unwrap();
+        }
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default().compression_method(compression_method);
@@ -2109,6 +2200,20 @@ mod tests {
         writer.start_file("manifest.json", options).unwrap();
         writer.write_all(&manifest_bytes).unwrap();
         writer.finish().unwrap().into_inner()
+    }
+
+    fn physical_profile_binding() -> PhysicalProfileBinding {
+        PhysicalProfileBinding {
+            schema_version: 1,
+            id: "fixture-v1".into(),
+            revision: 1,
+            canonical_sha256: "b".repeat(64),
+            source: crate::physical_profile::PhysicalProfileSource {
+                path: "profile.json".into(),
+                bytes: 1,
+                sha256: "c".repeat(64),
+            },
+        }
     }
 
     fn spawn_http_fixture(
@@ -2778,6 +2883,7 @@ mod tests {
                 input_path: "board.kicad_pcb".into(),
                 input_bytes: input.len() as u64,
                 input_sha256: sha256(input),
+                physical_profile: None,
             }
         );
 
@@ -2791,6 +2897,70 @@ mod tests {
         };
         package[index] ^= 1;
         assert!(validate_manufacturing_package(&package).is_err());
+    }
+
+    #[test]
+    fn validates_physical_profile_schema_and_rejects_cross_version_binding() {
+        let binding = physical_profile_binding();
+        let package = manufacturing_package_with_profile(
+            b"front-copper".to_vec(),
+            CompressionMethod::Stored,
+            2,
+            Some(&binding),
+        );
+        let identity = validate_manufacturing_package(&package).unwrap();
+        assert_eq!(identity.physical_profile, Some(binding.clone()));
+
+        let missing = manufacturing_package_with_profile(
+            b"front-copper".to_vec(),
+            CompressionMethod::Stored,
+            2,
+            None,
+        );
+        let error = validate_manufacturing_package(&missing).unwrap_err();
+        assert!(
+            error.contains("schema_version 2 requires physical_profile"),
+            "{error}"
+        );
+
+        let extra = manufacturing_package_with_profile(
+            b"front-copper".to_vec(),
+            CompressionMethod::Stored,
+            1,
+            Some(&binding),
+        );
+        let error = validate_manufacturing_package(&extra).unwrap_err();
+        assert!(
+            error.contains("schema_version 1 must omit physical_profile"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn repair_identity_rejects_physical_profile_add_drop_and_substitution() {
+        let binding = physical_profile_binding();
+        let without = ManufacturingPackageIdentity {
+            input_path: "board.kicad_pcb".into(),
+            input_bytes: 1,
+            input_sha256: "a".repeat(64),
+            physical_profile: None,
+        };
+        let with = ManufacturingPackageIdentity {
+            physical_profile: Some(binding.clone()),
+            ..without.clone()
+        };
+        assert!(validate_expected_physical_profile(&without, None).is_ok());
+        assert!(validate_expected_physical_profile(&with, Some(&binding)).is_ok());
+        assert!(validate_expected_physical_profile(&without, Some(&binding)).is_err());
+        assert!(validate_expected_physical_profile(&with, None).is_err());
+
+        let mut substituted = binding.clone();
+        substituted.canonical_sha256 = "d".repeat(64);
+        let substituted_identity = ManufacturingPackageIdentity {
+            physical_profile: Some(substituted),
+            ..without
+        };
+        assert!(validate_expected_physical_profile(&substituted_identity, Some(&binding)).is_err());
     }
 
     #[test]
@@ -2851,6 +3021,7 @@ mod tests {
                 input_path: "board.kicad_pcb".into(),
                 input_bytes: 5,
                 input_sha256: sha256(b"board"),
+                physical_profile: None,
             }
         );
     }
@@ -3631,15 +3802,16 @@ mod tests {
         }));
         let missing = temporary.path().join("missing-repair-command");
 
-        let outcome = run_repair_command(
-            &missing,
-            &snapshot,
-            &receipt,
-            temporary.path(),
-            Duration::from_secs(1),
-            None,
-            ManufacturingLimits::production(),
-        );
+        let outcome = run_repair_command(RepairCommandRequest {
+            executable: &missing,
+            current_package: &snapshot,
+            receipt: &receipt,
+            workspace: temporary.path(),
+            timeout: Duration::from_secs(1),
+            bearer_token_env: None,
+            manufacturing_limits: ManufacturingLimits::production(),
+            expected_physical_profile: None,
+        });
 
         assert!(!outcome.command_ran);
         assert!(

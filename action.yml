@@ -34,6 +34,10 @@ inputs:
     description: Optional strict external DFM profile JSON path; mutually exclusive with fab.
     required: false
     default: ""
+  physical-profile:
+    description: Optional strict physical constraint profile JSON path; mutually exclusive with fabrication and policy profiles.
+    required: false
+    default: ""
   policy-pack:
     description: Optional unsigned organization policy pack; mutually exclusive with physical-policy alternatives.
     required: false
@@ -1363,6 +1367,7 @@ runs:
         PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY: ${{ inputs.schematic-reviewer-routing-policy }}
         PCBEX_FAB: ${{ inputs.fab }}
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
+        PCBEX_PHYSICAL_PROFILE: ${{ inputs.physical-profile }}
         PCBEX_POLICY_PACK: ${{ inputs.policy-pack }}
         PCBEX_SIGNED_POLICY_PACK: ${{ inputs.signed-policy-pack }}
         PCBEX_POLICY_PACK_URL: ${{ inputs.policy-pack-url }}

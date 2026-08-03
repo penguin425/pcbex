@@ -122,6 +122,7 @@ analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
 if [[ -n "${PCBEX_FAB:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then ((profile_selections += 1)); fi
+if [[ -n "${PCBEX_PHYSICAL_PROFILE:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_POLICY_PACK:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_SIGNED_POLICY_PACK:-}" ]]; then ((profile_selections += 1)); fi
 if [[ -n "${PCBEX_POLICY_PACK_URL:-}" ]]; then ((profile_selections += 1)); fi
@@ -196,6 +197,9 @@ if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then
 fi
 if [[ -n "$effective_policy_pack" ]]; then
   analysis_arguments+=(--policy-pack "$effective_policy_pack")
+fi
+if [[ -n "${PCBEX_PHYSICAL_PROFILE:-}" ]]; then
+  analysis_arguments+=(--physical-profile "$PCBEX_PHYSICAL_PROFILE")
 fi
 "$PCBEX_BINARY" "${analysis_arguments[@]}"
 cp "$current_dir/report.sarif" "$sarif_dir/current.sarif"
@@ -2893,6 +2897,9 @@ if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
   fi
   if [[ -n "$effective_policy_pack" ]]; then
     baseline_arguments+=(--policy-pack "$effective_policy_pack")
+  fi
+  if [[ -n "${PCBEX_PHYSICAL_PROFILE:-}" ]]; then
+    baseline_arguments+=(--physical-profile "$PCBEX_PHYSICAL_PROFILE")
   fi
   "$PCBEX_BINARY" "${baseline_arguments[@]}"
   "$PCBEX_BINARY" compare-analysis \
