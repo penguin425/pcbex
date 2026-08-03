@@ -87,8 +87,9 @@ forgotten.
 ## Scope
 
 The hardware pipeline, firmware generator, factory connector, and remote
-adapters retain their existing narrower, purpose-specific limits. This release
-does not yet unify the Python agent subprocesses, release/CI helper scripts, or
-the internal manufacturing ZIP and artifact walkers with the shared runner and
-file facade. Those boundaries remain explicit follow-up work. Core A*, zone
+adapters retain their existing narrower, purpose-specific limits. The Python
+agent now has an equivalent stdlib-only boundary documented in
+[`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md). Release/CI helper scripts and
+the internal manufacturing ZIP and artifact walkers are not yet unified with
+either facade; those boundaries remain explicit follow-up work. Core A*, zone
 fill, placement, and raster budgets are unchanged.

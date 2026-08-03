@@ -144,6 +144,11 @@ Symlink path components are rejected. Purpose-specific pipeline, firmware, and
 factory limits may be smaller; see
 [`docs/CLI_IO_LIMITS.md`](docs/CLI_IO_LIMITS.md) for exact subprocess and MCP
 limits as well as the explicit sandbox exclusions.
+The Python agent applies a separate 32 MiB generic-file boundary, permits
+128 MiB KiCad repair candidates, rejects symlink/reparse paths, atomically
+publishes its outputs, and gives provider, pcbex, and KiCad children fixed
+input/output, deadline, and process-tree controls; see
+[`docs/PYTHON_AGENT_LIMITS.md`](docs/PYTHON_AGENT_LIMITS.md).
 
 Optional `net_classes` define per-class track width, clearance, via dimensions,
 and allowed layers. Assign a class by setting a net's `class` field. Routing and
@@ -2101,7 +2106,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.405.0
+    uses: penguin425/pcbex@v1.406.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2698,6 +2703,10 @@ must be positive, and enabled thermal relief requires a positive spoke width.
 The dependency-free Python agent converts bounded natural-language requirements
 to an auditable JSON plan. It does not choose coordinates: only the
 deterministic Rust engines may change physical design state.
+Agent inputs must be regular non-symlink files and generated outputs are
+size-checked, synchronized, and atomically replaced. Generic files are capped
+at 32 MiB; exact limits and platform containment behavior are documented in
+[`docs/PYTHON_AGENT_LIMITS.md`](docs/PYTHON_AGENT_LIMITS.md).
 
 ```sh
 PYTHONPATH=agent/src python -m pcbex_agent plan examples/requirements.txt \
@@ -4012,7 +4021,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.405.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.406.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
@@ -4045,9 +4054,9 @@ pcbex-agent provider-receipt-schema \
 exact argument. pcbex-agent does not interpret a command string, expand shell
 syntax, or accept or persist a provider credential. Credentials remain an
 adapter concern, typically supplied through its environment. pcbex-agent
-bounds stdout and stderr while the process runs, kills timed-out or oversized
-providers, validates the closed response before writing anything, and refuses
-to overwrite an existing response or receipt. The generated prompt labels
+bounds stdout and stderr while the process runs, kills the provider process
+tree on timeout or overflow, validates the closed response before writing
+anything, and refuses to overwrite an existing response or receipt. The generated prompt labels
 every schematic and requirement field as untrusted evidence rather than model
 instructions, reducing prompt-injection authority at the review boundary.
 

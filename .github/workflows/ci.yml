@@ -990,8 +990,14 @@ jobs:
 
   python:
     name: Python
+    needs: python-boundaries
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
+      - name: Require cross-platform boundary checks
+        env:
+          BOUNDARY_RESULT: ${{ needs.python-boundaries.result }}
+        run: test "$BOUNDARY_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -1002,3 +1008,30 @@ jobs:
         env:
           PYTHONPATH: agent/src
         run: python -m unittest discover -s agent/tests -v
+
+  python-boundaries:
+    name: Python boundaries (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - macos-latest
+          - windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Run cross-platform boundary tests
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest -v
+          agent.tests.test_bounded_io
+          agent.tests.test_bounded_process
+          agent.tests.test_agent_boundaries
+          agent.tests.test_provider_boundaries
+          agent.tests.test_repair_loop_boundaries
