@@ -7,26 +7,55 @@ import argparse
 import os
 from pathlib import Path
 import re
-import subprocess
 import sys
 import tomllib
 import unittest
+
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from ci_runtime import (
+    ExecutionBoundaryError,
+    atomic_write_text,
+    decode_utf8,
+    read_text,
+    run,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT = ROOT / "docs" / "COMPLETION_AUDIT.md"
 START = "<!-- completion-audit:start -->"
 END = "<!-- completion-audit:end -->"
+MIB = 1024 * 1024
+MAX_CONFIG_BYTES = MIB
+MAX_AUDIT_BYTES = 2 * MIB
+MAX_CARGO_STDOUT_BYTES = 32 * MIB
+MAX_CARGO_STDERR_BYTES = 4 * MIB
+CARGO_LIST_TIMEOUT_SECONDS = 10 * 60
+
+
+class CompletionAuditError(RuntimeError):
+    """The generated completion audit could not be produced safely."""
 
 
 def rust_test_count() -> int:
-    result = subprocess.run(
+    result = run(
         ["cargo", "test", "--workspace", "--locked", "--", "--list"],
         cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
+        timeout_seconds=CARGO_LIST_TIMEOUT_SECONDS,
+        max_stdout_bytes=MAX_CARGO_STDOUT_BYTES,
+        max_stderr_bytes=MAX_CARGO_STDERR_BYTES,
     )
-    return sum(line.endswith(": test") for line in result.stdout.splitlines())
+    if result.returncode:
+        detail = (result.stderr.strip() or result.stdout.strip()).decode(
+            "utf-8", errors="replace"
+        )[:2048]
+        raise CompletionAuditError(
+            f"cargo test --list failed with status {result.returncode}: {detail}"
+        )
+    output = decode_utf8(result.stdout, role="cargo test list output")
+    return sum(line.endswith(": test") for line in output.splitlines())
 
 
 def python_test_count() -> int:
@@ -43,12 +72,18 @@ def python_test_count() -> int:
 
 
 def generated_block() -> str:
-    workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())
+    workspace = tomllib.loads(
+        read_text(ROOT / "Cargo.toml", max_bytes=MAX_CONFIG_BYTES)
+    )
     version = workspace["workspace"]["package"]["version"]
-    agent = tomllib.loads((ROOT / "agent" / "pyproject.toml").read_text())
+    agent = tomllib.loads(
+        read_text(
+            ROOT / "agent" / "pyproject.toml", max_bytes=MAX_CONFIG_BYTES
+        )
+    )
     agent_version = agent["project"]["version"]
     if agent_version != version:
-        raise SystemExit(
+        raise CompletionAuditError(
             "workspace and agent versions differ: "
             f"Rust {version}, Python {agent_version}"
         )
@@ -66,7 +101,9 @@ def generated_block() -> str:
 def updated_document(document: str) -> str:
     pattern = re.compile(re.escape(START) + r".*?" + re.escape(END), re.DOTALL)
     if not pattern.search(document):
-        raise SystemExit(f"{AUDIT} does not contain generated audit markers")
+        raise CompletionAuditError(
+            f"{AUDIT} does not contain generated audit markers"
+        )
     return pattern.sub(generated_block(), document)
 
 
@@ -79,21 +116,29 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    original = AUDIT.read_text()
-    updated = updated_document(original)
-    if args.check:
-        if updated != original:
-            print(
-                "completion audit is stale; run "
-                "python3 scripts/update-completion-audit.py",
-                file=sys.stderr,
+    try:
+        original = read_text(AUDIT, max_bytes=MAX_AUDIT_BYTES)
+        updated = updated_document(original)
+        if len(updated.encode("utf-8")) > MAX_AUDIT_BYTES:
+            raise CompletionAuditError(
+                f"generated completion audit exceeds {MAX_AUDIT_BYTES} bytes"
             )
-            return 1
-        print("completion audit is current")
+        if args.check:
+            if updated != original:
+                print(
+                    "completion audit is stale; run "
+                    "python3 scripts/update-completion-audit.py",
+                    file=sys.stderr,
+                )
+                return 1
+            print("completion audit is current")
+            return 0
+        atomic_write_text(AUDIT, updated, max_bytes=MAX_AUDIT_BYTES)
+        print(f"updated {AUDIT.relative_to(ROOT)}")
         return 0
-    AUDIT.write_text(updated)
-    print(f"updated {AUDIT.relative_to(ROOT)}")
-    return 0
+    except (CompletionAuditError, ExecutionBoundaryError, OSError, ValueError) as error:
+        print(f"completion audit failed: {error}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

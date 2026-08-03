@@ -98,5 +98,7 @@ time limits; their local request and evidence files use the shared Python
 facade. Rust firmware and factory-repair subprocesses now use the Rust process
 supervisor documented in [`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). Rust
 manufacturing ZIP, artifact, and repair-workspace walkers now share a finite
-quota contract. Python external-child filesystem growth, release helpers, and
-CI shell/background processes remain separate follow-up boundaries.
+quota contract. Release helpers, GitHub Actions jobs, and composite-action
+output trees now have the outer execution limits documented in
+[`CI_EXECUTION_LIMITS.md`](CI_EXECUTION_LIMITS.md). Live filesystem growth by
+an external child remains a runner/sandbox responsibility.

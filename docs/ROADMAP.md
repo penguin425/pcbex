@@ -119,6 +119,7 @@ auditable release.
 | v1.407.0 | Immutable ERC safety floor | Keep every built-in error rule enabled at error severity across direct policies and signed packs, reject waivers for floor findings, and prevent baseline gates from accepting retained floor errors |
 | v1.408.0 | Supervised firmware and factory subprocesses | Run firmware validation and factory repair children through one deadline- and output-bounded process-tree supervisor while preserving deterministic evidence and last-known-good manufacturing packages |
 | v1.409.0 | Manufacturing package and workspace quotas | Bound manufacturing file count, depth, per-file, aggregate, archive, normalization, repair-workspace, and publication work while preserving deterministic atomic packages and last-known-good evidence |
+| v1.410.0 | Bounded release and CI execution | Enforce workflow time and parallelism policy, supervise composite-action and audit children, bound release/API/file work, and gate publication on finite output trees |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -127,15 +128,15 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release applies one production quota contract to manufacturing
-staging, timestamp normalization, deterministic ZIP creation, publication,
-package validation, and factory-repair workspaces. File count, traversal
-depth, individual file size, aggregate bytes, compressed/expanded archive
-size, manifest size, source identity, and cross-platform entry names fail
-closed before later copies or public replacement. Generated archives are
-revalidated through the factory acceptance boundary. External KiCad or a
-deployment-owned repair wrapper can still consume disk between scanner
-checkpoints; live filesystem enforcement requires an OS quota or sandbox.
+The current release applies explicit timeouts and concurrency policy to every
+GitHub Actions job, limits every matrix to two concurrent variants, bounds
+fuzz time/RSS/input size, and supervises composite-action, release-audit, and
+completion-audit child processes. Release metadata, downloaded assets, direct
+comment API responses, and action output trees now have finite count, depth,
+per-file, aggregate, and output ceilings before publication. These are
+application-level checkpoints rather than live OS CPU, memory, disk, network,
+or syscall isolation; hardened runners must provide those controls.
 
-The next roadmap work is to contain release/CI execution, then add bounded
-natural-language circuit generation with a deterministic ERC correction loop.
+The next roadmap work is bounded natural-language circuit generation with a
+deterministic ERC correction loop, followed by inventory-aware supplier
+selection and a headless schematic-to-manufacturing orchestrator.
