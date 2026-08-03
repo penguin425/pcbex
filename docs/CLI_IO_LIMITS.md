@@ -44,10 +44,10 @@ administrator must run pcbex in an isolated filesystem namespace.
 
 ## Subprocess limits
 
-The previously unbounded doctor, KiCad CLI, and MCP self-invocation paths use a
-shared shell-free runner. Standard input is closed, standard output and error
-are drained concurrently in fixed chunks, and every invocation has a hard
-deadline.
+Rust CLI integrations use a shared shell-free runner. Standard input is closed
+unless an integration supplies an already bounded, file-backed input; standard
+output and error are drained concurrently in fixed chunks, and every invocation
+has a hard deadline.
 
 | Invocation | Deadline | stdout | stderr |
 |---|---:|---:|---:|
@@ -55,6 +55,8 @@ deadline.
 | KiCad DRC and manufacturing export | 600 seconds | 8 MiB | 1 MiB |
 | KiCad build identity | 600 seconds | 128 KiB | 1 MiB |
 | MCP child `pcbex` command | 600 seconds | 8 MiB | 1 MiB |
+| Firmware compiler, smoke test, or Python check | configurable 1–3600 seconds; default 120 | 1 MiB | 1 MiB |
+| Factory repair wrapper | remaining portion of its 600-second repair limit | 1 MiB | 1 MiB |
 
 The final allowed byte is valid. The next byte, timeout, cancellation, read
 failure, or wait failure terminates and reaps the child before returning. Unix
@@ -73,6 +75,14 @@ KiCad manufacturing exports remain inside their purpose-specific private stage
 until validation and promotion, but the external tool's filesystem writes are
 not capped by the stdout/stderr limits.
 
+Firmware validation discards captured diagnostics after recording the process
+status, so its closed manifest schema and deterministic evidence remain
+unchanged. Factory repair passes the normalized receipt through a seek-rewound
+temporary file instead of a pipe, which cannot deadlock when a wrapper exits
+without reading stdin. A repair timeout, output overflow, nonzero exit, input
+mutation, or invalid candidate retains the last fully validated manufacturing
+package.
+
 ## MCP framing
 
 Each newline-delimited MCP request and serialized response is limited to 16
@@ -86,9 +96,9 @@ forgotten.
 
 ## Scope
 
-The hardware pipeline, firmware generator, factory connector, and remote
-adapters retain their existing narrower, purpose-specific limits. The Python
-agent now has an equivalent stdlib-only boundary documented in
+The hardware pipeline, factory HTTPS connector, and remote adapters retain
+their existing narrower, purpose-specific limits. The Python agent has an
+equivalent stdlib-only boundary documented in
 [`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md). Release/CI helper scripts and
 the internal manufacturing ZIP and artifact walkers are not yet unified with
 either facade; those boundaries remain explicit follow-up work. Core A*, zone

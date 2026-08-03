@@ -117,6 +117,7 @@ auditable release.
 | v1.405.0 | Bounded CLI I/O and subprocess execution | Limit generic Rust CLI files and MCP frames, atomically publish per-file outputs, and enforce deadlines, output ceilings, cancellation, and process-tree cleanup for doctor, KiCad, and MCP children |
 | v1.406.0 | Bounded Python agent I/O and subprocess execution | Route every Python agent file through regular-file, link-safe, size-limited atomic I/O; cap provider input and all child output; reject ambiguous KiCad DRC reports; and supervise provider, pcbex, and KiCad process trees under one deadline |
 | v1.407.0 | Immutable ERC safety floor | Keep every built-in error rule enabled at error severity across direct policies and signed packs, reject waivers for floor findings, and prevent baseline gates from accepting retained floor errors |
+| v1.408.0 | Supervised firmware and factory subprocesses | Run firmware validation and factory repair children through one deadline- and output-bounded process-tree supervisor while preserving deterministic evidence and last-known-good manufacturing packages |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -125,15 +126,15 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release makes the deterministic ERC error contract an immutable
-safety floor. All 12 built-in error rules remain enabled at error severity
-through direct policy files and signed organization packs; floor findings
-cannot be waived or retained behind a passing baseline comparison. Advisory
-rules remain configurable and promoted advisory errors remain eligible for
-audited, expiring waivers. The exact rule set and gate behavior are documented
-in [`ERC_SAFETY_FLOOR.md`](ERC_SAFETY_FLOOR.md).
+The current release converges the remaining Rust firmware-validation and
+factory-repair children on the shared subprocess supervisor. Every invocation
+has a finite deadline and independent 1 MiB stdout/stderr ceilings; ordinary
+descendants are terminated on both timeout and direct-child completion. The
+firmware manifest remains deterministic, while a failed factory repair still
+retains the last fully validated manufacturing package. Exact limits and the
+remaining operating-system sandbox boundary are documented in
+[`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md).
 
-The next roadmap work is to converge the remaining firmware and factory repair
-children on the shared process-tree supervisor, add manufacturing package and
-workspace quotas, then contain release/CI execution and add bounded
-natural-language circuit generation with a deterministic ERC correction loop.
+The next roadmap work is to add manufacturing package and workspace quotas,
+then contain release/CI execution and add bounded natural-language circuit
+generation with a deterministic ERC correction loop.

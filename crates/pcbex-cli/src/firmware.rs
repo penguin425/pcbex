@@ -6,6 +6,7 @@
 //! are evidence in the manifest rather than errors from the generator: callers
 //! decide whether a bundle with failed (or skipped) checks is acceptable.
 
+use crate::bounded_process::{ProcessLimits, run_bounded};
 use anyhow::{Context, Result, bail};
 use pcbex_kicad::{SchematicDocument, SchematicSymbol};
 use serde::{
@@ -19,9 +20,8 @@ use std::fmt;
 use std::fs::{self, File, Metadata, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
 /// The source files in a v2 firmware bundle, in canonical order.
 pub(crate) const FIRMWARE_ARTIFACTS: [&str; 7] = [
@@ -39,6 +39,8 @@ pub(crate) const MAX_FIRMWARE_ARTIFACT_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL_ARTIFACT_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_COMMAND_ARGUMENTS: usize = 256;
 const MAX_COMMAND_TEXT: usize = 4096;
+const FIRMWARE_PROCESS_STDOUT_LIMIT_BYTES: usize = 1024 * 1024;
+const FIRMWARE_PROCESS_STDERR_LIMIT_BYTES: usize = 1024 * 1024;
 const MAX_ENGINE_VERSION: usize = 128;
 const COMMAND_TEXT_PATTERN: &str = r"^[\u0021-\u007E](?:[\u0020-\u007E]*[\u0021-\u007E])?$";
 const ENGINE_VERSION_PATTERN: &str =
@@ -778,42 +780,20 @@ fn run_process(
     if command.is_empty() {
         return command_evidence(command, true, false, None);
     }
-    let mut child = match spawn_command(output_dir, &command) {
-        Ok(child) => child,
-        Err(_) => return command_evidence(command, true, false, None),
-    };
-    let deadline = Instant::now().checked_add(timeout);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                return command_evidence(command, true, status.success(), status.code());
-            }
-            Ok(None) => {
-                let expired = deadline.is_some_and(|end| Instant::now() >= end);
-                if expired {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return command_evidence(command, true, false, None);
-                }
-                thread::sleep(Duration::from_millis(5));
-            }
-            Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return command_evidence(command, true, false, None);
-            }
-        }
-    }
-}
-
-fn spawn_command(output_dir: &Path, command: &[String]) -> io::Result<Child> {
     let mut process = Command::new(&command[0]);
     process.args(&command[1..]);
     process.current_dir(output_dir);
-    process.stdin(Stdio::null());
-    process.stdout(Stdio::null());
-    process.stderr(Stdio::null());
-    process.spawn()
+    let limits = ProcessLimits {
+        timeout,
+        stdout_bytes: FIRMWARE_PROCESS_STDOUT_LIMIT_BYTES,
+        stderr_bytes: FIRMWARE_PROCESS_STDERR_LIMIT_BYTES,
+    };
+    match run_bounded(&mut process, limits, None) {
+        Ok(output) => {
+            command_evidence(command, true, output.status.success(), output.status.code())
+        }
+        Err(_) => command_evidence(command, true, false, None),
+    }
 }
 
 fn smoke_command(binary: &str) -> String {
@@ -1341,5 +1321,76 @@ mod tests {
             schema["$defs"]["command_evidence"]["properties"]["command"]["items"]["pattern"],
             COMMAND_TEXT_PATTERN
         );
+    }
+
+    #[cfg(unix)]
+    fn shell_command(script: &str, arguments: &[String]) -> Vec<String> {
+        let mut command = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            script.to_string(),
+            "pcbex-firmware-test".to_string(),
+        ];
+        command.extend(arguments.iter().cloned());
+        command
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_output_limits_allow_boundary_and_reject_overflow() {
+        let temporary = tempfile::tempdir().unwrap();
+        let timeout = Duration::from_secs(2);
+        let boundary = FIRMWARE_PROCESS_STDOUT_LIMIT_BYTES;
+        let stdout_ok = shell_command(&format!("printf '%{boundary}s' ''"), &[]);
+        let evidence = run_process(temporary.path(), &stdout_ok, timeout);
+        assert!(evidence.attempted && evidence.passed);
+        assert_eq!(evidence.exit_code, Some(0));
+
+        let stdout_overflow = shell_command(&format!("printf '%{}s' ''", boundary + 1), &[]);
+        let evidence = run_process(temporary.path(), &stdout_overflow, timeout);
+        assert!(evidence.attempted && !evidence.passed);
+        assert_eq!(evidence.exit_code, None);
+
+        let boundary = FIRMWARE_PROCESS_STDERR_LIMIT_BYTES;
+        let stderr_ok = shell_command(&format!("printf '%{boundary}s' '' >&2"), &[]);
+        let evidence = run_process(temporary.path(), &stderr_ok, timeout);
+        assert!(evidence.attempted && evidence.passed);
+        assert_eq!(evidence.exit_code, Some(0));
+
+        let stderr_overflow = shell_command(&format!("printf '%{}s' '' >&2", boundary + 1), &[]);
+        let evidence = run_process(temporary.path(), &stderr_overflow, timeout);
+        assert!(evidence.attempted && !evidence.passed);
+        assert_eq!(evidence.exit_code, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn normal_child_cannot_leave_a_background_descendant() {
+        let temporary = tempfile::tempdir().unwrap();
+        let marker = temporary.path().join("background-marker");
+        let command = shell_command(
+            "(sleep 0.2; printf leaked > \"$1\") >/dev/null 2>&1 &",
+            &[marker.to_string_lossy().into_owned()],
+        );
+        let evidence = run_process(temporary.path(), &command, Duration::from_secs(1));
+        assert!(evidence.attempted && evidence.passed);
+        std::thread::sleep(Duration::from_millis(350));
+        assert!(!marker.exists(), "background descendant outlived cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_child_cannot_leave_a_background_descendant() {
+        let temporary = tempfile::tempdir().unwrap();
+        let marker = temporary.path().join("timeout-marker");
+        let command = shell_command(
+            "(sleep 0.3; printf leaked > \"$1\") & wait",
+            &[marker.to_string_lossy().into_owned()],
+        );
+        let evidence = run_process(temporary.path(), &command, Duration::from_millis(40));
+        assert!(evidence.attempted && !evidence.passed);
+        assert_eq!(evidence.exit_code, None);
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(!marker.exists(), "timed-out descendant outlived cleanup");
     }
 }
