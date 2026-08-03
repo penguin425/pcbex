@@ -534,6 +534,11 @@
     {
       "id": "bounded-deterministic-astar-work",
       "release": "v1.403.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-deterministic-zone-fill-work",
+      "release": "v1.404.0",
       "status": "current"
     }
   ]

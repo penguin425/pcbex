@@ -708,6 +708,14 @@ for the final unit; checked callers can select a smaller limit with
 behavior are documented in
 [`docs/ASTAR_WORK_BUDGET.md`](docs/ASTAR_WORK_BUDGET.md).
 
+Copper-zone island removal has its own deterministic 1,048,576-unit work
+budget shared by every zone in one fill operation. The filler enqueues only
+previously undiscovered candidate cells and charges each queue removal and
+successful neighbor insertion. Checked callers can tighten the cap with
+`try_fill_copper_zones_with_work_budget`; exhaustion leaves every existing
+filled polygon unchanged. See
+[`docs/ZONE_FILL_WORK_BUDGET.md`](docs/ZONE_FILL_WORK_BUDGET.md).
+
 Generate an N-best routing portfolio for board JSON or a placed KiCad board:
 
 ```sh
@@ -2086,7 +2094,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.403.0
+    uses: penguin425/pcbex@v1.404.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -3993,7 +4001,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.403.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.404.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
