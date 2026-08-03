@@ -122,6 +122,7 @@ auditable release.
 | v1.410.0 | Bounded release and CI execution | Enforce workflow time and parallelism policy, supervise composite-action and audit children, bound release/API/file work, and gate publication on finite output trees |
 | v1.411.0 | Rust-gated natural-language circuit generation | Generate a closed circuit-spec v2 through a bounded correction loop and accept only the existing immutable native ERC floor |
 | v1.412.0 | Digest-bound catalog selection | Resolve MPNs from a bounded local catalog snapshot, retain a closed selection receipt, and run a second Rust ERC gate on the resolved circuit |
+| v1.412.1 | Hardened manufacturing filesystem boundaries | Pin manufacturing publication directories, double-read bounded sources, stream BOM/CPL output, cap extracted parts, and reserve complete-workspace quotas before package creation |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -130,16 +131,13 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release adds a closed, resource-bounded supplier-catalog boundary
-to the Rust-gated circuit-generation flow. A snapshot is normalized and
-hashed before deterministic MPN verification/assignment; its receipt binds the
-source, catalog, input/resolved specs, policy, and reference-sorted selections.
-The resolved circuit is sent through a second native Rust review, and the v2
-generation bundle records both initial and resolved identities. Footprint-only
-selection is opt-in, and SKiDL retains selected MPNs in an explicit reference
-map plus the receipt digest. The shell-free provider still uses one aggregate
-deadline, finite attempts/output, repeated-candidate detection, strict
-error-count improvement, and the immutable ERC floor.
+The current maintenance release hardens the manufacturing and factory
+filesystem boundary. Generic and package reads compare two passes through the
+same opened descriptor; Unix publication creates, removes, and renames files
+relative to a pinned directory; Windows retains a directory handle around its
+guarded replacement. BOM/CPL output is preflighted and streamed, footprint
+extraction is capped at 100,000 parts, and package creation reserves the bytes
+and entries already consumed by the complete private workspace.
 
 The next roadmap work is physical-profile injection, followed by a verified
 circuit-to-KiCad handoff and a headless schematic-to-manufacturing

@@ -1,25 +1,29 @@
 //! Factory-ready BOM, pick-and-place, manifest, and archive generation.
 
+use crate::anchored_io::{AnchoredTempFile, PinnedDirectory};
 use crate::bounded_io::{opened_path_matches, same_file};
 use crate::manufacturing_limits::{
     ManufacturingLimits, portable_manufacturing_name_key, scan_manufacturing_workspace,
     validate_manufacturing_basename,
 };
 use anyhow::{Context, Result, bail};
-use pcbex_kicad::ManufacturingPart;
+use pcbex_kicad::{MAX_MANUFACTURING_PARTS, ManufacturingPart};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use tempfile::NamedTempFile;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 const MANIFEST_NAME: &str = "manifest.json";
 const ARCHIVE_NAME: &str = "manufacturing.zip";
 const GENERATED_CSV_NAMES: [&str; 2] = ["bom.csv", "cpl.csv"];
+const GENERATED_PACKAGE_NAMES: [&str; 4] = ["bom.csv", "cpl.csv", MANIFEST_NAME, ARCHIVE_NAME];
 const MAX_NORMALIZATION_LINE_BYTES: u64 = 1024 * 1024;
+const CSV_BUFFER_BYTES: usize = 8 * 1024;
+const BOM_HEADER: &[u8] = b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n";
+const CPL_HEADER: &[u8] = b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n";
 
 #[derive(Clone, Debug, Serialize)]
 struct ArtifactDescriptor {
@@ -64,6 +68,7 @@ struct ManufacturingCounts {
 }
 
 /// Write all deterministic, vendor-neutral manufacturing deliverables.
+#[cfg(test)]
 pub fn write_manufacturing_package(
     output_dir: &Path,
     input_path: &Path,
@@ -73,6 +78,52 @@ pub fn write_manufacturing_package(
     exported_artifacts: &[PathBuf],
     kicad_identity: &KiCadIdentity,
 ) -> Result<PathBuf> {
+    write_manufacturing_package_with_workspace_reservation(
+        output_dir,
+        input_path,
+        input_bytes,
+        project_inputs,
+        parts,
+        exported_artifacts,
+        kicad_identity,
+        0,
+        0,
+    )
+}
+
+/// Generate a package while reserving quota already consumed elsewhere in the
+/// same private manufacturing workspace.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_manufacturing_package_with_workspace_reservation(
+    output_dir: &Path,
+    input_path: &Path,
+    input_bytes: &[u8],
+    project_inputs: &[KiCadProjectInput],
+    parts: &[ManufacturingPart],
+    exported_artifacts: &[PathBuf],
+    kicad_identity: &KiCadIdentity,
+    outside_bytes: u64,
+    outside_entries: usize,
+) -> Result<PathBuf> {
+    let mut limits = ManufacturingLimits::production();
+    limits.max_total_bytes = limits
+        .max_total_bytes
+        .checked_sub(outside_bytes)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "manufacturing workspace already exceeds the {}-byte aggregate limit",
+                limits.max_total_bytes
+            )
+        })?;
+    limits.max_entries = limits
+        .max_entries
+        .checked_sub(outside_entries)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "manufacturing workspace already exceeds the {}-entry limit",
+                limits.max_entries
+            )
+        })?;
     write_manufacturing_package_with_limits(
         output_dir,
         input_path,
@@ -81,7 +132,7 @@ pub fn write_manufacturing_package(
         parts,
         exported_artifacts,
         kicad_identity,
-        ManufacturingLimits::production(),
+        limits,
     )
 }
 
@@ -97,6 +148,28 @@ fn write_manufacturing_package_with_limits(
     limits: ManufacturingLimits,
 ) -> Result<PathBuf> {
     fs::create_dir_all(output_dir).with_context(|| format!("creating {}", output_dir.display()))?;
+    let pinned_output = PinnedDirectory::open(output_dir).with_context(|| {
+        format!(
+            "pinning manufacturing package directory {}",
+            output_dir.display()
+        )
+    })?;
+    let output_dir = pinned_output.path();
+    let (workspace_base_bytes, workspace_base_entries) = workspace_usage_excluding_direct_files(
+        output_dir,
+        &GENERATED_PACKAGE_NAMES,
+        limits,
+        "manufacturing package preflight",
+    )?;
+    let final_entries = workspace_base_entries
+        .checked_add(GENERATED_PACKAGE_NAMES.len())
+        .ok_or_else(|| anyhow::anyhow!("manufacturing package entry count overflow"))?;
+    if final_entries > limits.max_entries {
+        bail!(
+            "manufacturing package workspace would exceed the {}-entry limit",
+            limits.max_entries
+        );
+    }
     let input_name = input_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -105,7 +178,8 @@ fn write_manufacturing_package_with_limits(
     validate_portable_name(input_name, limits, "manufacturing input")?;
     ensure_slice_within_file_limit(input_bytes, limits, "manufacturing input")?;
     validate_kicad_identity(kicad_identity)?;
-    let mut files = validate_exported_artifacts(output_dir, exported_artifacts, limits)?;
+    let (mut files, _exported_bytes) =
+        validate_exported_artifacts(output_dir, exported_artifacts, limits)?;
     if !files
         .iter()
         .any(|path| path.file_name().and_then(|name| name.to_str()) == Some("drc.rpt"))
@@ -113,6 +187,12 @@ fn write_manufacturing_package_with_limits(
         bail!("manufacturing package requires the generated drc.rpt artifact");
     }
     let mut input_names = BTreeSet::from([portable_manufacturing_name_key(input_name)]);
+    if project_inputs.len() > limits.max_entries {
+        bail!(
+            "manufacturing provenance contains more than {} project inputs",
+            limits.max_entries
+        );
+    }
     let mut project_input_descriptors = Vec::with_capacity(project_inputs.len());
     for project_input in project_inputs {
         let name = project_input
@@ -141,15 +221,24 @@ fn write_manufacturing_package_with_limits(
         );
     }
 
-    for name in GENERATED_CSV_NAMES {
-        let path = output_dir.join(name);
-        match name {
-            "bom.csv" => write_bom(&path, parts, limits)?,
-            "cpl.csv" => write_cpl(&path, parts, limits)?,
-            _ => unreachable!("all generated CSV names are handled"),
-        }
-        files.push(path);
-    }
+    let bom_plan = plan_bom(parts, limits)?;
+    let cpl_plan = plan_cpl(parts, limits)?;
+    add_total_bytes(
+        add_total_bytes(
+            workspace_base_bytes,
+            bom_plan.bytes,
+            limits,
+            "manufacturing package",
+        )?,
+        cpl_plan.bytes,
+        limits,
+        "manufacturing package",
+    )?;
+    let bom_path = output_dir.join("bom.csv");
+    let cpl_path = output_dir.join("cpl.csv");
+    write_bom(&pinned_output, &bom_path, &bom_plan, limits)?;
+    write_cpl(&pinned_output, &cpl_path, &cpl_plan, limits)?;
+    files.extend([bom_path, cpl_path]);
     files.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
     let artifacts = files
         .iter()
@@ -179,7 +268,22 @@ fn write_manufacturing_package_with_limits(
         limits.max_manifest_bytes,
         "manufacturing manifest",
     )?;
+    let manifest_len = u64::try_from(manifest_bytes.len())
+        .map_err(|_| anyhow::anyhow!("manufacturing manifest byte count cannot be represented"))?;
+    let (pre_manifest_bytes, _) = workspace_usage_excluding_direct_files(
+        output_dir,
+        &[MANIFEST_NAME, ARCHIVE_NAME],
+        limits,
+        "manufacturing package before manifest",
+    )?;
+    add_total_bytes(
+        pre_manifest_bytes,
+        manifest_len,
+        limits,
+        "manufacturing package",
+    )?;
     write_bounded_file(
+        &pinned_output,
         &manifest_path,
         &manifest_bytes,
         limits,
@@ -188,8 +292,14 @@ fn write_manufacturing_package_with_limits(
 
     files.push(manifest_path);
     files.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
+    let (package_bytes, _) = workspace_usage_excluding_direct_files(
+        output_dir,
+        &[ARCHIVE_NAME],
+        limits,
+        "manufacturing package before archive",
+    )?;
     let archive_path = output_dir.join(ARCHIVE_NAME);
-    write_zip(&archive_path, &files, limits)?;
+    write_zip_with_existing_bytes(&pinned_output, &archive_path, &files, limits, package_bytes)?;
     scan_manufacturing_workspace(output_dir, limits, "manufacturing package stage")?;
     Ok(archive_path)
 }
@@ -206,6 +316,11 @@ fn normalize_kicad_artifacts_with_limits(
     validate_regular_file_set(artifacts, limits, "KiCad normalization input")?;
     let mut normalized_total = 0_u64;
     for path in artifacts {
+        let parent = path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("KiCad artifact is missing its parent directory"))?;
+        let pinned_parent = PinnedDirectory::open(parent)
+            .with_context(|| format!("pinning KiCad artifact directory {}", parent.display()))?;
         let metadata = fs::symlink_metadata(path)
             .with_context(|| format!("reading metadata for {}", path.display()))?;
         if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
@@ -224,15 +339,14 @@ fn normalize_kicad_artifacts_with_limits(
         {
             bail!("KiCad artifact changed while opening: {}", path.display());
         }
-        let parent = path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("KiCad artifact is missing its parent directory"))?;
-        let mut output = NamedTempFile::new_in(parent)
+        let mut output = pinned_parent
+            .create_temp(".pcbex-normalize-")
             .with_context(|| format!("creating normalized artifact beside {}", path.display()))?;
         let mut reader = BufReader::new(source);
         let mut replacements = 0_usize;
         let mut source_bytes = 0_u64;
         let mut output_bytes = 0_u64;
+        let mut source_digest = Sha256::new();
         let mut line = Vec::new();
         let line_limit = limits.max_file_bytes.min(MAX_NORMALIZATION_LINE_BYTES);
         loop {
@@ -244,6 +358,7 @@ fn normalize_kicad_artifacts_with_limits(
             source_bytes = source_bytes
                 .checked_add(read as u64)
                 .ok_or_else(|| anyhow::anyhow!("KiCad normalization input byte count overflow"))?;
+            source_digest.update(&line);
             while matches!(line.last(), Some(b'\r' | b'\n')) {
                 line.pop();
             }
@@ -282,6 +397,19 @@ fn normalize_kicad_artifacts_with_limits(
                 path.display()
             );
         }
+        let stable_digest = digest_open_file_from_start(
+            reader.get_mut(),
+            metadata.len(),
+            limits.max_file_bytes,
+            "KiCad normalization input",
+            path,
+        )?;
+        if stable_digest != <[u8; 32]>::from(source_digest.finalize()) {
+            bail!(
+                "KiCad artifact contents changed while being normalized: {}",
+                path.display()
+            );
+        }
         let final_path = fs::symlink_metadata(path)
             .with_context(|| format!("rechecking artifact path {}", path.display()))?;
         if final_path.file_type().is_symlink()
@@ -310,9 +438,8 @@ fn normalize_kicad_artifacts_with_limits(
             .as_file()
             .sync_all()
             .with_context(|| format!("syncing normalized artifact {}", path.display()))?;
-        output
-            .persist(path)
-            .map_err(|error| error.error)
+        pinned_parent
+            .persist_replace(output, path)
             .with_context(|| format!("publishing normalized artifact {}", path.display()))?;
         normalized_total = normalized_total
             .checked_add(output_bytes)
@@ -484,7 +611,13 @@ fn publish_staged_package_with_limits(
 ) -> Result<PathBuf> {
     scan_manufacturing_workspace(staging_dir, limits, "manufacturing publication stage")?;
     let output_dir = prepare_manufacturing_output_directory(output_dir)?;
-    let output_dir = output_dir.as_path();
+    let pinned_output = PinnedDirectory::open(&output_dir).with_context(|| {
+        format!(
+            "pinning manufacturing output directory {}",
+            output_dir.display()
+        )
+    })?;
+    let output_dir = pinned_output.path();
     let mut files = directory_regular_files(staging_dir, limits)?;
     files.sort_by(|left, right| {
         publish_rank(left)
@@ -516,6 +649,7 @@ fn publish_staged_package_with_limits(
         .map(portable_manufacturing_name_key)
         .collect::<BTreeSet<_>>();
     let mut output_entries = 0_usize;
+    let mut existing_output_names = BTreeSet::new();
     for entry in fs::read_dir(output_dir)
         .with_context(|| format!("listing manufacturing output {}", output_dir.display()))?
     {
@@ -530,6 +664,7 @@ fn publish_staged_package_with_limits(
         }
         let entry = entry?;
         let name = entry.file_name();
+        existing_output_names.insert(name.clone());
         let Some(name_text) = name.to_str() else {
             continue;
         };
@@ -547,6 +682,20 @@ fn publish_staged_package_with_limits(
                 entry.path().display()
             );
         }
+    }
+    let new_entries = files
+        .iter()
+        .filter_map(|path| path.file_name())
+        .filter(|name| !existing_output_names.contains(*name))
+        .count();
+    let final_entries = output_entries
+        .checked_add(new_entries)
+        .ok_or_else(|| anyhow::anyhow!("manufacturing output entry count overflow"))?;
+    if final_entries > limits.max_entries {
+        bail!(
+            "manufacturing publication would exceed the {}-entry output limit",
+            limits.max_entries
+        );
     }
     for source in &files {
         let name = source
@@ -577,7 +726,8 @@ fn publish_staged_package_with_limits(
             .file_name()
             .ok_or_else(|| anyhow::anyhow!("staged artifact is missing its filename"))?;
         let destination = output_dir.join(name);
-        let mut temporary = NamedTempFile::new_in(output_dir)
+        let mut temporary = pinned_output
+            .create_temp(".pcbex-publish-")
             .with_context(|| format!("creating temporary file in {}", output_dir.display()))?;
         let copied = copy_regular_file_bounded(
             &source,
@@ -598,9 +748,8 @@ fn publish_staged_package_with_limits(
         prepared.push((temporary, destination));
     }
     for (temporary, destination) in prepared {
-        temporary
-            .persist(&destination)
-            .map_err(|error| error.error)
+        pinned_output
+            .persist_replace(temporary, &destination)
             .with_context(|| format!("publishing {}", destination.display()))?;
     }
     let archive = output_dir.join(ARCHIVE_NAME);
@@ -650,8 +799,24 @@ pub fn prepare_manufacturing_output_directory(output_dir: &Path) -> Result<PathB
     Ok(canonical)
 }
 
-fn write_bom(path: &Path, parts: &[ManufacturingPart], limits: ManufacturingLimits) -> Result<()> {
-    let mut groups = BTreeMap::<(&str, &str, &str, &str, &str), Vec<&str>>::new();
+type BomKey<'a> = (&'a str, &'a str, &'a str, &'a str, &'static str);
+
+struct BomPlan<'a> {
+    groups: Vec<(BomKey<'a>, Vec<&'a str>)>,
+    bytes: u64,
+}
+
+struct CplPlan<'a> {
+    placed: Vec<&'a ManufacturingPart>,
+    bytes: u64,
+}
+
+fn plan_bom<'a>(
+    parts: &'a [ManufacturingPart],
+    limits: ManufacturingLimits,
+) -> Result<BomPlan<'a>> {
+    ensure_manufacturing_part_count(parts)?;
+    let mut groups = BTreeMap::<BomKey<'a>, Vec<&'a str>>::new();
     for part in parts.iter().filter(|part| part.in_bom) {
         groups
             .entry((
@@ -664,113 +829,326 @@ fn write_bom(path: &Path, parts: &[ManufacturingPart], limits: ManufacturingLimi
             .or_default()
             .push(part.reference.as_str());
     }
-    let mut output = String::from("Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n");
-    ensure_slice_within_file_limit(output.as_bytes(), limits, "manufacturing BOM")?;
-    for ((value, footprint, mpn, side, kind), mut references) in groups {
+
+    let mut bytes = BOM_HEADER.len() as u64;
+    let mut planned = Vec::with_capacity(groups.len());
+    for (key @ (value, footprint, mpn, side, kind), mut references) in groups {
         references.sort();
-        let designator_bytes = references
-            .iter()
-            .try_fold(0_usize, |total, reference| {
-                total.checked_add(reference.len())
-            })
-            .ok_or_else(|| anyhow::anyhow!("manufacturing BOM designator byte count overflow"))?
-            .checked_add(references.len().saturating_sub(1))
-            .ok_or_else(|| anyhow::anyhow!("manufacturing BOM designator byte count overflow"))?;
-        if u64::try_from(designator_bytes).unwrap_or(u64::MAX) > limits.max_file_bytes {
-            bail!(
-                "manufacturing BOM designators exceed the {}-byte file limit",
-                limits.max_file_bytes
-            );
-        }
-        let designators = references.join(",");
         let quantity = references.len().to_string();
-        write_csv_row(
-            &mut output,
-            &[value, &designators, footprint, &quantity, mpn, side, kind],
-            limits.max_file_bytes,
-            "manufacturing BOM",
-        )?;
+        let row_bytes = bom_row_bytes(value, &references, footprint, &quantity, mpn, side, kind)?;
+        bytes = add_file_bytes(bytes, row_bytes, limits.max_file_bytes, "manufacturing BOM")?;
+        planned.push((key, references));
     }
-    write_bounded_file(path, output.as_bytes(), limits, "manufacturing BOM")?;
-    Ok(())
+    Ok(BomPlan {
+        groups: planned,
+        bytes,
+    })
 }
 
-fn write_cpl(path: &Path, parts: &[ManufacturingPart], limits: ManufacturingLimits) -> Result<()> {
-    let mut output = String::from("Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n");
-    ensure_slice_within_file_limit(output.as_bytes(), limits, "manufacturing CPL")?;
+fn write_bom(
+    directory: &PinnedDirectory,
+    path: &Path,
+    plan: &BomPlan<'_>,
+    limits: ManufacturingLimits,
+) -> Result<u64> {
+    write_streamed_file(
+        directory,
+        path,
+        plan.bytes,
+        limits.max_file_bytes,
+        "manufacturing BOM",
+        |output| {
+            output.write_all(BOM_HEADER)?;
+            for ((value, footprint, mpn, side, kind), references) in &plan.groups {
+                let quantity = references.len().to_string();
+                write_csv_field(output, value)?;
+                output.write_all(b",")?;
+                write_joined_designators(output, references)?;
+                for value in [*footprint, quantity.as_str(), *mpn, *side, *kind] {
+                    output.write_all(b",")?;
+                    write_csv_field(output, value)?;
+                }
+                output.write_all(b"\n")?;
+            }
+            Ok(())
+        },
+    )
+}
+
+fn plan_cpl<'a>(
+    parts: &'a [ManufacturingPart],
+    limits: ManufacturingLimits,
+) -> Result<CplPlan<'a>> {
+    ensure_manufacturing_part_count(parts)?;
     let mut placed = parts.iter().filter(|part| part.in_pos).collect::<Vec<_>>();
     placed.sort_unstable_by(|left, right| left.reference.cmp(&right.reference));
-    for part in placed {
+    let mut bytes = CPL_HEADER.len() as u64;
+    for part in &placed {
         let x = format_mm(part.x_nm);
         let y = format_mm(part.y_nm);
         let rotation = format_mdeg(part.rotation_mdeg);
-        write_csv_row(
-            &mut output,
-            &[&part.reference, &x, &y, &rotation, &part.side],
-            limits.max_file_bytes,
-            "manufacturing CPL",
-        )?;
+        let row_bytes = csv_row_bytes(&[&part.reference, &x, &y, &rotation, &part.side])?;
+        bytes = add_file_bytes(bytes, row_bytes, limits.max_file_bytes, "manufacturing CPL")?;
     }
-    write_bounded_file(path, output.as_bytes(), limits, "manufacturing CPL")?;
+    Ok(CplPlan { placed, bytes })
+}
+
+fn write_cpl(
+    directory: &PinnedDirectory,
+    path: &Path,
+    plan: &CplPlan<'_>,
+    limits: ManufacturingLimits,
+) -> Result<u64> {
+    write_streamed_file(
+        directory,
+        path,
+        plan.bytes,
+        limits.max_file_bytes,
+        "manufacturing CPL",
+        |output| {
+            output.write_all(CPL_HEADER)?;
+            for part in &plan.placed {
+                let x = format_mm(part.x_nm);
+                let y = format_mm(part.y_nm);
+                let rotation = format_mdeg(part.rotation_mdeg);
+                write_csv_row(output, &[&part.reference, &x, &y, &rotation, &part.side])?;
+            }
+            Ok(())
+        },
+    )
+}
+
+fn ensure_manufacturing_part_count(parts: &[ManufacturingPart]) -> Result<()> {
+    if parts.len() > MAX_MANUFACTURING_PARTS {
+        bail!("manufacturing package contains more than {MAX_MANUFACTURING_PARTS} parts");
+    }
     Ok(())
 }
 
-fn write_csv_row(output: &mut String, values: &[&str], max_bytes: u64, label: &str) -> Result<()> {
-    let mut row_bytes = values.len().saturating_sub(1);
-    for value in values {
-        let escaped = value
-            .bytes()
-            .filter(|byte| *byte == b'"')
-            .count()
-            .checked_add(value.len())
-            .ok_or_else(|| anyhow::anyhow!("{label} CSV row byte count overflow"))?;
-        let escaped = if value
-            .chars()
-            .any(|character| matches!(character, ',' | '"' | '\r' | '\n'))
-        {
-            escaped
-                .checked_add(2)
-                .ok_or_else(|| anyhow::anyhow!("{label} CSV row byte count overflow"))?
-        } else {
-            value.len()
-        };
-        row_bytes = row_bytes
-            .checked_add(escaped)
-            .ok_or_else(|| anyhow::anyhow!("{label} CSV row byte count overflow"))?;
+fn bom_row_bytes(
+    value: &str,
+    references: &[&str],
+    footprint: &str,
+    quantity: &str,
+    mpn: &str,
+    side: &str,
+    kind: &str,
+) -> Result<u64> {
+    let mut bytes = csv_field_bytes(value)?;
+    bytes = checked_csv_add(bytes, 1, "manufacturing BOM row")?;
+    bytes = checked_csv_add(
+        bytes,
+        joined_designator_bytes(references)?,
+        "manufacturing BOM row",
+    )?;
+    for field in [footprint, quantity, mpn, side, kind] {
+        bytes = checked_csv_add(bytes, 1, "manufacturing BOM row")?;
+        bytes = checked_csv_add(bytes, csv_field_bytes(field)?, "manufacturing BOM row")?;
     }
-    row_bytes = row_bytes
-        .checked_add(1)
-        .ok_or_else(|| anyhow::anyhow!("{label} CSV row byte count overflow"))?;
-    let next = output
-        .len()
-        .checked_add(row_bytes)
-        .ok_or_else(|| anyhow::anyhow!("{label} byte count overflow"))?;
-    if u64::try_from(next).unwrap_or(u64::MAX) > max_bytes {
+    checked_csv_add(bytes, 1, "manufacturing BOM row")
+}
+
+fn csv_row_bytes(values: &[&str]) -> Result<u64> {
+    let mut bytes = u64::try_from(values.len().saturating_sub(1))
+        .map_err(|_| anyhow::anyhow!("CSV separator count cannot be represented"))?;
+    for value in values {
+        bytes = checked_csv_add(bytes, csv_field_bytes(value)?, "CSV row")?;
+    }
+    checked_csv_add(bytes, 1, "CSV row")
+}
+
+fn csv_field_bytes(value: &str) -> Result<u64> {
+    let raw = u64::try_from(value.len())
+        .map_err(|_| anyhow::anyhow!("CSV field byte count cannot be represented"))?;
+    if csv_field_needs_quotes(value) {
+        let quotes = u64::try_from(value.bytes().filter(|byte| *byte == b'"').count())
+            .map_err(|_| anyhow::anyhow!("CSV quote count cannot be represented"))?;
+        checked_csv_add(checked_csv_add(raw, quotes, "CSV field")?, 2, "CSV field")
+    } else {
+        Ok(raw)
+    }
+}
+
+fn joined_designator_bytes(references: &[&str]) -> Result<u64> {
+    let separators = u64::try_from(references.len().saturating_sub(1))
+        .map_err(|_| anyhow::anyhow!("manufacturing BOM designator count cannot be represented"))?;
+    let mut raw = separators;
+    let mut quotes = 0_u64;
+    let mut needs_quotes = references.len() > 1;
+    for reference in references {
+        raw = checked_csv_add(
+            raw,
+            u64::try_from(reference.len()).map_err(|_| {
+                anyhow::anyhow!("manufacturing BOM designator byte count cannot be represented")
+            })?,
+            "manufacturing BOM designators",
+        )?;
+        quotes = checked_csv_add(
+            quotes,
+            u64::try_from(reference.bytes().filter(|byte| *byte == b'"').count())
+                .map_err(|_| anyhow::anyhow!("CSV quote count cannot be represented"))?,
+            "manufacturing BOM designators",
+        )?;
+        needs_quotes |= csv_field_needs_quotes(reference);
+    }
+    if needs_quotes {
+        checked_csv_add(
+            checked_csv_add(raw, quotes, "manufacturing BOM designators")?,
+            2,
+            "manufacturing BOM designators",
+        )
+    } else {
+        Ok(raw)
+    }
+}
+
+fn checked_csv_add(current: u64, additional: u64, label: &str) -> Result<u64> {
+    current
+        .checked_add(additional)
+        .ok_or_else(|| anyhow::anyhow!("{label} byte count overflow"))
+}
+
+fn add_file_bytes(current: u64, additional: u64, max_bytes: u64, label: &str) -> Result<u64> {
+    let total = checked_csv_add(current, additional, label)?;
+    if total > max_bytes {
         bail!("{label} exceeds the {max_bytes}-byte file limit");
     }
-    output.reserve(row_bytes);
+    Ok(total)
+}
+
+fn csv_field_needs_quotes(value: &str) -> bool {
+    value
+        .bytes()
+        .any(|byte| matches!(byte, b',' | b'"' | b'\r' | b'\n'))
+}
+
+fn write_csv_row<W: Write>(output: &mut BoundedStream<'_, W>, values: &[&str]) -> Result<()> {
     for (index, value) in values.iter().enumerate() {
         if index > 0 {
-            output.push(',');
+            output.write_all(b",")?;
         }
-        if value
-            .chars()
-            .any(|character| matches!(character, ',' | '"' | '\r' | '\n'))
-        {
-            output.push('"');
-            for character in value.chars() {
-                if character == '"' {
-                    output.push('"');
-                }
-                output.push(character);
-            }
-            output.push('"');
+        write_csv_field(output, value)?;
+    }
+    output.write_all(b"\n")?;
+    Ok(())
+}
+
+fn write_csv_field<W: Write>(output: &mut BoundedStream<'_, W>, value: &str) -> Result<()> {
+    if !csv_field_needs_quotes(value) {
+        output.write_all(value.as_bytes())?;
+        return Ok(());
+    }
+    output.write_all(b"\"")?;
+    write_csv_escaped_fragment(output, value)?;
+    output.write_all(b"\"")?;
+    Ok(())
+}
+
+fn write_joined_designators<W: Write>(
+    output: &mut BoundedStream<'_, W>,
+    references: &[&str],
+) -> Result<()> {
+    let needs_quotes = references.len() > 1
+        || references
+            .iter()
+            .any(|reference| csv_field_needs_quotes(reference));
+    if needs_quotes {
+        output.write_all(b"\"")?;
+    }
+    for (index, reference) in references.iter().enumerate() {
+        if index > 0 {
+            output.write_all(b",")?;
+        }
+        if needs_quotes {
+            write_csv_escaped_fragment(output, reference)?;
         } else {
-            output.push_str(value);
+            output.write_all(reference.as_bytes())?;
         }
     }
-    output.push('\n');
+    if needs_quotes {
+        output.write_all(b"\"")?;
+    }
     Ok(())
+}
+
+fn write_csv_escaped_fragment<W: Write>(
+    output: &mut BoundedStream<'_, W>,
+    value: &str,
+) -> Result<()> {
+    let bytes = value.as_bytes();
+    let mut start = 0;
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'"' {
+            output.write_all(&bytes[start..=index])?;
+            output.write_all(b"\"")?;
+            start = index + 1;
+        }
+    }
+    output.write_all(&bytes[start..])?;
+    Ok(())
+}
+
+struct BoundedStream<'a, W> {
+    inner: &'a mut W,
+    max_bytes: u64,
+    written: u64,
+    label: &'a str,
+}
+
+impl<'a, W: Write> BoundedStream<'a, W> {
+    fn write_all(&mut self, bytes: &[u8]) -> Result<()> {
+        let additional = u64::try_from(bytes.len())
+            .map_err(|_| anyhow::anyhow!("{} byte count cannot be represented", self.label))?;
+        let next = add_file_bytes(self.written, additional, self.max_bytes, self.label)?;
+        self.inner.write_all(bytes)?;
+        self.written = next;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        self.inner.flush()?;
+        Ok(())
+    }
+}
+
+fn write_streamed_file(
+    directory: &PinnedDirectory,
+    path: &Path,
+    expected_bytes: u64,
+    max_bytes: u64,
+    label: &str,
+    render: impl FnOnce(&mut BoundedStream<'_, BufWriter<&mut AnchoredTempFile>>) -> Result<()>,
+) -> Result<u64> {
+    ensure_file_size_with_limit(expected_bytes, max_bytes, label, path)?;
+    let mut temporary = directory
+        .create_temp(".pcbex-csv-")
+        .with_context(|| format!("creating temporary {label} beside {}", path.display()))?;
+    let written = {
+        let mut buffered = BufWriter::with_capacity(CSV_BUFFER_BYTES, &mut temporary);
+        let mut output = BoundedStream {
+            inner: &mut buffered,
+            max_bytes,
+            written: 0,
+            label,
+        };
+        render(&mut output)?;
+        output.flush()?;
+        output.written
+    };
+    if written != expected_bytes {
+        bail!("{label} rendered {written} bytes instead of the preflighted {expected_bytes} bytes");
+    }
+    temporary
+        .flush()
+        .with_context(|| format!("flushing {label} {}", path.display()))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .with_context(|| format!("syncing {label} {}", path.display()))?;
+    directory
+        .persist_replace(temporary, path)
+        .with_context(|| format!("publishing {label} {}", path.display()))?;
+    Ok(written)
 }
 
 fn format_mm(value_nm: i64) -> String {
@@ -840,11 +1218,91 @@ fn directory_regular_files(directory: &Path, limits: ManufacturingLimits) -> Res
     Ok(files)
 }
 
+fn workspace_usage_excluding_direct_files(
+    directory: &Path,
+    excluded_names: &[&str],
+    limits: ManufacturingLimits,
+    label: &str,
+) -> Result<(u64, usize)> {
+    let mut excluded = Vec::with_capacity(excluded_names.len());
+    let mut excluded_bytes = 0_u64;
+    for name in excluded_names {
+        let path = directory.join(name);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata)
+                if metadata.file_type().is_symlink() || !metadata.file_type().is_file() =>
+            {
+                bail!(
+                    "{label}: reserved manufacturing destination must be a regular file: {}",
+                    path.display()
+                );
+            }
+            Ok(metadata) => {
+                excluded_bytes = excluded_bytes.checked_add(metadata.len()).ok_or_else(|| {
+                    anyhow::anyhow!("{label}: excluded workspace byte count overflow")
+                })?;
+                excluded.push((path, metadata));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("{label}: reading reserved destination {}", path.display())
+                });
+            }
+        }
+    }
+    let mut scan_limits = limits;
+    scan_limits.max_total_bytes = scan_limits
+        .max_total_bytes
+        .checked_add(excluded_bytes)
+        .ok_or_else(|| anyhow::anyhow!("{label}: adjusted workspace byte limit overflow"))?;
+    scan_limits.max_entries = scan_limits
+        .max_entries
+        .checked_add(excluded.len())
+        .ok_or_else(|| anyhow::anyhow!("{label}: adjusted workspace entry limit overflow"))?;
+    let usage = scan_manufacturing_workspace(directory, scan_limits, label)?;
+    for (path, before) in &excluded {
+        let after = fs::symlink_metadata(path)
+            .with_context(|| format!("{label}: rechecking excluded file {}", path.display()))?;
+        if after.file_type().is_symlink()
+            || !after.file_type().is_file()
+            || !same_file(before, &after)
+            || before.len() != after.len()
+        {
+            bail!(
+                "{label}: excluded manufacturing destination changed during accounting: {}",
+                path.display()
+            );
+        }
+    }
+    let bytes = usage
+        .bytes
+        .checked_sub(excluded_bytes)
+        .ok_or_else(|| anyhow::anyhow!("{label}: workspace byte accounting underflow"))?;
+    let entries = usage
+        .entries
+        .checked_sub(excluded.len())
+        .ok_or_else(|| anyhow::anyhow!("{label}: workspace entry accounting underflow"))?;
+    if bytes > limits.max_total_bytes {
+        bail!(
+            "{label}: workspace files excluding replaced outputs exceed the {}-byte aggregate limit",
+            limits.max_total_bytes
+        );
+    }
+    if entries > limits.max_entries {
+        bail!(
+            "{label}: workspace entries excluding replaced outputs exceed limit {}",
+            limits.max_entries
+        );
+    }
+    Ok((bytes, entries))
+}
+
 fn validate_exported_artifacts(
     output_dir: &Path,
     artifacts: &[PathBuf],
     limits: ManufacturingLimits,
-) -> Result<Vec<PathBuf>> {
+) -> Result<(Vec<PathBuf>, u64)> {
     if artifacts.len() > limits.max_entries {
         bail!(
             "manufacturing export contains more than {} artifacts",
@@ -899,7 +1357,7 @@ fn validate_exported_artifacts(
         validated.push(path.clone());
     }
     validated.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
-    Ok(validated)
+    Ok((validated, total_bytes))
 }
 
 fn is_reserved_name(name: &str) -> bool {
@@ -1002,33 +1460,23 @@ fn descriptor_for_file(
     }
     let bytes = metadata.len();
     ensure_file_size(bytes, limits, "manufacturing artifact", path)?;
-    let mut digest = Sha256::new();
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut hashed = 0_u64;
-    loop {
-        let read = source
-            .read(&mut buffer)
-            .with_context(|| format!("hashing {}", path.display()))?;
-        if read == 0 {
-            break;
-        }
-        hashed = hashed
-            .checked_add(read as u64)
-            .ok_or_else(|| anyhow::anyhow!("manufacturing artifact hash byte count overflow"))?;
-        if hashed > bytes || hashed > limits.max_file_bytes {
-            bail!(
-                "manufacturing artifact changed while hashing: {}",
-                path.display()
-            );
-        }
-        digest.update(&buffer[..read]);
-    }
-    let after = source
-        .metadata()
-        .with_context(|| format!("rechecking metadata for {}", path.display()))?;
-    if !same_file(&metadata, &after) || hashed != bytes || after.len() != bytes {
+    let digest = digest_open_file_from_start(
+        &mut source,
+        bytes,
+        limits.max_file_bytes,
+        "manufacturing artifact",
+        path,
+    )?;
+    let stable_digest = digest_open_file_from_start(
+        &mut source,
+        bytes,
+        limits.max_file_bytes,
+        "manufacturing artifact",
+        path,
+    )?;
+    if digest != stable_digest {
         bail!(
-            "manufacturing artifact changed while hashing: {}",
+            "manufacturing artifact contents changed while hashing: {}",
             path.display()
         );
     }
@@ -1049,7 +1497,7 @@ fn descriptor_for_file(
     Ok(ArtifactDescriptor {
         path: name.to_string(),
         bytes,
-        sha256: hex::encode(digest.finalize()),
+        sha256: hex::encode(digest),
     })
 }
 
@@ -1061,19 +1509,48 @@ fn descriptor_for_bytes(path: &str, bytes: &[u8]) -> ArtifactDescriptor {
     }
 }
 
+#[cfg(test)]
 fn write_zip(path: &Path, files: &[PathBuf], limits: ManufacturingLimits) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("manufacturing archive is missing its parent directory"))?;
+    let directory = PinnedDirectory::open(parent).with_context(|| {
+        format!(
+            "pinning manufacturing archive directory {}",
+            parent.display()
+        )
+    })?;
+    write_zip_with_existing_bytes(&directory, path, files, limits, 0)
+}
+
+fn write_zip_with_existing_bytes(
+    directory: &PinnedDirectory,
+    path: &Path,
+    files: &[PathBuf],
+    limits: ManufacturingLimits,
+    existing_bytes: u64,
+) -> Result<()> {
     if files.is_empty() || files.len() > limits.max_entries {
         bail!(
             "manufacturing archive must contain 1 to {} files",
             limits.max_entries
         );
     }
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("manufacturing archive is missing its parent directory"))?;
-    let mut temporary = NamedTempFile::new_in(parent)
+    let existing_bytes = add_total_bytes(
+        0,
+        existing_bytes,
+        limits,
+        "manufacturing package before archive",
+    )?;
+    let aggregate_remaining = limits.max_total_bytes - existing_bytes;
+    let archive_write_limit = limits
+        .max_archive_bytes
+        .min(limits.max_file_bytes)
+        .min(aggregate_remaining);
+    let mut temporary = directory
+        .create_temp(".pcbex-archive-")
         .with_context(|| format!("creating temporary archive beside {}", path.display()))?;
-    let writer = BoundedSeekWriter::new(temporary.as_file_mut(), limits.max_archive_bytes);
+    let writer = BoundedSeekWriter::new(temporary.as_file_mut(), archive_write_limit);
     let mut zip = ZipWriter::new(writer);
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
@@ -1152,15 +1629,33 @@ fn write_zip(path: &Path, files: &[PathBuf], limits: ManufacturingLimits) -> Res
     }
     let writer = zip.finish().context("finalizing manufacturing archive")?;
     debug_assert!(source_total <= limits.max_archive_uncompressed_bytes);
-    if writer.overflowed
-        || writer.max_position == 0
-        || writer.max_position > limits.max_archive_bytes
-    {
+    if writer.max_position == 0 || writer.max_position > limits.max_archive_bytes {
         bail!(
             "manufacturing archive must contain 1 to {} bytes",
             limits.max_archive_bytes
         );
     }
+    if writer.max_position > limits.max_file_bytes {
+        bail!(
+            "manufacturing archive exceeds the {}-byte file limit",
+            limits.max_file_bytes
+        );
+    }
+    if writer.max_position > aggregate_remaining {
+        bail!(
+            "manufacturing package including archive exceeds the {}-byte aggregate limit",
+            limits.max_total_bytes
+        );
+    }
+    if writer.overflowed {
+        bail!("manufacturing archive exceeded its bounded output limit");
+    }
+    add_total_bytes(
+        existing_bytes,
+        writer.max_position,
+        limits,
+        "manufacturing package including archive",
+    )?;
     temporary
         .as_file_mut()
         .flush()
@@ -1169,9 +1664,8 @@ fn write_zip(path: &Path, files: &[PathBuf], limits: ManufacturingLimits) -> Res
         .as_file()
         .sync_all()
         .with_context(|| format!("syncing manufacturing archive {}", path.display()))?;
-    temporary
-        .persist(path)
-        .map_err(|error| error.error)
+    directory
+        .persist_replace(temporary, path)
         .with_context(|| format!("publishing manufacturing archive {}", path.display()))?;
     Ok(())
 }
@@ -1275,16 +1769,15 @@ fn add_bytes_with_limit(current: u64, additional: u64, max_bytes: u64, label: &s
 }
 
 fn write_bounded_file(
+    directory: &PinnedDirectory,
     path: &Path,
     contents: &[u8],
     limits: ManufacturingLimits,
     label: &str,
 ) -> Result<()> {
     ensure_slice_within_file_limit(contents, limits, label)?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| anyhow::anyhow!("{label} path is missing its parent directory"))?;
-    let mut temporary = NamedTempFile::new_in(parent)
+    let mut temporary = directory
+        .create_temp(".pcbex-bounded-")
         .with_context(|| format!("creating temporary {label} beside {}", path.display()))?;
     temporary
         .write_all(contents)
@@ -1296,9 +1789,8 @@ fn write_bounded_file(
         .as_file()
         .sync_all()
         .with_context(|| format!("syncing {label} {}", path.display()))?;
-    temporary
-        .persist(path)
-        .map_err(|error| error.error)
+    directory
+        .persist_replace(temporary, path)
         .with_context(|| format!("publishing {label} {}", path.display()))?;
     Ok(())
 }
@@ -1361,6 +1853,7 @@ fn copy_regular_file_bounded<W: Write>(
 
     let expected = opened.len();
     let mut copied = 0_u64;
+    let mut copied_digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let read = input
@@ -1375,6 +1868,7 @@ fn copy_regular_file_bounded<W: Write>(
         if next > expected || next > limits.max_file_bytes {
             bail!("{label} changed while reading: {}", path.display());
         }
+        copied_digest.update(&buffer[..read]);
         output
             .write_all(&buffer[..read])
             .with_context(|| format!("copying {label} {}", path.display()))?;
@@ -1385,6 +1879,11 @@ fn copy_regular_file_bounded<W: Write>(
         .with_context(|| format!("rechecking {label} metadata {}", path.display()))?;
     if !same_file(&opened, &after) || copied != expected || after.len() != expected {
         bail!("{label} changed while reading: {}", path.display());
+    }
+    let stable_digest =
+        digest_open_file_from_start(&mut input, expected, limits.max_file_bytes, label, path)?;
+    if stable_digest != <[u8; 32]>::from(copied_digest.finalize()) {
+        bail!("{label} contents changed while reading: {}", path.display());
     }
     let final_path = fs::symlink_metadata(path)
         .with_context(|| format!("rechecking {label} path {}", path.display()))?;
@@ -1398,6 +1897,51 @@ fn copy_regular_file_bounded<W: Write>(
         bail!("{label} path changed while reading: {}", path.display());
     }
     Ok(copied)
+}
+
+fn digest_open_file_from_start(
+    input: &mut File,
+    expected_bytes: u64,
+    max_bytes: u64,
+    label: &str,
+    path: &Path,
+) -> Result<[u8; 32]> {
+    input
+        .seek(SeekFrom::Start(0))
+        .with_context(|| format!("rewinding {label} {}", path.display()))?;
+    let before = input
+        .metadata()
+        .with_context(|| format!("reading opened {label} metadata {}", path.display()))?;
+    if !before.is_file() || before.len() != expected_bytes {
+        bail!("{label} changed while reading: {}", path.display());
+    }
+
+    let mut digest = Sha256::new();
+    let mut read_bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .with_context(|| format!("reading {label} {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        read_bytes = read_bytes
+            .checked_add(read as u64)
+            .ok_or_else(|| anyhow::anyhow!("{label} byte count overflow"))?;
+        if read_bytes > expected_bytes || read_bytes > max_bytes {
+            bail!("{label} changed while reading: {}", path.display());
+        }
+        digest.update(&buffer[..read]);
+    }
+    let after = input
+        .metadata()
+        .with_context(|| format!("rechecking opened {label} metadata {}", path.display()))?;
+    if !same_file(&before, &after) || after.len() != expected_bytes || read_bytes != expected_bytes
+    {
+        bail!("{label} changed while reading: {}", path.display());
+    }
+    Ok(digest.finalize().into())
 }
 
 struct BoundedSeekWriter<W> {
@@ -1531,10 +2075,22 @@ mod tests {
         )
         .unwrap();
         let bom = fs::read_to_string(path.join("bom.csv")).unwrap();
-        assert!(bom.contains("R1,R2"));
+        assert_eq!(
+            bom,
+            concat!(
+                "Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n",
+                "10k,\"R1,R2\",Test:Footprint,2,C123,F,SMD\n"
+            )
+        );
         let cpl = fs::read_to_string(path.join("cpl.csv")).unwrap();
-        assert!(cpl.contains("R1,1.250000,2.500000,90,F"));
-        assert!(cpl.find("R1,").unwrap() < cpl.find("R2,").unwrap());
+        assert_eq!(
+            cpl,
+            concat!(
+                "Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n",
+                "R1,1.250000,2.500000,90,F\n",
+                "R2,1.250000,2.500000,90,F\n"
+            )
+        );
         assert!(archive.is_file());
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(path.join(MANIFEST_NAME)).unwrap()).unwrap();
@@ -1552,6 +2108,59 @@ mod tests {
         let mut zip = ZipArchive::new(File::open(archive).unwrap()).unwrap();
         assert!(zip.by_name("manifest.json").is_ok());
         assert!(zip.by_name("not-exported.secret").is_err());
+    }
+
+    #[test]
+    fn streamed_csv_preserves_escaping_and_inclusive_file_limits() {
+        let staging = tempdir().unwrap();
+        let directory = PinnedDirectory::open(staging.path()).unwrap();
+        let mut first = part("R\"2", "10k,\"tight\"", true, true, true);
+        first.footprint = "Pkg\nOne".to_string();
+        first.mpn = Some("C,123".to_string());
+        let mut second = first.clone();
+        second.reference = "R,1".to_string();
+        let parts = vec![second, first];
+
+        let production = ManufacturingLimits::production();
+        let bom_plan = plan_bom(&parts, production).unwrap();
+        let cpl_plan = plan_cpl(&parts, production).unwrap();
+        let expected_bom = concat!(
+            "Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n",
+            "\"10k,\"\"tight\"\"\",\"R\"\"2,R,1\",\"Pkg\nOne\",2,\"C,123\",F,SMD\n"
+        );
+        let expected_cpl = concat!(
+            "Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n",
+            "\"R\"\"2\",1.250000,2.500000,90,F\n",
+            "\"R,1\",1.250000,2.500000,90,F\n"
+        );
+        assert_eq!(bom_plan.bytes, expected_bom.len() as u64);
+        assert_eq!(cpl_plan.bytes, expected_cpl.len() as u64);
+
+        let mut exact_bom = production;
+        exact_bom.max_file_bytes = bom_plan.bytes;
+        let bom_path = staging.path().join("bom.csv");
+        write_bom(&directory, &bom_path, &bom_plan, exact_bom).unwrap();
+        assert_eq!(fs::read_to_string(&bom_path).unwrap(), expected_bom);
+
+        let mut exact_cpl = production;
+        exact_cpl.max_file_bytes = cpl_plan.bytes;
+        let cpl_path = staging.path().join("cpl.csv");
+        write_cpl(&directory, &cpl_path, &cpl_plan, exact_cpl).unwrap();
+        assert_eq!(fs::read_to_string(&cpl_path).unwrap(), expected_cpl);
+
+        fs::write(&bom_path, b"known-good BOM").unwrap();
+        let mut one_under_bom = production;
+        one_under_bom.max_file_bytes = bom_plan.bytes - 1;
+        let error = plan_bom(&parts, one_under_bom).err().unwrap();
+        assert!(format!("{error:#}").contains("file limit"), "{error:#}");
+        assert_eq!(fs::read(&bom_path).unwrap(), b"known-good BOM");
+
+        fs::write(&cpl_path, b"known-good CPL").unwrap();
+        let mut one_under_cpl = production;
+        one_under_cpl.max_file_bytes = cpl_plan.bytes - 1;
+        let error = plan_cpl(&parts, one_under_cpl).err().unwrap();
+        assert!(format!("{error:#}").contains("file limit"), "{error:#}");
+        assert_eq!(fs::read(&cpl_path).unwrap(), b"known-good CPL");
     }
 
     #[test]
@@ -1884,6 +2493,8 @@ mod tests {
 
         let probe = staging.path().join("probe.zip");
         let mut probe_limits = small_limits();
+        probe_limits.max_file_bytes = 4096;
+        probe_limits.max_total_bytes = 8192;
         probe_limits.max_archive_bytes = 4096;
         write_zip(&probe, std::slice::from_ref(&source), probe_limits).unwrap();
         let exact_bytes = fs::metadata(&probe).unwrap().len();
@@ -1913,6 +2524,8 @@ mod tests {
 
         let destination = staging.path().join("expanded.zip");
         let mut exact = small_limits();
+        exact.max_file_bytes = 4096;
+        exact.max_total_bytes = 8192;
         exact.max_archive_bytes = 4096;
         exact.max_archive_uncompressed_bytes = 3;
         write_zip(&destination, &[first.clone(), second.clone()], exact).unwrap();
@@ -1981,6 +2594,68 @@ mod tests {
     }
 
     #[test]
+    fn package_aggregate_limit_is_inclusive_and_preserves_existing_archive() {
+        let staging = tempdir().unwrap();
+        let drc = staging.path().join("drc.rpt");
+        let copper = staging.path().join("board-F_Cu.gtl");
+        fs::write(&drc, b"DRC clean\n").unwrap();
+        fs::write(&copper, b"G04 copper*\n").unwrap();
+        fs::write(staging.path().join("unlisted.private"), b"quota-counted").unwrap();
+        let artifacts = vec![drc, copper];
+        let parts = [part("R1", "10k", true, true, true)];
+
+        write_manufacturing_package(
+            staging.path(),
+            Path::new("board.kicad_pcb"),
+            b"board",
+            &[],
+            &parts,
+            &artifacts,
+            &identity(),
+        )
+        .unwrap();
+        let usage = scan_manufacturing_workspace(
+            staging.path(),
+            ManufacturingLimits::production(),
+            "aggregate quota probe",
+        )
+        .unwrap();
+        let archive_path = staging.path().join(ARCHIVE_NAME);
+        let known_good = fs::read(&archive_path).unwrap();
+
+        let mut exact = ManufacturingLimits::production();
+        exact.max_total_bytes = usage.bytes;
+        write_manufacturing_package_with_limits(
+            staging.path(),
+            Path::new("board.kicad_pcb"),
+            b"board",
+            &[],
+            &parts,
+            &artifacts,
+            &identity(),
+            exact,
+        )
+        .unwrap();
+        assert_eq!(fs::read(&archive_path).unwrap(), known_good);
+
+        let mut one_under = exact;
+        one_under.max_total_bytes -= 1;
+        let error = write_manufacturing_package_with_limits(
+            staging.path(),
+            Path::new("board.kicad_pcb"),
+            b"board",
+            &[],
+            &parts,
+            &artifacts,
+            &identity(),
+            one_under,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("aggregate"), "{error:#}");
+        assert_eq!(fs::read(&archive_path).unwrap(), known_good);
+    }
+
+    #[test]
     fn publication_quota_failure_leaves_existing_outputs_unchanged() {
         let staging = tempdir().unwrap();
         let output = tempdir().unwrap();
@@ -1998,6 +2673,31 @@ mod tests {
             b"known-good DRC"
         );
         assert!(!output.path().join(ARCHIVE_NAME).exists());
+    }
+
+    #[test]
+    fn publication_preflights_new_output_entries_before_copying() {
+        let staging = tempdir().unwrap();
+        let output = tempdir().unwrap();
+        fs::write(staging.path().join("drc.rpt"), b"new DRC").unwrap();
+        fs::write(staging.path().join(ARCHIVE_NAME), b"new archive").unwrap();
+        for index in 0..7 {
+            fs::write(output.path().join(format!("unrelated-{index}")), b"keep").unwrap();
+        }
+
+        let error =
+            publish_staged_package_with_limits(staging.path(), output.path(), small_limits())
+                .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("entry output limit"),
+            "{error:#}"
+        );
+        assert!(!output.path().join("drc.rpt").exists());
+        assert!(!output.path().join(ARCHIVE_NAME).exists());
+        assert_eq!(
+            fs::read(output.path().join("unrelated-0")).unwrap(),
+            b"keep"
+        );
     }
 
     #[test]
@@ -2041,6 +2741,56 @@ mod tests {
             "{error:#}"
         );
         assert!(writer.bytes.len() <= 96 * 1024);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_rejects_same_inode_same_size_mutation_during_streaming() {
+        struct OverwritingWriter {
+            source: PathBuf,
+            bytes: Vec<u8>,
+            overwritten: bool,
+        }
+
+        impl Write for OverwritingWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.bytes.extend_from_slice(buffer);
+                if !self.overwritten {
+                    let mut source = fs::OpenOptions::new().write(true).open(&self.source)?;
+                    source.write_all(&vec![b'b'; 96 * 1024])?;
+                    source.flush()?;
+                    self.overwritten = true;
+                }
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let staging = tempdir().unwrap();
+        let source = staging.path().join("source.gbr");
+        fs::write(&source, vec![b'a'; 96 * 1024]).unwrap();
+        let before = fs::metadata(&source).unwrap();
+        let mut limits = ManufacturingLimits::production();
+        limits.max_file_bytes = 128 * 1024;
+        let mut writer = OverwritingWriter {
+            source: source.clone(),
+            bytes: Vec::new(),
+            overwritten: false,
+        };
+
+        let error =
+            copy_regular_file_bounded(&source, &mut writer, limits, "test source").unwrap_err();
+        assert!(
+            format!("{error:#}").contains("contents changed"),
+            "{error:#}"
+        );
+        let after = fs::metadata(&source).unwrap();
+        assert!(same_file(&before, &after));
+        assert_eq!(before.len(), after.len());
+        assert!(writer.overwritten);
     }
 
     #[cfg(unix)]

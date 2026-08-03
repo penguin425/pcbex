@@ -157,6 +157,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+mod anchored_io;
 mod bounded_io;
 mod bounded_process;
 mod canary_completion;
@@ -223,7 +224,7 @@ use manufacturing_limits::{ManufacturingLimits, scan_manufacturing_workspace};
 use manufacturing_package::{
     KiCadIdentity, KiCadProjectInput, collect_staged_artifacts, normalize_kicad_artifacts,
     prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
-    write_manufacturing_package,
+    write_manufacturing_package_with_workspace_reservation,
 };
 use pipeline::{
     PipelineInputs, pipeline_factory_gate_schema, pipeline_gate_schema, verify_pipeline,
@@ -14829,8 +14830,27 @@ fn run_cli() -> Result<()> {
             enforce_manufacturing_workspace_quota(staging.path(), "artifact normalization")?;
             let kicad_identity = kicad_cli_identity(&kicad_environment)?;
             verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
-            enforce_manufacturing_workspace_quota(staging.path(), "KiCad identity")?;
-            let staged_archive = write_manufacturing_package(
+            let workspace_before_package = scan_manufacturing_workspace(
+                staging.path(),
+                ManufacturingLimits::production(),
+                "manufacturing workspace after KiCad identity",
+            )?;
+            let package_directory_before = scan_manufacturing_workspace(
+                &staging_dir,
+                ManufacturingLimits::production(),
+                "manufacturing package directory before creation",
+            )?;
+            let outside_package_bytes = workspace_before_package
+                .bytes
+                .checked_sub(package_directory_before.bytes)
+                .ok_or_else(|| anyhow::anyhow!("manufacturing workspace byte accounting underflow"))?;
+            let outside_package_entries = workspace_before_package
+                .entries
+                .checked_sub(package_directory_before.entries)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("manufacturing workspace entry accounting underflow")
+                })?;
+            let staged_archive = write_manufacturing_package_with_workspace_reservation(
                 &staging_dir,
                 &input,
                 &input_bytes,
@@ -14838,6 +14858,8 @@ fn run_cli() -> Result<()> {
                 &parts,
                 &exported_artifacts,
                 &kicad_identity,
+                outside_package_bytes,
+                outside_package_entries,
             )?;
             let staged_package = fs::read(&staged_archive).with_context(|| {
                 format!(

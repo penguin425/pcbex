@@ -5,7 +5,6 @@
 //! into a stable receipt.  Provider-specific authentication and endpoint paths
 //! remain configuration, never source-code secrets.
 
-use crate::bounded_io::{opened_path_matches, same_file};
 use crate::bounded_process::{ProcessError, ProcessLimits, run_bounded_with_stdin_file};
 use crate::manufacturing_limits::{
     MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES, MAX_MANIFEST_BYTES, MAX_PACKAGE_BYTES,
@@ -17,8 +16,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
-    fs::{self, File},
+    env, fs,
     io::{Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::Command,
@@ -1125,68 +1123,28 @@ pub(crate) struct ManufacturingPackageIdentity {
 }
 
 fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
-    let path_metadata = fs::symlink_metadata(package_path).map_err(|error| {
-        format!(
-            "inspecting factory package {}: {error}",
-            package_path.display()
-        )
-    })?;
-    if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
-        return Err("factory package path must be a real regular file, not a symlink".into());
-    }
-    let mut file = File::open(package_path).map_err(|error| {
-        format!(
-            "opening factory package {}: {error}",
-            package_path.display()
-        )
-    })?;
-    let metadata = file
-        .metadata()
-        .map_err(|error| format!("reading factory package metadata: {error}"))?;
-    if !metadata.is_file() {
-        return Err("factory package path must be a regular file".into());
-    }
-    if !same_file(&path_metadata, &metadata)
-        || path_metadata.len() != metadata.len()
-        || !opened_path_matches(&file, package_path)
-            .map_err(|error| format!("verifying opened factory package identity: {error}"))?
-    {
-        return Err("factory package path changed while it was being opened".into());
-    }
-    if metadata.len() > MAX_PACKAGE_BYTES {
+    let package = crate::bounded_io::read_with_limit(package_path, MAX_PACKAGE_BYTES).map_err(
+        |error| {
+            let detail = error.to_string();
+            let context = format!("reading factory package {}", package_path.display());
+            if detail.contains("exceeds") {
+                format!(
+                    "{context}: factory package must contain 1 to {MAX_PACKAGE_BYTES} bytes"
+                )
+            } else if detail.to_ascii_lowercase().contains("symlink") {
+                format!(
+                    "{context}: factory package path must be a real regular file, not a symlink: {detail}"
+                )
+            } else if detail.contains("regular non-symlink file") {
+                format!("{context}: factory package path must be a regular file: {detail}")
+            } else {
+                format!("{context}: {detail}")
+            }
+        },
+    )?;
+    if package.is_empty() {
         return Err(format!(
             "factory package must contain 1 to {MAX_PACKAGE_BYTES} bytes"
-        ));
-    }
-
-    // The limit protects against a file growing after the metadata check while
-    // still keeping the read bounded even when the initial size is stale.
-    let mut package = Vec::new();
-    Read::by_ref(&mut file)
-        .take(MAX_PACKAGE_BYTES.saturating_add(1))
-        .read_to_end(&mut package)
-        .map_err(|error| format!("reading factory package: {error}"))?;
-    let after = file
-        .metadata()
-        .map_err(|error| format!("rechecking factory package metadata: {error}"))?;
-    let final_path = fs::symlink_metadata(package_path)
-        .map_err(|error| format!("rechecking factory package path: {error}"))?;
-    let package_bytes = u64::try_from(package.len())
-        .map_err(|_| "factory package byte count cannot be represented".to_string())?;
-    if package.is_empty()
-        || package_bytes > MAX_PACKAGE_BYTES
-        || !same_file(&metadata, &after)
-        || after.len() != metadata.len()
-        || package_bytes != metadata.len()
-        || final_path.file_type().is_symlink()
-        || !final_path.file_type().is_file()
-        || !same_file(&path_metadata, &final_path)
-        || final_path.len() != metadata.len()
-        || !opened_path_matches(&file, package_path)
-            .map_err(|error| format!("rechecking opened factory package identity: {error}"))?
-    {
-        return Err(format!(
-            "factory package must remain one regular file containing 1 to {MAX_PACKAGE_BYTES} bytes"
         ));
     }
     Ok(package)
@@ -3062,6 +3020,26 @@ mod tests {
             error.contains("does not match manifest") || error.contains("Invalid checksum"),
             "{error}"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_factory_package_through_an_ancestor_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempdir().unwrap();
+        let real_parent = tempdir().unwrap();
+        let package = real_parent.path().join("manufacturing.zip");
+        fs::write(&package, b"package").unwrap();
+
+        let linked_parent = temporary.path().join("linked-parent");
+        symlink(real_parent.path(), &linked_parent).unwrap();
+        let linked_package = linked_parent.join("manufacturing.zip");
+
+        let error = read_package(&linked_package).unwrap_err();
+        assert!(error.contains("reading factory package"), "{error}");
+        assert!(error.to_ascii_lowercase().contains("symlink"), "{error}");
+        assert_eq!(fs::read(&package).unwrap(), b"package");
     }
 
     #[test]

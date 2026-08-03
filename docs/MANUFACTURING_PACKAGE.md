@@ -61,6 +61,7 @@ publication:
 | Expanded artifact payload accepted from a ZIP | 512 MiB |
 | `manifest.json` or one Gerber job | 1 MiB |
 | Complete private workspace | 1 GiB |
+| Manufacturing footprints / BOM-CPL source parts | 100,000 |
 | One portable UTF-8 basename | 255 bytes |
 | One line normalized from a KiCad artifact | 1 MiB |
 
@@ -73,12 +74,28 @@ checkpoints, charge an entry before queueing it, and reject every observed
 link, socket, or other non-regular entry. Exact limits are accepted; the next
 entry, byte, depth, or name byte fails closed.
 
+BOM and CPL sizes are calculated before either destination is replaced. Rows
+are then emitted directly through an 8 KiB buffered, byte-counted temporary
+writer; the implementation never builds the complete CSV or a joined
+designator field in memory. Minimal CSV quoting, doubled embedded quotes, raw
+UTF-8 bytes, LF terminators, and deterministic reference ordering remain part
+of the byte-level reproducibility contract. Existing files which are not part
+of the archive are still charged to the private package-directory quota, and
+bytes/entries used by the sibling source and KiCad-environment stages are
+reserved before package creation.
+
 The archive is written through a size-limited temporary regular file with
 sorted unique names, flushed and synchronized, then atomically replaces the
 private staged archive. A normalization, source-change, archive, or publication
 quota error leaves an existing archive and every public destination unchanged.
 Opened source identities are checked around hashing, normalization, and copy,
-and the generated canonical ZIP is passed through the same complete validator
+and each source is read twice through the same opened descriptor with digest or
+byte-for-byte comparison so an in-place same-inode/same-size rewrite is not
+accepted merely because metadata stayed constant. On Unix, manufacturing
+temporary files and replacements are created, removed, and renamed relative to
+a pinned directory descriptor. Windows uses a retained directory handle with
+guarded identity checks around its path-based atomic replacement.
+The generated canonical ZIP is passed through the same complete validator
 used by `factory-submit` before any public file is replaced. The staged board
 and adjacent project/rule bytes are compared with their original snapshots
 after every KiCad subprocess phase, so an export cannot silently rebind the
@@ -87,6 +104,10 @@ Each public file is replaced atomically, but the set of sibling files is not a
 cross-file transaction: an operating-system failure during the final sequence
 of renames can leave earlier destinations updated. Consumers which require one
 atomic hand-off should use the validated `manufacturing.zip` boundary.
+A directory-synchronization error is reported even when the immediately
+preceding atomic rename already committed; failure-preservation guarantees
+therefore apply to validation and pre-commit errors, not to a durability error
+reported after the filesystem accepted a rename.
 The complete private workspace is rescanned after project staging, DRC, each
 KiCad export, normalization, KiCad identity discovery, and package creation.
 These are deterministic post-process checkpoints: an external KiCad process
