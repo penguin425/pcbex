@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-import time
 import unittest
 from unittest import mock
 
@@ -57,16 +56,19 @@ class CiRuntimeTests(unittest.TestCase):
             )
 
     def test_aggregate_deadline_is_shared_across_calls(self):
-        deadline = ci_runtime.Deadline.start(0.05)
-        time.sleep(0.06)
-        with self.assertRaisesRegex(
-            ci_runtime.ExecutionBoundaryError, "aggregate execution deadline"
+        with mock.patch.object(
+            ci_runtime.time, "monotonic", side_effect=[100.0, 105.0, 111.0]
         ):
-            ci_runtime.run(
-                [sys.executable, "-c", "pass"],
-                timeout_seconds=5,
-                deadline=deadline,
-            )
+            deadline = ci_runtime.Deadline.start(10)
+            self.assertEqual(deadline.remaining(), 5)
+            with self.assertRaisesRegex(
+                ci_runtime.ExecutionBoundaryError, "aggregate execution deadline"
+            ):
+                ci_runtime.run(
+                    [sys.executable, "-c", "pass"],
+                    timeout_seconds=5,
+                    deadline=deadline,
+                )
 
     def test_http_response_accepts_exact_limit_and_rejects_overflow(self):
         self.assertEqual(
@@ -81,12 +83,12 @@ class CiRuntimeTests(unittest.TestCase):
     def test_append_text_accepts_exact_limit_and_rejects_overflow(self):
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary).resolve() / "github-output"
-            output.write_text("a=1\n")
+            output.write_bytes(b"a=1\n")
             ci_runtime.append_text(output, "b=2\n", max_bytes=8)
-            self.assertEqual(output.read_text(), "a=1\nb=2\n")
+            self.assertEqual(output.read_bytes(), b"a=1\nb=2\n")
             with self.assertRaises(ci_runtime.ExecutionBoundaryError):
                 ci_runtime.append_text(output, "x", max_bytes=8)
-            self.assertEqual(output.read_text(), "a=1\nb=2\n")
+            self.assertEqual(output.read_bytes(), b"a=1\nb=2\n")
 
     def test_append_text_creates_missing_file_and_uses_binary_mode(self):
         with tempfile.TemporaryDirectory() as temporary:
