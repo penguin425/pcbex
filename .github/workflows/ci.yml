@@ -66,17 +66,8 @@ jobs:
             --public-key build/action-quorum/engineer-b.pub
           target/release/pcbex electrical-policy \
             --output build/action-quorum/electrical-policy.json
-          jq '
-            .rules |= with_entries(
-              if .value.severity == "error"
-              then .value.enabled = false
-              else .
-              end
-            )
-          ' build/action-quorum/electrical-policy.json \
-            > build/action-quorum/electrical-policy.approved.json
           jq \
-            --slurpfile electrical build/action-quorum/electrical-policy.approved.json \
+            --slurpfile electrical build/action-quorum/electrical-policy.json \
             --arg key_a "$(tr -d '\n' < build/action-quorum/reviewer-a.pub)" \
             --arg key_b "$(tr -d '\n' < build/action-quorum/reviewer-b.pub)" \
             --arg human_key_a "$(tr -d '\n' < build/action-quorum/engineer-a.pub)" \
@@ -240,11 +231,13 @@ jobs:
               --ticket PCBEX-CI-ROLL-2 \
               --output "build/action-rollout/completion-$engineer.json"
           done
-          target/release/pcbex check-schematic examples/simple.kicad_sch \
+          target/release/pcbex check-schematic \
+            crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch \
             --policy-pack build/action-quorum/policy-pack.json \
             --output build/action-quorum/electrical-review.json \
             --require-approved
-          target/release/pcbex prepare-ai-review examples/simple.kicad_sch \
+          target/release/pcbex prepare-ai-review \
+            crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch \
             --electrical-review build/action-quorum/electrical-review.json \
             --policy-pack build/action-quorum/policy-pack.json \
             --output build/action-quorum/request.json \
@@ -288,8 +281,8 @@ jobs:
             --response build/action-quorum/response-a.json \
             --response build/action-quorum/response-b.json \
             --policy-pack build/action-quorum/policy-pack.json \
-            --baseline-schematic examples/simple.kicad_sch \
-            --current-schematic examples/simple.kicad_sch \
+            --baseline-schematic crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch \
+            --current-schematic crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch \
             --reviewer-routing-policy examples/reviewer-routing-policy.json \
             --session build/action-quorum/session.json \
             --output build/action-quorum/retained-quorum.json
@@ -628,8 +621,8 @@ jobs:
         with:
           board: examples/simple.kicad_pcb
           baseline-board: examples/simple.kicad_pcb
-          schematic: examples/simple.kicad_sch
-          baseline-schematic: examples/simple.kicad_sch
+          schematic: crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch
+          baseline-schematic: crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch
           schematic-reviewer-routing-policy: examples/reviewer-routing-policy.json
           fail-on-schematic-review: "true"
           fail-on-unrouted-schematic-review: "true"

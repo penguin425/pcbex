@@ -549,6 +549,11 @@
     {
       "id": "bounded-python-agent-io-subprocess-execution",
       "release": "v1.406.0",
+      "status": "released"
+    },
+    {
+      "id": "immutable-erc-safety-floor",
+      "release": "v1.407.0",
       "status": "current"
     }
   ]

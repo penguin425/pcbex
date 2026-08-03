@@ -1,4 +1,7 @@
-use super::{ElectricalFinding, ElectricalFindingCounts, ElectricalReview, ElectricalSeverity};
+use super::{
+    ElectricalFinding, ElectricalFindingCounts, ElectricalReview, ElectricalSeverity,
+    is_electrical_safety_floor_rule,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -138,8 +141,29 @@ pub fn compare_electrical_reviews(
             .count(),
         error_regressions: 0,
     };
+    let mut error_regression_ids = new_findings
+        .iter()
+        .filter(|finding| finding.severity == ElectricalSeverity::Error)
+        .map(|finding| finding.id.as_str())
+        .collect::<BTreeSet<_>>();
+    error_regression_ids.extend(
+        severity_changes
+            .iter()
+            .filter(|change| change.current_severity == ElectricalSeverity::Error)
+            .map(|change| change.id.as_str()),
+    );
+    error_regression_ids.extend(
+        current
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding.severity == ElectricalSeverity::Error
+                    && is_electrical_safety_floor_rule(&finding.rule)
+            })
+            .map(|finding| finding.id.as_str()),
+    );
     let counts = ElectricalComparisonCounts {
-        error_regressions: counts.new_errors + counts.escalated_errors,
+        error_regressions: error_regression_ids.len(),
         ..counts
     };
 
@@ -193,6 +217,14 @@ fn validate_review(review: &ElectricalReview, label: &str) -> Result<(), String>
             return Err(format!(
                 "{label} electrical review finding {} has a blank rule or message",
                 finding.id
+            ));
+        }
+        if is_electrical_safety_floor_rule(&finding.rule)
+            && finding.severity != ElectricalSeverity::Error
+        {
+            return Err(format!(
+                "{label} electrical review finding {} demotes immutable safety-floor rule {}",
+                finding.id, finding.rule
             ));
         }
         if !ids.insert(finding.id.as_str()) {
@@ -383,21 +415,27 @@ mod tests {
     #[test]
     fn comparison_tracks_new_resolved_and_escalated_findings() {
         let mut baseline = review();
-        baseline.findings[0].severity = ElectricalSeverity::Warning;
-        let mut later_resolved = baseline.findings[0].clone();
-        later_resolved.id = "pcbex-er-fedcba9876543210".into();
-        later_resolved.severity = ElectricalSeverity::Error;
-        later_resolved.message = "resolved baseline error".into();
-        baseline.findings.push(later_resolved);
+        baseline.findings = vec![
+            advisory_finding(
+                "pcbex-er-1111111111111111",
+                "missing_footprint",
+                ElectricalSeverity::Warning,
+            ),
+            advisory_finding(
+                "pcbex-er-fedcba9876543210",
+                "input_not_driven",
+                ElectricalSeverity::Error,
+            ),
+        ];
         refresh_review(&mut baseline);
         let mut current = baseline.clone();
         current.findings[0].severity = ElectricalSeverity::Error;
         let resolved = current.findings.pop().unwrap();
-        let mut new = current.findings[0].clone();
-        new.id = "pcbex-er-0123456789abcdef".into();
-        new.severity = ElectricalSeverity::Error;
-        new.message = "new regression".into();
-        current.findings.push(new);
+        current.findings.push(advisory_finding(
+            "pcbex-er-0123456789abcdef",
+            "multiple_net_names",
+            ElectricalSeverity::Error,
+        ));
         refresh_review(&mut current);
 
         let comparison = compare_electrical_reviews(&baseline, &current).unwrap();
@@ -417,12 +455,46 @@ mod tests {
     }
 
     #[test]
-    fn existing_errors_do_not_fail_the_baseline_gate() {
-        let baseline = review();
+    fn existing_non_floor_errors_do_not_fail_the_baseline_gate() {
+        let mut baseline = review();
+        baseline.findings = vec![advisory_finding(
+            "pcbex-er-1111111111111111",
+            "missing_footprint",
+            ElectricalSeverity::Error,
+        )];
+        refresh_review(&mut baseline);
         let comparison = compare_electrical_reviews(&baseline, &baseline).unwrap();
         assert!(comparison.passed);
         assert_eq!(comparison.counts.error_regressions, 0);
         assert_eq!(comparison.counts.unchanged, baseline.findings.len());
+    }
+
+    #[test]
+    fn retained_safety_floor_errors_fail_the_baseline_gate() {
+        let baseline = review();
+        let floor_errors = baseline
+            .findings
+            .iter()
+            .filter(|finding| {
+                finding.severity == ElectricalSeverity::Error
+                    && is_electrical_safety_floor_rule(&finding.rule)
+            })
+            .count();
+        assert!(floor_errors > 0);
+        let comparison = compare_electrical_reviews(&baseline, &baseline).unwrap();
+        assert!(!comparison.passed);
+        assert_eq!(comparison.counts.error_regressions, floor_errors);
+        assert_eq!(comparison.counts.new_errors, 0);
+        assert_eq!(comparison.counts.escalated_errors, 0);
+    }
+
+    #[test]
+    fn demoted_safety_floor_findings_fail_closed() {
+        let mut baseline = review();
+        baseline.findings[0].severity = ElectricalSeverity::Warning;
+        refresh_review(&mut baseline);
+        let error = compare_electrical_reviews(&baseline, &baseline).unwrap_err();
+        assert!(error.contains("demotes immutable safety-floor rule"));
     }
 
     #[test]
@@ -473,5 +545,17 @@ mod tests {
                 .count(),
         };
         review.approved = review.counts.errors == 0;
+    }
+
+    fn advisory_finding(id: &str, rule: &str, severity: ElectricalSeverity) -> ElectricalFinding {
+        ElectricalFinding {
+            id: id.into(),
+            rule: rule.into(),
+            severity,
+            message: format!("synthetic {rule} finding"),
+            net_id: None,
+            symbols: Vec::new(),
+            pins: Vec::new(),
+        }
     }
 }

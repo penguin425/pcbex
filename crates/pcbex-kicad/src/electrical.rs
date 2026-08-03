@@ -3,7 +3,7 @@ use super::{
     SchematicSymbol,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
@@ -57,6 +57,31 @@ const RULES: [(&str, ElectricalSeverity); 16] = [
     (RULE_POWER_INPUT_VOLTAGE_EXCEEDED, ElectricalSeverity::Error),
     (RULE_MISSING_DECOUPLING_CAPACITOR, ElectricalSeverity::Error),
 ];
+
+/// Built-in electrical rules that form the immutable ERC safety floor.
+///
+/// The list is ordered deterministically to match the built-in rule table.
+/// Rules whose built-in severity is `Warning` remain configurable through an
+/// electrical policy; every rule in this list must stay enabled at `Error`.
+pub const ELECTRICAL_SAFETY_FLOOR_RULES: [&str; 12] = [
+    RULE_COVERAGE_INCOMPLETE,
+    RULE_DUPLICATE_REFERENCE_UNIT,
+    RULE_UNANNOTATED_REFERENCE,
+    RULE_NO_CONNECT_CONNECTED,
+    RULE_PIN_TYPE_NO_CONNECT_CONNECTED,
+    RULE_MULTIPLE_OUTPUT_DRIVERS,
+    RULE_MULTIPLE_POWER_OUTPUTS,
+    RULE_POWER_INPUT_NOT_DRIVEN,
+    RULE_INVALID_POWER_METADATA,
+    RULE_POWER_RAIL_VOLTAGE_CONFLICT,
+    RULE_POWER_INPUT_VOLTAGE_EXCEEDED,
+    RULE_MISSING_DECOUPLING_CAPACITOR,
+];
+
+/// Return whether `rule` is protected by the immutable ERC safety floor.
+pub fn is_electrical_safety_floor_rule(rule: &str) -> bool {
+    ELECTRICAL_SAFETY_FLOOR_RULES.contains(&rule)
+}
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -697,6 +722,17 @@ fn effective_policy(policy: &ElectricalPolicy) -> Result<ElectricalPolicy, Strin
     let mut effective = ElectricalPolicy::default();
     effective.id.clone_from(&policy.id);
     effective.rules.extend(policy.rules.clone());
+    for rule in ELECTRICAL_SAFETY_FLOOR_RULES {
+        let setting = effective
+            .rules
+            .get(rule)
+            .expect("effective policy contains every safety-floor rule");
+        if !setting.enabled || setting.severity != ElectricalSeverity::Error {
+            return Err(format!(
+                "immutable safety floor violation: rule {rule} must remain enabled with error severity"
+            ));
+        }
+    }
     Ok(effective)
 }
 
@@ -1341,6 +1377,23 @@ fn hex_digest(bytes: &[u8]) -> String {
 }
 
 pub fn electrical_policy_json_schema() -> Value {
+    let floor_rule_properties = ELECTRICAL_SAFETY_FLOOR_RULES
+        .into_iter()
+        .map(|rule| {
+            (
+                rule.to_string(),
+                json!({
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["enabled", "severity"],
+                    "properties": {
+                        "enabled": {"const": true},
+                        "severity": {"const": "error"}
+                    }
+                }),
+            )
+        })
+        .collect::<Map<_, _>>();
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://github.com/penguin425/pcbex/schemas/electrical-policy-v1.json",
@@ -1354,6 +1407,7 @@ pub fn electrical_policy_json_schema() -> Value {
             "rules": {
                 "type": "object",
                 "propertyNames": {"enum": RULES.map(|(id, _)| id)},
+                "properties": floor_rule_properties,
                 "additionalProperties": {"$ref": "#/$defs/rule"}
             }
         },
@@ -1523,17 +1577,118 @@ mod tests {
     }
 
     #[test]
-    fn policy_can_demote_or_disable_rules() {
+    fn immutable_safety_floor_rejects_disabled_and_demoted_rules() {
+        let default_error_rules = RULES
+            .iter()
+            .filter(|(_, severity)| *severity == ElectricalSeverity::Error)
+            .map(|(rule, _)| *rule)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ELECTRICAL_SAFETY_FLOOR_RULES.as_slice(),
+            default_error_rules.as_slice(),
+            "every built-in default-error rule must remain in the safety floor"
+        );
+
         let schematic = import_schematic(SOURCE).unwrap();
-        let mut policy = ElectricalPolicy::default();
-        for setting in policy.rules.values_mut() {
-            if setting.severity == ElectricalSeverity::Error {
-                setting.enabled = false;
+        for rule in ELECTRICAL_SAFETY_FLOOR_RULES {
+            for (enabled, severity) in [
+                (false, ElectricalSeverity::Error),
+                (true, ElectricalSeverity::Info),
+                (true, ElectricalSeverity::Warning),
+            ] {
+                let mut policy = ElectricalPolicy::default();
+                policy.rules.get_mut(rule).unwrap().enabled = enabled;
+                policy.rules.get_mut(rule).unwrap().severity = severity;
+                let error = check_schematic(&schematic, &policy).unwrap_err();
+                assert_eq!(
+                    error,
+                    format!(
+                        "immutable safety floor violation: rule {rule} must remain enabled with error severity"
+                    )
+                );
             }
         }
-        let report = check_schematic(&schematic, &policy).unwrap();
-        assert!(report.approved);
-        assert_eq!(report.counts.errors, 0);
+    }
+
+    #[test]
+    fn parsed_partial_policies_inherit_the_safety_floor_and_reject_overrides() {
+        let partial =
+            parse_electrical_policy(r#"{"schema_version":1,"id":"partial","rules":{}}"#).unwrap();
+        assert_eq!(partial.rules.len(), RULES.len());
+        for rule in ELECTRICAL_SAFETY_FLOOR_RULES {
+            assert_eq!(
+                partial.rules.get(rule),
+                Some(&ElectricalRulePolicy {
+                    enabled: true,
+                    severity: ElectricalSeverity::Error,
+                })
+            );
+        }
+
+        for rule in ELECTRICAL_SAFETY_FLOOR_RULES {
+            for (enabled, severity) in [(false, "error"), (true, "info"), (true, "warning")] {
+                let source = json!({
+                    "schema_version": 1,
+                    "id": "invalid-floor-override",
+                    "rules": {
+                        rule: {"enabled": enabled, "severity": severity}
+                    }
+                })
+                .to_string();
+                let error = parse_electrical_policy(&source).unwrap_err();
+                assert_eq!(
+                    error,
+                    format!(
+                        "immutable safety floor violation: rule {rule} must remain enabled with error severity"
+                    )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn non_floor_rules_remain_configurable() {
+        let schematic = import_schematic(SOURCE).unwrap();
+        for (rule, _) in RULES
+            .iter()
+            .filter(|(rule, _)| !is_electrical_safety_floor_rule(rule))
+        {
+            let mut disabled = ElectricalPolicy::default();
+            disabled.rules.get_mut(*rule).unwrap().enabled = false;
+            let disabled_report = check_schematic(&schematic, &disabled).unwrap();
+            assert!(
+                disabled_report
+                    .findings
+                    .iter()
+                    .all(|finding| finding.rule != *rule),
+                "disabled rule {rule} emitted a finding"
+            );
+
+            let mut promoted = ElectricalPolicy::default();
+            promoted.rules.get_mut(*rule).unwrap().severity = ElectricalSeverity::Error;
+            let promoted_report = check_schematic(&schematic, &promoted).unwrap();
+            assert!(promoted_report.findings.iter().all(|finding| {
+                finding.rule != *rule || finding.severity == ElectricalSeverity::Error
+            }));
+        }
+    }
+
+    #[test]
+    fn electrical_policy_schema_pins_the_safety_floor_only() {
+        let schema = electrical_policy_json_schema();
+        let rules = &schema["properties"]["rules"];
+        for rule in ELECTRICAL_SAFETY_FLOOR_RULES {
+            let floor = &rules["properties"][rule];
+            assert_eq!(floor["properties"]["enabled"]["const"], true);
+            assert_eq!(floor["properties"]["severity"]["const"], "error");
+        }
+        for (rule, _) in RULES
+            .iter()
+            .filter(|(rule, _)| !is_electrical_safety_floor_rule(rule))
+        {
+            assert!(rules["properties"][*rule].is_null());
+        }
+        assert!(rules["additionalProperties"]["$ref"] == "#/$defs/rule");
     }
 
     #[test]
@@ -2082,10 +2237,17 @@ mod tests {
 
     #[test]
     fn sarif_binds_rules_findings_and_schematic_identity() {
-        let schematic = import_schematic(SOURCE).unwrap();
+        let mut schematic = import_schematic(SOURCE).unwrap();
+        schematic.symbols[0].footprint = None;
         let mut policy = ElectricalPolicy::default();
-        for rule in policy.rules.values_mut() {
-            rule.severity = ElectricalSeverity::Warning;
+        for (rule, setting) in &mut policy.rules {
+            if !is_electrical_safety_floor_rule(rule) {
+                setting.severity = if rule == RULE_INPUT_NOT_DRIVEN {
+                    ElectricalSeverity::Info
+                } else {
+                    ElectricalSeverity::Warning
+                };
+            }
         }
         let review = check_schematic(&schematic, &policy).unwrap();
         let sarif =

@@ -1,0 +1,44 @@
+(kicad_sch
+  (version 20231120)
+  (generator eeschema)
+  (generator_version "8.0")
+  (uuid 00000000-0000-0000-0000-000000000200)
+  (paper "A4")
+  (lib_symbols
+    (symbol "Device:R"
+      (pin_names (offset 0))
+      (in_bom yes)
+      (on_board yes)
+      (symbol "R_1_1"
+        (pin passive line
+          (at 0 0 0)
+          (length 2.54)
+          (name "~" (effects (font (size 1.27 1.27))))
+          (number "1" (effects (font (size 1.27 1.27))))))))
+  (no_connect
+    (at 10 20)
+    (uuid 00000000-0000-0000-0000-000000000201))
+  (symbol
+    (lib_id "Device:R")
+    (at 10 20 0)
+    (unit 1)
+    (exclude_from_sim no)
+    (in_bom yes)
+    (on_board yes)
+    (dnp no)
+    (uuid 00000000-0000-0000-0000-000000000202)
+    (property "Reference" "R1"
+      (at 10 15 0)
+      (effects (font (size 1.27 1.27))))
+    (property "Value" "10k"
+      (at 10 17.5 0)
+      (effects (font (size 1.27 1.27))))
+    (pin "1" (uuid 00000000-0000-0000-0000-000000000203))
+    (instances
+      (project "waivable-missing-footprint"
+        (path "/00000000-0000-0000-0000-000000000200"
+          (reference "R1")
+          (unit 1)))))
+  (sheet_instances
+    (path "/"
+      (page "1"))))

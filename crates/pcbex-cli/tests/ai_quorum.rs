@@ -32,7 +32,7 @@ fn temp_dir() -> PathBuf {
 fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
     let directory = temp_dir();
     let schematic =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/simple.kicad_sch");
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/approved-mcu.kicad_sch");
     let sample_pack =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/acme-policy-pack.json");
 
@@ -69,17 +69,8 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
             .status
             .success()
     );
-    let mut electrical_policy_value: Value =
+    let electrical_policy_value: Value =
         serde_json::from_slice(&fs::read(&electrical_policy).unwrap()).unwrap();
-    for setting in electrical_policy_value["rules"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
-    {
-        if setting["severity"] == "error" {
-            setting["enabled"] = false.into();
-        }
-    }
 
     let mut pack: Value = serde_json::from_slice(&fs::read(sample_pack).unwrap()).unwrap();
     pack["electrical_policy"] = electrical_policy_value;
@@ -108,6 +99,17 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
             "public_key": fs::read_to_string(&human_public_b).unwrap().trim()
         }
     ]);
+    let mut unsafe_pack = pack.clone();
+    unsafe_pack["electrical_policy"]["rules"]["power_input_not_driven"]["enabled"] = false.into();
+    let unsafe_policy_pack = directory.join("unsafe-policy-pack.json");
+    fs::write(
+        &unsafe_policy_pack,
+        serde_json::to_vec_pretty(&unsafe_pack).unwrap(),
+    )
+    .unwrap();
+    let unsafe_validation = run(&["validate-policy-pack", path(&unsafe_policy_pack)]);
+    assert!(!unsafe_validation.status.success());
+    assert!(String::from_utf8_lossy(&unsafe_validation.stderr).contains("immutable safety floor"));
     let policy_pack = directory.join("policy-pack.json");
     fs::write(&policy_pack, serde_json::to_vec_pretty(&pack).unwrap()).unwrap();
     assert!(
