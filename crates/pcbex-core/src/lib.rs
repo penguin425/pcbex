@@ -36,6 +36,53 @@ pub use schema::{board_json_schema, migrate_board_json, parse_board_json};
 
 pub type Nm = i64;
 
+/// Production ceiling for the aggregate A* work performed by one routing
+/// operation.  A work unit is one heap pop (including stale entries) or one
+/// successful relaxation push.  Initial frontier seed pushes are excluded.
+pub const MAX_ASTAR_WORK_BUDGET: usize = 2_000_000;
+
+/// Default production budget used by the public routing entry points.
+pub const DEFAULT_ASTAR_WORK_BUDGET: usize = MAX_ASTAR_WORK_BUDGET;
+
+const ASTAR_WORK_BUDGET_ERROR: &str = "resource limit exceeded: astar work budget";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct WorkBudgetError;
+
+#[derive(Debug)]
+struct WorkBudget {
+    remaining: usize,
+}
+
+impl WorkBudget {
+    fn new(limit: usize) -> Self {
+        Self { remaining: limit }
+    }
+
+    fn remaining(&self) -> usize {
+        self.remaining
+    }
+
+    fn used(&self, limit: usize) -> usize {
+        limit
+            .checked_sub(self.remaining)
+            .expect("work budget accounting invariant violated")
+    }
+
+    fn consume(&mut self) -> Result<(), WorkBudgetError> {
+        if self.remaining == 0 {
+            return Err(WorkBudgetError);
+        }
+        self.remaining = self.remaining.checked_sub(1).ok_or(WorkBudgetError)?;
+        Ok(())
+    }
+
+    fn debit(&mut self, units: usize) -> Result<(), WorkBudgetError> {
+        self.remaining = self.remaining.checked_sub(units).ok_or(WorkBudgetError)?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub x_nm: Nm,
@@ -1127,14 +1174,20 @@ pub struct Router<'a> {
     search_variant: u8,
 }
 
+#[derive(Debug)]
 struct RouteFailure {
     expanded: usize,
     blockers: HashSet<u32>,
+    budget_exhausted: bool,
 }
 
+type LeasedRouteResult = (Result<(Route, usize), RouteFailure>, usize);
+
+#[derive(Debug)]
 struct SearchFailure {
     expanded: usize,
     blockers: HashSet<u32>,
+    budget_exhausted: bool,
 }
 
 impl<'a> Router<'a> {
@@ -1815,8 +1868,17 @@ impl<'a> Router<'a> {
     /// shape used for an unrouted board.  `route_board*` uses the checked
     /// internal variant below and returns the distinct error instead.
     pub fn route_all_with_workers(self, worker_limit: usize) -> (Vec<Route>, RouteReport) {
+        self.route_all_with_budget(worker_limit, DEFAULT_ASTAR_WORK_BUDGET)
+    }
+
+    fn route_all_with_budget(
+        self,
+        worker_limit: usize,
+        max_work: usize,
+    ) -> (Vec<Route>, RouteReport) {
         let fallback = self.resource_failure_fallback();
-        match self.try_route_all_with_workers(worker_limit) {
+        let mut budget = WorkBudget::new(max_work.min(MAX_ASTAR_WORK_BUDGET));
+        match self.try_route_all_with_workers(worker_limit, &mut budget) {
             Ok(result) => result,
             Err(_) => fallback,
         }
@@ -1852,6 +1914,7 @@ impl<'a> Router<'a> {
     fn try_route_all_with_workers(
         mut self,
         worker_limit: usize,
+        budget: &mut WorkBudget,
     ) -> Result<(Vec<Route>, RouteReport), String> {
         let fixed_net_ids: HashSet<u32> =
             self.board.routes.iter().map(|route| route.net_id).collect();
@@ -1912,12 +1975,22 @@ impl<'a> Router<'a> {
                 parallel_candidates += attempt_nets.len();
                 let worker_count = worker_limit.max(1).min(attempt_nets.len()).min(8);
                 parallel_workers = worker_count;
+
+                // Every first-pass net receives a stable lease derived from
+                // the sorted attempt order.  Workers may execute these
+                // leases concurrently, but actual usage is debited below in
+                // index order so the aggregate result is independent of the
+                // worker count and scheduling.
+                let available = budget.remaining();
+                let net_count = attempt_nets.len();
+                let base = available / net_count;
+                let remainder = available % net_count;
+                let quotas: Vec<_> = (0..net_count)
+                    .map(|index| base + usize::from(index < remainder))
+                    .collect();
                 let next = std::sync::atomic::AtomicUsize::new(0);
-                let results = std::sync::Mutex::new(
-                    (0..attempt_nets.len())
-                        .map(|_| None)
-                        .collect::<Vec<Option<Result<(Route, usize), RouteFailure>>>>(),
-                );
+                let results: std::sync::Mutex<Vec<Option<LeasedRouteResult>>> =
+                    std::sync::Mutex::new((0..net_count).map(|_| None).collect());
                 std::thread::scope(|scope| {
                     for _ in 0..worker_count {
                         scope.spawn(|| {
@@ -1926,26 +1999,46 @@ impl<'a> Router<'a> {
                                 let Some(net) = attempt_nets.get(index) else {
                                     break;
                                 };
+                                let quota = quotas[index];
+                                let mut local_budget = WorkBudget::new(quota);
+                                let result = self.route_net(net, &mut local_budget);
+                                let used = local_budget.used(quota);
                                 results.lock().expect("result lock poisoned")[index] =
-                                    Some(self.route_net(net));
+                                    Some((result, used));
                             }
                         });
                     }
                 });
-                results
+                let merged = results
                     .into_inner()
                     .expect("result lock poisoned")
                     .into_iter()
                     .map(|result| result.expect("parallel worker skipped a net"))
-                    .map(Some)
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                let mut initial_results = Vec::with_capacity(net_count);
+                for (result, used) in merged {
+                    budget
+                        .debit(used)
+                        .map_err(|_| ASTAR_WORK_BUDGET_ERROR.to_string())?;
+                    initial_results.push(Some(result));
+                }
+                initial_results
             } else {
                 (0..attempt_nets.len()).map(|_| None).collect()
             };
             let mut validation = self.board.clone();
             validation.routes.extend(accepted.iter().cloned());
             for (net, initial_result) in attempt_nets.iter().copied().zip(initial_results) {
-                let mut result = initial_result.unwrap_or_else(|| self.route_net(net));
+                let mut result = initial_result.unwrap_or_else(|| self.route_net(net, budget));
+                if result
+                    .as_ref()
+                    .is_err_and(|failure| failure.budget_exhausted)
+                {
+                    // A local lease can end before the aggregate budget does.
+                    // Retry deterministically in sorted net order using only
+                    // the remaining shared budget.
+                    result = self.route_net(net, budget);
+                }
                 if attempt == 0
                     && let Ok((candidate, _)) = &result
                 {
@@ -1957,7 +2050,7 @@ impl<'a> Router<'a> {
                     validation.routes.pop();
                     if invalid {
                         parallel_fallbacks += 1;
-                        result = self.route_net(net);
+                        result = self.route_net(net, budget);
                     }
                 }
                 match result {
@@ -1968,6 +2061,9 @@ impl<'a> Router<'a> {
                         accepted.push(route);
                     }
                     Err(failure) => {
+                        if failure.budget_exhausted {
+                            return Err(ASTAR_WORK_BUDGET_ERROR.to_string());
+                        }
                         total_expanded += failure.expanded;
                         blockers.extend(failure.blockers.iter().copied());
                         failed_blockers.insert(net.id, failure.blockers);
@@ -1983,7 +2079,8 @@ impl<'a> Router<'a> {
                     continue;
                 };
                 if let Some((blocker_id, shoved, routed, expanded)) =
-                    try_automatic_shove(self.board, &accepted, net, net_blockers)
+                    try_automatic_shove(self.board, &accepted, net, net_blockers, budget)
+                        .map_err(|_| ASTAR_WORK_BUDGET_ERROR.to_string())?
                 {
                     total_expanded += expanded;
                     if let Some(route) =
@@ -2076,7 +2173,11 @@ impl<'a> Router<'a> {
         Ok((best_routes, best_report))
     }
 
-    fn route_net(&self, net: &Net) -> Result<(Route, usize), RouteFailure> {
+    fn route_net(
+        &self,
+        net: &Net,
+        budget: &mut WorkBudget,
+    ) -> Result<(Route, usize), RouteFailure> {
         if net.terminals.len() < 2 {
             return Ok((
                 Route {
@@ -2111,6 +2212,7 @@ impl<'a> Router<'a> {
             return Err(RouteFailure {
                 expanded: 0,
                 blockers: HashSet::new(),
+                budget_exhausted: false,
             });
         }
         let mut remaining: Vec<usize> = (0..net.terminals.len())
@@ -2121,16 +2223,27 @@ impl<'a> Router<'a> {
             let mut best: Option<(u64, Nm, Nm, usize, Vec<Node>)> = None;
             let mut search_blockers = HashSet::new();
             for &terminal_index in &remaining {
-                let (path, count, cost) =
-                    match self.astar_to_tree(net.id, &net.terminals[terminal_index], &tree, &rules)
-                    {
-                        Ok(result) => result,
-                        Err(failure) => {
-                            expanded += failure.expanded;
-                            search_blockers.extend(failure.blockers);
-                            continue;
+                let (path, count, cost) = match self.astar_to_tree(
+                    net.id,
+                    &net.terminals[terminal_index],
+                    &tree,
+                    &rules,
+                    budget,
+                ) {
+                    Ok(result) => result,
+                    Err(failure) => {
+                        expanded += failure.expanded;
+                        if failure.budget_exhausted {
+                            return Err(RouteFailure {
+                                expanded,
+                                blockers: search_blockers,
+                                budget_exhausted: true,
+                            });
                         }
-                    };
+                        search_blockers.extend(failure.blockers);
+                        continue;
+                    }
+                };
                 expanded += count;
                 let terminal = &net.terminals[terminal_index];
                 let candidate = (
@@ -2151,6 +2264,7 @@ impl<'a> Router<'a> {
                 return Err(RouteFailure {
                     expanded,
                     blockers: search_blockers,
+                    budget_exhausted: false,
                 });
             };
             let terminal = &net.terminals[terminal_index];
@@ -2220,13 +2334,18 @@ impl<'a> Router<'a> {
             .collect()
     }
 
-    fn route_coupled_pair(&self, positive: &Net, negative: &Net) -> Option<(Route, Route, usize)> {
+    fn route_coupled_pair(
+        &self,
+        positive: &Net,
+        negative: &Net,
+        budget: &mut WorkBudget,
+    ) -> Result<Option<(Route, Route, usize)>, WorkBudgetError> {
         if positive.terminals.len() != 2 || negative.terminals.len() != 2 {
-            return None;
+            return Ok(None);
         }
         let rules = self.board.rules_for_net(positive.id);
         if rules != self.board.rules_for_net(negative.id) {
-            return None;
+            return Ok(None);
         }
         let g = rules.grid_nm;
         let start_offset = (
@@ -2242,7 +2361,7 @@ impl<'a> Router<'a> {
                 - nearest_grid(positive.terminals[1].position.y_nm, g),
         );
         if start_offset != end_offset || (start_offset.0 != 0 && start_offset.1 != 0) {
-            return None;
+            return Ok(None);
         }
         let starts = self.terminal_nodes(positive.id, &positive.terminals[0], &rules);
         let goals: HashSet<_> = self
@@ -2274,7 +2393,9 @@ impl<'a> Router<'a> {
         let max_x = (self.board.width_nm / g) as i32;
         let max_y = (self.board.height_nm / g) as i32;
         let mut expanded = 0;
-        while let Some(item) = open.pop() {
+        while !open.is_empty() {
+            budget.consume()?;
+            let item = open.pop().expect("open was checked as non-empty");
             if item.cost != *costs.get(&item.node).unwrap_or(&u64::MAX) {
                 continue;
             }
@@ -2327,7 +2448,7 @@ impl<'a> Router<'a> {
                     &rules,
                     false,
                 );
-                return Some((positive_route, negative_route, expanded));
+                return Ok(Some((positive_route, negative_route, expanded)));
             }
             for offset in 0..DIRS.len() {
                 let direction = (offset + usize::from(self.search_variant)) % DIRS.len();
@@ -2375,10 +2496,11 @@ impl<'a> Router<'a> {
                     &mut costs,
                     &mut prev,
                     &mut open,
-                );
+                    budget,
+                )?;
             }
         }
-        None
+        Ok(None)
     }
 
     fn astar_to_tree(
@@ -2387,6 +2509,7 @@ impl<'a> Router<'a> {
         start: &Terminal,
         goals: &HashSet<(i32, i32, u8)>,
         rules: &Rules,
+        budget: &mut WorkBudget,
     ) -> Result<(Vec<Node>, usize, u64), SearchFailure> {
         const DIRS: [(i32, i32); 8] = [
             (1, 0),
@@ -2419,7 +2542,15 @@ impl<'a> Router<'a> {
             });
         }
         let mut expanded = 0;
-        while let Some(item) = open.pop() {
+        while !open.is_empty() {
+            if budget.consume().is_err() {
+                return Err(SearchFailure {
+                    expanded,
+                    blockers,
+                    budget_exhausted: true,
+                });
+            }
+            let item = open.pop().expect("open was checked as non-empty");
             if item.cost != *costs.get(&item.node).unwrap_or(&u64::MAX) {
                 continue;
             }
@@ -2473,20 +2604,30 @@ impl<'a> Router<'a> {
                     0
                 };
                 let proximity = self.proximity(nx, ny, item.node.layer) as u64;
-                self.relax(
-                    item.node,
-                    Node {
-                        x: nx,
-                        y: ny,
-                        layer: item.node.layer,
-                        dir: dir as u8,
-                    },
-                    item.cost + step + bend + proximity,
-                    goals,
-                    &mut costs,
-                    &mut prev,
-                    &mut open,
-                );
+                if self
+                    .relax(
+                        item.node,
+                        Node {
+                            x: nx,
+                            y: ny,
+                            layer: item.node.layer,
+                            dir: dir as u8,
+                        },
+                        item.cost + step + bend + proximity,
+                        goals,
+                        &mut costs,
+                        &mut prev,
+                        &mut open,
+                        budget,
+                    )
+                    .is_err()
+                {
+                    return Err(SearchFailure {
+                        expanded,
+                        blockers,
+                        budget_exhausted: true,
+                    });
+                }
             }
             let via_radius = rules.via_diameter_nm / 2;
             let via_inside_board = item.node.x as Nm * g >= via_radius
@@ -2540,20 +2681,34 @@ impl<'a> Router<'a> {
                             layer: other,
                             dir: item.node.dir,
                         };
-                        self.relax(
-                            item.node,
-                            n,
-                            item.cost + rules.via_cost as u64 * cost_multiplier,
-                            goals,
-                            &mut costs,
-                            &mut prev,
-                            &mut open,
-                        );
+                        if self
+                            .relax(
+                                item.node,
+                                n,
+                                item.cost + rules.via_cost as u64 * cost_multiplier,
+                                goals,
+                                &mut costs,
+                                &mut prev,
+                                &mut open,
+                                budget,
+                            )
+                            .is_err()
+                        {
+                            return Err(SearchFailure {
+                                expanded,
+                                blockers,
+                                budget_exhausted: true,
+                            });
+                        }
                     }
                 }
             }
         }
-        Err(SearchFailure { expanded, blockers })
+        Err(SearchFailure {
+            expanded,
+            blockers,
+            budget_exhausted: false,
+        })
     }
 
     fn foreign_obstacle(&self, cell: (i32, i32, u8), net_id: u32) -> bool {
@@ -2589,8 +2744,10 @@ impl<'a> Router<'a> {
         costs: &mut HashMap<Node, u64>,
         prev: &mut HashMap<Node, Node>,
         open: &mut BinaryHeap<QueueItem>,
-    ) {
+        budget: &mut WorkBudget,
+    ) -> Result<(), WorkBudgetError> {
         if cost < *costs.get(&to).unwrap_or(&u64::MAX) {
+            budget.consume()?;
             costs.insert(to, cost);
             prev.insert(to, from);
             open.push(QueueItem {
@@ -2599,6 +2756,7 @@ impl<'a> Router<'a> {
                 node: to,
             });
         }
+        Ok(())
     }
     fn proximity(&self, x: i32, y: i32, l: u8) -> u16 {
         let mut p = *self.congestion.get(&(x, y, l)).unwrap_or(&0);
@@ -2869,8 +3027,11 @@ fn try_automatic_shove(
     accepted: &[Route],
     failed_net: &Net,
     blockers: &HashSet<u32>,
-) -> Option<(u32, Route, Route, usize)> {
+    budget: &mut WorkBudget,
+) -> Result<Option<(u32, Route, Route, usize)>, WorkBudgetError> {
     let grid = board.rules_for_net(failed_net.id).grid_nm;
+    let mut blocker_ids: Vec<_> = blockers.iter().copied().collect();
+    blocker_ids.sort_unstable();
     for distance in 1..=2 {
         for offset in [
             Point {
@@ -2890,7 +3051,7 @@ fn try_automatic_shove(
                 y_nm: -distance * grid,
             },
         ] {
-            for blocker_id in blockers {
+            for blocker_id in &blocker_ids {
                 let Some(blocker_index) = accepted
                     .iter()
                     .position(|route| route.net_id == *blocker_id)
@@ -2914,8 +3075,13 @@ fn try_automatic_shove(
                 let Ok(router) = Router::new(&candidate) else {
                     continue;
                 };
-                let Ok((routed, expanded)) = router.route_net(failed_net) else {
-                    continue;
+                let routed_result = router.route_net(failed_net, budget);
+                let (routed, expanded) = match routed_result {
+                    Ok(route) => route,
+                    Err(failure) if failure.budget_exhausted => {
+                        return Err(WorkBudgetError);
+                    }
+                    Err(_) => continue,
                 };
                 candidate.routes.push(routed.clone());
                 let invalid =
@@ -2927,12 +3093,12 @@ fn try_automatic_shove(
                                 || violation.net_ids.contains(blocker_id)
                         });
                 if !invalid {
-                    return Some((*blocker_id, shoved, routed, expanded));
+                    return Ok(Some((*blocker_id, shoved, routed, expanded)));
                 }
             }
         }
     }
-    None
+    Ok(None)
 }
 
 fn append_path(route: &mut Route, nodes: &[Node], rules: &Rules, board: &Board) {
@@ -3049,7 +3215,7 @@ fn empty_route(net_id: u32) -> Route {
 
 pub fn route_board(board: &Board) -> Result<(Board, RouteReport), String> {
     let workers = std::thread::available_parallelism().map_or(2, usize::from);
-    route_board_with_workers(board, workers)
+    route_board_with_work_budget(board, workers, DEFAULT_ASTAR_WORK_BUDGET)
 }
 
 /// Route a board with a deterministic upper bound on first-pass search workers.
@@ -3060,7 +3226,22 @@ pub fn route_board_with_workers(
     board: &Board,
     worker_limit: usize,
 ) -> Result<(Board, RouteReport), String> {
-    route_board_with_variant(board, worker_limit, 0)
+    route_board_with_work_budget(board, worker_limit, DEFAULT_ASTAR_WORK_BUDGET)
+}
+
+/// Route a board with a caller-selected A* work cap.
+///
+/// The cap is aggregate across coupled routing, normal nets, retries/ripups,
+/// validation reroutes, and automatic-shove temporary routers.  It may tighten
+/// the production ceiling but may not raise it.  Initial frontier seed pushes
+/// are excluded; each heap pop (including stale entries) and successful
+/// relaxation push consumes one unit.
+pub fn route_board_with_work_budget(
+    board: &Board,
+    worker_limit: usize,
+    max_work: usize,
+) -> Result<(Board, RouteReport), String> {
+    route_board_with_variant_and_work_budget(board, worker_limit, 0, max_work)
 }
 
 pub(crate) fn route_board_with_variant(
@@ -3068,10 +3249,31 @@ pub(crate) fn route_board_with_variant(
     worker_limit: usize,
     search_variant: u8,
 ) -> Result<(Board, RouteReport), String> {
+    route_board_with_variant_and_work_budget(
+        board,
+        worker_limit,
+        search_variant,
+        DEFAULT_ASTAR_WORK_BUDGET,
+    )
+}
+
+fn route_board_with_variant_and_work_budget(
+    board: &Board,
+    worker_limit: usize,
+    search_variant: u8,
+    max_work: usize,
+) -> Result<(Board, RouteReport), String> {
     if worker_limit == 0 {
         return Err("worker limit must be at least 1".into());
     }
+    if max_work > MAX_ASTAR_WORK_BUDGET {
+        return Err(format!(
+            "resource limit configuration: astar work budget must be at most {} units",
+            MAX_ASTAR_WORK_BUDGET
+        ));
+    }
     validate_routing_resource_bounds(board)?;
+    let mut budget = WorkBudget::new(max_work);
     let (mut seeded, escape_stubs) = prepare_escape_routing(board)?;
     let mut coupled = Vec::new();
     let mut paired_expanded = 0;
@@ -3089,7 +3291,8 @@ pub(crate) fn route_board_with_variant(
         };
         let Some((positive_route, negative_route, expanded)) =
             Router::new_with_variant(&seeded, search_variant)?
-                .route_coupled_pair(positive, negative)
+                .route_coupled_pair(positive, negative, &mut budget)
+                .map_err(|_| ASTAR_WORK_BUDGET_ERROR.to_string())?
         else {
             continue;
         };
@@ -3112,7 +3315,7 @@ pub(crate) fn route_board_with_variant(
         }
     }
     let (routes, mut report) = Router::new_with_variant(&seeded, search_variant)?
-        .try_route_all_with_workers(worker_limit)?;
+        .try_route_all_with_workers(worker_limit, &mut budget)?;
     let mut out = seeded;
     out.routes = routes;
     couple_differential_pairs(&mut out, &mut report);
@@ -4915,6 +5118,272 @@ mod tests {
             parallel_workers: 0,
             generated_return_vias: 0,
         };
+    }
+
+    #[test]
+    fn astar_work_budget_exact_boundary_succeeds_and_one_less_fails() {
+        let mut b = board();
+        b.obstacles.clear();
+        let router = Router::new(&b).expect("fixture must validate");
+        let net = &b.nets[0];
+        let rules = b.rules_for_net(net.id);
+        let start_nodes = router.terminal_nodes(net.id, &net.terminals[0], &rules);
+        let goals = start_nodes
+            .iter()
+            .map(|node| (node.x, node.y, node.layer))
+            .collect();
+        let mut exact_pop = WorkBudget::new(1);
+        assert!(
+            router
+                .astar_to_tree(net.id, &net.terminals[0], &goals, &rules, &mut exact_pop,)
+                .is_ok()
+        );
+        assert_eq!(exact_pop.remaining(), 0);
+        let mut one_less_pop = WorkBudget::new(0);
+        let failure = router
+            .astar_to_tree(net.id, &net.terminals[0], &goals, &rules, &mut one_less_pop)
+            .expect_err("one fewer work unit must exhaust the search");
+        assert!(failure.budget_exhausted);
+
+        let from = start_nodes[0];
+        let to = Node {
+            x: from.x + 1,
+            ..from
+        };
+        let relax_goals = HashSet::from([(to.x, to.y, to.layer)]);
+        let mut costs = HashMap::from([(from, 0)]);
+        let mut previous = HashMap::new();
+        let mut open = BinaryHeap::new();
+        let mut exact_push = WorkBudget::new(1);
+        router
+            .relax(
+                from,
+                to,
+                1,
+                &relax_goals,
+                &mut costs,
+                &mut previous,
+                &mut open,
+                &mut exact_push,
+            )
+            .expect("one unit must allow one successful relaxation push");
+        assert_eq!(exact_push.remaining(), 0);
+        assert_eq!(open.len(), 1);
+
+        let mut blocked_costs = HashMap::from([(from, 0)]);
+        let mut blocked_previous = HashMap::new();
+        let mut blocked_open = BinaryHeap::new();
+        let mut no_push_budget = WorkBudget::new(0);
+        assert!(
+            router
+                .relax(
+                    from,
+                    to,
+                    1,
+                    &relax_goals,
+                    &mut blocked_costs,
+                    &mut blocked_previous,
+                    &mut blocked_open,
+                    &mut no_push_budget,
+                )
+                .is_err()
+        );
+        assert!(blocked_open.is_empty());
+    }
+
+    #[test]
+    fn checked_budget_failure_is_distinct_and_input_is_atomic() {
+        let b = board();
+        let original_routes = b.routes.clone();
+        let error =
+            route_board_with_work_budget(&b, 1, 0).expect_err("a routed net must attempt A* work");
+        assert_eq!(error, ASTAR_WORK_BUDGET_ERROR);
+        assert_eq!(b.routes, original_routes);
+        assert_eq!(
+            route_board_with_work_budget(&b, 1, MAX_ASTAR_WORK_BUDGET + 1)
+                .expect_err("the configurable cap must only tighten production limits"),
+            format!(
+                "resource limit configuration: astar work budget must be at most {} units",
+                MAX_ASTAR_WORK_BUDGET
+            )
+        );
+    }
+
+    #[test]
+    fn coupled_and_normal_routing_share_one_budget() {
+        let mut pair_board = board();
+        pair_board.obstacles.clear();
+        let terminals = |y_nm| {
+            vec![
+                Terminal {
+                    position: Point {
+                        x_nm: 1_000_000,
+                        y_nm,
+                    },
+                    layers: vec![Layer::Front],
+                },
+                Terminal {
+                    position: Point {
+                        x_nm: 9_000_000,
+                        y_nm,
+                    },
+                    layers: vec![Layer::Front],
+                },
+            ]
+        };
+        pair_board.nets = vec![
+            Net {
+                id: 1,
+                name: "USB_D+".into(),
+                class: None,
+                priority: 0,
+                terminals: terminals(4_000_000),
+            },
+            Net {
+                id: 2,
+                name: "USB_D-".into(),
+                class: None,
+                priority: 0,
+                terminals: terminals(5_000_000),
+            },
+        ];
+        pair_board.differential_pairs = vec![DifferentialPair {
+            name: "USB_D".into(),
+            positive_net_id: 1,
+            negative_net_id: 2,
+            gap_nm: 750_000,
+            gap_tolerance_nm: 50_000,
+            max_skew_nm: 0,
+            min_coupled_percent: 100,
+            target_differential_impedance_ohms: None,
+            differential_impedance_tolerance_ohms: None,
+            maximum_differential_impedance_step_ohms: None,
+            minimum_length_nm: None,
+            tuning_amplitude_nm: None,
+            tuning_pitch_nm: None,
+            max_tuning_sections: 1,
+        }];
+        let router = Router::new(&pair_board).expect("pair fixture must validate");
+        let mut probe = WorkBudget::new(MAX_ASTAR_WORK_BUDGET);
+        let (positive, negative) = (&pair_board.nets[0], &pair_board.nets[1]);
+        assert!(
+            router
+                .route_coupled_pair(positive, negative, &mut probe)
+                .expect("pair search must not exhaust the probe")
+                .is_some()
+        );
+        let pair_work = MAX_ASTAR_WORK_BUDGET
+            .checked_sub(probe.remaining())
+            .expect("probe accounting must not underflow");
+        assert!(pair_work > 0);
+
+        pair_board.nets.push(Net {
+            id: 3,
+            name: "normal".into(),
+            class: None,
+            priority: 0,
+            terminals: terminals(7_000_000),
+        });
+        let error = route_board_with_work_budget(&pair_board, 1, pair_work)
+            .expect_err("the normal net must see the pair's consumed budget");
+        assert_eq!(error, ASTAR_WORK_BUDGET_ERROR);
+    }
+
+    #[test]
+    fn fixed_budget_is_deterministic_across_worker_counts() {
+        let mut b = board();
+        b.obstacles.clear();
+        b.nets.push(Net {
+            id: 2,
+            name: "N2".into(),
+            class: None,
+            priority: 0,
+            terminals: vec![
+                Terminal {
+                    position: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 8_000_000,
+                    },
+                    layers: both_layers(),
+                },
+                Terminal {
+                    position: Point {
+                        x_nm: 9_000_000,
+                        y_nm: 8_000_000,
+                    },
+                    layers: both_layers(),
+                },
+            ],
+        });
+        let mut probe_budget = WorkBudget::new(MAX_ASTAR_WORK_BUDGET);
+        Router::new(&b)
+            .expect("fixture must validate")
+            .try_route_all_with_workers(1, &mut probe_budget)
+            .expect("probe route must succeed");
+        let work = MAX_ASTAR_WORK_BUDGET
+            .checked_sub(probe_budget.remaining())
+            .expect("probe accounting must not underflow");
+        let (one_board, mut one_report) =
+            route_board_with_work_budget(&b, 1, work).expect("single worker must route");
+        let (eight_board, mut eight_report) =
+            route_board_with_work_budget(&b, 8, work).expect("eight workers must route");
+        assert_eq!(one_report.parallel_workers, 1);
+        assert_eq!(eight_report.parallel_workers, 2);
+        one_report.parallel_workers = 0;
+        eight_report.parallel_workers = 0;
+        assert_eq!(one_board.routes, eight_board.routes);
+        assert_eq!(
+            serde_json::to_value(&one_report).unwrap(),
+            serde_json::to_value(&eight_report).unwrap()
+        );
+    }
+
+    #[test]
+    fn report_only_router_budget_fallback_preserves_original_routes() {
+        let mut b = board();
+        b.obstacles.clear();
+        b.nets.push(Net {
+            id: 2,
+            name: "N2".into(),
+            class: None,
+            priority: 0,
+            terminals: vec![
+                Terminal {
+                    position: Point {
+                        x_nm: 1_000_000,
+                        y_nm: 8_000_000,
+                    },
+                    layers: both_layers(),
+                },
+                Terminal {
+                    position: Point {
+                        x_nm: 9_000_000,
+                        y_nm: 8_000_000,
+                    },
+                    layers: both_layers(),
+                },
+            ],
+        });
+        b.routes.push(Route {
+            net_id: 1,
+            segments: vec![Segment {
+                start: b.nets[0].terminals[0].position,
+                end: b.nets[0].terminals[1].position,
+                layer: Layer::Front,
+                width_nm: b.rules.track_width_nm,
+            }],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![],
+        });
+        let original_routes = b.routes.clone();
+        let (routes, report) = Router::new(&b)
+            .expect("fixture must validate")
+            .route_all_with_budget(1, 0);
+        assert_eq!(routes, original_routes);
+        assert_eq!(report.preserved, vec!["N1"]);
+        assert_eq!(report.unrouted, vec!["N2"]);
     }
 
     #[test]
@@ -6877,8 +7346,10 @@ mod tests {
             zones: vec![],
         }];
 
+        let mut budget = WorkBudget::new(DEFAULT_ASTAR_WORK_BUDGET);
         let (blocker_id, shoved, routed, _) =
-            try_automatic_shove(&b, &accepted, &b.nets[1], &HashSet::from([1]))
+            try_automatic_shove(&b, &accepted, &b.nets[1], &HashSet::from([1]), &mut budget)
+                .expect("the shove search must stay within its budget")
                 .expect("a legal shove should make room for the target");
 
         assert_eq!(blocker_id, 1);

@@ -529,6 +529,11 @@
     {
       "id": "fail-closed-numeric-raster-bounds",
       "release": "v1.402.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-deterministic-astar-work",
+      "release": "v1.403.0",
       "status": "current"
     }
   ]
