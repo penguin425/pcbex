@@ -13,6 +13,7 @@ from .provider import (
 )
 from .circuit_generation import (
     CircuitCandidateRejected,
+    CircuitCatalogRejected,
     CircuitGenerationError,
     circuit_generation_json_schema,
     fetch_circuit_spec_check_schema,
@@ -28,6 +29,7 @@ __all__ = [
     "ReviewError",
     "CircuitGenerationError",
     "CircuitCandidateRejected",
+    "CircuitCatalogRejected",
     "build_plan",
     "managed_provider_receipt_json_schema",
     "provider_receipt_json_schema",

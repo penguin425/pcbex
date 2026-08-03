@@ -732,7 +732,12 @@ class AdapterTests(unittest.TestCase):
                 {"name": "VCC", "connections": [{"reference": "C1", "pin": "1"}, {"reference": "C1", "pin": "2"}]},
             ],
         }
-        selected = assign_catalog_parts(spec, parts, require_basic=True)
+        selected = assign_catalog_parts(
+            spec,
+            parts,
+            require_basic=True,
+            allow_footprint_fallback=True,
+        )
         self.assertEqual(selected["parts"][0]["mpn"], "C2")
 
     def test_skidl_generator_is_deterministic_and_complete(self):

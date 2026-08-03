@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "supplier": "jlcpcb",
+  "snapshot_id": "example-2026-08-04",
+  "captured_at_unix": 1785715200,
+  "expires_at_unix": 1786320000,
+  "parts": [
+    {
+      "mpn": "AP2112K-3.3TRG1",
+      "supplier_part_number": "C16581",
+      "description": "AP2112K 3.3 V low-noise LDO regulator",
+      "footprint": "Package_TO_SOT_SMD:SOT-23-5",
+      "tags": ["ldo", "regulator", "3v3"],
+      "vendor": "Diodes Incorporated",
+      "stock": 1200,
+      "basic": true,
+      "datasheet_url": "https://www.diodes.com/assets/Datasheets/AP2112.pdf"
+    },
+    {
+      "mpn": "C-100NF-0603",
+      "supplier_part_number": "C14663",
+      "description": "100 nF ceramic capacitor",
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "tags": ["100nF", "capacitor", "ceramic", "decoupling"],
+      "vendor": "Example Components",
+      "stock": 5000,
+      "basic": true,
+      "datasheet_url": null
+    },
+    {
+      "mpn": "C-1UF-0603",
+      "supplier_part_number": "C15849",
+      "description": "1 uF ceramic capacitor",
+      "footprint": "Capacitor_SMD:C_0603_1608Metric",
+      "tags": ["1uF", "capacitor", "ceramic", "decoupling"],
+      "vendor": "Example Components",
+      "stock": 3500,
+      "basic": true,
+      "datasheet_url": null
+    },
+    {
+      "mpn": "HDR-1X02-2.54",
+      "supplier_part_number": "C18084",
+      "description": "2-pin 2.54 mm vertical pin header",
+      "footprint": "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical",
+      "tags": ["connector", "header", "power"],
+      "vendor": "Example Components",
+      "stock": 800,
+      "basic": true,
+      "datasheet_url": null
+    }
+  ]
+}

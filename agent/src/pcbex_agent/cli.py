@@ -12,7 +12,13 @@ from .bounded_io import (
     read_text,
     validate_no_clobber_path,
 )
-from .catalog import catalog_parts_from_json
+from .catalog import (
+    CatalogError,
+    catalog_parts_from_json,
+    catalog_receipt_json_schema,
+    catalog_snapshot_json_schema,
+    load_catalog_snapshot,
+)
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -149,6 +155,11 @@ def main() -> None:
         help="restrict automatic selection to basic parts",
     )
     skidl.add_argument(
+        "--allow-footprint-fallback",
+        action="store_true",
+        help="allow footprint-only fallback when catalog text has no match",
+    )
+    skidl.add_argument(
         "--no-netlist",
         action="store_true",
         help="omit generate_netlist() from the generated source",
@@ -171,6 +182,26 @@ def main() -> None:
         "--maximum-output-bytes", type=int, default=1024 * 1024
     )
     generate_circuit.add_argument(
+        "--catalog-snapshot",
+        type=Path,
+        help="closed local catalog snapshot used to verify or assign every MPN",
+    )
+    generate_circuit.add_argument(
+        "--allow-out-of-stock",
+        action="store_true",
+        help="allow selection when the snapshot reports insufficient stock",
+    )
+    generate_circuit.add_argument(
+        "--require-basic",
+        action="store_true",
+        help="require every selected catalog item to be marked basic",
+    )
+    generate_circuit.add_argument(
+        "--allow-footprint-fallback",
+        action="store_true",
+        help="allow deterministic footprint-only selection when text has no match",
+    )
+    generate_circuit.add_argument(
         "--provider-command",
         nargs=argparse.REMAINDER,
         required=True,
@@ -182,6 +213,16 @@ def main() -> None:
     )
     generation_schema.add_argument("--pcbex", default=None)
     generation_schema.add_argument("-o", "--output", type=Path)
+    catalog_snapshot_schema = sub.add_parser(
+        "catalog-snapshot-schema",
+        help="write the closed local catalog-snapshot JSON Schema",
+    )
+    catalog_snapshot_schema.add_argument("-o", "--output", type=Path)
+    catalog_receipt_schema = sub.add_parser(
+        "catalog-selection-receipt-schema",
+        help="write the closed catalog-selection receipt JSON Schema",
+    )
+    catalog_receipt_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -299,9 +340,16 @@ def main() -> None:
                     catalog,
                     require_available=not args.allow_out_of_stock,
                     require_basic=args.require_basic,
+                    allow_footprint_fallback=args.allow_footprint_fallback,
                 )
             source = generate_skidl(spec, include_netlist=not args.no_netlist)
-        except (OSError, BoundedIOError, json.JSONDecodeError, CircuitSpecError) as error:
+        except (
+            OSError,
+            BoundedIOError,
+            json.JSONDecodeError,
+            CatalogError,
+            CircuitSpecError,
+        ) as error:
             raise SystemExit(f"SKiDL generation failed: {error}") from error
         _write_text(args.output, source)
     elif args.command == "circuit-spec-schema":
@@ -314,6 +362,14 @@ def main() -> None:
             print(rendered, end="")
     elif args.command == "generate-circuit":
         try:
+            if args.catalog_snapshot is None and (
+                args.allow_out_of_stock
+                or args.require_basic
+                or args.allow_footprint_fallback
+            ):
+                raise CircuitGenerationError(
+                    "catalog policy options require --catalog-snapshot"
+                )
             output_paths = [args.output]
             if args.skidl_output:
                 output_paths.append(args.skidl_output)
@@ -326,6 +382,11 @@ def main() -> None:
                 validate_no_clobber_path(path)
                 normalized_paths.append(path)
             requirements = _read_text(args.requirements)
+            catalog_snapshot = (
+                load_catalog_snapshot(args.catalog_snapshot)
+                if args.catalog_snapshot is not None
+                else None
+            )
             bundle = generate_circuit_with_command(
                 requirements,
                 args.pcbex,
@@ -333,6 +394,10 @@ def main() -> None:
                 max_attempts=args.max_attempts,
                 timeout_seconds=args.timeout_seconds,
                 maximum_output_bytes=args.maximum_output_bytes,
+                catalog_snapshot=catalog_snapshot,
+                require_available=not args.allow_out_of_stock,
+                require_basic=args.require_basic,
+                allow_footprint_fallback=args.allow_footprint_fallback,
             )
             rendered = json.dumps(bundle, indent=2, ensure_ascii=False) + "\n"
             atomic_write_text_no_clobber(
@@ -350,6 +415,7 @@ def main() -> None:
             OSError,
             BoundedIOError,
             CircuitGenerationError,
+            CatalogError,
             ProviderError,
         ) as error:
             raise SystemExit(f"circuit generation failed: {error}") from error
@@ -375,6 +441,28 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, CircuitGenerationError) as error:
             raise SystemExit(f"circuit generation schema failed: {error}") from error
+    elif args.command in {
+        "catalog-snapshot-schema",
+        "catalog-selection-receipt-schema",
+    }:
+        try:
+            schema = (
+                catalog_snapshot_json_schema()
+                if args.command == "catalog-snapshot-schema"
+                else catalog_receipt_json_schema()
+            )
+            rendered = json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CatalogError) as error:
+            raise SystemExit(f"catalog schema failed: {error}") from error
     else:
         if _paths_are_same(args.output, args.report):
             raise SystemExit("repair board output and report paths must differ")

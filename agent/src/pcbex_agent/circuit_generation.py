@@ -8,6 +8,7 @@ only renders the checked, normalized result to SKiDL.
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import math
@@ -26,6 +27,15 @@ from .bounded_process import (
     BoundedProcessError,
     run_bounded,
 )
+from .catalog import (
+    CatalogError,
+    CatalogSelectionError,
+    canonical_sha256,
+    load_catalog_snapshot,
+    select_catalog_parts,
+    validate_catalog_receipt,
+    validate_catalog_receipt_shape,
+)
 from .provider import (
     MAXIMUM_PROVIDER_PROMPT_BYTES,
     MAXIMUM_PROVIDER_OUTPUT_BYTES,
@@ -35,7 +45,7 @@ from .provider import (
 from .skidl import CircuitSpecError, generate_skidl, validate_circuit_spec
 
 
-GENERATION_SCHEMA_VERSION = 1
+GENERATION_SCHEMA_VERSION = 2
 NATIVE_CHECK_SCHEMA_VERSION = 1
 NATIVE_SPEC_SCHEMA_VERSION = 2
 MAX_REQUIREMENTS_BYTES = 256 * 1024
@@ -55,8 +65,20 @@ class CircuitCandidateRejected(CircuitGenerationError):
     """Raised by the command adapter when Rust rejects a candidate input."""
 
 
+class CircuitCatalogRejected(CircuitGenerationError):
+    """Raised when a candidate cannot satisfy the trusted catalog policy."""
+
+
 CircuitTransport = Callable[[str, float], str | bytes]
 CircuitChecker = Callable[[Path, float], Mapping[str, Any] | str | bytes]
+CircuitCatalogSelector = Callable[
+    [Mapping[str, Any], float],
+    tuple[Mapping[str, Any], Mapping[str, Any]],
+]
+CircuitCatalogReceiptValidator = Callable[
+    [Mapping[str, Any], Mapping[str, Any], Mapping[str, Any], float],
+    Any,
+]
 Clock = Callable[[], float]
 
 
@@ -441,14 +463,90 @@ def _v2_to_v1(value: Mapping[str, Any]) -> dict[str, Any]:
         ) from error
 
 
-def _render_skidl(value: Mapping[str, Any], circuit_sha: str, review_sha: str) -> str:
-    source = generate_skidl(_v2_to_v1(value))
+def _render_skidl(
+    value: Mapping[str, Any],
+    circuit_sha: str,
+    review_sha: str,
+    catalog_receipt_sha: str | None = None,
+) -> str:
+    source = generate_skidl(
+        _v2_to_v1(value),
+        catalog_receipt_sha256=catalog_receipt_sha,
+    )
     lines = source.splitlines()
     evidence = [
         f"_PCBEX_CIRCUIT_SPEC_SHA256 = {json.dumps(circuit_sha)}",
         f"_PCBEX_ELECTRICAL_REVIEW_SHA256 = {json.dumps(review_sha)}",
     ]
     return "\n".join([lines[0], *evidence, *lines[1:]]) + "\n"
+
+
+def _validate_catalog_resolution(
+    original: Mapping[str, Any],
+    resolved: Any,
+) -> dict[str, Any]:
+    """Require a catalog selector to change MPNs and nothing electrical."""
+
+    normalized = _validate_v2_spec(resolved)
+    if original["nets"] != normalized["nets"]:
+        raise CircuitGenerationError("catalog selection changed circuit nets")
+    original_parts = original["parts"]
+    resolved_parts = normalized["parts"]
+    if len(original_parts) != len(resolved_parts):
+        raise CircuitGenerationError("catalog selection changed the circuit part set")
+    for before, after in zip(original_parts, resolved_parts):
+        before_without_mpn = {key: value for key, value in before.items() if key != "mpn"}
+        after_without_mpn = {key: value for key, value in after.items() if key != "mpn"}
+        if before_without_mpn != after_without_mpn:
+            raise CircuitGenerationError(
+                "catalog selection changed circuit data outside MPN fields"
+            )
+        if not isinstance(after["mpn"], str) or not after["mpn"].strip():
+            raise CircuitGenerationError(
+                f"catalog selection did not resolve {after['reference']} MPN"
+            )
+    return normalized
+
+
+def _validate_catalog_selections(
+    original: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    receipt: Mapping[str, Any],
+) -> None:
+    """Bind every receipt selection to the corresponding resolved part."""
+
+    original_by_ref = {part["reference"]: part for part in original["parts"]}
+    resolved_by_ref = {part["reference"]: part for part in resolved["parts"]}
+    selections = receipt["selections"]
+    expected_references = sorted(
+        resolved_by_ref,
+        key=lambda reference: (reference.casefold(), reference),
+    )
+    if [selection["reference"] for selection in selections] != expected_references:
+        raise CircuitGenerationError(
+            "catalog receipt selections do not cover the resolved circuit"
+        )
+    for selection in selections:
+        reference = selection["reference"]
+        expected_status = (
+            "verified"
+            if original_by_ref[reference]["mpn"] is not None
+            else "assigned"
+        )
+        resolved_part = resolved_by_ref[reference]
+        original_mpn = original_by_ref[reference]["mpn"]
+        if (
+            selection["status"] != expected_status
+            or selection["mpn"] != resolved_part["mpn"]
+            or selection["footprint"] != resolved_part["footprint"]
+            or (
+                original_mpn is not None
+                and original_mpn.casefold() != resolved_part["mpn"].casefold()
+            )
+        ):
+            raise CircuitGenerationError(
+                f"catalog receipt selection does not match resolved part {reference}"
+            )
 
 
 def _prompt(
@@ -553,6 +651,8 @@ def generate_circuit_with_llm(
     timeout_seconds: float = 120.0,
     maximum_output_bytes: int = 1024 * 1024,
     provider_descriptor: Mapping[str, Any] | None = None,
+    catalog_selector: CircuitCatalogSelector | None = None,
+    catalog_receipt_validator: CircuitCatalogReceiptValidator | None = None,
     _clock: Clock = time.monotonic,
     _deadline: float | None = None,
 ) -> dict[str, Any]:
@@ -586,6 +686,21 @@ def generate_circuit_with_llm(
         raise CircuitGenerationError("trusted circuit schema exceeds its byte limit")
     if not callable(transport) or not callable(checker):
         raise CircuitGenerationError("transport and checker must be callable")
+    if catalog_selector is not None and not callable(catalog_selector):
+        raise CircuitGenerationError("catalog_selector must be callable or null")
+    if catalog_receipt_validator is not None and not callable(catalog_receipt_validator):
+        raise CircuitGenerationError(
+            "catalog_receipt_validator must be callable or null"
+        )
+    if catalog_selector is not None and catalog_receipt_validator is None:
+        raise CircuitGenerationError(
+            "catalog receipt validator (catalog_receipt_validator) is required "
+            "when catalog_selector is supplied"
+        )
+    if catalog_selector is None and catalog_receipt_validator is not None:
+        raise CircuitGenerationError(
+            "catalog_receipt_validator requires catalog_selector"
+        )
 
     try:
         start = float(_clock())
@@ -630,6 +745,11 @@ def generate_circuit_with_llm(
                 "check_sha256": None,
                 "circuit_spec_sha256": None,
                 "electrical_review_sha256": None,
+                "resolved_spec_sha256": None,
+                "resolved_check_sha256": None,
+                "resolved_circuit_spec_sha256": None,
+                "resolved_electrical_review_sha256": None,
+                "catalog_receipt_sha256": None,
                 "errors": None,
                 "warnings": None,
                 "error_count": None,
@@ -684,6 +804,7 @@ def generate_circuit_with_llm(
 
             try:
                 checked = checker(candidate_path, _remaining(deadline, _clock))
+                _remaining(deadline, _clock)
                 if isinstance(checked, bytes):
                     checked = _parse_object(checked, label="native circuit check")
                 elif isinstance(checked, str):
@@ -722,13 +843,208 @@ def generate_circuit_with_llm(
             normalized_seen.add(normalized_sha)
 
             if checked["electrical_review"]["approved"] and error_count == 0:
+                final_spec = normalized
+                final_check = checked
+                catalog_receipt: dict[str, Any] | None = None
+                catalog_receipt_sha: str | None = None
+                if catalog_selector is not None:
+                    catalog_baseline = _parse_object(
+                        normalized_bytes,
+                        label="normalized catalog baseline",
+                    )
+                    catalog_input = _parse_object(
+                        normalized_bytes,
+                        label="normalized catalog input",
+                    )
+                    try:
+                        resolved, receipt = catalog_selector(
+                            catalog_input,
+                            _remaining(deadline, _clock),
+                        )
+                        _remaining(deadline, _clock)
+                    except (CircuitCatalogRejected, CatalogSelectionError) as error:
+                        record["outcome"] = "catalog_rejected"
+                        correction = _bounded_text(str(error), MAX_CORRECTION_BYTES)
+                        record["error"] = "catalog policy rejected candidate"
+                        history.append(record)
+                        # This candidate already passed ERC with zero errors.
+                        # A later provider candidate may only proceed if it
+                        # also reaches that immutable floor before catalog
+                        # selection is attempted again.
+                        previous_errors = 0
+                        if attempt == max_attempts:
+                            raise CircuitGenerationError(
+                                f"circuit generation exhausted after {max_attempts} attempt(s)"
+                            ) from error
+                        continue
+                    except Exception as error:
+                        record["outcome"] = "catalog_selection_error"
+                        record["error"] = _bounded_text(
+                            str(error), MAX_CORRECTION_BYTES
+                        )
+                        history.append(record)
+                        raise CircuitGenerationError(
+                            f"catalog selector failed: {error}"
+                        ) from error
+
+                    try:
+                        final_spec = _validate_catalog_resolution(
+                            catalog_baseline,
+                            resolved,
+                        )
+                        try:
+                            catalog_receipt = validate_catalog_receipt_shape(receipt)
+                        except CatalogError as error:
+                            raise CircuitGenerationError(
+                                f"catalog selector returned an invalid receipt: {error}"
+                            ) from error
+                        _validate_catalog_selections(
+                            catalog_baseline,
+                            final_spec,
+                            catalog_receipt,
+                        )
+                        receipt_input_sha = _valid_sha(
+                            catalog_receipt.get("input_spec_sha256"),
+                            "catalog receipt input_spec_sha256",
+                        )
+                        if receipt_input_sha != canonical_sha256(catalog_baseline):
+                            raise CircuitGenerationError(
+                                "catalog receipt is bound to a different input circuit"
+                            )
+                        receipt_resolved_sha = _valid_sha(
+                            catalog_receipt.get("resolved_spec_sha256"),
+                            "catalog receipt resolved_spec_sha256",
+                        )
+                        if receipt_resolved_sha != canonical_sha256(final_spec):
+                            raise CircuitGenerationError(
+                                "catalog receipt is bound to a different resolved circuit"
+                            )
+                    except Exception as error:
+                        record["outcome"] = "catalog_receipt_error"
+                        record["error"] = _bounded_text(
+                            str(error), MAX_CORRECTION_BYTES
+                        )
+                        history.append(record)
+                        if isinstance(error, CircuitGenerationError):
+                            raise
+                        raise CircuitGenerationError(
+                            f"catalog receipt validation failed: {error}"
+                        ) from error
+
+                    try:
+                        # The selector is untrusted, so a trusted callback must
+                        # recompute the complete receipt binding (including the
+                        # supplier/source/catalog/part digests) against the
+                        # exact artifacts that will be sent to the second gate.
+                        # Give the callback isolated copies: even trusted
+                        # extension code must not be able to mutate the
+                        # artifacts after the local binding checks and before
+                        # the second native gate.
+                        _remaining(deadline, _clock)
+                        validator_original = copy.deepcopy(catalog_baseline)
+                        validator_resolved = copy.deepcopy(final_spec)
+                        validator_receipt = copy.deepcopy(catalog_receipt)
+                        catalog_receipt_validator(
+                            validator_original,
+                            validator_resolved,
+                            validator_receipt,
+                            _remaining(deadline, _clock),
+                        )
+                        _remaining(deadline, _clock)
+                    except (CircuitCatalogRejected, CatalogSelectionError) as error:
+                        record["outcome"] = "catalog_rejected"
+                        correction = _bounded_text(str(error), MAX_CORRECTION_BYTES)
+                        record["error"] = "catalog policy rejected candidate"
+                        history.append(record)
+                        previous_errors = 0
+                        if attempt == max_attempts:
+                            raise CircuitGenerationError(
+                                f"circuit generation exhausted after {max_attempts} attempt(s)"
+                            ) from error
+                        continue
+                    except Exception as error:
+                        record["outcome"] = "catalog_receipt_error"
+                        record["error"] = _bounded_text(str(error), MAX_CORRECTION_BYTES)
+                        history.append(record)
+                        if isinstance(error, CircuitGenerationError):
+                            raise
+                        raise CircuitGenerationError(
+                            f"catalog receipt validation failed: {error}"
+                        ) from error
+
+                    try:
+                        resolved_path = root / f"catalog-resolved-{attempt}.json"
+                        atomic_write_text_no_clobber(
+                            resolved_path,
+                            _compact_json(final_spec).decode("utf-8"),
+                            max_bytes=MAX_NATIVE_CHECK_BYTES,
+                        )
+                        final_check_value = checker(
+                            resolved_path,
+                            _remaining(deadline, _clock),
+                        )
+                        _remaining(deadline, _clock)
+                        if isinstance(final_check_value, (str, bytes)):
+                            final_check_value = _parse_object(
+                                final_check_value,
+                                label="native catalog-resolved circuit check",
+                            )
+                        final_spec_checked, final_error_count = _validate_check_envelope(
+                            final_check_value
+                        )
+                        if final_spec_checked != final_spec:
+                            raise CircuitGenerationError(
+                                "native checker changed the catalog-resolved circuit"
+                            )
+                        if (
+                            not final_check_value["electrical_review"]["approved"]
+                            or final_error_count != 0
+                        ):
+                            raise CircuitGenerationError(
+                                "catalog-resolved circuit failed the native electrical gate"
+                            )
+                        final_spec = final_spec_checked
+                        final_check = dict(final_check_value)
+                        catalog_receipt_sha = canonical_sha256(catalog_receipt)
+                    except Exception as error:
+                        record["outcome"] = "catalog_check_error"
+                        record["error"] = _bounded_text(str(error), MAX_CORRECTION_BYTES)
+                        history.append(record)
+                        if isinstance(error, CircuitGenerationError):
+                            raise
+                        raise CircuitGenerationError(
+                            f"checking catalog-resolved circuit failed: {error}"
+                        ) from error
+
+                if catalog_receipt is not None:
+                    record["resolved_spec_sha256"] = _sha256(
+                        _compact_json(final_spec)
+                    )
+                    record["resolved_check_sha256"] = _sha256(
+                        _compact_json(final_check)
+                    )
+                    record["resolved_circuit_spec_sha256"] = final_check[
+                        "circuit_spec_sha256"
+                    ]
+                    record["resolved_electrical_review_sha256"] = final_check[
+                        "electrical_review_sha256"
+                    ]
+                record["catalog_receipt_sha256"] = catalog_receipt_sha
+                record["errors"] = 0
+                record["warnings"] = final_check["electrical_review"]["counts"][
+                    "warnings"
+                ]
+                record["error_count"] = 0
                 record["outcome"] = "approved"
                 history.append(record)
+                _remaining(deadline, _clock)
                 skidl = _render_skidl(
-                    normalized,
-                    checked["circuit_spec_sha256"],
-                    checked["electrical_review_sha256"],
+                    final_spec,
+                    final_check["circuit_spec_sha256"],
+                    final_check["electrical_review_sha256"],
+                    catalog_receipt_sha,
                 )
+                _remaining(deadline, _clock)
                 bundle = {
                     "schema_version": GENERATION_SCHEMA_VERSION,
                     "requirements": _descriptor(requirements_bytes),
@@ -736,10 +1052,14 @@ def generate_circuit_with_llm(
                     "attempts": attempt,
                     "attempt_history": history,
                     "repaired": attempt > 1,
-                    "spec": normalized,
-                    "check": checked,
-                    "circuit_spec_sha256": checked["circuit_spec_sha256"],
-                    "electrical_review_sha256": checked["electrical_review_sha256"],
+                    "spec": final_spec,
+                    "check": final_check,
+                    "circuit_spec_sha256": final_check["circuit_spec_sha256"],
+                    "electrical_review_sha256": final_check[
+                        "electrical_review_sha256"
+                    ],
+                    "catalog_receipt": catalog_receipt,
+                    "catalog_receipt_sha256": catalog_receipt_sha,
                     "skidl": skidl,
                     "skidl_sha256": _sha256(skidl.encode("utf-8")),
                 }
@@ -834,7 +1154,13 @@ def generate_circuit_with_command(
     max_attempts: int = 3,
     timeout_seconds: float = 120.0,
     maximum_output_bytes: int = 1024 * 1024,
+    catalog_snapshot: Any | None = None,
+    require_available: bool = True,
+    require_basic: bool = False,
+    allow_footprint_fallback: bool = False,
+    evaluated_at_unix: int | None = None,
     _clock: Clock = time.monotonic,
+    _wall_clock: Clock = time.time,
 ) -> dict[str, Any]:
     """Use the bounded ``pcbex`` schema/check commands and provider argv."""
 
@@ -865,6 +1191,52 @@ def generate_circuit_with_command(
         raise CircuitGenerationError(
             f"maximum_output_bytes must be between 1 and {MAXIMUM_PROVIDER_OUTPUT_BYTES}"
         )
+    for name, value in (
+        ("require_available", require_available),
+        ("require_basic", require_basic),
+        ("allow_footprint_fallback", allow_footprint_fallback),
+    ):
+        if not isinstance(value, bool):
+            raise CircuitGenerationError(f"{name} must be a boolean")
+    if catalog_snapshot is None and (
+        not require_available
+        or require_basic
+        or allow_footprint_fallback
+        or evaluated_at_unix is not None
+    ):
+        raise CircuitGenerationError(
+            "catalog policy and evaluation options require a catalog snapshot"
+        )
+    evaluation: int | None = None
+    validated_catalog_snapshot: Any | None = None
+    if catalog_snapshot is not None:
+        if evaluated_at_unix is None:
+            try:
+                wall_now = float(_wall_clock())
+            except (TypeError, ValueError, OverflowError) as error:
+                raise CircuitGenerationError("catalog wall clock is invalid") from error
+            if not math.isfinite(wall_now) or wall_now < 0:
+                raise CircuitGenerationError("catalog wall clock is invalid")
+            evaluation = int(wall_now)
+        elif (
+            isinstance(evaluated_at_unix, bool)
+            or not isinstance(evaluated_at_unix, int)
+            or evaluated_at_unix < 0
+        ):
+            raise CircuitGenerationError(
+                "evaluated_at_unix must be a non-negative integer"
+            )
+        else:
+            evaluation = evaluated_at_unix
+        try:
+            validated_catalog_snapshot = load_catalog_snapshot(
+                catalog_snapshot,
+                evaluated_at_unix=evaluation,
+            )
+        except CatalogError as error:
+            raise CircuitGenerationError(
+                f"catalog snapshot validation failed: {error}"
+            ) from error
     deadline = start + timeout
 
     schema = _command_json(
@@ -896,6 +1268,60 @@ def generate_circuit_with_command(
             check_candidate=True,
         )
 
+    catalog_selector: CircuitCatalogSelector | None = None
+    catalog_receipt_validator: CircuitCatalogReceiptValidator | None = None
+    if catalog_snapshot is not None:
+
+        def resolve_catalog(
+            spec: Mapping[str, Any],
+            _remaining_seconds: float,
+        ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+            try:
+                resolved, receipt = select_catalog_parts(
+                    spec,
+                    validated_catalog_snapshot,
+                    require_available=require_available,
+                    require_basic=require_basic,
+                    allow_footprint_fallback=allow_footprint_fallback,
+                    evaluated_at_unix=evaluation,
+                )
+            except CatalogSelectionError as error:
+                raise CircuitCatalogRejected(str(error)) from error
+            except CatalogError as error:
+                raise CircuitGenerationError(
+                    f"catalog contract validation failed: {error}"
+                ) from error
+            return resolved, receipt
+
+        catalog_selector = resolve_catalog
+
+        def validate_resolved_catalog(
+            original: Mapping[str, Any],
+            resolved: Mapping[str, Any],
+            receipt: Mapping[str, Any],
+            _remaining_seconds: float,
+        ) -> None:
+            del _remaining_seconds
+            try:
+                validate_catalog_receipt(
+                    receipt,
+                    original,
+                    resolved,
+                    validated_catalog_snapshot,
+                    require_available=require_available,
+                    require_basic=require_basic,
+                    allow_footprint_fallback=allow_footprint_fallback,
+                    evaluated_at_unix=evaluation,
+                )
+            except CatalogSelectionError:
+                raise
+            except CatalogError as error:
+                raise CircuitGenerationError(
+                    f"catalog contract validation failed: {error}"
+                ) from error
+
+        catalog_receipt_validator = validate_resolved_catalog
+
     return generate_circuit_with_llm(
         requirements,
         schema,
@@ -905,6 +1331,8 @@ def generate_circuit_with_command(
         timeout_seconds=timeout,
         maximum_output_bytes=maximum_output_bytes,
         provider_descriptor=descriptor,
+        catalog_selector=catalog_selector,
+        catalog_receipt_validator=catalog_receipt_validator,
         _clock=_clock,
         _deadline=deadline,
     )
@@ -961,6 +1389,10 @@ def circuit_generation_json_schema(
     native_check_schema: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a closed, secret-free schema for generated bundles."""
+
+    # Imported lazily so the catalog contract remains usable without creating
+    # an import cycle through the command adapter.
+    from .catalog import catalog_receipt_json_schema
 
     digest = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
     descriptor = {
@@ -1023,7 +1455,12 @@ def circuit_generation_json_schema(
             "lib_id": {"type": "string", "minLength": 1},
             "value": {"type": "string", "minLength": 1},
             "footprint": {"type": "string", "minLength": 1},
-            "mpn": {"type": ["string", "null"]},
+            "mpn": {
+                "anyOf": [
+                    {"type": "string", "minLength": 1},
+                    {"type": "null"},
+                ]
+            },
             "power": v2_power,
             "pins": {"type": "array", "minItems": 1, "items": v2_pin},
         },
@@ -1179,6 +1616,11 @@ def circuit_generation_json_schema(
             "check_sha256",
             "circuit_spec_sha256",
             "electrical_review_sha256",
+            "resolved_spec_sha256",
+            "resolved_check_sha256",
+            "resolved_circuit_spec_sha256",
+            "resolved_electrical_review_sha256",
+            "catalog_receipt_sha256",
             "errors",
             "warnings",
             "error_count",
@@ -1194,15 +1636,55 @@ def circuit_generation_json_schema(
             "check_sha256": {"anyOf": [digest, {"type": "null"}]},
             "circuit_spec_sha256": {"anyOf": [digest, {"type": "null"}]},
             "electrical_review_sha256": {"anyOf": [digest, {"type": "null"}]},
+            "resolved_spec_sha256": {"anyOf": [digest, {"type": "null"}]},
+            "resolved_check_sha256": {"anyOf": [digest, {"type": "null"}]},
+            "resolved_circuit_spec_sha256": {
+                "anyOf": [digest, {"type": "null"}]
+            },
+            "resolved_electrical_review_sha256": {
+                "anyOf": [digest, {"type": "null"}]
+            },
+            "catalog_receipt_sha256": {
+                "anyOf": [digest, {"type": "null"}]
+            },
             "errors": {"type": ["integer", "null"], "minimum": 0},
             "warnings": {"type": ["integer", "null"], "minimum": 0},
             "error_count": {"type": ["integer", "null"], "minimum": 0},
             "error": {"type": "string", "minLength": 1},
         },
+        "oneOf": [
+            {
+                "properties": {
+                    key: {"type": "null"}
+                    for key in (
+                        "resolved_spec_sha256",
+                        "resolved_check_sha256",
+                        "resolved_circuit_spec_sha256",
+                        "resolved_electrical_review_sha256",
+                        "catalog_receipt_sha256",
+                    )
+                }
+            },
+            {
+                "properties": {
+                    "outcome": {"const": "approved"},
+                    **{
+                        key: digest
+                        for key in (
+                            "resolved_spec_sha256",
+                            "resolved_check_sha256",
+                            "resolved_circuit_spec_sha256",
+                            "resolved_electrical_review_sha256",
+                            "catalog_receipt_sha256",
+                        )
+                    },
+                }
+            },
+        ],
     }
     result = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://github.com/penguin425/pcbex/schemas/circuit-generation-v1.json",
+        "$id": "https://github.com/penguin425/pcbex/schemas/circuit-generation-v2.json",
         "title": "pcbex bounded circuit generation bundle",
         "type": "object",
         "additionalProperties": False,
@@ -1217,6 +1699,8 @@ def circuit_generation_json_schema(
             "check",
             "circuit_spec_sha256",
             "electrical_review_sha256",
+            "catalog_receipt",
+            "catalog_receipt_sha256",
             "skidl",
             "skidl_sha256",
         ],
@@ -1236,9 +1720,84 @@ def circuit_generation_json_schema(
             "check": check,
             "circuit_spec_sha256": digest,
             "electrical_review_sha256": digest,
+            "catalog_receipt": {
+                "anyOf": [catalog_receipt_json_schema(), {"type": "null"}]
+            },
+            "catalog_receipt_sha256": {
+                "anyOf": [digest, {"type": "null"}]
+            },
             "skidl": {"type": "string", "minLength": 1},
             "skidl_sha256": digest,
         },
+        "oneOf": [
+            {
+                "properties": {
+                    "catalog_receipt": {"type": "null"},
+                    "catalog_receipt_sha256": {"type": "null"},
+                    "attempt_history": {
+                        "items": {
+                            "properties": {
+                                key: {"type": "null"}
+                                for key in (
+                                    "resolved_spec_sha256",
+                                    "resolved_check_sha256",
+                                    "resolved_circuit_spec_sha256",
+                                    "resolved_electrical_review_sha256",
+                                    "catalog_receipt_sha256",
+                                )
+                            }
+                        }
+                    },
+                }
+            },
+            {
+                "properties": {
+                    "catalog_receipt": {"type": "object"},
+                    "catalog_receipt_sha256": digest,
+                    "attempt_history": {
+                        "contains": {
+                            "required": [
+                                "outcome",
+                                "resolved_spec_sha256",
+                                "resolved_check_sha256",
+                                "resolved_circuit_spec_sha256",
+                                "resolved_electrical_review_sha256",
+                                "catalog_receipt_sha256",
+                            ],
+                            "properties": {
+                                "outcome": {"const": "approved"},
+                                **{
+                                    key: digest
+                                    for key in (
+                                        "resolved_spec_sha256",
+                                        "resolved_check_sha256",
+                                        "resolved_circuit_spec_sha256",
+                                        "resolved_electrical_review_sha256",
+                                        "catalog_receipt_sha256",
+                                    )
+                                },
+                            },
+                        },
+                        "minContains": 1,
+                        "maxContains": 1,
+                    },
+                    "spec": {
+                        "properties": {
+                            "parts": {
+                                "items": {
+                                    "properties": {
+                                        "mpn": {
+                                            "type": "string",
+                                            "minLength": 1,
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                }
+            },
+        ],
     }
     if native_spec_schema is not None or native_check_schema is not None:
         if native_spec_schema is None or native_check_schema is None:
@@ -1257,6 +1816,7 @@ def circuit_generation_json_schema(
 __all__ = [
     "CircuitGenerationError",
     "CircuitCandidateRejected",
+    "CircuitCatalogRejected",
     "circuit_generation_json_schema",
     "fetch_circuit_spec_v2_schema",
     "fetch_circuit_spec_check_schema",

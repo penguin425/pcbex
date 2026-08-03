@@ -115,7 +115,7 @@ the values actually produced; the commands below show POSIX output):
 {
   "schema_version": 2,
   "engine": "pcbex",
-  "engine_version": "1.411.0",
+  "engine_version": "1.412.0",
   "schematic_sha256": "<canonical IR SHA-256>",
   "artifacts": [
     {"path": "pinout.h", "bytes": 123, "sha256": "<sha256>"},
@@ -276,6 +276,15 @@ trusted upstream producers when hostile concurrent filesystem mutation is in
 scope.
 
 ## Factory and repository boundaries
+
+An upstream `circuit-generation-v2` bundle is not itself a pipeline-gate
+input. If it used a catalog snapshot, its receipt and
+`_PCBEX_MPN_BY_REFERENCE` SKiDL evidence bind the selected MPNs and the second
+Rust review; the design still must be materialized as a KiCad schematic and
+re-enter the normal schematic/ERC, analysis, manufacturing, and firmware
+phases below. `pipeline-verify` does not query a supplier or re-run catalog
+selection, so retain the generation bundle, snapshot, and receipt alongside
+the final schematic evidence when traceability is required.
 
 The v1 gate ends at the locally validated manufacturing ZIP. The v2 factory
 phase validates an already-produced receipt and enforces its normalized DFM

@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.411.0
+    uses: penguin425/pcbex@v1.412.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2190,6 +2190,9 @@ reference. The release audit's `--check-protection` mode verifies that this
 enforcement remains enabled; the full update procedure and reviewed commit map
 are documented in
 [`docs/GITHUB_ACTIONS_SUPPLY_CHAIN.md`](docs/GITHUB_ACTIONS_SUPPLY_CHAIN.md).
+The semver references in the caller-facing example above prioritize a stable
+public integration contract; production callers may pin those references to
+reviewed commit SHAs under their own supply-chain policy.
 
 Callers select exactly one of `fab`, `fab-profile`, `policy-pack`, or
 `signed-policy-pack`. A signed pack additionally requires
@@ -2769,14 +2772,35 @@ PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
   --output circuit-generation.json \
   --skidl-output circuit.py \
   --pcbex target/release/pcbex \
+  --catalog-snapshot examples/catalog-snapshot-v1.json \
   --provider-command ./structured-circuit-provider
 ```
 
 The provider command is shell-free and must be the final option. Schema
 loading, provider calls, and native checks share one monotonic deadline and
-bounded process-tree/output policy. See
+bounded process-tree/output policy. With `--catalog-snapshot`, pcbex first
+requires a zero-error native Rust review, then resolves MPNs from the closed
+snapshot and runs a second Rust review on the resolved specification. The
+generation bundle is `schema_version: 2` and carries the digest-bound catalog
+receipt when selection is enabled. See
 [`docs/CIRCUIT_GENERATION.md`](docs/CIRCUIT_GENERATION.md) for the v2 contract,
-correction rules, evidence digests, and remaining trust boundaries.
+correction rules, evidence digests, and remaining trust boundaries. The
+snapshot and receipt contracts can be emitted independently:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent catalog-snapshot-schema
+PYTHONPATH=agent/src python3 -m pcbex_agent catalog-selection-receipt-schema
+```
+
+`--allow-out-of-stock`, `--require-basic`, and
+`--allow-footprint-fallback` are explicit snapshot policies; footprint-only
+fallback is disabled by default and is recorded in the receipt when enabled.
+See [`docs/CATALOG_SELECTION.md`](docs/CATALOG_SELECTION.md) and the example
+[`examples/catalog-snapshot-v1.json`](examples/catalog-snapshot-v1.json) for
+the closed fields and selection semantics. Generated SKiDL keeps the selected
+MPNs in `_PCBEX_MPN_BY_REFERENCE` and, for snapshot selection, records
+`_PCBEX_CATALOG_RECEIPT_SHA256`; it does not pass an unsupported `mpn=`
+keyword to `Part`.
 
 ## Schematic electrical IR
 
@@ -4070,7 +4094,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.411.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.412.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
@@ -4191,10 +4215,10 @@ a versioned KiCad schematic electrical IR. It supports polygonal multilayer
 boards, differential pairs, length tuning, copper zones, partial-span vias,
 exact KiCad pad geometry, placement optimization, DFM reporting, and headless
 or IPC-assisted KiCad workflows. The companion agent can render a validated,
-closed circuit specification as executable SKiDL, deterministically select
-parts from a normalized catalog input, and run bounded natural-language
+closed circuit specification as executable SKiDL, resolve MPNs from a
+digest-bound local catalog snapshot, and run bounded natural-language
 candidate correction against the native immutable ERC floor. Declared power
-metadata is still input evidence rather than verified datasheet truth. pcbex
-does not yet replace complete electrical design, live supplier qualification,
-analog or signal-integrity simulation, final KiCad ERC/DRC, or fabrication
-review.
+metadata and catalog inventory remain input evidence rather than verified
+datasheet or supplier truth. pcbex does not yet replace complete electrical
+design, live supplier qualification, analog or signal-integrity simulation,
+final KiCad ERC/DRC, or fabrication review.
