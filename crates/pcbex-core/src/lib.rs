@@ -44,7 +44,17 @@ pub const MAX_ASTAR_WORK_BUDGET: usize = 2_000_000;
 /// Default production budget used by the public routing entry points.
 pub const DEFAULT_ASTAR_WORK_BUDGET: usize = MAX_ASTAR_WORK_BUDGET;
 
+/// Production ceiling for the aggregate breadth-first work performed while
+/// connecting all copper-zone candidate cells in one fill operation.  A work
+/// unit is one queue pop or one successful enqueue of a previously unseen
+/// candidate neighbour.  The initial seed enqueue is excluded.
+pub const MAX_ZONE_FILL_WORK_BUDGET: usize = 2 * MAX_ZONE_CANDIDATE_CELLS;
+
+/// Default production budget used by the public copper-zone fill entry points.
+pub const DEFAULT_ZONE_FILL_WORK_BUDGET: usize = MAX_ZONE_FILL_WORK_BUDGET;
+
 const ASTAR_WORK_BUDGET_ERROR: &str = "resource limit exceeded: astar work budget";
+const ZONE_FILL_WORK_BUDGET_ERROR: &str = "resource limit exceeded: zone fill work budget";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct WorkBudgetError;
@@ -4009,6 +4019,35 @@ pub fn fill_copper_zones(board: &mut Board) -> usize {
 /// The operation is atomic: a resource or arithmetic failure leaves all
 /// `filled_polygons` exactly as they were on entry.
 pub fn try_fill_copper_zones(board: &mut Board) -> Result<usize, String> {
+    try_fill_copper_zones_with_work_budget(board, DEFAULT_ZONE_FILL_WORK_BUDGET)
+}
+
+/// Fill copper zones with a caller-selected breadth-first work cap.
+///
+/// The cap is aggregate across every route and zone in this operation.  It
+/// may tighten the production ceiling but may not raise it.  Initial frontier
+/// seed pushes are excluded; each queue pop and successful enqueue of a
+/// previously unseen candidate neighbour consumes one unit.  The operation is
+/// atomic: a resource or arithmetic failure leaves all `filled_polygons`
+/// exactly as they were on entry.
+pub fn try_fill_copper_zones_with_work_budget(
+    board: &mut Board,
+    max_work: usize,
+) -> Result<usize, String> {
+    if max_work > MAX_ZONE_FILL_WORK_BUDGET {
+        return Err(format!(
+            "resource limit configuration: zone fill work budget must be at most {} units",
+            MAX_ZONE_FILL_WORK_BUDGET
+        ));
+    }
+    let mut budget = WorkBudget::new(max_work);
+    try_fill_copper_zones_with_budget(board, &mut budget)
+}
+
+fn try_fill_copper_zones_with_budget(
+    board: &mut Board,
+    budget: &mut WorkBudget,
+) -> Result<usize, String> {
     validate_routing_resource_bounds(board)?;
     if board.width_nm <= 0 || board.height_nm <= 0 {
         return Err(
@@ -4053,7 +4092,8 @@ pub fn try_fill_copper_zones(board: &mut Board) -> Result<usize, String> {
                     }
                 }
             }
-            let cells = connected_zone_cells(&snapshot, route.net_id, cells, grid);
+            let cells = connected_zone_cells(&snapshot, route.net_id, cells, grid, budget)
+                .map_err(|_| ZONE_FILL_WORK_BUDGET_ERROR.to_string())?;
             total_cells = total_cells.checked_add(cells.len()).ok_or_else(|| {
                 format!(
                     "resource limit exceeded: zone_candidate_cells (limit {} cells)",
@@ -4249,9 +4289,10 @@ fn connected_zone_cells(
     net_id: u32,
     cells: HashSet<(Nm, Nm)>,
     grid: Nm,
-) -> HashSet<(Nm, Nm)> {
+    budget: &mut WorkBudget,
+) -> Result<HashSet<(Nm, Nm)>, WorkBudgetError> {
     if cells.is_empty() {
-        return cells;
+        return Ok(cells);
     }
     let seeds: Vec<_> = board
         .nets
@@ -4273,20 +4314,29 @@ fn connected_zone_cells(
         .unwrap_or_else(|| cells.iter().copied().min().unwrap());
     let mut connected = HashSet::new();
     let mut queue = VecDeque::from([start]);
-    while let Some(cell) = queue.pop_front() {
-        if !cells.contains(&cell) || !connected.insert(cell) {
-            continue;
-        }
+    // The initial seed enqueue is deliberately free.  Mark it as discovered
+    // at enqueue time so each candidate enters the queue at most once.
+    connected.insert(start);
+    while !queue.is_empty() {
+        // Charge before the queue mutation so an exhausted budget cannot
+        // consume an uncharged item.
+        budget.consume()?;
+        let cell = queue.pop_front().expect("queue was checked as non-empty");
         for neighbor in [
             (cell.0 + 1, cell.1),
             (cell.0 - 1, cell.1),
             (cell.0, cell.1 + 1),
             (cell.0, cell.1 - 1),
         ] {
-            queue.push_back(neighbor);
+            if cells.contains(&neighbor) && !connected.contains(&neighbor) {
+                // Charge before enqueueing the newly discovered candidate.
+                budget.consume()?;
+                connected.insert(neighbor);
+                queue.push_back(neighbor);
+            }
         }
     }
-    connected
+    Ok(connected)
 }
 
 pub fn generate_route_teardrops(board: &mut Board) -> usize {
@@ -8713,8 +8763,124 @@ mod tests {
         let expected = HashSet::from([(2, 2), (2, 3)]);
         for _ in 0..8 {
             let cells = HashSet::from([(2, 2), (2, 3), (8, 8), (8, 9)]);
-            assert_eq!(connected_zone_cells(&board, 99, cells, 1), expected);
+            let mut budget = WorkBudget::new(MAX_ZONE_FILL_WORK_BUDGET);
+            assert_eq!(
+                connected_zone_cells(&board, 99, cells, 1, &mut budget).unwrap(),
+                expected
+            );
         }
+    }
+
+    #[test]
+    fn connected_zone_cells_charges_exact_pop_and_enqueue_boundaries() {
+        let board = board();
+
+        let one = HashSet::from([(2, 2)]);
+        let mut exact_one = WorkBudget::new(1);
+        assert_eq!(
+            connected_zone_cells(&board, 99, one.clone(), 1, &mut exact_one).unwrap(),
+            one
+        );
+        let mut one_less = WorkBudget::new(0);
+        assert_eq!(
+            connected_zone_cells(&board, 99, one, 1, &mut one_less),
+            Err(WorkBudgetError)
+        );
+
+        let two = HashSet::from([(2, 2), (2, 3)]);
+        let mut exact_two = WorkBudget::new(3);
+        assert_eq!(
+            connected_zone_cells(&board, 99, two.clone(), 1, &mut exact_two).unwrap(),
+            two
+        );
+        let mut two_less = WorkBudget::new(2);
+        assert_eq!(
+            connected_zone_cells(&board, 99, two, 1, &mut two_less),
+            Err(WorkBudgetError)
+        );
+    }
+
+    #[test]
+    fn zone_fill_budget_is_shared_and_atomic_across_zones() {
+        let mut board = board();
+        board.obstacles.clear();
+        let zone = |x_nm: Nm| CopperZone {
+            polygon: vec![
+                Point {
+                    x_nm: x_nm - 250_000,
+                    y_nm: 750_000,
+                },
+                Point {
+                    x_nm: x_nm + 250_000,
+                    y_nm: 750_000,
+                },
+                Point {
+                    x_nm: x_nm + 250_000,
+                    y_nm: 1_250_000,
+                },
+                Point {
+                    x_nm: x_nm - 250_000,
+                    y_nm: 1_250_000,
+                },
+            ],
+            layer: Layer::Front,
+            clearance_nm: 0,
+            minimum_thickness_nm: 1,
+            thermal_relief: false,
+            thermal_gap_nm: 0,
+            thermal_spoke_width_nm: 0,
+            filled_polygons: vec![vec![
+                Point { x_nm: 1, y_nm: 1 },
+                Point { x_nm: 2, y_nm: 1 },
+                Point { x_nm: 2, y_nm: 2 },
+            ]],
+        };
+        board.routes = vec![Route {
+            net_id: 1,
+            segments: vec![],
+            arcs: vec![],
+            vias: vec![],
+            teardrops: vec![],
+            zones: vec![zone(1_000_000), zone(2_000_000)],
+        }];
+        let before = board.routes[0]
+            .zones
+            .iter()
+            .map(|zone| zone.filled_polygons.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            try_fill_copper_zones_with_work_budget(&mut board, 1),
+            Err(ZONE_FILL_WORK_BUDGET_ERROR.to_string())
+        );
+        assert_eq!(
+            board.routes[0]
+                .zones
+                .iter()
+                .map(|zone| zone.filled_polygons.clone())
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert_eq!(try_fill_copper_zones_with_work_budget(&mut board, 2), Ok(2));
+        assert!(
+            board.routes[0]
+                .zones
+                .iter()
+                .all(|zone| zone.filled_polygons.len() == 1)
+        );
+    }
+
+    #[test]
+    fn zone_fill_budget_rejects_a_cap_above_production() {
+        let mut board = board();
+        let before = board.routes.clone();
+        assert_eq!(
+            try_fill_copper_zones_with_work_budget(&mut board, MAX_ZONE_FILL_WORK_BUDGET + 1),
+            Err(format!(
+                "resource limit configuration: zone fill work budget must be at most {} units",
+                MAX_ZONE_FILL_WORK_BUDGET
+            ))
+        );
+        assert_eq!(board.routes, before);
     }
 
     #[test]

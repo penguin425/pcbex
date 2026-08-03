@@ -78,12 +78,14 @@ must not retry the same model by silently relaxing these ceilings.
 
 These limits bound work that can be derived from one immutable board before the
 operation begins. A* routing now has an additional aggregate runtime ceiling,
-documented in [`ASTAR_WORK_BUDGET.md`](ASTAR_WORK_BUDGET.md), but neither
-boundary is a whole-command deadline or a shared budget across a
-multi-candidate portfolio.
+documented in [`ASTAR_WORK_BUDGET.md`](ASTAR_WORK_BUDGET.md), and zone-fill
+connectivity has a separate queue-work ceiling documented in
+[`ZONE_FILL_WORK_BUDGET.md`](ZONE_FILL_WORK_BUDGET.md). None of these boundaries
+is a whole-command deadline or a shared budget across a multi-candidate
+portfolio.
 
-Zone-fill BFS queues, repeated routing-candidate portfolios, aggregate arc
-linearization, placement/optimization passes, generic CLI file size, subprocess
-output, and subprocess time still require separate dynamic controls. Keeping
-those controls explicit prevents this static preflight from claiming a
-wall-clock guarantee it does not provide.
+Repeated routing-candidate portfolios, aggregate arc linearization,
+placement/optimization passes, generic CLI file size, subprocess output, and
+subprocess time still require separate dynamic controls. Keeping those controls
+explicit prevents this static preflight from claiming a wall-clock guarantee it
+does not provide.

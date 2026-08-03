@@ -44,6 +44,8 @@ than silently weakening the boundary.
 
 The limit is aggregate only within one board-routing call. A
 `route_candidates` portfolio currently gives each candidate its own top-level
-budget. This budget is not a wall-clock deadline and does not yet cover zone
-BFS, arc linearization, placement, post-route optimization, file I/O, or child
-process execution; those remain separately tracked hardening boundaries.
+budget. This budget is not a wall-clock deadline and does not cover zone BFS,
+arc linearization, placement, post-route optimization, file I/O, or child
+process execution. Zone BFS has its own independent ceiling documented in
+[`ZONE_FILL_WORK_BUDGET.md`](ZONE_FILL_WORK_BUDGET.md); the other boundaries
+remain separately tracked.
