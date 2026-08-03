@@ -13,7 +13,9 @@ symbolic links in ancestor path components are rejected. The reader:
 1. checks the path type and advertised size;
 2. opens the file and verifies that its identity and size still match;
 3. reads at most the limit plus one byte;
-4. rechecks the opened file and path identity before returning data.
+4. rewinds the same opened descriptor and compares a second fixed-buffer pass
+   byte-for-byte with the first; and
+5. rechecks the opened file and path identity before returning data.
 
 Text inputs are decoded as strict UTF-8 after the bounded read. Empty files are
 permitted by the I/O layer so the owning parser can report its format-specific
@@ -41,6 +43,15 @@ quality gate fails, as documented by that command.
 The checks before and after opening reduce path-replacement races but are not an
 OS filesystem sandbox. Callers that require protection from a hostile local
 administrator must run pcbex in an isolated filesystem namespace.
+
+Manufacturing publication additionally pins each validated destination
+directory. On Unix, temporary creation, cleanup, and atomic replacement are
+directory-descriptor-relative (`openat`/`unlinkat`/`renameat`), so renaming and
+replacing an ancestor cannot redirect a commit. Windows retains a real
+directory handle and performs identity checks immediately around its guarded
+path-based replacement. Protection against a process that can write arbitrary
+entries inside the already-pinned directory still requires an OS sandbox or
+private directory permissions.
 
 ## Subprocess limits
 
@@ -77,7 +88,10 @@ phase under the manufacturing quota contract: 4,096 entries, depth 16, 128 MiB
 per file and final ZIP, 1 GiB aggregate workspace bytes, 255-byte portable
 basenames, and 1 MiB normalization lines, manifests, and Gerber jobs. ZIP
 expanded artifact payload is separately limited to 512 MiB. Archive creation
-and public copies are bounded and staged before atomic replacement, and the
+and public copies are bounded and staged before atomic replacement. BOM/CPL
+rows are size-preflighted and streamed through a bounded writer, manufacturing
+metadata is capped at 100,000 parts, and the package generator reserves bytes
+and entries already consumed elsewhere in the private workspace. The
 generated ZIP is revalidated through the factory acceptance boundary. The
 external tool's filesystem writes are not live-capped while that process is
 running.

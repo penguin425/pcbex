@@ -9,6 +9,8 @@ use super::{Sexp, atom, child_values, number, parse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+pub const MAX_MANUFACTURING_PARTS: usize = 100_000;
+
 /// Return the copper and standard manufacturing layers declared by a KiCad board.
 ///
 /// KiCad's layer table is allowed to be written in any order, and its numeric
@@ -155,6 +157,13 @@ pub struct ManufacturingPart {
 
 /// Parse all top-level footprints in a KiCad PCB into stable manufacturing records.
 pub fn manufacturing_parts(source: &str) -> Result<Vec<ManufacturingPart>, String> {
+    manufacturing_parts_with_limit(source, MAX_MANUFACTURING_PARTS)
+}
+
+fn manufacturing_parts_with_limit(
+    source: &str,
+    limit: usize,
+) -> Result<Vec<ManufacturingPart>, String> {
     let root = parse(source)?;
     let top = root
         .as_list()
@@ -169,6 +178,11 @@ pub fn manufacturing_parts(source: &str) -> Result<Vec<ManufacturingPart>, Strin
         let Some(xs) = item.as_list() else { continue };
         if atom(xs.first()) != Some("footprint") {
             continue;
+        }
+        if parts.len() >= limit {
+            return Err(format!(
+                "KiCad board exceeds the {limit} manufacturing part limit"
+            ));
         }
         let part = parse_footprint(xs)?;
         if part.reference.is_empty() {
@@ -568,6 +582,28 @@ mod tests {
         assert!(resistor.in_bom && resistor.in_pos && resistor.smd);
         assert_eq!(parts[0].side, "B");
         assert!(!parts[0].in_bom);
+    }
+
+    #[test]
+    fn enforces_manufacturing_part_limit_before_parsing_next_footprint() {
+        let footprint = |reference: &str| {
+            format!(
+                r#"(footprint "X" (layer "F.Cu") (at 0 0)
+                  (property "Reference" "{reference}") (property "Value" "10k"))"#
+            )
+        };
+        let exact = format!("(kicad_pcb {} {})", footprint("R1"), footprint("R2"));
+        assert_eq!(manufacturing_parts_with_limit(&exact, 2).unwrap().len(), 2);
+
+        let over = format!(
+            "(kicad_pcb {} {} (footprint \"malformed\"))",
+            footprint("R1"),
+            footprint("R2")
+        );
+        assert_eq!(
+            manufacturing_parts_with_limit(&over, 2).unwrap_err(),
+            "KiCad board exceeds the 2 manufacturing part limit"
+        );
     }
 
     #[test]

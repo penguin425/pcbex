@@ -26,3 +26,6 @@ pcbex-kicad = { path = "../pcbex-kicad" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true

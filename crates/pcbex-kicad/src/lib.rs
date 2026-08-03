@@ -218,7 +218,9 @@ pub use circuit_spec::{
     parse_and_check_circuit_spec_v2, parse_circuit_spec_v2,
 };
 mod manufacturing;
-pub use manufacturing::{ManufacturingPart, manufacturing_gerber_layers, manufacturing_parts};
+pub use manufacturing::{
+    MAX_MANUFACTURING_PARTS, ManufacturingPart, manufacturing_gerber_layers, manufacturing_parts,
+};
 mod electrical_comparison;
 pub use electrical_comparison::{
     ElectricalComparisonCounts, ElectricalFindingSummary, ElectricalReviewComparison,

@@ -6,8 +6,38 @@
 //! resource and path-safety policy while the rest of the filesystem API can
 //! continue to be used normally for directory and staging operations.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+
+const READ_COMPARE_BUFFER_BYTES: usize = 64 * 1024;
+
+#[cfg(test)]
+use std::cell::RefCell;
+
+#[cfg(test)]
+thread_local! {
+    // The hook makes the otherwise timing-sensitive same-inode mutation test
+    // deterministic without changing production behavior.  It is invoked
+    // after the first pass and before the second pass below.
+    static AFTER_FIRST_READ_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        RefCell::new(None);
+}
+
+#[cfg(test)]
+fn invoke_after_first_read_hook() {
+    let hook = AFTER_FIRST_READ_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+fn set_after_first_read_hook(hook: impl FnOnce() + 'static) {
+    AFTER_FIRST_READ_HOOK.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        assert!(slot.replace(Box::new(hook)).is_none());
+    });
+}
 
 pub use std::fs::{
     File, Metadata, Permissions, canonicalize, create_dir, create_dir_all, read_dir, remove_dir,
@@ -19,7 +49,8 @@ pub const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 
 /// Read one regular, non-symlink file without allowing an unbounded
 /// allocation.  The path and opened-file identities are checked before and
-/// after the read so a replacement or resize while reading fails closed.
+/// after two passes, and the second pass is compared with the first so an
+/// in-place same-size mutation fails closed as well.
 pub fn read<P>(path: P) -> io::Result<Vec<u8>>
 where
     P: AsRef<Path>,
@@ -87,18 +118,44 @@ where
         .take(read_limit)
         .read_to_end(&mut bytes)?;
 
-    let after = file.metadata()?;
-    ensure_regular(&after, path, "opened input")?;
     let bytes_len = u64::try_from(bytes.len()).map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             "read byte count cannot be represented",
         )
     })?;
+
+    #[cfg(test)]
+    invoke_after_first_read_hook();
+
+    // Read the same opened descriptor a second time using a fixed-size buffer.
+    // Comparing against the first pass detects an in-place write that leaves
+    // the inode and file length unchanged, which metadata checks alone cannot
+    // observe.
+    file.seek(SeekFrom::Start(0))?;
+    let mut compare_buffer = [0_u8; READ_COMPARE_BUFFER_BYTES];
+    let mut compared = 0_usize;
+    loop {
+        let read = file.read(&mut compare_buffer)?;
+        if read == 0 {
+            break;
+        }
+        let end = compared.checked_add(read).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "read byte count overflow")
+        })?;
+        if end > bytes.len() || compare_buffer[..read] != bytes[compared..end] {
+            return Err(changed_error(path, "changed while it was being re-read"));
+        }
+        compared = end;
+    }
+
+    let after = file.metadata()?;
+    ensure_regular(&after, path, "opened input")?;
     if !same_file(&opened, &after)
         || after.len() != metadata.len()
         || bytes_len != metadata.len()
         || bytes_len > max_bytes
+        || compared != bytes.len()
     {
         return Err(changed_error(path, "changed while it was being read"));
     }
@@ -472,6 +529,36 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn rejects_same_inode_same_size_mutation_between_read_passes() {
+        let workspace = tempfile::tempdir().unwrap();
+        let path = workspace.path().join("input");
+        let original = vec![b'a'; READ_COMPARE_BUFFER_BYTES * 2 + 17];
+        fs::write(&path, &original).unwrap();
+        let before = fs::metadata(&path).unwrap();
+
+        let replacement = vec![b'b'; original.len()];
+        let expected_after = replacement.clone();
+        let hook_path = path.clone();
+        set_after_first_read_hook(move || {
+            let mut file = File::options().write(true).open(hook_path).unwrap();
+            file.write_all(&replacement).unwrap();
+            file.flush().unwrap();
+        });
+
+        let error = read(&path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed while it was being re-read"),
+            "{error}"
+        );
+        let after = fs::metadata(&path).unwrap();
+        assert!(same_file(&before, &after));
+        assert_eq!(before.len(), after.len());
+        assert_eq!(fs::read(&path).unwrap(), expected_after);
     }
 
     #[test]

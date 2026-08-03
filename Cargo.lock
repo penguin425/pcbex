@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex"
-version = "1.412.0"
+version = "1.412.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -698,6 +698,7 @@ dependencies = [
  "hex",
  "pcbex-core",
  "pcbex-kicad",
+ "rustix",
  "serde",
  "serde_json",
  "sha2",
@@ -709,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-core"
-version = "1.412.0"
+version = "1.412.1"
 dependencies = [
  "criterion",
  "proptest",
@@ -719,7 +720,7 @@ dependencies = [
 
 [[package]]
 name = "pcbex-kicad"
-version = "1.412.0"
+version = "1.412.1"
 dependencies = [
  "ed25519-dalek",
  "hex",
