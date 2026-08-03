@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 from urllib import error
@@ -68,6 +70,34 @@ class RedirectOpener:
         if len(self.calls) > 1:
             raise AssertionError("redirect must not trigger a second request")
         return RedirectResponse()
+
+
+class JsonResponse(io.BytesIO):
+    status = 200
+
+    def __init__(self, payload: bytes, content_length: str | None = None):
+        super().__init__(payload)
+        self.headers = {}
+        if content_length is not None:
+            self.headers["Content-Length"] = content_length
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def getcode(self):
+        return self.status
+
+
+class JsonOpener:
+    def __init__(self, responses):
+        self.responses = list(responses)
+
+    def open(self, call, timeout):
+        del call, timeout
+        return self.responses.pop(0)
 
 
 class UpsertPrCommentTests(unittest.TestCase):
@@ -204,6 +234,61 @@ class UpsertPrCommentTests(unittest.TestCase):
                 client.update_comment("owner/repository", 12, "body")
         self.assertNotIn("secret-token", str(raised.exception))
         self.assertNotIn("attacker.example", str(raised.exception))
+
+    def test_api_responses_have_per_response_and_aggregate_byte_limits(self):
+        client = upsert_pr_comment.GitHubClient(
+            "https://api.github.example",
+            "secret-token",
+            opener=JsonOpener([JsonResponse(b"[]", "2")]),
+        )
+        client.response_bytes_remaining = 1
+        with self.assertRaisesRegex(upsert_pr_comment.CommentError, "exceeds"):
+            client.list_comments("owner/repository", 1)
+
+        client = upsert_pr_comment.GitHubClient(
+            "https://api.github.example",
+            "secret-token",
+            opener=JsonOpener([JsonResponse(b"[" * 8)]),
+        )
+        with mock.patch.object(upsert_pr_comment, "MAX_API_RESPONSE_BYTES", 7):
+            with self.assertRaisesRegex(upsert_pr_comment.CommentError, "exceeds"):
+                client.list_comments("owner/repository", 1)
+
+    def test_output_append_is_bounded_and_rejects_multiline_values(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary).resolve() / "github-output"
+            output.write_text("a=1\n")
+            with (
+                mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}),
+                mock.patch.object(upsert_pr_comment, "MAX_GITHUB_OUTPUT_BYTES", 8),
+            ):
+                upsert_pr_comment.write_output("b", "2")
+                self.assertEqual(output.read_text(), "a=1\nb=2\n")
+                with self.assertRaises(upsert_pr_comment.CommentError):
+                    upsert_pr_comment.write_output("c", "3")
+                with self.assertRaises(upsert_pr_comment.CommentError):
+                    upsert_pr_comment.write_output("bad", "line\nbreak")
+
+    def test_main_rejects_oversized_markdown_before_network_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            markdown = Path(temporary).resolve() / "comment.md"
+            with markdown.open("wb") as stream:
+                stream.truncate(upsert_pr_comment.MAX_COMMENT_BODY_BYTES + 1)
+            environment = {
+                "PCBEX_REPOSITORY": "owner/repository",
+                "PCBEX_PR_NUMBER": "1",
+                "PCBEX_COMMENT_ID": "layout",
+                "PCBEX_COMMENT_BODY": str(markdown),
+                "PCBEX_API_URL": "https://api.github.example",
+                "PCBEX_GITHUB_TOKEN": "secret",
+            }
+            with (
+                mock.patch.dict(os.environ, environment, clear=True),
+                mock.patch.object(upsert_pr_comment, "GitHubClient") as client,
+                mock.patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                self.assertEqual(upsert_pr_comment.main(), 2)
+                client.assert_not_called()
 
     def test_user_marker_is_not_updated_when_expected_bot_author_does_not_match(
         self,

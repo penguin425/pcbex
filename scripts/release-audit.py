@@ -6,13 +6,27 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
-import subprocess
+import stat
 import sys
 import tempfile
 import tomllib
 from typing import Any
+
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from ci_runtime import (
+    Deadline,
+    ExecutionBoundaryError,
+    decode_utf8,
+    read_bytes,
+    read_text,
+    run as run_bounded_command,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 ROADMAP = ROOT / "docs" / "ROADMAP.json"
@@ -25,28 +39,47 @@ TARGETS = (
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 REQUIRED_CHECKS = {"Rust", "Python", "KiCad E2E"}
+MIB = 1024 * 1024
+MAX_CONFIG_BYTES = MIB
+MAX_ROADMAP_MILESTONES = 1024
+MAX_COMMAND_STDOUT_BYTES = 16 * MIB
+MAX_COMMAND_STDERR_BYTES = MIB
+MAX_ARCHIVE_BYTES = 128 * MIB
+MAX_CHECKSUM_BYTES = 4096
+MAX_SBOM_BYTES = 16 * MIB
+MAX_RELEASE_ASSET_BYTES = 640 * MIB
+RELEASE_AUDIT_DEADLINE_SECONDS = 8 * 60
 
 
 class AuditError(RuntimeError):
     """A release invariant was not satisfied."""
 
 
-def run(*arguments: str) -> str:
-    result = subprocess.run(
+def run(
+    *arguments: str,
+    timeout_seconds: float = 60,
+    max_stdout_bytes: int = MAX_COMMAND_STDOUT_BYTES,
+    deadline: Deadline | None = None,
+) -> str:
+    result = run_bounded_command(
         arguments,
         cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
+        timeout_seconds=timeout_seconds,
+        max_stdout_bytes=max_stdout_bytes,
+        max_stderr_bytes=MAX_COMMAND_STDERR_BYTES,
+        deadline=deadline,
     )
     if result.returncode:
-        detail = result.stderr.strip() or result.stdout.strip()
-        raise AuditError(f"{' '.join(arguments)} failed: {detail}")
-    return result.stdout
+        detail_bytes = result.stderr.strip() or result.stdout.strip()
+        detail = detail_bytes.decode("utf-8", errors="replace")[:2048]
+        raise AuditError(f"{arguments[0]} failed with status {result.returncode}: {detail}")
+    return decode_utf8(result.stdout, role=f"{arguments[0]} stdout")
 
 
 def workspace_version() -> str:
-    document = tomllib.loads((ROOT / "Cargo.toml").read_text())
+    document = tomllib.loads(
+        read_text(ROOT / "Cargo.toml", max_bytes=MAX_CONFIG_BYTES)
+    )
     return document["workspace"]["package"]["version"]
 
 
@@ -69,7 +102,9 @@ def parse_version(tag: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())
 
 
-def validate_roadmap(document: Any, version: str) -> list[str]:
+def validate_roadmap(
+    document: Any, version: str, *, deadline: Deadline | None = None
+) -> list[str]:
     if not isinstance(document, dict) or set(document) != {"schema_version", "milestones"}:
         raise AuditError("roadmap must be a closed object")
     if document["schema_version"] != 1:
@@ -77,11 +112,17 @@ def validate_roadmap(document: Any, version: str) -> list[str]:
     milestones = document["milestones"]
     if not isinstance(milestones, list) or not milestones:
         raise AuditError("roadmap must contain milestones")
+    if len(milestones) > MAX_ROADMAP_MILESTONES:
+        raise AuditError(
+            f"roadmap exceeds {MAX_ROADMAP_MILESTONES} milestones"
+        )
 
     ids: set[str] = set()
     releases: list[str] = []
     current: list[str] = []
     for milestone in milestones:
+        if deadline is not None:
+            deadline.remaining()
         if not isinstance(milestone, dict) or set(milestone) != {
             "id",
             "release",
@@ -118,6 +159,8 @@ def validate_release(
     *,
     allow_draft: bool,
 ) -> None:
+    if not isinstance(release, dict):
+        raise AuditError("release metadata must be an object")
     if release.get("tag_name") != tag:
         raise AuditError("release tag does not match")
     if release.get("prerelease") is not False:
@@ -132,54 +175,160 @@ def validate_release(
     assets = release.get("assets")
     if not isinstance(assets, list):
         raise AuditError("release assets are missing")
+    if any(not isinstance(asset, dict) for asset in assets):
+        raise AuditError("release assets must be objects")
     names = [asset.get("name") for asset in assets]
+    if any(not isinstance(name, str) for name in names):
+        raise AuditError("release asset names must be strings")
     if len(names) != len(set(names)):
         raise AuditError("release contains duplicate asset names")
     if set(names) != expected_assets(tag):
         missing = sorted(expected_assets(tag) - set(names))
         extra = sorted(set(names) - expected_assets(tag))
         raise AuditError(f"release asset set mismatch; missing={missing}, extra={extra}")
+    total_bytes = 0
     for asset in assets:
-        if asset.get("state") != "uploaded" or not isinstance(asset.get("size"), int) or asset["size"] <= 0:
+        name = asset["name"]
+        size = asset.get("size")
+        if (
+            asset.get("state") != "uploaded"
+            or isinstance(size, bool)
+            or not isinstance(size, int)
+            or size <= 0
+        ):
             raise AuditError(f"release asset is incomplete: {asset.get('name')}")
+        limit = asset_size_limit(name)
+        if size > limit:
+            raise AuditError(
+                f"release asset exceeds {limit} bytes: {name}"
+            )
+        total_bytes += size
+        if total_bytes > MAX_RELEASE_ASSET_BYTES:
+            raise AuditError(
+                f"release assets exceed {MAX_RELEASE_ASSET_BYTES} aggregate bytes"
+            )
 
 
-def validate_downloaded_assets(directory: Path, tag: str) -> None:
-    actual = {path.name for path in directory.iterdir() if path.is_file()}
-    if actual != expected_assets(tag):
+def asset_size_limit(name: str) -> int:
+    if name.endswith(".sha256"):
+        return MAX_CHECKSUM_BYTES
+    if name.endswith(".spdx.json"):
+        return MAX_SBOM_BYTES
+    return MAX_ARCHIVE_BYTES
+
+
+def _release_directory_entries(directory: Path) -> dict[str, os.stat_result]:
+    entries: dict[str, os.stat_result] = {}
+    try:
+        iterator = os.scandir(directory)
+    except OSError as error:
+        raise AuditError(f"cannot enumerate downloaded assets: {directory}") from error
+    with iterator:
+        for entry in iterator:
+            if len(entries) >= len(expected_assets("v0.0.0")):
+                raise AuditError("downloaded release contains too many entries")
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise AuditError(
+                    f"cannot inspect downloaded release asset: {entry.name}"
+                ) from error
+            if (
+                entry.is_symlink()
+                or not stat.S_ISREG(metadata.st_mode)
+                or bool((getattr(metadata, "st_file_attributes", 0) or 0) & 0x400)
+            ):
+                raise AuditError(
+                    f"downloaded release entry is not a regular file: {entry.name}"
+                )
+            if entry.name in entries:
+                raise AuditError(f"duplicate downloaded release asset: {entry.name}")
+            entries[entry.name] = metadata
+    return entries
+
+
+def validate_downloaded_assets(
+    directory: Path, tag: str, *, deadline: Deadline | None = None
+) -> None:
+    if deadline is not None:
+        deadline.remaining()
+    entries = _release_directory_entries(directory)
+    if set(entries) != expected_assets(tag):
         raise AuditError("downloaded release asset set does not match")
+    total_bytes = 0
+    for name, metadata in entries.items():
+        limit = asset_size_limit(name)
+        if metadata.st_size <= 0 or metadata.st_size > limit:
+            raise AuditError(
+                f"downloaded release asset must contain 1 to {limit} bytes: {name}"
+            )
+        total_bytes += metadata.st_size
+        if total_bytes > MAX_RELEASE_ASSET_BYTES:
+            raise AuditError(
+                f"downloaded release assets exceed {MAX_RELEASE_ASSET_BYTES} aggregate bytes"
+            )
+    observed_bytes = 0
+
+    def load(path: Path) -> bytes:
+        nonlocal observed_bytes
+        if deadline is not None:
+            deadline.remaining()
+        payload = read_bytes(path, max_bytes=asset_size_limit(path.name))
+        if deadline is not None:
+            deadline.remaining()
+        observed_bytes += len(payload)
+        if observed_bytes > MAX_RELEASE_ASSET_BYTES:
+            raise AuditError(
+                f"downloaded release assets exceed {MAX_RELEASE_ASSET_BYTES} aggregate bytes"
+            )
+        return payload
+
     for target, extension in TARGETS:
+        if deadline is not None:
+            deadline.remaining()
         archive = directory / f"pcbex-{tag}-{target}.{extension}"
         checksum = directory / f"{archive.name}.sha256"
-        fields = checksum.read_text().strip().split()
+        fields = decode_utf8(load(checksum), role=checksum.name).strip().split()
         if len(fields) != 2 or fields[1].lstrip("*") != archive.name:
             raise AuditError(f"invalid checksum file: {checksum.name}")
         if not SHA256_RE.fullmatch(fields[0]):
             raise AuditError(f"invalid SHA-256 encoding: {checksum.name}")
-        digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+        digest = hashlib.sha256(load(archive)).hexdigest()
         if digest != fields[0]:
             raise AuditError(f"checksum mismatch: {archive.name}")
         sbom = directory / f"pcbex-{tag}-{target}.spdx.json"
-        value = json.loads(sbom.read_text())
-        if value.get("spdxVersion") != "SPDX-2.3":
+        value = json.loads(decode_utf8(load(sbom), role=sbom.name))
+        if not isinstance(value, dict) or value.get("spdxVersion") != "SPDX-2.3":
             raise AuditError(f"invalid SPDX document: {sbom.name}")
 
 
 def validate_protection(protection: Any) -> None:
-    checks = protection.get("required_status_checks") or {}
+    if not isinstance(protection, dict):
+        raise AuditError("main protection must be an object")
+    checks = protection.get("required_status_checks")
+    if not isinstance(checks, dict):
+        raise AuditError("main protection status checks must be an object")
     if checks.get("strict") is not True:
         raise AuditError("main protection must require an up-to-date branch")
-    if not REQUIRED_CHECKS.issubset(set(checks.get("contexts") or [])):
+    contexts = checks.get("contexts")
+    if not isinstance(contexts, list) or any(
+        not isinstance(context, str) for context in contexts
+    ):
+        raise AuditError("main protection status-check contexts must be strings")
+    if not REQUIRED_CHECKS.issubset(set(contexts)):
         raise AuditError("main protection is missing required status checks")
-    if protection.get("required_pull_request_reviews") is None:
+    if not isinstance(protection.get("required_pull_request_reviews"), dict):
         raise AuditError("main protection must require the pull-request workflow")
-    if (protection.get("enforce_admins") or {}).get("enabled") is not True:
+    enforce_admins = protection.get("enforce_admins")
+    if not isinstance(enforce_admins, dict) or enforce_admins.get("enabled") is not True:
         raise AuditError("main protection must apply to administrators")
     for field in ("required_linear_history", "required_conversation_resolution"):
-        if (protection.get(field) or {}).get("enabled") is not True:
+        value = protection.get(field)
+        if not isinstance(value, dict) or value.get("enabled") is not True:
             raise AuditError(f"main protection must enable {field}")
     for field in ("allow_force_pushes", "allow_deletions"):
-        if (protection.get(field) or {}).get("enabled") is not False:
+        value = protection.get(field)
+        if not isinstance(value, dict) or value.get("enabled") is not False:
             raise AuditError(f"main protection must disable {field}")
 
 
@@ -222,11 +371,14 @@ def validate_actions_permissions(permissions: Any) -> None:
         raise AuditError("GitHub Actions selected_actions_url is invalid")
 
 
-def github_json(endpoint: str) -> Any:
-    return json.loads(run("gh", "api", endpoint))
+def github_json(endpoint: str, *, deadline: Deadline | None = None) -> Any:
+    return json.loads(run("gh", "api", endpoint, deadline=deadline))
 
 
-def github_release_by_tag(repository: str, tag: str) -> Any:
+def github_release_by_tag(
+    repository: str, tag: str, *, deadline: Deadline | None = None
+) -> Any:
+    run_options = {} if deadline is None else {"deadline": deadline}
     pages = json.loads(
         run(
             "gh",
@@ -234,8 +386,17 @@ def github_release_by_tag(repository: str, tag: str) -> Any:
             "--paginate",
             "--slurp",
             f"repos/{repository}/releases?per_page=100",
+            **run_options,
         )
     )
+    if deadline is not None:
+        deadline.remaining()
+    if not isinstance(pages, list) or len(pages) > 100:
+        raise AuditError("GitHub release collection exceeds 100 pages")
+    if any(not isinstance(page, list) or len(page) > 100 for page in pages):
+        raise AuditError("GitHub release collection page is invalid")
+    if any(not isinstance(release, dict) for page in pages for release in page):
+        raise AuditError("GitHub release collection entries must be objects")
     matches = [
         release
         for page in pages
@@ -260,25 +421,43 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        deadline = Deadline.start(RELEASE_AUDIT_DEADLINE_SECONDS)
         version = workspace_version()
         tag = args.tag or f"v{version}"
-        roadmap = json.loads(ROADMAP.read_text())
-        releases = validate_roadmap(roadmap, version)
+        roadmap = json.loads(read_text(ROADMAP, max_bytes=MAX_CONFIG_BYTES))
+        releases = validate_roadmap(roadmap, version, deadline=deadline)
         if tag not in releases:
             raise AuditError("tag is not recorded in the roadmap")
         for release_tag in releases:
             if release_tag == f"v{version}" and tag != release_tag:
                 continue
-            run("git", "rev-parse", "--verify", f"refs/tags/{release_tag}")
+            run(
+                "git",
+                "rev-parse",
+                "--verify",
+                f"refs/tags/{release_tag}",
+                timeout_seconds=30,
+                max_stdout_bytes=64 * 1024,
+                deadline=deadline,
+            )
 
-        tag_sha = run("git", "rev-list", "-n", "1", tag).strip()
+        tag_sha = run(
+            "git",
+            "rev-list",
+            "-n",
+            "1",
+            tag,
+            timeout_seconds=30,
+            max_stdout_bytes=64 * 1024,
+            deadline=deadline,
+        ).strip()
         expected_sha = args.expected_sha or tag_sha
         if tag_sha != expected_sha:
             raise AuditError("tag does not resolve to the expected commit")
 
         # GitHub's "get by tag" endpoint returns 404 for draft releases.
         # The paginated release collection includes drafts for authorized callers.
-        release = github_release_by_tag(args.repository, tag)
+        release = github_release_by_tag(args.repository, tag, deadline=deadline)
         validate_release(release, tag, expected_sha, allow_draft=args.allow_draft)
 
         if not args.skip_download:
@@ -292,19 +471,34 @@ def main() -> int:
                     args.repository,
                     "--dir",
                     temporary,
+                    timeout_seconds=240,
+                    max_stdout_bytes=MIB,
+                    deadline=deadline,
                 )
-                validate_downloaded_assets(Path(temporary), tag)
+                validate_downloaded_assets(
+                    Path(temporary).resolve(), tag, deadline=deadline
+                )
 
         if args.check_protection:
             protection = github_json(
-                f"repos/{args.repository}/branches/main/protection"
+                f"repos/{args.repository}/branches/main/protection",
+                deadline=deadline,
             )
             validate_protection(protection)
             actions_permissions = github_json(
-                f"repos/{args.repository}/actions/permissions"
+                f"repos/{args.repository}/actions/permissions",
+                deadline=deadline,
             )
             validate_actions_permissions(actions_permissions)
-    except (AuditError, json.JSONDecodeError, OSError) as error:
+        deadline.remaining()
+    except (
+        AuditError,
+        ExecutionBoundaryError,
+        json.JSONDecodeError,
+        OSError,
+        TypeError,
+        ValueError,
+    ) as error:
         print(f"release audit failed: {error}", file=sys.stderr)
         return 1
 

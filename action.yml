@@ -1335,12 +1335,20 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        rustup toolchain install stable --profile minimal
-        cargo +stable build \
-          --manifest-path "$GITHUB_ACTION_PATH/Cargo.toml" \
-          --package pcbex \
-          --release \
-          --locked
+        python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
+          --timeout-seconds 600 \
+          --max-stdout-bytes 8388608 \
+          --max-stderr-bytes 8388608 \
+          -- rustup toolchain install stable --profile minimal
+        python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
+          --timeout-seconds 1800 \
+          --max-stdout-bytes 8388608 \
+          --max-stderr-bytes 8388608 \
+          -- cargo +stable build \
+            --manifest-path "$GITHUB_ACTION_PATH/Cargo.toml" \
+            --package pcbex \
+            --release \
+            --locked
         echo "binary=$GITHUB_ACTION_PATH/target/release/pcbex" >> "$GITHUB_OUTPUT"
 
     - name: Analyze hardware
@@ -1565,10 +1573,31 @@ runs:
         PCBEX_REMOTE_WITNESS_BEARER_TOKEN: ${{ inputs.remote-witness-bearer-token }}
         PCBEX_REMOTE_WITNESS_TIMEOUT_SECONDS: ${{ inputs.remote-witness-timeout-seconds }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
-      run: "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
+      run: >-
+        python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec
+        --timeout-seconds 2400
+        --max-stdout-bytes 8388608
+        --max-stderr-bytes 8388608
+        --output-root "$PCBEX_OUTPUT_DIR"
+        -- "$GITHUB_ACTION_PATH/scripts/github-analysis.sh"
+
+    - name: Validate bounded analysis outputs
+      id: artifact-boundary
+      if: ${{ always() && steps.analyze.outputs.artifact-dir != '' }}
+      shell: bash
+      env:
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" scan \
+          --output-root "$PCBEX_OUTPUT_DIR" \
+          --max-entries 4096 \
+          --max-depth 16 \
+          --max-file-bytes 134217728 \
+          --max-total-bytes 536870912
+        echo "safe=true" >> "$GITHUB_OUTPUT"
 
     - name: Upload analysis artifact
-      if: ${{ always() && inputs.upload-artifact == 'true' && steps.analyze.outputs.artifact-dir != '' }}
+      if: ${{ always() && steps.artifact-boundary.outputs.safe == 'true' && inputs.upload-artifact == 'true' && steps.analyze.outputs.artifact-dir != '' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ inputs.artifact-name }}
@@ -1577,7 +1606,7 @@ runs:
         retention-days: ${{ inputs.retention-days }}
 
     - name: Upload SARIF
-      if: ${{ always() && inputs.upload-sarif == 'true' && steps.analyze.outputs.sarif-dir != '' }}
+      if: ${{ always() && steps.artifact-boundary.outputs.safe == 'true' && inputs.upload-sarif == 'true' && steps.analyze.outputs.sarif-dir != '' }}
       uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
       with:
         sarif_file: ${{ steps.analyze.outputs.sarif-dir }}
@@ -1585,7 +1614,7 @@ runs:
 
     - name: Create or update pull request comment
       id: comment
-      if: ${{ always() && inputs.pr-comment == 'true' && steps.analyze.outputs.comment-body != '' }}
+      if: ${{ always() && steps.artifact-boundary.outputs.safe == 'true' && inputs.pr-comment == 'true' && steps.analyze.outputs.comment-body != '' }}
       shell: bash
       env:
         PCBEX_API_URL: ${{ github.api_url }}

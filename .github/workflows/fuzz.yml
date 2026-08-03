@@ -8,11 +8,17 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   fuzz:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         target: [kicad_import, board_json, length_tuning, bga_escape]
     steps:
@@ -26,4 +32,32 @@ jobs:
       - name: Fuzz ${{ matrix.target }}
         env:
           RUSTUP_TOOLCHAIN: nightly
-        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=60
+        shell: bash
+        run: |
+          mkdir -p "build/fuzz-artifacts/${{ matrix.target }}"
+          cargo fuzz run "${{ matrix.target }}" -- \
+            -max_total_time=60 \
+            -timeout=10 \
+            -rss_limit_mb=2048 \
+            -max_len=1048576 \
+            -artifact_prefix="build/fuzz-artifacts/${{ matrix.target }}/"
+      - name: Validate bounded fuzz failure artifacts
+        id: fuzz-artifact-boundary
+        if: failure()
+        shell: bash
+        run: |
+          python3 scripts/ci_runtime.py scan \
+            --output-root "build/fuzz-artifacts/${{ matrix.target }}" \
+            --max-entries 16 \
+            --max-depth 1 \
+            --max-file-bytes 1048576 \
+            --max-total-bytes 16777216
+          echo "safe=true" >> "$GITHUB_OUTPUT"
+      - name: Upload bounded fuzz failure artifact
+        if: ${{ failure() && steps.fuzz-artifact-boundary.outputs.safe == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/fuzz-artifacts/${{ matrix.target }}
+          if-no-files-found: ignore
+          retention-days: 7

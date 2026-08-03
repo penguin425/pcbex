@@ -19,11 +19,13 @@ jobs:
   analyze:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       security-events: write
       packages: read
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         language:
           - rust

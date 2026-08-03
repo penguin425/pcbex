@@ -108,6 +108,7 @@ their existing narrower, purpose-specific limits. The Python agent has an
 equivalent stdlib-only boundary documented in
 [`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md). Rust manufacturing ZIP,
 artifact, workspace, and repair walkers use the production contract documented
-in [`MANUFACTURING_PACKAGE.md`](MANUFACTURING_PACKAGE.md). Release/CI helper
-scripts remain explicit follow-up work. Core A*, zone fill, placement, and
-raster budgets are unchanged.
+in [`MANUFACTURING_PACKAGE.md`](MANUFACTURING_PACKAGE.md). Release workflows,
+CI jobs, composite-action output trees, and their Python helper scripts use the
+outer limits documented in [`CI_EXECUTION_LIMITS.md`](CI_EXECUTION_LIMITS.md).
+Core A*, zone fill, placement, and raster budgets are unchanged.

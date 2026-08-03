@@ -11,9 +11,24 @@ import sys
 from typing import Any
 from urllib import error, parse, request
 
+SCRIPTS = Path(__file__).resolve().parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+
+from ci_runtime import (
+    ExecutionBoundaryError,
+    append_text,
+    read_response_bytes,
+    read_text,
+)
 
 MAX_COMMENT_CHARACTERS = 65_536
 MAX_COMMENT_PAGES = 100
+MAX_COMMENT_BODY_BYTES = 256 * 1024
+MAX_API_RESPONSE_BYTES = 1024 * 1024
+MAX_API_TOTAL_BYTES = 8 * 1024 * 1024
+MAX_API_REQUEST_BYTES = 1024 * 1024
+MAX_GITHUB_OUTPUT_BYTES = 1024 * 1024
 COMMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 REPOSITORY_PATTERN = re.compile(
     r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
@@ -49,6 +64,7 @@ class GitHubClient:
             raise CommentError("GitHub token must not be empty")
         self.api_url = api_url
         self.token = token
+        self.response_bytes_remaining = MAX_API_TOTAL_BYTES
         self.opener = (
             opener if opener is not None else request.build_opener(_NoRedirectHandler())
         )
@@ -105,6 +121,10 @@ class GitHubClient:
         tolerated_statuses: set[int] | None = None,
     ) -> Any:
         data = None if payload is None else json.dumps(payload).encode()
+        if data is not None and len(data) > MAX_API_REQUEST_BYTES:
+            raise CommentError(
+                f"GitHub API request exceeds {MAX_API_REQUEST_BYTES} bytes"
+            )
         call = request.Request(
             f"{self.api_url}{endpoint}",
             data=data,
@@ -128,7 +148,16 @@ class GitHubClient:
                     raise CommentError(
                         f"GitHub API {method} {endpoint} failed with HTTP redirect {status}"
                     )
-                return json.load(response)
+                limit = min(MAX_API_RESPONSE_BYTES, self.response_bytes_remaining)
+                try:
+                    response_bytes = read_response_bytes(response, max_bytes=limit)
+                except ExecutionBoundaryError as failure:
+                    raise CommentError(str(failure)) from failure
+                self.response_bytes_remaining -= len(response_bytes)
+                try:
+                    return json.loads(response_bytes)
+                except (json.JSONDecodeError, UnicodeDecodeError) as failure:
+                    raise CommentError("GitHub API response is not valid JSON") from failure
         except error.HTTPError as failure:
             if 300 <= failure.code < 400:
                 # The no-redirect opener should surface redirects as HTTPError.
@@ -220,10 +249,20 @@ def required_environment(name: str) -> str:
 
 
 def write_output(name: str, value: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        raise CommentError("GitHub output name is invalid")
+    if "\n" in value or "\r" in value:
+        raise CommentError("GitHub output value must be one line")
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
-        with Path(output).open("a", encoding="utf-8") as stream:
-            stream.write(f"{name}={value}\n")
+        try:
+            append_text(
+                Path(output),
+                f"{name}={value}\n",
+                max_bytes=MAX_GITHUB_OUTPUT_BYTES,
+            )
+        except ExecutionBoundaryError as failure:
+            raise CommentError(str(failure)) from failure
 
 
 def main() -> int:
@@ -232,7 +271,7 @@ def main() -> int:
         pull_request = int(required_environment("PCBEX_PR_NUMBER"))
         comment_id = required_environment("PCBEX_COMMENT_ID")
         markdown_path = Path(required_environment("PCBEX_COMMENT_BODY"))
-        markdown = markdown_path.read_text(encoding="utf-8")
+        markdown = read_text(markdown_path, max_bytes=MAX_COMMENT_BODY_BYTES)
         client = GitHubClient(
             required_environment("PCBEX_API_URL"),
             required_environment("PCBEX_GITHUB_TOKEN"),
@@ -246,7 +285,13 @@ def main() -> int:
         write_output("comment-url", comment_url)
         print(f"{operation} pcbex pull-request comment: {comment_url}")
         return 0
-    except (CommentError, OSError, UnicodeError, ValueError) as failure:
+    except (
+        CommentError,
+        ExecutionBoundaryError,
+        OSError,
+        UnicodeError,
+        ValueError,
+    ) as failure:
         print(f"pcbex PR comment error: {failure}", file=sys.stderr)
         return 2
 

@@ -564,6 +564,11 @@
     {
       "id": "manufacturing-package-workspace-quotas",
       "release": "v1.409.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-release-ci-execution",
+      "release": "v1.410.0",
       "status": "current"
     }
   ]

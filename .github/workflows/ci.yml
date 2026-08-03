@@ -16,6 +16,7 @@ jobs:
   hardware-ci-action:
     name: Hardware CI action
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -567,11 +568,12 @@ jobs:
             --witness-private-key build/action-quorum/gossip-history-witness-b.key \
             --witnessed-at-unix 16 \
             --output build/action-quorum/gossip-history-witness-b.json
-          RUNNER_TRACKING_ID="" nohup python3 \
+          RUNNER_TRACKING_ID="" nohup setsid python3 \
             scripts/tests/remote_approval_registry_history_witness_server.py \
             --witness build/action-quorum/gossip-history-witness-a.json \
             --endpoint-output build/action-quorum/gossip-history-witness.endpoint \
             > build/action-quorum/gossip-history-witness.server.log 2>&1 </dev/null &
+          printf '%s\n' "$!" >> build/action-server-pids
           for attempt in {1..50}; do
             [[ -s build/action-quorum/gossip-history-witness.endpoint ]] && break
             sleep 0.1
@@ -598,12 +600,13 @@ jobs:
             --witness-id action-remote-witness \
             --public-key build/action-quorum/remote-witness.pub \
             --output build/action-quorum/remote-witness.trust.json
-          RUNNER_TRACKING_ID="" nohup python3 scripts/tests/remote_witness_server.py \
+          RUNNER_TRACKING_ID="" nohup setsid python3 scripts/tests/remote_witness_server.py \
             --pcbex target/release/pcbex \
             --checkpoint build/action-quorum/approval-log.checkpoint.json \
             --private-key build/action-quorum/remote-witness.key \
             --endpoint-output build/action-quorum/remote-witness.endpoint \
             > build/action-quorum/remote-witness.server.log 2>&1 </dev/null &
+          printf '%s\n' "$!" >> build/action-server-pids
           for attempt in {1..50}; do
             [[ -s build/action-quorum/remote-witness.endpoint ]] && break
             sleep 0.1
@@ -911,11 +914,12 @@ jobs:
             --public-key build/action-policy/policy.pub \
             --output build/action-policy/accepted-policy.json \
             --state-output build/action-policy/accepted-state.json
-          RUNNER_TRACKING_ID="" nohup python3 scripts/tests/policy_pack_server.py \
+          RUNNER_TRACKING_ID="" nohup setsid python3 scripts/tests/policy_pack_server.py \
             --signed-policy-pack build/action-policy/policy.signed.json \
             --endpoint-output build/action-policy/policy.endpoint \
             --bearer-token action-policy-token \
             > build/action-policy/policy.server.log 2>&1 </dev/null &
+          printf '%s\n' "$!" >> build/action-server-pids
           for attempt in {1..50}; do
             [[ -s build/action-policy/policy.endpoint ]] && break
             sleep 0.1
@@ -951,10 +955,36 @@ jobs:
           test -s "$FETCH_RECEIPT"
           test "$(jq -r '.verified' "$FETCH_RECEIPT")" = "true"
           test "$(jq -r '.baseline_revision' "$FETCH_RECEIPT")" = "1"
+      - name: Stop fixture servers
+        if: always()
+        shell: bash
+        run: |
+          if [[ ! -f build/action-server-pids ]]; then
+            exit 0
+          fi
+          mapfile -t server_pids < build/action-server-pids
+          for server_pid in "${server_pids[@]}"; do
+            [[ "$server_pid" =~ ^[1-9][0-9]*$ ]] || exit 2
+            kill -TERM -- "-$server_pid" 2>/dev/null || true
+          done
+          for attempt in {1..50}; do
+            running=false
+            for server_pid in "${server_pids[@]}"; do
+              if kill -0 -- "-$server_pid" 2>/dev/null; then
+                running=true
+              fi
+            done
+            [[ "$running" = false ]] && break
+            sleep 0.1
+          done
+          for server_pid in "${server_pids[@]}"; do
+            kill -KILL -- "-$server_pid" 2>/dev/null || true
+          done
 
   rust:
     name: Rust
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -986,6 +1016,7 @@ jobs:
     needs: python-boundaries
     if: ${{ always() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Require cross-platform boundary checks
         env:
@@ -1005,8 +1036,10 @@ jobs:
   python-boundaries:
     name: Python boundaries (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 2
       matrix:
         runner:
           - macos-latest
@@ -1028,3 +1061,4 @@ jobs:
           agent.tests.test_agent_boundaries
           agent.tests.test_provider_boundaries
           agent.tests.test_repair_loop_boundaries
+          scripts.tests.test_ci_runtime

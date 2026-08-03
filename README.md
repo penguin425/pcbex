@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.409.0
+    uses: penguin425/pcbex@v1.410.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2144,6 +2144,13 @@ The action outputs the artifact directory, current and comparison SARIF paths,
 violation count, regression result, and optional PR comment URL.
 `upload-sarif` is opt-in because the calling job must grant
 `security-events: write`; artifact upload defaults to on.
+Toolchain installation, compilation, and hardware analysis run through a
+process-tree supervisor with fixed deadlines and output ceilings. Artifact,
+SARIF, and trusted direct-comment publication additionally require a
+regular-file-only analysis tree within 4,096 entries, depth 16, 128 MiB per
+file, and 512 MiB total. Repository workflows also enforce explicit job
+timeouts and two-run matrix parallelism; the complete contract is documented
+in [bounded release and CI execution](docs/CI_EXECUTION_LIMITS.md).
 
 `pr-comment` remains opt-in and requires both `pull-requests: write` and an
 explicit `github-token`. A stable `comment-id` creates a hidden marker; later
@@ -4035,7 +4042,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.409.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.410.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
@@ -4132,7 +4139,11 @@ safely.
 Before publication, the workflow runs `scripts/release-audit.py` against the
 machine-readable [product roadmap](docs/ROADMAP.md). It requires the exact 12
 release assets, downloads them, verifies every archive checksum and SPDX
-document, and confirms the tag commit. Repository administrators can also
+document, and confirms the tag commit. Audit subprocesses share one aggregate
+deadline, while local roadmap and asset work checks that deadline between
+bounded items. It also bounds command output, rejects links and special files,
+and caps archives, checksums, SBOMs, and their aggregate downloaded size.
+Repository administrators can also
 audit the live `main` protection:
 
 ```sh
