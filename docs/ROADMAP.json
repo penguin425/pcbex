@@ -544,6 +544,11 @@
     {
       "id": "bounded-cli-io-subprocess-execution",
       "release": "v1.405.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-python-agent-io-subprocess-execution",
+      "release": "v1.406.0",
       "status": "current"
     }
   ]

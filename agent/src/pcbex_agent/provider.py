@@ -1,19 +1,34 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
-import subprocess
-import tempfile
-import threading
 from pathlib import Path
 from typing import Any
 
-from .review import ReviewError, review_schematic_with_llm
+from .bounded_io import (
+    BoundedIOError,
+    atomic_write_no_clobber,
+    read_bytes,
+    validate_no_clobber_path,
+)
+from .bounded_process import (
+    BoundedProcessError,
+    InvalidProcessArguments,
+    ProcessInputLimitExceeded,
+    ProcessOutputLimitExceeded,
+    ProcessSpawnError,
+    ProcessTimeout,
+    run_bounded,
+)
+from .review import review_schematic_with_llm
 
 MAXIMUM_REQUEST_BYTES = 32 * 1024 * 1024
+MAXIMUM_PROVIDER_PROMPT_BYTES = 32 * 1024 * 1024
 MAXIMUM_PROVIDER_OUTPUT_BYTES = 16 * 1024 * 1024
 MAXIMUM_TIMEOUT_SECONDS = 600
+_PROMPT_VALIDATION_CHUNK_CHARACTERS = 64 * 1024
 
 
 class ProviderError(RuntimeError):
@@ -88,8 +103,11 @@ def review_schematic_with_command(
         raise ProviderError("provider command must not be empty")
     if output_path == receipt_path:
         raise ProviderError("response and receipt paths must differ")
-    if output_path.exists() or receipt_path.exists():
-        raise ProviderError("provider adapter refuses to overwrite response or receipt")
+    _preflight_new_artifacts(
+        output_path,
+        receipt_path,
+        refusal="provider adapter refuses to overwrite response or receipt",
+    )
     if not 1 <= timeout_seconds <= MAXIMUM_TIMEOUT_SECONDS:
         raise ProviderError(
             f"timeout must be between 1 and {MAXIMUM_TIMEOUT_SECONDS} seconds"
@@ -99,13 +117,12 @@ def review_schematic_with_command(
             "maximum output must be between 1 and "
             f"{MAXIMUM_PROVIDER_OUTPUT_BYTES} bytes"
         )
-    request_bytes = request_path.read_bytes()
-    if len(request_bytes) > MAXIMUM_REQUEST_BYTES:
-        raise ProviderError(
-            f"AI review request exceeds {MAXIMUM_REQUEST_BYTES} bytes"
-        )
     try:
-        request = json.loads(request_bytes)
+        request_bytes = read_bytes(request_path, max_bytes=MAXIMUM_REQUEST_BYTES)
+    except BoundedIOError as error:
+        raise ProviderError(f"reading AI review request: {error}") from error
+    try:
+        request = json.loads(request_bytes.decode("utf-8", errors="strict"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ProviderError(f"invalid AI review request JSON: {error}") from error
     if not isinstance(request, dict):
@@ -141,11 +158,11 @@ def review_schematic_with_command(
         json.dumps(receipt, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
     )
     _atomic_write_new(output_path, response_bytes)
-    try:
-        _atomic_write_new(receipt_path, receipt_bytes)
-    except Exception:
-        output_path.unlink(missing_ok=True)
-        raise
+    # The two artifacts are independently atomic, not a filesystem
+    # transaction.  If receipt publication fails, retain the already-published
+    # response: deleting it here could race with another path replacement and
+    # remove an object that this invocation did not create.
+    _atomic_write_new(receipt_path, receipt_bytes)
     return receipt
 
 
@@ -156,104 +173,47 @@ def _run_provider(
     timeout_seconds: int,
     max_output_bytes: int,
 ) -> str:
+    prompt_bytes = _encode_provider_prompt(prompt)
     try:
-        process = subprocess.Popen(
+        completed = run_bounded(
             command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
+            input_bytes=prompt_bytes,
+            timeout_seconds=timeout_seconds,
+            max_stdin_bytes=MAXIMUM_PROVIDER_PROMPT_BYTES,
+            max_stdout_bytes=max_output_bytes,
+            max_stderr_bytes=max_output_bytes,
         )
-    except OSError as error:
+    except (InvalidProcessArguments, ProcessSpawnError) as error:
         raise ProviderError(f"starting provider command: {error}") from error
-
-    stdout = bytearray()
-    stderr = bytearray()
-    overflow = threading.Event()
-    streams = [
-        threading.Thread(
-            target=_read_bounded,
-            args=(process.stdout, stdout, max_output_bytes, overflow, process),
-            daemon=True,
-        ),
-        threading.Thread(
-            target=_read_bounded,
-            args=(process.stderr, stderr, max_output_bytes, overflow, process),
-            daemon=True,
-        ),
-    ]
-    for thread in streams:
-        thread.start()
-    writer = threading.Thread(
-        target=_write_prompt,
-        args=(process.stdin, prompt.encode("utf-8")),
-        daemon=True,
-    )
-    writer.start()
-    try:
-        try:
-            return_code = process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired as error:
-            process.kill()
-            process.wait()
-            raise ProviderError(
-                f"provider command exceeded {timeout_seconds} second timeout"
-            ) from error
-    finally:
-        writer.join(timeout=2)
-        for thread in streams:
-            thread.join(timeout=2)
-        if process.stdout is not None:
-            process.stdout.close()
-        if process.stderr is not None:
-            process.stderr.close()
-
-    if overflow.is_set():
+    except ProcessTimeout as error:
+        raise ProviderError(
+            f"provider command exceeded {timeout_seconds} second timeout"
+        ) from error
+    except ProcessInputLimitExceeded as error:
+        raise ProviderError(
+            "provider prompt exceeded "
+            f"{MAXIMUM_PROVIDER_PROMPT_BYTES} bytes"
+        ) from error
+    except ProcessOutputLimitExceeded as error:
         raise ProviderError(
             f"provider stdout or stderr exceeded {max_output_bytes} bytes"
-        )
-    if return_code != 0:
-        detail = stderr[:4096].decode("utf-8", errors="replace").strip()
-        if len(stderr) > 4096:
+        ) from error
+    except BoundedProcessError as error:
+        raise ProviderError(f"running provider command: {error}") from error
+
+    if completed.returncode != 0:
+        diagnostic = completed.stderr if completed.stderr else completed.stdout
+        detail = diagnostic[:4096].decode("utf-8", errors="replace").strip()
+        if len(diagnostic) > 4096:
             detail += "…"
         raise ProviderError(
-            f"provider command exited with {return_code}"
+            f"provider command exited with {completed.returncode}"
             + (f": {detail}" if detail else "")
         )
     try:
-        return stdout.decode("utf-8")
+        return completed.stdout.decode("utf-8")
     except UnicodeDecodeError as error:
         raise ProviderError("provider stdout is not valid UTF-8") from error
-
-
-def _read_bounded(
-    stream: Any,
-    destination: bytearray,
-    limit: int,
-    overflow: threading.Event,
-    process: subprocess.Popen[bytes],
-) -> None:
-    if stream is None:
-        return
-    while chunk := stream.read(65536):
-        remaining = limit - len(destination)
-        destination.extend(chunk[: max(remaining, 0)])
-        if len(chunk) > remaining:
-            overflow.set()
-            process.kill()
-            return
-
-
-def _write_prompt(stream: Any, prompt: bytes) -> None:
-    if stream is None:
-        return
-    try:
-        stream.write(prompt)
-        stream.flush()
-    except BrokenPipeError:
-        pass
-    finally:
-        stream.close()
 
 
 def _descriptor(path: Path, value: bytes) -> dict[str, Any]:
@@ -268,19 +228,55 @@ def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _atomic_write_new(path: Path, value: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", dir=path.parent
-    )
-    temporary = Path(temporary_name)
+def _validate_provider_prompt(prompt: str) -> None:
+    """Reject an oversized/invalid UTF-8 prompt before allocating its bytes."""
+
+    total = 0
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(value)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.link(temporary, path)
-        temporary.unlink()
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
+        for offset in range(0, len(prompt), _PROMPT_VALIDATION_CHUNK_CHARACTERS):
+            chunk = prompt[offset : offset + _PROMPT_VALIDATION_CHUNK_CHARACTERS]
+            total += len(chunk.encode("utf-8", errors="strict"))
+            if total > MAXIMUM_PROVIDER_PROMPT_BYTES:
+                raise ProviderError(
+                    "provider prompt exceeded "
+                    f"{MAXIMUM_PROVIDER_PROMPT_BYTES} bytes"
+                )
+    except UnicodeEncodeError as error:
+        raise ProviderError("provider prompt is not valid UTF-8") from error
+
+
+def _encode_provider_prompt(prompt: str) -> bytes:
+    _validate_provider_prompt(prompt)
+    return prompt.encode("utf-8", errors="strict")
+
+
+def _preflight_new_artifacts(
+    output_path: Path,
+    receipt_path: Path,
+    *,
+    refusal: str,
+) -> None:
+    """Reject unsafe/existing targets before a provider is contacted."""
+
+    if os.path.normcase(os.path.abspath(output_path)) == os.path.normcase(
+        os.path.abspath(receipt_path)
+    ):
+        raise ProviderError("response and receipt paths must differ")
+    for path in (output_path, receipt_path):
+        try:
+            validate_no_clobber_path(path)
+        except BoundedIOError as error:
+            if error.errno == errno.EEXIST:
+                raise ProviderError(refusal) from error
+            raise ProviderError(f"validating provider artifact path: {error}") from error
+
+
+def _atomic_write_new(path: Path, value: bytes) -> None:
+    try:
+        atomic_write_no_clobber(
+            path,
+            value,
+            max_bytes=MAXIMUM_PROVIDER_OUTPUT_BYTES,
+        )
+    except BoundedIOError as error:
+        raise ProviderError(f"writing provider artifact: {error}") from error

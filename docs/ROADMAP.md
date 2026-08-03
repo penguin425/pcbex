@@ -115,6 +115,7 @@ auditable release.
 | v1.403.0 | Deterministic A* work budget | Bound aggregate heap-pop and successful-relaxation work across differential, normal, retry, and shove routing while preserving deterministic parallel results and fail-closed public compatibility |
 | v1.404.0 | Deterministic zone-fill work budget | Bound aggregate queue-pop and successful-discovery work across every zone in one atomic fill while eliminating duplicate queue entries and preserving deterministic output |
 | v1.405.0 | Bounded CLI I/O and subprocess execution | Limit generic Rust CLI files and MCP frames, atomically publish per-file outputs, and enforce deadlines, output ceilings, cancellation, and process-tree cleanup for doctor, KiCad, and MCP children |
+| v1.406.0 | Bounded Python agent I/O and subprocess execution | Route every Python agent file through regular-file, link-safe, size-limited atomic I/O; cap provider input and all child output; reject ambiguous KiCad DRC reports; and supervise provider, pcbex, and KiCad process trees under one deadline |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -123,12 +124,14 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release applies a 128 MiB regular-file boundary and atomic per-file
-publication to generic Rust CLI paths, limits MCP frames, and gives the doctor,
-KiCad, and MCP child paths fixed deadlines and output ceilings with process-tree
-cleanup. Exact limits, atomicity scope, platform behavior, and exclusions are
-documented in [`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md). The next roadmap work is
-to unify specialized manufacturing/Python execution boundaries, close the
-remaining static resource-accounting gaps, enforce an immutable ERC safety
-floor, and then add bounded natural-language circuit generation with a
-deterministic ERC correction loop.
+The current release extends the same fail-closed boundary to the Python agent:
+generic files are capped at 32 MiB, KiCad candidates at 128 MiB, outputs are
+atomic, provider prompts are capped at 32 MiB, and provider, pcbex, and KiCad
+children receive concurrent output ceilings, one deadline, and process-tree
+cleanup. Empty, malformed, or unexplained nonzero KiCad DRC reports fail
+closed. Exact limits, atomicity scope, platform behavior, and exclusions are documented in
+[`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md). The next roadmap work is to
+unify specialized manufacturing, firmware, factory, release, and CI execution
+boundaries, close the remaining static resource-accounting gaps, enforce an
+immutable ERC safety floor, and then add bounded natural-language circuit
+generation with a deterministic ERC correction loop.

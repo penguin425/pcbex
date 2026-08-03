@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
+from .bounded_io import BoundedIOError, atomic_write, read_text
 from .catalog import catalog_parts_from_json
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
@@ -28,6 +30,26 @@ from .skidl import (
     circuit_spec_json_schema,
     generate_skidl,
 )
+
+MAXIMUM_AGENT_FILE_BYTES = 32 * 1024 * 1024
+
+
+def _read_text(path: Path) -> str:
+    return read_text(path, max_bytes=MAXIMUM_AGENT_FILE_BYTES)
+
+
+def _write_text(path: Path, value: str) -> None:
+    atomic_write(
+        path,
+        value,
+        max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+    )
+
+
+def _paths_are_same(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
+        os.path.abspath(right)
+    )
 
 
 def main() -> None:
@@ -136,24 +158,25 @@ def main() -> None:
 
     if args.command == "plan":
         result = build_plan(
-            args.requirements.read_text(encoding="utf-8"),
+            _read_text(args.requirements),
             limits=PlanLimits(args.max_iterations, args.max_changed_components),
         )
-        args.output.write_text(
+        _write_text(
+            args.output,
             json.dumps(result.as_dict(), indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
         )
     elif args.command == "apply-constraints":
-        raw = json.loads(args.plan.read_text(encoding="utf-8"))
+        raw = json.loads(_read_text(args.plan))
         result = build_plan(
             raw["requirements"],
             limits=PlanLimits(**raw["limits"]),
         )
         apply_constraints(args.problem, result, args.output)
     elif args.command == "normalize-drc":
-        violations = normalize_kicad_report(args.report.read_text(encoding="utf-8"))
+        violations = normalize_kicad_report(_read_text(args.report))
         repairs = propose_repairs(violations)
-        args.output.write_text(
+        _write_text(
+            args.output,
             json.dumps(
                 {
                     "violations": [v.__dict__ for v in violations],
@@ -163,10 +186,9 @@ def main() -> None:
                 ensure_ascii=False,
             )
             + "\n",
-            encoding="utf-8",
         )
     elif args.command == "apply-ipc":
-        document = json.loads(args.routes.read_text(encoding="utf-8"))
+        document = json.loads(_read_text(args.routes))
         result = apply_routes_to_open_board(document, max_items=args.max_items)
         print(
             f"created {result.tracks_created} tracks and "
@@ -194,7 +216,7 @@ def main() -> None:
             provider_receipt_json_schema(), indent=2, ensure_ascii=False
         ) + "\n"
         if args.output:
-            args.output.write_text(rendered, encoding="utf-8")
+            _write_text(args.output, rendered)
         else:
             print(rendered, end="")
     elif args.command == "review-managed":
@@ -224,15 +246,15 @@ def main() -> None:
             managed_provider_receipt_json_schema(), indent=2, ensure_ascii=False
         ) + "\n"
         if args.output:
-            args.output.write_text(rendered, encoding="utf-8")
+            _write_text(args.output, rendered)
         else:
             print(rendered, end="")
     elif args.command == "generate-skidl":
         try:
-            spec = json.loads(args.spec.read_text(encoding="utf-8"))
+            spec = json.loads(_read_text(args.spec))
             if args.catalog:
                 catalog = catalog_parts_from_json(
-                    json.loads(args.catalog.read_text(encoding="utf-8"))
+                    json.loads(_read_text(args.catalog))
                 )
                 spec = assign_catalog_parts(
                     spec,
@@ -241,18 +263,22 @@ def main() -> None:
                     require_basic=args.require_basic,
                 )
             source = generate_skidl(spec, include_netlist=not args.no_netlist)
-        except (OSError, json.JSONDecodeError, CircuitSpecError) as error:
+        except (OSError, BoundedIOError, json.JSONDecodeError, CircuitSpecError) as error:
             raise SystemExit(f"SKiDL generation failed: {error}") from error
-        args.output.write_text(source, encoding="utf-8")
+        _write_text(args.output, source)
     elif args.command == "circuit-spec-schema":
         rendered = json.dumps(
             circuit_spec_json_schema(), indent=2, ensure_ascii=False
         ) + "\n"
         if args.output:
-            args.output.write_text(rendered, encoding="utf-8")
+            _write_text(args.output, rendered)
         else:
             print(rendered, end="")
     else:
+        if _paths_are_same(args.output, args.report):
+            raise SystemExit("repair board output and report paths must differ")
+        if _paths_are_same(args.input, args.report):
+            raise SystemExit("repair input and report paths must differ")
         result = repair_kicad_board(
             args.input,
             args.output,

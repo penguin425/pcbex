@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .bounded_io import BoundedIOError, read_bytes
 from .provider import (
     MAXIMUM_PROVIDER_OUTPUT_BYTES,
     MAXIMUM_REQUEST_BYTES,
@@ -17,6 +18,8 @@ from .provider import (
     ProviderError,
     _atomic_write_new,
     _descriptor,
+    _preflight_new_artifacts,
+    _validate_provider_prompt,
 )
 from .review import review_schematic_with_llm
 
@@ -31,6 +34,7 @@ DEFAULT_KEY_ENVIRONMENTS = {
 }
 PROVIDERS = frozenset(DEFAULT_KEY_ENVIRONMENTS)
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+MAXIMUM_MANAGED_PROVIDER_REQUEST_BYTES = 64 * 1024 * 1024
 
 
 def managed_provider_receipt_json_schema() -> dict[str, Any]:
@@ -130,8 +134,11 @@ def review_schematic_with_managed_provider(
         raise ProviderError("provider model version must not be blank")
     if output_path == receipt_path:
         raise ProviderError("response and receipt paths must differ")
-    if output_path.exists() or receipt_path.exists():
-        raise ProviderError("managed provider refuses to overwrite response or receipt")
+    _preflight_new_artifacts(
+        output_path,
+        receipt_path,
+        refusal="managed provider refuses to overwrite response or receipt",
+    )
     if not 1 <= timeout_seconds <= MAXIMUM_TIMEOUT_SECONDS:
         raise ProviderError(
             f"timeout must be between 1 and {MAXIMUM_TIMEOUT_SECONDS} seconds"
@@ -156,13 +163,12 @@ def review_schematic_with_managed_provider(
         resolved_endpoint,
         allow_insecure_loopback=allow_insecure_loopback,
     )
-    request_bytes = request_path.read_bytes()
-    if len(request_bytes) > MAXIMUM_REQUEST_BYTES:
-        raise ProviderError(
-            f"AI review request exceeds {MAXIMUM_REQUEST_BYTES} bytes"
-        )
     try:
-        request = json.loads(request_bytes)
+        request_bytes = read_bytes(request_path, max_bytes=MAXIMUM_REQUEST_BYTES)
+    except BoundedIOError as error:
+        raise ProviderError(f"reading AI review request: {error}") from error
+    try:
+        request = json.loads(request_bytes.decode("utf-8", errors="strict"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ProviderError(f"invalid AI review request JSON: {error}") from error
     if not isinstance(request, dict):
@@ -171,17 +177,14 @@ def review_schematic_with_managed_provider(
     exchange: dict[str, bytes] = {}
 
     def transport(prompt: str) -> str:
+        _validate_provider_prompt(prompt)
         provider_request = _provider_request(
             provider,
             model,
             prompt,
             max_output_tokens=max_output_tokens,
         )
-        encoded_request = json.dumps(
-            provider_request,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
+        encoded_request = _encode_bounded_provider_request(provider_request)
         raw_response = _post_json(
             resolved_endpoint,
             encoded_request,
@@ -230,12 +233,36 @@ def review_schematic_with_managed_provider(
         json.dumps(receipt, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
     )
     _atomic_write_new(output_path, response_bytes)
-    try:
-        _atomic_write_new(receipt_path, receipt_bytes)
-    except Exception:
-        output_path.unlink(missing_ok=True)
-        raise
+    # These are per-file atomic publications rather than a multi-file
+    # transaction.  Retain a successfully-published response if the receipt
+    # cannot be published; rollback-by-unlink can remove a concurrently
+    # replaced object.
+    _atomic_write_new(receipt_path, receipt_bytes)
     return receipt
+
+
+def _encode_bounded_provider_request(request: dict[str, Any]) -> bytes:
+    """Encode one managed-provider body without retaining bytes past its cap."""
+
+    encoder = json.JSONEncoder(
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        for text in encoder.iterencode(request):
+            encoded = text.encode("utf-8", errors="strict")
+            total += len(encoded)
+            if total > MAXIMUM_MANAGED_PROVIDER_REQUEST_BYTES:
+                raise ProviderError(
+                    "managed provider request exceeded "
+                    f"{MAXIMUM_MANAGED_PROVIDER_REQUEST_BYTES} bytes"
+                )
+            chunks.append(encoded)
+    except UnicodeEncodeError as error:
+        raise ProviderError("managed provider request is not valid UTF-8") from error
+    return b"".join(chunks)
 
 
 def _default_endpoint(provider: str, model: str) -> str:
