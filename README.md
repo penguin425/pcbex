@@ -700,6 +700,13 @@ Independent first-pass A* candidates are explored concurrently by up to eight
 workers. Results are validated and committed in the original deterministic net
 order. A candidate that conflicts with an earlier commit is discarded and
 searched again against the updated board, retaining byte-identical output.
+One top-level routing call also has a deterministic 2,000,000-unit A* budget
+shared by coupled pairs, normal nets, retries, validation reroutes, and
+automatic shove. Parallel searches use stable per-net leases instead of racing
+for the final unit; checked callers can select a smaller limit with
+`route_board_with_work_budget`. Exact accounting and fail-closed compatibility
+behavior are documented in
+[`docs/ASTAR_WORK_BUDGET.md`](docs/ASTAR_WORK_BUDGET.md).
 
 Generate an N-best routing portfolio for board JSON or a placed KiCad board:
 
@@ -2079,7 +2086,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.402.0
+    uses: penguin425/pcbex@v1.403.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2748,7 +2755,7 @@ After syntax parsing, physical values and statically derivable geometry work
 pass a second fail-closed boundary. It checks finite nanometre conversion,
 board/grid/layer products, polygon and checker pair work, raster edge visits,
 segment/via clearance scans, and atomic copper-zone work. The exact production
-ceilings and deliberately separate dynamic-search scope are documented in
+ceilings and remaining dynamic scope are documented in
 [`docs/NUMERIC_RASTER_LIMITS.md`](docs/NUMERIC_RASTER_LIMITS.md).
 
 Compare two schematic revisions by electrical intent rather than KiCad
@@ -3986,7 +3993,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.402.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.403.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

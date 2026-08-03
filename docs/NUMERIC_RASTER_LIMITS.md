@@ -74,13 +74,16 @@ Errors are stable, fail-closed strings beginning with `resource limit exceeded:`
 or `resource limit configuration:` and name the rejected resource. A caller
 must not retry the same model by silently relaxing these ceilings.
 
-## Deliberately separate runtime budgets
+## Separate runtime budgets
 
 These limits bound work that can be derived from one immutable board before the
-operation begins. They do not yet form a whole-command deadline or a shared
-budget across a multi-candidate portfolio. A follow-up runtime `WorkBudget`
-will bound A* expansions and heap size, BFS queues, repeated differential-pair
-and candidate attempts, aggregate arc linearization, and optimization passes.
-Generic CLI file-size, subprocess-output, and subprocess-time limits are also a
-separate boundary. Keeping those dynamic controls explicit prevents this
-static preflight from claiming a wall-clock guarantee it does not provide.
+operation begins. A* routing now has an additional aggregate runtime ceiling,
+documented in [`ASTAR_WORK_BUDGET.md`](ASTAR_WORK_BUDGET.md), but neither
+boundary is a whole-command deadline or a shared budget across a
+multi-candidate portfolio.
+
+Zone-fill BFS queues, repeated routing-candidate portfolios, aggregate arc
+linearization, placement/optimization passes, generic CLI file size, subprocess
+output, and subprocess time still require separate dynamic controls. Keeping
+those controls explicit prevents this static preflight from claiming a
+wall-clock guarantee it does not provide.

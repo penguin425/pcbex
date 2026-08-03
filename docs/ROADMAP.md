@@ -112,6 +112,7 @@ auditable release.
 | v1.400.0 | Immutable GitHub Actions supply chain | Pin every external workflow and composite-action dependency to a reviewed commit SHA, reject mutable or malformed references in tests and repository policy, retain weekly Dependabot updates, and provide a fail-closed live audit of SHA-pinning enforcement |
 | v1.401.0 | Bounded KiCad S-expression parser | Replace token-buffered recursive parsing with a typed iterative parser, enforce fixed byte/token/atom/depth/list/span ceilings across every KiCad consumer, preserve quoted parentheses, and parse custom-rule sequences without copying the input |
 | v1.402.0 | Fail-closed numeric and raster bounds | Reject non-finite, out-of-range, or malformed KiCad physical values and enforce checked board/grid/layer, topology, raster candidate/edge, segment/via, and zone cell/blocker ceilings before covered geometry, allocation, narrowing, or mutation |
+| v1.403.0 | Deterministic A* work budget | Bound aggregate heap-pop and successful-relaxation work across differential, normal, retry, and shove routing while preserving deterministic parallel results and fail-closed public compatibility |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -120,12 +121,11 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release bounds the numeric domain and per-board statically
-derivable physical work before the covered rasterization and geometry loops.
-The exact boundary and its runtime non-goals are documented in
-[`NUMERIC_RASTER_LIMITS.md`](NUMERIC_RASTER_LIMITS.md). The next roadmap
-candidates are fail-closed input and execution hardening, in order: add
-per-search A* and BFS runtime budgets; make generic CLI I/O and subprocess
-execution atomic and bounded; and enforce an immutable ERC safety floor.
-Bounded natural-language circuit generation with a deterministic ERC correction
-loop follows that safety boundary.
+The current release adds a deterministic aggregate runtime ceiling to A*
+routing after the static numeric/raster preflight. The exact accounting,
+failure behavior, and configurable checked API are documented in
+[`ASTAR_WORK_BUDGET.md`](ASTAR_WORK_BUDGET.md). The next roadmap candidates are
+fail-closed input and execution hardening, in order: bound zone-fill BFS work;
+make generic CLI I/O and subprocess execution atomic and bounded; and enforce
+an immutable ERC safety floor. Bounded natural-language circuit generation
+with a deterministic ERC correction loop follows that safety boundary.
