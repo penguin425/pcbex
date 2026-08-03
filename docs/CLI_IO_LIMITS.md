@@ -72,8 +72,15 @@ the atomic file boundary only after the process succeeds and the staged report
 passes regular-file and size validation. A timeout, output overflow, or nonzero
 exit therefore leaves an existing public report unchanged.
 KiCad manufacturing exports remain inside their purpose-specific private stage
-until validation and promotion, but the external tool's filesystem writes are
-not capped by the stdout/stderr limits.
+until validation and promotion. The stage is checked after every external
+phase under the manufacturing quota contract: 4,096 entries, depth 16, 128 MiB
+per file and final ZIP, 1 GiB aggregate workspace bytes, 255-byte portable
+basenames, and 1 MiB normalization lines, manifests, and Gerber jobs. ZIP
+expanded artifact payload is separately limited to 512 MiB. Archive creation
+and public copies are bounded and staged before atomic replacement, and the
+generated ZIP is revalidated through the factory acceptance boundary. The
+external tool's filesystem writes are not live-capped while that process is
+running.
 
 Firmware validation discards captured diagnostics after recording the process
 status, so its closed manifest schema and deterministic evidence remain
@@ -99,7 +106,8 @@ forgotten.
 The hardware pipeline, factory HTTPS connector, and remote adapters retain
 their existing narrower, purpose-specific limits. The Python agent has an
 equivalent stdlib-only boundary documented in
-[`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md). Release/CI helper scripts and
-the internal manufacturing ZIP and artifact walkers are not yet unified with
-either facade; those boundaries remain explicit follow-up work. Core A*, zone
-fill, placement, and raster budgets are unchanged.
+[`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md). Rust manufacturing ZIP,
+artifact, workspace, and repair walkers use the production contract documented
+in [`MANUFACTURING_PACKAGE.md`](MANUFACTURING_PACKAGE.md). Release/CI helper
+scripts remain explicit follow-up work. Core A*, zone fill, placement, and
+raster budgets are unchanged.

@@ -5,7 +5,13 @@
 //! into a stable receipt.  Provider-specific authentication and endpoint paths
 //! remain configuration, never source-code secrets.
 
+use crate::bounded_io::{opened_path_matches, same_file};
 use crate::bounded_process::{ProcessError, ProcessLimits, run_bounded_with_stdin_file};
+use crate::manufacturing_limits::{
+    MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES, MAX_MANIFEST_BYTES, MAX_PACKAGE_BYTES,
+    ManufacturingLimits, portable_manufacturing_name_key, scan_manufacturing_workspace,
+    validate_manufacturing_basename,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -21,13 +27,8 @@ use std::{
 use tempfile::{Builder as TempfileBuilder, NamedTempFile};
 use zip::ZipArchive;
 
-const MAX_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
-const MAX_ARCHIVE_ENTRIES: usize = 4096;
-const MAX_ARCHIVE_UNCOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_REPAIR_ATTEMPTS: u8 = 4;
-const MAX_REPAIR_PACKAGE_BYTES: u64 = 128 * 1024 * 1024;
 const FACTORY_LOOP_TIMEOUT_SECONDS: u64 = 900;
 const REPAIR_TIMEOUT_SECONDS: u64 = 600;
 const MAX_LOOP_ERROR_CHARS: usize = 4096;
@@ -211,7 +212,7 @@ pub fn factory_feedback_loop_json_schema() -> Value {
                     "properties": {
                         "attempt": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_ATTEMPTS},
                         "package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-                        "package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_PACKAGE_BYTES},
+                        "package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_PACKAGE_BYTES},
                         "receipt": {
                             "anyOf": [
                                 {"$ref": "#/$defs/factory_submission_receipt"},
@@ -240,7 +241,7 @@ pub fn factory_feedback_loop_json_schema() -> Value {
                 }
             },
             "final_package_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-            "final_package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_REPAIR_PACKAGE_BYTES},
+            "final_package_bytes": {"type": "integer", "minimum": 1, "maximum": MAX_PACKAGE_BYTES},
             "failure": {
                 "type": ["string", "null"],
                 "minLength": 1,
@@ -295,6 +296,7 @@ pub fn run_factory_feedback_loop(
 struct FactoryLoopLimits {
     total: Duration,
     repair: Duration,
+    manufacturing: ManufacturingLimits,
 }
 
 impl FactoryLoopLimits {
@@ -302,6 +304,7 @@ impl FactoryLoopLimits {
         Self {
             total: Duration::from_secs(FACTORY_LOOP_TIMEOUT_SECONDS),
             repair: Duration::from_secs(REPAIR_TIMEOUT_SECONDS),
+            manufacturing: ManufacturingLimits::production(),
         }
     }
 }
@@ -485,6 +488,7 @@ fn run_factory_feedback_loop_with_limits(
             workspace.path(),
             repair_timeout,
             bearer_token_env,
+            limits.manufacturing,
         );
         attempt.repair_command_ran = repair.command_ran;
         let candidate = match repair.result {
@@ -565,6 +569,7 @@ fn run_repair_command(
     workspace: &Path,
     timeout: Duration,
     _bearer_token_env: Option<&str>,
+    manufacturing_limits: ManufacturingLimits,
 ) -> RepairCommandOutcome {
     let deadline = match Instant::now().checked_add(timeout) {
         Some(deadline) => deadline,
@@ -713,10 +718,22 @@ fn run_repair_command(
         };
     }
     match process_result {
-        Ok(output) if output.status.success() => RepairCommandOutcome {
-            command_ran: true,
-            result: read_validated_repair_output(output_package.path()),
-        },
+        Ok(output) if output.status.success() => {
+            if let Err(error) = scan_manufacturing_workspace(
+                workspace,
+                manufacturing_limits,
+                "factory repair workspace",
+            ) {
+                return RepairCommandOutcome {
+                    command_ran: true,
+                    result: Err(format!("scanning factory repair workspace: {error:#}")),
+                };
+            }
+            RepairCommandOutcome {
+                command_ran: true,
+                result: read_validated_repair_output(output_package.path(), manufacturing_limits),
+            }
+        }
         Ok(output) => RepairCommandOutcome {
             command_ran: true,
             result: Err(format!(
@@ -775,14 +792,36 @@ fn verify_repair_input_unchanged(snapshot: &PackageSnapshot) -> Result<(), Strin
     Ok(())
 }
 
-fn read_validated_repair_output(path: &Path) -> Result<Vec<u8>, String> {
+fn read_validated_repair_output(
+    path: &Path,
+    manufacturing_limits: ManufacturingLimits,
+) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("factory repair command did not write output package: {error}"))?;
     if !metadata.file_type().is_file() {
         return Err("factory repair output must be a regular file".into());
     }
+    if metadata.len() > manufacturing_limits.max_file_bytes {
+        return Err(format!(
+            "factory repair output exceeds the {}-byte file limit",
+            manufacturing_limits.max_file_bytes
+        ));
+    }
+    if metadata.len() > manufacturing_limits.max_archive_bytes {
+        return Err(format!(
+            "factory repair output exceeds the {}-byte archive limit",
+            manufacturing_limits.max_archive_bytes
+        ));
+    }
     let package = read_package(path)
         .map_err(|error| format!("reading bounded factory repair output: {error}"))?;
+    if package.len() as u64 > manufacturing_limits.max_file_bytes
+        || package.len() as u64 > manufacturing_limits.max_archive_bytes
+    {
+        return Err(
+            "factory repair output exceeded its manufacturing byte quota while being read".into(),
+        );
+    }
     validate_manufacturing_package(&package).map_err(|error| {
         format!("factory repair output is not a valid manufacturing package: {error}")
     })?;
@@ -1095,7 +1134,7 @@ fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
     if path_metadata.file_type().is_symlink() || !path_metadata.file_type().is_file() {
         return Err("factory package path must be a real regular file, not a symlink".into());
     }
-    let file = File::open(package_path).map_err(|error| {
+    let mut file = File::open(package_path).map_err(|error| {
         format!(
             "opening factory package {}: {error}",
             package_path.display()
@@ -1107,12 +1146,12 @@ fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
     if !metadata.is_file() {
         return Err("factory package path must be a regular file".into());
     }
-    #[cfg(unix)]
+    if !same_file(&path_metadata, &metadata)
+        || path_metadata.len() != metadata.len()
+        || !opened_path_matches(&file, package_path)
+            .map_err(|error| format!("verifying opened factory package identity: {error}"))?
     {
-        use std::os::unix::fs::MetadataExt;
-        if path_metadata.dev() != metadata.dev() || path_metadata.ino() != metadata.ino() {
-            return Err("factory package path changed while it was being opened".into());
-        }
+        return Err("factory package path changed while it was being opened".into());
     }
     if metadata.len() > MAX_PACKAGE_BYTES {
         return Err(format!(
@@ -1123,12 +1162,31 @@ fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
     // The limit protects against a file growing after the metadata check while
     // still keeping the read bounded even when the initial size is stale.
     let mut package = Vec::new();
-    file.take(MAX_PACKAGE_BYTES.saturating_add(1))
+    Read::by_ref(&mut file)
+        .take(MAX_PACKAGE_BYTES.saturating_add(1))
         .read_to_end(&mut package)
         .map_err(|error| format!("reading factory package: {error}"))?;
-    if package.is_empty() || package.len() as u64 > MAX_PACKAGE_BYTES {
+    let after = file
+        .metadata()
+        .map_err(|error| format!("rechecking factory package metadata: {error}"))?;
+    let final_path = fs::symlink_metadata(package_path)
+        .map_err(|error| format!("rechecking factory package path: {error}"))?;
+    let package_bytes = u64::try_from(package.len())
+        .map_err(|_| "factory package byte count cannot be represented".to_string())?;
+    if package.is_empty()
+        || package_bytes > MAX_PACKAGE_BYTES
+        || !same_file(&metadata, &after)
+        || after.len() != metadata.len()
+        || package_bytes != metadata.len()
+        || final_path.file_type().is_symlink()
+        || !final_path.file_type().is_file()
+        || !same_file(&path_metadata, &final_path)
+        || final_path.len() != metadata.len()
+        || !opened_path_matches(&file, package_path)
+            .map_err(|error| format!("rechecking opened factory package identity: {error}"))?
+    {
         return Err(format!(
-            "factory package must contain 1 to {MAX_PACKAGE_BYTES} bytes"
+            "factory package must remain one regular file containing 1 to {MAX_PACKAGE_BYTES} bytes"
         ));
     }
     Ok(package)
@@ -1136,6 +1194,13 @@ fn read_package(package_path: &Path) -> Result<Vec<u8>, String> {
 
 pub(crate) fn validate_manufacturing_package(
     package: &[u8],
+) -> Result<ManufacturingPackageIdentity, String> {
+    validate_manufacturing_package_with_expanded_limit(package, MAX_ARCHIVE_UNCOMPRESSED_BYTES)
+}
+
+fn validate_manufacturing_package_with_expanded_limit(
+    package: &[u8],
+    max_expanded_bytes: u64,
 ) -> Result<ManufacturingPackageIdentity, String> {
     let central_entries = central_directory_entry_count(package);
     if central_entries.is_some_and(|entries| entries > MAX_ARCHIVE_ENTRIES) {
@@ -1203,9 +1268,13 @@ pub(crate) fn validate_manufacturing_package(
         input_sha256: manifest.input.sha256.clone(),
     };
     let mut provenance_paths = BTreeSet::from([manifest.input.path.clone()]);
+    let mut provenance_portable_paths =
+        BTreeSet::from([portable_manufacturing_name_key(&manifest.input.path)]);
     for descriptor in &manifest.project_inputs {
         validate_manifest_descriptor(descriptor, "project input")?;
-        if !provenance_paths.insert(descriptor.path.clone()) {
+        if !provenance_paths.insert(descriptor.path.clone())
+            || !provenance_portable_paths.insert(portable_manufacturing_name_key(&descriptor.path))
+        {
             return Err(format!(
                 "factory package has duplicate provenance descriptor {}",
                 descriptor.path
@@ -1216,20 +1285,24 @@ pub(crate) fn validate_manufacturing_package(
         return Err("factory package manifest.json must list at least one artifact".into());
     }
     let mut expected = BTreeMap::new();
+    let mut expected_portable_paths = BTreeSet::new();
     for descriptor in manifest.artifacts {
         validate_manifest_descriptor(&descriptor, "artifact")?;
-        if descriptor.path == "manifest.json" || descriptor.path == "manufacturing.zip" {
+        if descriptor.path.eq_ignore_ascii_case("manifest.json")
+            || descriptor.path.eq_ignore_ascii_case("manufacturing.zip")
+        {
             return Err(
                 "factory package artifacts must not include manifest.json or manufacturing.zip"
                     .into(),
             );
         }
-        if expected
-            .insert(
-                descriptor.path.clone(),
-                (descriptor.bytes, descriptor.sha256),
-            )
-            .is_some()
+        if !expected_portable_paths.insert(portable_manufacturing_name_key(&descriptor.path))
+            || expected
+                .insert(
+                    descriptor.path.clone(),
+                    (descriptor.bytes, descriptor.sha256),
+                )
+                .is_some()
         {
             return Err(format!(
                 "factory package has duplicate manifest descriptor {}",
@@ -1239,12 +1312,8 @@ pub(crate) fn validate_manufacturing_package(
     }
     validate_manifest_path_domains(&provenance_paths, &expected)?;
     let gerber_job = validate_required_manufacturing_artifacts(&expected)?;
-    let mut declared_uncompressed = 0_u64;
-    for (name, (bytes, _)) in &expected {
-        add_archive_size(&mut declared_uncompressed, *bytes, name)?;
-    }
-
     let mut seen = BTreeSet::new();
+    let mut seen_portable = BTreeSet::new();
     let mut total_uncompressed = 0_u64;
     for index in 0..archive.len() {
         let mut entry = archive
@@ -1256,7 +1325,9 @@ pub(crate) fn validate_manufacturing_package(
                 "factory package contains unsafe ZIP entry path {name:?}"
             ));
         }
-        if !seen.insert(name.clone()) {
+        if !seen.insert(name.clone())
+            || !seen_portable.insert(portable_manufacturing_name_key(&name))
+        {
             return Err(format!(
                 "factory package contains duplicate ZIP entry {name}"
             ));
@@ -1272,8 +1343,16 @@ pub(crate) fn validate_manufacturing_package(
         let (expected_bytes, expected_hash) = expected
             .get(&name)
             .ok_or_else(|| format!("factory package contains unlisted ZIP entry {name}"))?;
-        add_archive_size(&mut total_uncompressed, entry.size(), &name)?;
         let (actual_bytes, actual_hash) = hash_zip_entry(&mut entry, &name)?;
+        // ZIP size fields are attacker-controlled metadata.  Aggregate the
+        // bytes that were actually decompressed instead of trusting the
+        // central-directory declaration.
+        add_archive_size_with_limit(
+            &mut total_uncompressed,
+            actual_bytes,
+            &name,
+            max_expanded_bytes,
+        )?;
         if actual_bytes != *expected_bytes || actual_hash != *expected_hash {
             return Err(format!(
                 "factory package ZIP entry {name} does not match manifest bytes/hash"
@@ -1345,7 +1424,14 @@ fn validate_manifest_path_domains(
     provenance: &BTreeSet<String>,
     artifacts: &BTreeMap<String, (u64, String)>,
 ) -> Result<(), String> {
-    if let Some(path) = artifacts.keys().find(|path| provenance.contains(*path)) {
+    let provenance_keys = provenance
+        .iter()
+        .map(|path| portable_manufacturing_name_key(path))
+        .collect::<BTreeSet<_>>();
+    if let Some(path) = artifacts
+        .keys()
+        .find(|path| provenance_keys.contains(&portable_manufacturing_name_key(path)))
+    {
         return Err(format!(
             "factory package path {path} must not identify both provenance and an artifact"
         ));
@@ -1487,13 +1573,18 @@ fn is_gerber_artifact(path: &str) -> bool {
     })
 }
 
-fn add_archive_size(total: &mut u64, size: u64, name: &str) -> Result<(), String> {
+fn add_archive_size_with_limit(
+    total: &mut u64,
+    size: u64,
+    name: &str,
+    max_expanded_bytes: u64,
+) -> Result<(), String> {
     *total = total
         .checked_add(size)
         .ok_or_else(|| format!("factory package ZIP entry {name} size overflow"))?;
-    if *total > MAX_ARCHIVE_UNCOMPRESSED_BYTES {
+    if *total > max_expanded_bytes {
         return Err(format!(
-            "factory package decompressed artifact bytes exceed {MAX_ARCHIVE_UNCOMPRESSED_BYTES}"
+            "factory package decompressed artifact bytes exceed {max_expanded_bytes}"
         ));
     }
     Ok(())
@@ -1538,10 +1629,9 @@ fn validate_manifest_descriptor(
             descriptor.path
         ));
     }
-    if matches!(
-        descriptor.path.as_str(),
-        "manifest.json" | "manufacturing.zip"
-    ) {
+    if descriptor.path.eq_ignore_ascii_case("manifest.json")
+        || descriptor.path.eq_ignore_ascii_case("manufacturing.zip")
+    {
         return Err(format!(
             "factory package {kind} descriptor must not reference a reserved archive name"
         ));
@@ -1560,12 +1650,12 @@ fn validate_manifest_descriptor(
 }
 
 fn is_safe_manifest_path(path: &str) -> bool {
-    !path.is_empty()
-        && path != "."
-        && path != ".."
-        && !path.contains('/')
-        && !path.contains('\\')
-        && !path.contains('\0')
+    validate_manufacturing_basename(
+        path,
+        ManufacturingLimits::production().max_name_bytes,
+        "factory package path",
+    )
+    .is_ok()
 }
 
 fn is_sha256(value: &str) -> bool {
@@ -1997,6 +2087,13 @@ mod tests {
     type ReceivedRequests = Arc<Mutex<Vec<Vec<u8>>>>;
 
     fn manufacturing_package() -> Vec<u8> {
+        manufacturing_package_with_front_copper(b"front-copper".to_vec(), CompressionMethod::Stored)
+    }
+
+    fn manufacturing_package_with_front_copper(
+        front_copper: Vec<u8>,
+        compression_method: CompressionMethod,
+    ) -> Vec<u8> {
         let board = b"board-bytes";
         let job = serde_json::to_vec(&json!({
             "GeneralSpecs": {"LayerNumber": 2},
@@ -2012,7 +2109,7 @@ mod tests {
         }))
         .unwrap();
         let artifacts = vec![
-            ("board-F_Cu.gtl", b"front-copper".to_vec()),
+            ("board-F_Cu.gtl", front_copper),
             ("board-B_Cu.gbl", b"back-copper".to_vec()),
             ("board-f_mask.gts", b"front-mask".to_vec()),
             ("board-b_mask.gbs", b"back-mask".to_vec()),
@@ -2046,7 +2143,7 @@ mod tests {
         });
         let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
-        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let options = SimpleFileOptions::default().compression_method(compression_method);
         for (path, bytes) in artifacts {
             writer.start_file(path, options).unwrap();
             writer.write_all(&bytes).unwrap();
@@ -2459,17 +2556,151 @@ mod tests {
     }
 
     #[test]
+    fn rejects_unsafe_archive_basenames_at_shared_name_limit() {
+        let name_limit = ManufacturingLimits::production().max_name_bytes;
+        assert!(is_safe_manifest_path("board-F_Cu.gtl"));
+        assert!(!is_safe_manifest_path("board:Cu.gtl"));
+        assert!(!is_safe_manifest_path("board\nCu.gtl"));
+        assert!(!is_safe_manifest_path("CON.gtl"));
+        assert!(!is_safe_manifest_path("board.gtl."));
+        assert!(!is_safe_manifest_path("board.gtl "));
+        assert!(!is_safe_manifest_path(&"x".repeat(name_limit + 1)));
+        assert!(is_safe_manifest_path(&"x".repeat(name_limit)));
+    }
+
+    #[test]
     fn caps_total_uncompressed_archive_entries() {
         let mut total = MAX_ARCHIVE_UNCOMPRESSED_BYTES - 1;
-        assert!(add_archive_size(&mut total, 2, "large.gbr").is_err());
+        assert!(
+            add_archive_size_with_limit(
+                &mut total,
+                2,
+                "large.gbr",
+                MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+            )
+            .is_err()
+        );
         let mut total = u64::MAX;
-        assert!(add_archive_size(&mut total, 1, "overflow.gbr").is_err());
+        assert!(
+            add_archive_size_with_limit(
+                &mut total,
+                1,
+                "overflow.gbr",
+                MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+            )
+            .is_err()
+        );
 
         let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
         writer.start_file("duplicate.txt", options).unwrap();
         writer.write_all(b"one").unwrap();
         let _ = writer.finish().unwrap().into_inner();
+    }
+
+    #[test]
+    fn aggregate_archive_limit_uses_actual_decompressed_bytes() {
+        let payload = vec![b'x'; 4096];
+        let mut package =
+            manufacturing_package_with_front_copper(payload.clone(), CompressionMethod::Deflated);
+        let (local_header, central_header) = {
+            let mut archive = ZipArchive::new(Cursor::new(package.as_slice())).unwrap();
+            let entry = archive.by_name("board-F_Cu.gtl").unwrap();
+            (
+                entry.header_start() as usize,
+                entry.central_header_start() as usize,
+            )
+        };
+
+        // Forge both ZIP headers to understate the uncompressed size while
+        // retaining the compressed stream, CRC, and payload.
+        package[local_header + 22..local_header + 26].copy_from_slice(&1_u32.to_le_bytes());
+        package[central_header + 24..central_header + 28].copy_from_slice(&1_u32.to_le_bytes());
+
+        let declared_total = {
+            let mut archive = ZipArchive::new(Cursor::new(package.as_slice())).unwrap();
+            let mut total = 0_u64;
+            for index in 0..archive.len() {
+                let entry = archive.by_index(index).unwrap();
+                if entry.name() != "manifest.json" {
+                    total += entry.size();
+                }
+            }
+            total
+        };
+
+        // The package is otherwise valid under the production cap.  A test
+        // cap equal to the forged declarations must still reject it because
+        // the streamed payload is larger than those declarations.
+        validate_manufacturing_package(&package).unwrap();
+        let error = validate_manufacturing_package_with_expanded_limit(&package, declared_total)
+            .unwrap_err();
+        assert!(
+            error.contains("decompressed artifact bytes exceed"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn scans_workspace_at_exact_file_and_total_limits_then_rejects_plus_one() {
+        let temporary = tempdir().unwrap();
+        let file = temporary.path().join("candidate.bin");
+        fs::write(&file, b"1234").unwrap();
+        let mut limits = ManufacturingLimits::production();
+        limits.max_file_bytes = 4;
+        limits.max_total_bytes = 4;
+        assert!(
+            scan_manufacturing_workspace(temporary.path(), limits, "factory repair workspace")
+                .is_ok()
+        );
+
+        fs::write(&file, b"12345").unwrap();
+        let error =
+            scan_manufacturing_workspace(temporary.path(), limits, "factory repair workspace")
+                .unwrap_err();
+        assert!(error.to_string().contains("limit"), "{error:#}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scans_workspace_rejects_symlinks_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        let temporary = tempdir().unwrap();
+        let target = temporary.path().join("target.bin");
+        let link = temporary.path().join("link.bin");
+        fs::write(&target, b"target").unwrap();
+        symlink(&target, &link).unwrap();
+        let error = scan_manufacturing_workspace(
+            temporary.path(),
+            ManufacturingLimits::production(),
+            "factory repair workspace",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().to_ascii_lowercase().contains("symlink"),
+            "{error:#}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scans_workspace_rejects_nonregular_entries() {
+        use std::os::unix::net::UnixListener;
+
+        let temporary = tempdir().unwrap();
+        let socket = temporary.path().join("candidate.sock");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        let error = scan_manufacturing_workspace(
+            temporary.path(),
+            ManufacturingLimits::production(),
+            "factory repair workspace",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().to_ascii_lowercase().contains("regular"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -2886,7 +3117,7 @@ mod tests {
         );
         assert_eq!(
             schema["properties"]["final_package_bytes"]["maximum"],
-            MAX_REPAIR_PACKAGE_BYTES
+            MAX_PACKAGE_BYTES
         );
         assert_eq!(
             bounded_loop_error(&"x".repeat(MAX_LOOP_ERROR_CHARS + 100))
@@ -3269,6 +3500,11 @@ mod tests {
                 "printf not-a-package > \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"",
                 "not a valid manufacturing package",
             ),
+            (
+                "symlink.sh",
+                "rm -f \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"\nln -s \"$PCBEX_FACTORY_REPAIR_INPUT_PACKAGE\" \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"",
+                "symlink",
+            ),
         ];
         for (name, body, expected) in cases {
             let temporary = tempdir().unwrap();
@@ -3307,6 +3543,57 @@ mod tests {
             assert_eq!(outcome.final_package, package);
             assert_eq!(outcome.report.final_package_sha256, sha256(&package));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_workspace_quota_failure_preserves_known_good_package_and_evidence() {
+        let temporary = tempdir().unwrap();
+        let package_path = temporary.path().join("manufacturing.zip");
+        let package = write_package(&package_path);
+        let failed = serde_json::to_vec(&json!({
+            "status": "quoted",
+            "accepted": true,
+            "dfm_passed": false,
+            "findings": []
+        }))
+        .unwrap();
+        let (endpoint, _received, handle) =
+            spawn_http_fixture(200, "application/json", failed, &[]);
+        let script = write_repair_script(
+            temporary.path(),
+            "workspace-overage.sh",
+            "cp \"$PCBEX_FACTORY_REPAIR_INPUT_PACKAGE\" \"$PCBEX_FACTORY_REPAIR_OUTPUT_PACKAGE\"\nhead -c 8192 /dev/zero > workspace-overage.bin",
+        );
+        let mut manufacturing = ManufacturingLimits::production();
+        manufacturing.max_total_bytes = package.len() as u64 * 2 + 1024;
+        let limits = FactoryLoopLimits {
+            total: Duration::from_secs(3),
+            repair: Duration::from_secs(1),
+            manufacturing,
+        };
+
+        let outcome = run_factory_feedback_loop_with_limits(
+            &package_path,
+            &endpoint,
+            FactoryProvider::Generic,
+            None,
+            5,
+            true,
+            2,
+            Some(&script),
+            limits,
+        )
+        .unwrap();
+        handle.join().unwrap();
+
+        assert!(!outcome.report.passed);
+        assert_eq!(outcome.report.attempts.len(), 1);
+        let attempt = &outcome.report.attempts[0];
+        assert!(attempt.repair_command_ran);
+        assert!(attempt.error.as_deref().unwrap().contains("workspace"));
+        assert_eq!(outcome.final_package, package);
+        assert_eq!(outcome.report.final_package_sha256, sha256(&package));
     }
 
     #[cfg(unix)]
@@ -3373,6 +3660,7 @@ mod tests {
             temporary.path(),
             Duration::from_secs(1),
             None,
+            ManufacturingLimits::production(),
         );
 
         assert!(!outcome.command_ran);
@@ -3404,6 +3692,7 @@ mod tests {
         let limits = FactoryLoopLimits {
             total: Duration::from_secs(3),
             repair: Duration::from_millis(100),
+            manufacturing: ManufacturingLimits::production(),
         };
 
         let started = Instant::now();
@@ -3515,6 +3804,7 @@ mod tests {
         let limits = FactoryLoopLimits {
             total: Duration::from_secs(3),
             repair: Duration::from_millis(100),
+            manufacturing: ManufacturingLimits::production(),
         };
 
         let outcome = run_factory_feedback_loop_with_limits(

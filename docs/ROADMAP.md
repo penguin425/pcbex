@@ -118,6 +118,7 @@ auditable release.
 | v1.406.0 | Bounded Python agent I/O and subprocess execution | Route every Python agent file through regular-file, link-safe, size-limited atomic I/O; cap provider input and all child output; reject ambiguous KiCad DRC reports; and supervise provider, pcbex, and KiCad process trees under one deadline |
 | v1.407.0 | Immutable ERC safety floor | Keep every built-in error rule enabled at error severity across direct policies and signed packs, reject waivers for floor findings, and prevent baseline gates from accepting retained floor errors |
 | v1.408.0 | Supervised firmware and factory subprocesses | Run firmware validation and factory repair children through one deadline- and output-bounded process-tree supervisor while preserving deterministic evidence and last-known-good manufacturing packages |
+| v1.409.0 | Manufacturing package and workspace quotas | Bound manufacturing file count, depth, per-file, aggregate, archive, normalization, repair-workspace, and publication work while preserving deterministic atomic packages and last-known-good evidence |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -126,15 +127,15 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release converges the remaining Rust firmware-validation and
-factory-repair children on the shared subprocess supervisor. Every invocation
-has a finite deadline and independent 1 MiB stdout/stderr ceilings; ordinary
-descendants are terminated on both timeout and direct-child completion. The
-firmware manifest remains deterministic, while a failed factory repair still
-retains the last fully validated manufacturing package. Exact limits and the
-remaining operating-system sandbox boundary are documented in
-[`CLI_IO_LIMITS.md`](CLI_IO_LIMITS.md).
+The current release applies one production quota contract to manufacturing
+staging, timestamp normalization, deterministic ZIP creation, publication,
+package validation, and factory-repair workspaces. File count, traversal
+depth, individual file size, aggregate bytes, compressed/expanded archive
+size, manifest size, source identity, and cross-platform entry names fail
+closed before later copies or public replacement. Generated archives are
+revalidated through the factory acceptance boundary. External KiCad or a
+deployment-owned repair wrapper can still consume disk between scanner
+checkpoints; live filesystem enforcement requires an OS quota or sandbox.
 
-The next roadmap work is to add manufacturing package and workspace quotas,
-then contain release/CI execution and add bounded natural-language circuit
-generation with a deterministic ERC correction loop.
+The next roadmap work is to contain release/CI execution, then add bounded
+natural-language circuit generation with a deterministic ERC correction loop.

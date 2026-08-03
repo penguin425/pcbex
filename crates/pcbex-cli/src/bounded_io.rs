@@ -343,23 +343,23 @@ fn changed_error(path: &Path, detail: &str) -> io::Error {
 }
 
 #[cfg(unix)]
-fn same_file(left: &Metadata, right: &Metadata) -> bool {
+pub(crate) fn same_file(left: &Metadata, right: &Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     left.dev() == right.dev() && left.ino() == right.ino()
 }
 
 #[cfg(windows)]
-fn same_file(left: &Metadata, right: &Metadata) -> bool {
+pub(crate) fn same_file(left: &Metadata, right: &Metadata) -> bool {
     left.file_type().is_file() == right.file_type().is_file() && left.len() == right.len()
 }
 
 #[cfg(not(any(unix, windows)))]
-fn same_file(left: &Metadata, right: &Metadata) -> bool {
+pub(crate) fn same_file(left: &Metadata, right: &Metadata) -> bool {
     left.file_type().is_file() == right.file_type().is_file() && left.len() == right.len()
 }
 
 #[cfg(windows)]
-fn opened_path_matches(opened: &File, path: &Path) -> io::Result<bool> {
+pub(crate) fn opened_path_matches(opened: &File, path: &Path) -> io::Result<bool> {
     fn identity(file: &File) -> io::Result<(u32, u32, u32)> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::Foundation::HANDLE;
@@ -384,7 +384,7 @@ fn opened_path_matches(opened: &File, path: &Path) -> io::Result<bool> {
 }
 
 #[cfg(not(windows))]
-fn opened_path_matches(_opened: &File, _path: &Path) -> io::Result<bool> {
+pub(crate) fn opened_path_matches(_opened: &File, _path: &Path) -> io::Result<bool> {
     Ok(true)
 }
 
