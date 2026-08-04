@@ -80,9 +80,10 @@ use pcbex_kicad::{
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
     approval_public_key, approval_transparency_log_json_schema, approval_transparency_log_sha256,
     audit_approval_log_gossip_organization_registry_history, build_ai_review_request,
-    build_ai_review_session, check_schematic, circuit_kicad_handoff_report_json_schema,
-    circuit_spec_check_json_schema, circuit_spec_v2_json_schema, compare_electrical_reviews,
-    compare_schematics, create_approval_log_anchor_proof, create_approval_log_consistency_proof,
+    build_ai_review_session, check_schematic, circuit_kicad_board_binding_report_json_schema,
+    circuit_kicad_handoff_report_json_schema, circuit_spec_check_json_schema,
+    circuit_spec_v2_json_schema, compare_electrical_reviews, compare_schematics,
+    create_approval_log_anchor_proof, create_approval_log_consistency_proof,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
@@ -144,9 +145,10 @@ use pcbex_kicad::{
     verify_approval_log_gossip_quorum_with_observer_trust_states,
     verify_approval_log_gossip_quorum_with_organization_registry,
     verify_approval_log_gossip_receipt, verify_approval_log_witness_quorum,
-    verify_circuit_kicad_handoff, verify_human_escalation, verify_routed_ai_approval_quorum,
-    verify_session_ai_approval_quorum, verify_session_routed_ai_approval_quorum,
-    verify_session_signed_ai_approval, verify_signed_ai_approval,
+    verify_circuit_kicad_board_binding, verify_circuit_kicad_handoff, verify_human_escalation,
+    verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
+    verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
+    verify_signed_ai_approval,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -769,6 +771,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed circuit-to-KiCad board-binding verification JSON Schema.
+    CircuitKicadBoardBindingSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed schematic semantic-diff JSON Schema.
     SchematicDiffSchema {
         #[arg(short, long)]
@@ -1005,6 +1012,27 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Fail after retaining the report unless both documents are approved and equivalent.
+        #[arg(long)]
+        require_approved: bool,
+        /// Echo the retained report to stdout for the in-process MCP bridge.
+        #[arg(long, hide = true)]
+        mcp_echo_report: bool,
+    },
+    /// Verify that a circuit specification, KiCad schematic, and KiCad board are an exact binding.
+    VerifyCircuitKicadBoardBinding {
+        /// Circuit-spec v2 JSON source generated upstream.
+        circuit_spec: PathBuf,
+        /// KiCad schematic source generated or edited downstream.
+        schematic: PathBuf,
+        /// KiCad board source consumed downstream.
+        board: PathBuf,
+        /// Override the built-in electrical policy with a strict JSON policy.
+        #[arg(long)]
+        policy: Option<PathBuf>,
+        /// Write the retained board-binding report without overwriting an existing destination.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Fail after retaining the report unless all documents are approved and equivalent.
         #[arg(long)]
         require_approved: bool,
         /// Echo the retained report to stdout for the in-process MCP bridge.
@@ -5012,6 +5040,15 @@ fn run_cli() -> Result<()> {
                 println!("{rendered}");
             }
         }
+        Command::CircuitKicadBoardBindingSchema { output } => {
+            let rendered =
+                serde_json::to_string_pretty(&circuit_kicad_board_binding_report_json_schema())?;
+            if let Some(path) = output {
+                write_new_file(&path, &format!("{rendered}\n"), false)?;
+            } else {
+                println!("{rendered}");
+            }
+        }
         Command::SchematicDiffSchema { output } => {
             write_or_print_json(&schematic_diff_json_schema(), output.as_ref())?;
         }
@@ -5576,6 +5613,85 @@ fn run_cli() -> Result<()> {
             }
             if require_approved && !report.approved {
                 bail!("circuit-to-KiCad handoff rejected");
+            }
+        }
+        Command::VerifyCircuitKicadBoardBinding {
+            circuit_spec,
+            schematic,
+            board,
+            policy,
+            output,
+            require_approved,
+            mcp_echo_report,
+        } => {
+            if mcp_echo_report && output.is_none() {
+                bail!("--mcp-echo-report requires --output");
+            }
+            let mut input_paths = vec![circuit_spec.as_path(), schematic.as_path(), board.as_path()];
+            if let Some(path) = policy.as_deref() {
+                input_paths.push(path);
+            }
+            // Reserve and validate the destination before touching any input.  This
+            // ensures an occupied, aliased, or symlinked output fails closed even
+            // when one of the sources is missing or malformed.
+            let prepared = output
+                .as_deref()
+                .map(|path| prepare_board_binding_output(path, &input_paths))
+                .transpose()?;
+            let circuit_source = read_bounded_utf8(
+                &circuit_spec,
+                "circuit specification",
+                pcbex_kicad::CIRCUIT_SPEC_V2_MAX_BYTES,
+            )?;
+            let schematic_source = read_bounded_utf8(
+                &schematic,
+                "KiCad schematic",
+                pcbex_kicad::CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES,
+            )?;
+            let board_source = read_bounded_utf8(
+                &board,
+                "KiCad board",
+                pcbex_kicad::CIRCUIT_KICAD_BOARD_BINDING_MAX_BOARD_BYTES,
+            )?;
+            let electrical_policy = if let Some(path) = policy {
+                let source = read_bounded_utf8(&path, "electrical policy", 4 * 1024 * 1024)?;
+                parse_electrical_policy(&source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("parsing {}", path.display()))?
+            } else {
+                ElectricalPolicy::default()
+            };
+            let report = verify_circuit_kicad_board_binding(
+                &circuit_source,
+                &schematic_source,
+                &board_source,
+                &electrical_policy,
+            )
+            .map_err(anyhow::Error::msg)?;
+            // Keep the retained/echoed representation within the core report
+            // byte contract. MCP embeds the parsed object in structuredContent,
+            // so pretty-print amplification must not bypass that bound.
+            let rendered = format!("{}\n", serde_json::to_string(&report)?);
+            if let (Some(path), Some(prepared)) = (output.as_deref(), prepared) {
+                persist_atomic_new_file(prepared, path, &rendered)?;
+                if mcp_echo_report {
+                    io::stdout().write_all(rendered.as_bytes())?;
+                    io::stdout().flush()?;
+                }
+                eprintln!(
+                    "circuit-to-KiCad board binding: {}; report={}",
+                    if report.approved { "approved" } else { "rejected" },
+                    path.display()
+                );
+            } else {
+                print!("{rendered}");
+                eprintln!(
+                    "circuit-to-KiCad board binding: {}",
+                    if report.approved { "approved" } else { "rejected" }
+                );
+            }
+            if require_approved && !report.approved {
+                bail!("circuit-to-KiCad board binding rejected");
             }
         }
         Command::CompareElectricalReviews {
@@ -15779,6 +15895,25 @@ fn prepare_handoff_output(output: &Path, inputs: &[&Path]) -> Result<tempfile::N
         {
             bail!(
                 "circuit-to-KiCad handoff output must not alias input: {}",
+                input.display()
+            );
+        }
+    }
+    prepare_atomic_new_file(output)
+}
+
+fn prepare_board_binding_output(
+    output: &Path,
+    inputs: &[&Path],
+) -> Result<tempfile::NamedTempFile> {
+    reject_output_symlink_components(output, "circuit-to-KiCad board binding output")?;
+    let normalized_output = normalize_destination(output)?;
+    for input in inputs {
+        if let Ok(normalized_input) = normalize_destination(input)
+            && destinations_alias(&normalized_output, &normalized_input)
+        {
+            bail!(
+                "circuit-to-KiCad board binding output must not alias an input: {}",
                 input.display()
             );
         }

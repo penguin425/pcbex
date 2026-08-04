@@ -5,6 +5,13 @@ closed `circuit-spec-v2` contract. It is a semantic verification boundary,
 not a circuit or schematic generator: neither input is rewritten and no
 library, supplier, or placement decision is made by this command.
 
+This remains the v1.415 schematic-only contract.  v1.416 adds the separate
+`verify-circuit-kicad-board-binding` gate, which recalculates this handoff from
+the raw circuit and schematic before binding the result to the actual
+`.kicad_pcb`; a previously retained handoff report is never accepted as a
+substitute.  See [Circuit-spec v2 to KiCad schematic and board
+binding](CIRCUIT_KICAD_BOARD_BINDING.md) for that three-way boundary.
+
 ## Contracts and commands
 
 Discover the exact native JSON Schema before producing a handoff artifact:
@@ -101,3 +108,9 @@ Those are separate gates. A passing handoff only proves that the supplied
 flat, single-unit KiCad schematic expresses the supplied circuit-spec v2
 intent. The schematic must still pass the complete PCB, manufacturing, and
 approval pipeline before production.
+
+The v1.416 board-binding gate is intentionally not folded into this command,
+the v1/v2 `pipeline-verify` reports, or the existing pipeline phases.  Invoke
+it explicitly when the board must be bound to the already-verified schematic;
+the deterministic bounded-input pipeline runner planned for v1.417 is the
+future integration point.

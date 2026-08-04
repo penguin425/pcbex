@@ -218,6 +218,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Digest-bound physical profiles | Closed bounded geometry/DFM profile applied atomically to placement, routing, analysis, and fabrication; raw and canonical SHA-256 bindings must match through manufacturing and pipeline verification | Core concave-outline/cutout/fixed-position/atomicity/non-relaxation tests, KiCad placement revalidation, manifest v1/v2 compatibility and substitution tests, MCP/Action forwarding tests |
 | MCP/Action hardware pipeline parity | Opt-in composite Action pipeline inputs/outputs forward the generated analysis evidence and physical-profile binding; rejected pipeline reports are published before the final fail gate, while MCP `check_schematic`, `check_circuit_spec`, and `pipeline_verify` expose the same closed contract with optional Tasks support | Action static/input/output and retained-failure tests, MCP tool-schema/dispatch/optional-Tasks tests, and pipeline report publication regressions |
 | Verified circuit-to-KiCad handoff | Native digest-bound verification compares a closed flat/single-unit circuit-spec v2 semantic subset with an existing KiCad schematic, runs both deterministic ERC/check paths, and retains the report before a required-approval rejection; it is not a generator | Circuit/KiCad handoff schema and CLI/MCP verification regressions, including source/canonical identity, mismatch, ERC, and rejection-retention coverage |
+| Circuit-spec/KiCad schematic-board binding | Standalone native verification recalculates the raw v1.415 handoff and binds exact reference/footprint identity, value/MPN/BOM/DNP metadata, pin-to-pad number/net/no-connect state, and complete net/footprint/pad coverage to the actual board using canonical names from the imported schematic; source, canonical, and binding digests are deterministic and rejected reports are retained atomically | Board-binding schema and Rust/CLI/MCP regressions cover exact and duplicate/missing/extra records, terminal-less raw nets, reserved net 0, declared no-connect pads, the empty unconnected unnumbered-NPTH exception, nested-handoff rejection, bounded inputs, source/electrical digest behavior, output collisions, and retained failures |
 
 ## Final verification commands
 
@@ -235,7 +236,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.415.0 exposes 866 Rust tests and 156 Python tests. The release workflow
+Version 1.416.0 exposes 878 Rust tests and 156 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

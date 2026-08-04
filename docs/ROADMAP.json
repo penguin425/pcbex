@@ -599,6 +599,11 @@
     {
       "id": "verified-circuit-kicad-handoff",
       "release": "v1.415.0",
+      "status": "released"
+    },
+    {
+      "id": "circuit-kicad-board-binding",
+      "release": "v1.416.0",
       "status": "current"
     }
   ]

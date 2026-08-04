@@ -100,6 +100,39 @@ fn handoff_schematic() -> String {
     source
 }
 
+fn board_binding_board() -> &'static str {
+    r#"(kicad_pcb
+  (version 20250114)
+  (generator pcbex-test)
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal)
+    (36 "B.SilkS" user "b.silkscreen")
+    (37 "F.SilkS" user "f.silkscreen")
+    (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (net 1 "SIGNAL")
+  (net 2 "VCC")
+  (footprint "Package:QFN"
+    (layer "F.Cu")
+    (at 10 10)
+    (fp_text reference "U1" (at 0 0) (layer "F.Fab") hide)
+    (fp_text value "Chip" (at 0 1) (layer "F.Fab") hide)
+    (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "SIGNAL"))
+    (pad "2" thru_hole circle (at 2 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 2 "VCC")))
+  (footprint "Resistor_SMD:R_0603"
+    (layer "F.Cu")
+    (at 20 10)
+    (fp_text reference "R1" (at 0 0) (layer "F.Fab") hide)
+    (fp_text value "10k" (at 0 1) (layer "F.Fab") hide)
+    (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "SIGNAL"))
+    (pad "2" thru_hole circle (at 2 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 2 "VCC")))
+  (gr_rect (start 0 0) (end 40 20) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts")))"#
+}
+
 #[test]
 fn stdio_server_negotiates_and_returns_failed_gate_artifacts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -586,6 +619,108 @@ fn stdio_server_handoff_retains_success_and_rejected_reports() {
             .iter()
             .any(|finding| finding["code"] == "symbol_mismatch")
     );
+    assert!(rejected_report.is_file());
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn stdio_server_board_binding_retains_rejected_report() {
+    let output = temporary_directory("mcp-board-binding");
+    fs::create_dir_all(&output).unwrap();
+    let spec = output.join("circuit.json");
+    let schematic = output.join("design.kicad_sch");
+    let board = output.join("design.kicad_pcb");
+    fs::write(&spec, HANDOFF_CIRCUIT_SPEC).unwrap();
+    fs::write(&schematic, handoff_schematic()).unwrap();
+    fs::write(&board, board_binding_board()).unwrap();
+    let approved_report = output.join("approved.json");
+    let rejected_report = output.join("rejected.json");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let initialized = initialize(&mut stdin, &mut stdout, json!("initialize-board-binding"));
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "board-binding-success",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_circuit_kicad_board_binding",
+                "arguments": {
+                    "circuit_spec": spec,
+                    "schematic": schematic,
+                    "board": board,
+                    "output": approved_report,
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let success = receive(&mut stdout);
+    assert_eq!(success["id"], "board-binding-success");
+    assert_eq!(success["result"]["isError"], false);
+    assert_eq!(
+        success["result"]["structuredContent"]["report"]["approved"],
+        true
+    );
+    let success_text = success["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(success_text.contains("board binding approved"));
+    assert!(!success_text.contains("binding_sha256"));
+    assert!(approved_report.is_file());
+
+    let changed = fs::read_to_string(&board).unwrap().replace(
+        "(fp_text value \"10k\" (at 0 1) (layer \"F.Fab\") hide)",
+        "(fp_text value \"9k\" (at 0 1) (layer \"F.Fab\") hide)",
+    );
+    fs::write(&board, changed).unwrap();
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "board-binding-rejected",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_circuit_kicad_board_binding",
+                "arguments": {
+                    "circuit_spec": spec,
+                    "schematic": schematic,
+                    "board": board,
+                    "output": rejected_report,
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let rejected = receive(&mut stdout);
+    assert_eq!(rejected["id"], "board-binding-rejected");
+    assert_eq!(rejected["result"]["isError"], true);
+    assert_eq!(
+        rejected["result"]["structuredContent"]["report"]["approved"],
+        false
+    );
+    let rejected_text = rejected["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(rejected_text.contains("board binding rejected"));
+    assert!(!rejected_text.contains("binding_sha256"));
     assert!(rejected_report.is_file());
 
     drop(stdin);

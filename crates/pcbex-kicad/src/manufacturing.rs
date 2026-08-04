@@ -200,7 +200,7 @@ fn manufacturing_parts_with_limit(
     Ok(parts)
 }
 
-fn parse_footprint(xs: &[Sexp]) -> Result<ManufacturingPart, String> {
+pub(super) fn parse_footprint(xs: &[Sexp]) -> Result<ManufacturingPart, String> {
     let properties = footprint_properties(xs);
     let footprint = atom(xs.get(1)).unwrap_or_default().to_string();
     if footprint.trim().is_empty() {
@@ -428,6 +428,7 @@ fn is_mpn_property_normalized(normalized: &str) -> bool {
     matches!(
         normalized,
         "mpn"
+            | "pcbexmpn"
             | "manufacturerpart"
             | "manufacturerpartnumber"
             | "manufacturerpartno"
@@ -635,11 +636,15 @@ mod tests {
             (property "JLCPCB-Part_Number" "C456") (attr smd))
           (footprint "Z" (layer "F.Cu") (at 2 2)
             (property "Reference" "R3") (property "Value" "10k")
-            (property "Mfr Part #" "RC0603") (attr smd)))"#;
+            (property "Mfr Part #" "RC0603") (attr smd))
+          (footprint "W" (layer "F.Cu") (at 3 3)
+            (property "Reference" "R4") (property "Value" "10k")
+            (property "pcbex:mpn" "PCBEX-1") (attr smd)))"#;
         let parts = manufacturing_parts(pcb).unwrap();
         assert_eq!(parts[0].mpn.as_deref(), Some("C123"));
         assert_eq!(parts[1].mpn.as_deref(), Some("C456"));
         assert_eq!(parts[2].mpn.as_deref(), Some("RC0603"));
+        assert_eq!(parts[3].mpn.as_deref(), Some("PCBEX-1"));
     }
 
     #[test]

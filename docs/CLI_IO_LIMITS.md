@@ -65,7 +65,7 @@ has a hard deadline.
 | `pcbex doctor` version check | 10 seconds | 64 KiB | 64 KiB |
 | KiCad DRC and manufacturing export | 600 seconds | 8 MiB | 1 MiB |
 | KiCad build identity | 600 seconds | 128 KiB | 1 MiB |
-| MCP child `pcbex` command | 600 seconds | 8 MiB | 1 MiB |
+| MCP child `pcbex` command | 600 seconds | 16 MiB | 1 MiB |
 | Firmware compiler, smoke test, or Python check | configurable 1–3600 seconds; default 120 | 1 MiB | 1 MiB |
 | Factory repair wrapper | remaining portion of its 600-second repair limit | 1 MiB | 1 MiB |
 

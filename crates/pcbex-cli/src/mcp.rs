@@ -450,6 +450,7 @@ impl McpServer {
                     | "check_schematic"
                     | "check_circuit_spec"
                     | "verify_circuit_kicad_handoff"
+                    | "verify_circuit_kicad_board_binding"
                     | "pipeline_verify"
             )
         ) {
@@ -933,6 +934,27 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                 "properties": {
                     "circuit_spec": {"type": "string"},
                     "schematic": {"type": "string"},
+                    "policy": {"type": "string"},
+                    "output": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "verify_circuit_kicad_board_binding",
+            "Verify circuit-to-KiCad board binding",
+            "Verify that a circuit-spec v2, KiCad schematic, and KiCad board represent the same bound design, retaining the closed board-binding report on rejection.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["circuit_spec", "schematic", "board", "output"],
+                "properties": {
+                    "circuit_spec": {"type": "string"},
+                    "schematic": {"type": "string"},
+                    "board": {"type": "string"},
                     "policy": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
@@ -4520,6 +4542,9 @@ fn call_tool(
         "verify_circuit_kicad_handoff" => {
             verify_circuit_kicad_handoff(arguments, cancellation)?
         }
+        "verify_circuit_kicad_board_binding" => {
+            verify_circuit_kicad_board_binding(arguments, cancellation)?
+        }
         "pipeline_verify" => pipeline_verify(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
@@ -5053,13 +5078,39 @@ fn call_tool(
         _ => return Err(json!({"detail": format!("unknown tool {name:?}")})),
     };
     let is_error = structured.get("ok").and_then(Value::as_bool) == Some(false);
-    let text =
-        serde_json::to_string_pretty(&structured).expect("structured tool result serializes");
+    let text = tool_result_text(name, &structured);
     Ok(json!({
         "content": [{"type": "text", "text": text}],
         "structuredContent": structured,
         "isError": is_error
     }))
+}
+
+fn tool_result_text(name: &str, structured: &Value) -> String {
+    if name != "verify_circuit_kicad_board_binding" {
+        return serde_json::to_string_pretty(structured)
+            .expect("structured tool result serializes");
+    }
+
+    // This report can legitimately be several MiB. Repeating it as escaped
+    // human-readable text would more than double the JSON-RPC frame and could
+    // make a valid structured result exceed the 16 MiB transport ceiling.
+    let command_ok = structured.get("ok").and_then(Value::as_bool) == Some(true);
+    let approved = structured
+        .pointer("/report/approved")
+        .and_then(Value::as_bool);
+    let status = match (command_ok, approved) {
+        (true, Some(true)) => "approved",
+        (_, Some(false)) => "rejected",
+        _ => "failed",
+    };
+    let output = structured
+        .get("output")
+        .and_then(Value::as_str)
+        .unwrap_or("unavailable");
+    format!(
+        "Circuit-to-KiCad board binding {status}; retained report: {output}; command_ok={command_ok}"
+    )
 }
 
 fn verify_policy_pack(
@@ -5390,6 +5441,56 @@ fn verify_circuit_kicad_handoff(
     // stale report into a failed MCP call between preflight and readback.
     let report = trusted_echoed_json(&execution, Path::new(&output));
     let execution = require_retained_json(execution, &report, "handoff output");
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
+    ))
+}
+
+fn verify_circuit_kicad_board_binding(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "circuit_spec",
+            "schematic",
+            "board",
+            "policy",
+            "output",
+            "require_approved",
+        ],
+    )?;
+    let circuit_spec = required_string(&arguments, "circuit_spec")?;
+    let schematic = required_string(&arguments, "schematic")?;
+    let board = required_string(&arguments, "board")?;
+    optional_string(&arguments, "policy")?;
+    let output = required_string(&arguments, "output")?;
+    require_absent_outputs([Some(output.as_str())])?;
+    let mut command = vec![
+        "verify-circuit-kicad-board-binding".into(),
+        circuit_spec,
+        schematic,
+        board,
+        "--output".into(),
+        output.clone(),
+        "--mcp-echo-report".into(),
+    ];
+    optional_option(&arguments, "policy", "--policy", &mut command)?;
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    // Trust a retained board-binding report only when the child echoed the
+    // exact JSON after atomic no-clobber publish and the retained file still
+    // matches. This protects failed/rejected calls from stale or concurrent
+    // output injection between execution and readback.
+    let report = trusted_echoed_json(&execution, Path::new(&output));
+    let execution = require_retained_json(execution, &report, "board binding output");
     Ok(execution_result(
         execution,
         json!({"output": output, "report": report}),
@@ -12023,7 +12124,7 @@ fn execute(
         &mut command,
         crate::bounded_process::ProcessLimits {
             timeout: Duration::from_secs(600),
-            stdout_bytes: 8 * 1024 * 1024,
+            stdout_bytes: MAX_MCP_RESPONSE_BYTES,
             stderr_bytes: 1024 * 1024,
         },
         cancellation,
@@ -12485,7 +12586,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 144);
+        assert_eq!(tools.len(), 145);
         let named = |name: &str| {
             tools
                 .iter()
@@ -12580,6 +12681,18 @@ mod tests {
         );
         assert_eq!(
             named("verify_circuit_kicad_handoff")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("verify_circuit_kicad_board_binding")["inputSchema"]["required"],
+            json!(["circuit_spec", "schematic", "board", "output"])
+        );
+        assert_eq!(
+            named("verify_circuit_kicad_board_binding")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("verify_circuit_kicad_board_binding")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(
@@ -13330,6 +13443,17 @@ mod tests {
                     "require_approved": "yes"
                 }),
             ),
+            (
+                15,
+                "verify_circuit_kicad_board_binding",
+                json!({
+                    "circuit_spec": "circuit.json",
+                    "schematic": "design.kicad_sch",
+                    "board": "design.kicad_pcb",
+                    "output": "binding.json",
+                    "require_approved": "yes"
+                }),
+            ),
         ] {
             let response = server
                 .handle_message(request(
@@ -13468,6 +13592,35 @@ mod tests {
             std::fs::read(&handoff_output).unwrap(),
             br#"{"approved":true}"#
         );
+
+        let board_binding_output = directory.path().join("old-board-binding.json");
+        std::fs::write(&board_binding_output, br#"{"approved":true}"#).unwrap();
+        let response = server
+            .handle_message(request(
+                32,
+                "tools/call",
+                json!({
+                    "name": "verify_circuit_kicad_board_binding",
+                    "arguments": {
+                        "circuit_spec": "missing-spec.json",
+                        "schematic": "missing-schematic.kicad_sch",
+                        "board": "missing-board.kicad_pcb",
+                        "output": board_binding_output
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["data"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&board_binding_output).unwrap(),
+            br#"{"approved":true}"#
+        );
     }
 
     #[test]
@@ -13563,6 +13716,7 @@ mod tests {
             "check_schematic",
             "check_circuit_spec",
             "verify_circuit_kicad_handoff",
+            "verify_circuit_kicad_board_binding",
             "pipeline_verify",
         ]
         .into_iter()
