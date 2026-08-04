@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.419.0
+    uses: penguin425/pcbex@v1.420.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2155,7 +2155,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.419.0` step:
+# Add these fields to a `penguin425/pcbex@v1.420.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -2937,7 +2937,33 @@ snapshot and receipt contracts can be emitted independently:
 ```sh
 PYTHONPATH=agent/src python3 -m pcbex_agent catalog-snapshot-schema
 PYTHONPATH=agent/src python3 -m pcbex_agent catalog-selection-receipt-schema
+PYTHONPATH=agent/src python3 -m pcbex_agent catalog-fetch-receipt-schema
 ```
+
+Version 1.420 can acquire that same closed snapshot through one explicit,
+bounded HTTPS pre-step:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent fetch-catalog-snapshot \
+  --endpoint https://inventory.example.test/catalog/v1 \
+  --provider jlcpcb \
+  --output build/catalog-snapshot.json \
+  --receipt build/catalog-fetch-receipt.json \
+  --bearer-token-environment PCBEX_CATALOG_TOKEN
+```
+
+The endpoint must already return `catalog-snapshot-v1`; provider-native field
+mapping remains a separate adapter boundary. The fetcher rejects redirects,
+credentials/query/fragment in URLs, non-JSON responses, stale or malformed
+snapshots, links, overwrites, and responses beyond its deadline or 4 MiB cap.
+It normalizes the snapshot and retains a secret-free receipt binding the exact
+response, normalized output, provider, endpoint identity, timestamps, and
+catalog digest. Endpoints are capped at 4 KiB; bearer tokens are capped at 8
+KiB, read only from a named environment variable, and excluded from the
+bounded resolver process.
+Selection and circuit generation never fetch implicitly and remain offline and
+replayable. Supplier search, substitution, reservation, purchasing, datasheet
+truth, and qualification are not performed.
 
 `--allow-out-of-stock`, `--require-basic`, and
 `--allow-footprint-fallback` are explicit snapshot policies; footprint-only
@@ -3065,7 +3091,7 @@ Minimal Action opt-in:
 
 ```yaml
 - id: deterministic-pipeline
-  uses: penguin425/pcbex@v1.419.0
+  uses: penguin425/pcbex@v1.420.0
   with:
     board: hardware/controller.kicad_pcb
     deterministic-pipeline-plan: hardware/pipeline-plan.json
@@ -4364,7 +4390,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.419.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.420.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
@@ -4487,8 +4513,10 @@ exact KiCad pad geometry, placement optimization, DFM reporting, and headless
 or IPC-assisted KiCad workflows. The companion agent can render a validated,
 closed circuit specification as executable SKiDL, resolve MPNs from a
 digest-bound local catalog snapshot, and run bounded natural-language
-candidate correction against the native immutable ERC floor. Declared power
-metadata and catalog inventory remain input evidence rather than verified
-datasheet or supplier truth. pcbex does not yet replace complete electrical
-design, live supplier qualification, analog or signal-integrity simulation,
-final KiCad ERC/DRC, or fabrication review.
+candidate correction against the native immutable ERC floor. It can explicitly
+acquire the closed snapshot from a bounded HTTPS feed before selection, but
+does not translate arbitrary supplier-native APIs. Declared power metadata and
+catalog inventory remain input evidence rather than verified datasheet or
+supplier truth. pcbex does not yet replace complete electrical design, live
+supplier qualification, analog or signal-integrity simulation, final KiCad
+ERC/DRC, or fabrication review.

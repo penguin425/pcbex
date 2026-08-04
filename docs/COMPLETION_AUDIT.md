@@ -44,6 +44,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Natural-language planning | Deterministic English/Japanese parser plus schema-validated injected LLM adapter | Planner and LLM safety tests |
 | SKiDL and part search boundaries | Optional SKiDL graph converter and injected catalog search | Adapter tests |
 | Rust-gated natural-language circuit generation | A bounded shell-free provider emits only closed circuit-spec v2 candidates; exact raw JSON is normalized into deterministic schematic IR and accepted only after the native immutable ERC floor reaches zero errors under one aggregate deadline | Rust schema/conversion/ERC tests plus Python correction-loop regressions cover malformed, repeated, non-improving, oversized, timed-out, digest-inconsistent, and namespace-hostile candidates without publishing failed output |
+| Bounded supplier inventory snapshot ingestion | One explicit no-redirect HTTPS GET acquires only the closed catalog-snapshot v1 contract under a shared deadline and 4 MiB ceiling, reads optional Bearer credentials from a named environment variable without retention, reuses the authoritative snapshot/TTL validator, and atomically publishes normalized local evidence plus a secret-free response/snapshot/catalog digest receipt; selection and deterministic pipelines remain offline | Real loopback HTTP-stack, malformed/duplicate/non-finite JSON, response/status/type/timeout bounds, token non-reflection, endpoint policy, output collision/link/race, normalized replay, schema, and receipt/output tamper regressions |
 | DRC repair planning | KiCad 10 report normalization and rule-to-repair mapping | DRC normalization tests |
 | Automatic DRC repair loop | Bounded candidate generation, KiCad revalidation, convergence guard, atomic clean-output promotion | Injected three-iteration repair and repeated-candidate tests; real KiCad clean-board run |
 | Polygon board geometry | Concave/convex outlines, exact polygon keepouts, edge-aware routing/checking/SVG, KiCad line-outline import | L-board routing, triangular keepout bounding-box escape, concavity tests; five-sided example passes real KiCad DRC |
@@ -239,7 +240,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.419.0 exposes 892 Rust tests and 156 Python tests. The release workflow
+Version 1.420.0 exposes 892 Rust tests and 174 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

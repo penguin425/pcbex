@@ -151,9 +151,12 @@ the correct real-world component rating.
 ## Scope and KiCad handoff
 
 Generation still ends at a checked circuit specification and deterministic
-SKiDL source. It does not query live supplier inventory, verify datasheet
-ratings, generate a `.kicad_sch`, place or route a board, or authorize
-fabrication. When a schematic is authored separately, the native
+SKiDL source. It never queries live supplier inventory implicitly. The
+standalone v1.420 `fetch-catalog-snapshot` pre-step may acquire a caller-owned
+closed feed before generation, but generation itself consumes only that
+retained local snapshot. It does not map arbitrary supplier-native responses,
+verify datasheet ratings, generate a `.kicad_sch`, place or route a board, or
+authorize fabrication. When a schematic is authored separately, the native
 `verify-circuit-kicad-handoff` gate can verify its closed flat/single-unit
 semantic subset against the exact circuit-spec v2 intent; it is a verifier,
 not a converter. See [Circuit-spec v2 to KiCad schematic handoff
