@@ -19,6 +19,53 @@ const FIRMWARE_FILES: [&str; 7] = [
     "host.py",
 ];
 
+const RUNNER_CIRCUIT_SPEC: &str = r#"{
+  "schema_version": 2,
+  "parts": [
+    {"reference":"U1","lib_id":"MCU:Chip","value":"Chip","footprint":"Package:QFN","mpn":null,"power":{"rail_voltage_uv":null,"max_voltage_uv":null,"requires_decoupling":false,"decoupling":false},"pins":[{"number":"1","name":"OUT","net":"SIGNAL","electrical_type":"output"},{"number":"2","name":"VCC","net":"VCC","electrical_type":"passive"}]},
+    {"reference":"R1","lib_id":"Device:R","value":"10k","footprint":"Resistor_SMD:R_0603","mpn":null,"power":{"rail_voltage_uv":null,"max_voltage_uv":null,"requires_decoupling":false,"decoupling":false},"pins":[{"number":"1","name":"~","net":"SIGNAL","electrical_type":"passive"},{"number":"2","name":"~","net":"VCC","electrical_type":"passive"}]}
+  ],
+  "nets": [
+    {"name":"SIGNAL","voltage_uv":null,"connections":[{"reference":"U1","pin":"1"},{"reference":"R1","pin":"1"}]},
+    {"name":"VCC","voltage_uv":null,"connections":[{"reference":"U1","pin":"2"},{"reference":"R1","pin":"2"}]}
+  ]
+}"#;
+
+const RUNNER_BOARD: &str = r#"(kicad_pcb
+  (version 20250114)
+  (generator pcbex-test)
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers
+    (0 "F.Cu" signal)
+    (31 "B.Cu" signal)
+    (34 "B.Mask" user "b.mask")
+    (35 "F.Mask" user "f.mask")
+    (36 "B.SilkS" user "b.silkscreen")
+    (37 "F.SilkS" user "f.silkscreen")
+    (44 "Edge.Cuts" user))
+  (setup (pad_to_mask_clearance 0))
+  (net 0 "")
+  (net 1 "SIGNAL")
+  (net 2 "VCC")
+  (footprint "Package:QFN"
+    (layer "F.Cu")
+    (at 10 10)
+    (fp_text reference "U1" (at 0 0) (layer "F.Fab") hide)
+    (fp_text value "Chip" (at 0 1) (layer "F.Fab") hide)
+    (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "SIGNAL"))
+    (pad "2" thru_hole circle (at 2 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 2 "VCC")))
+  (footprint "Resistor_SMD:R_0603"
+    (layer "F.Cu")
+    (at 20 20)
+    (fp_text reference "R1" (at 0 0) (layer "F.Fab") hide)
+    (fp_text value "10k" (at 0 1) (layer "F.Fab") hide)
+    (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "SIGNAL"))
+    (pad "2" thru_hole circle (at 2 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 2 "VCC")))
+  (segment (start 10 10) (end 20 20) (width 0.25) (layer "F.Cu") (net 1))
+  (segment (start 12 10) (end 22 20) (width 0.25) (layer "B.Cu") (net 2))
+  (gr_rect (start 0 0) (end 40 30) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts")))"#;
+
 fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_pcbex"))
 }
@@ -134,6 +181,60 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn runner_schematic() -> String {
+    let mut source = include_str!("../../../examples/simple.kicad_sch").to_string();
+    source = source.replace("(pin power_in line", "(pin passive line");
+    source = source.replace(
+        r##"  (no_connect
+    (at 42.54 20)
+    (uuid 00000000-0000-0000-0000-000000000015))"##,
+        r##"  (global_label "VCC"
+    (shape input)
+    (at 42.54 20 0)
+    (effects (font (size 1.27 1.27)) (justify left))
+    (uuid 00000000-0000-0000-0000-000000000015)
+    (property "Intersheetrefs" "${INTERSHEET_REFS}"
+      (at 42.54 20 0)
+      (effects (font (size 1.27 1.27)) hide)))"##,
+    );
+    for (footprint, property) in [
+        (
+            "Package:QFN",
+            "    (property \"pcbex:requires_decoupling\" \"false\")\n    (property \"pcbex:decoupling\" \"false\")",
+        ),
+        (
+            "Resistor_SMD:R_0603",
+            "    (property \"pcbex:requires_decoupling\" \"false\")\n    (property \"pcbex:decoupling\" \"false\")",
+        ),
+    ] {
+        let needle = format!(
+            "    (property \"Footprint\" \"{footprint}\"\n      (at {} 20 0)\n      (effects (font (size 1.27 1.27)) hide))",
+            if footprint == "Package:QFN" {
+                "12.54"
+            } else {
+                "40"
+            }
+        );
+        let replacement = format!("{needle}\n{property}");
+        source = source.replace(&needle, &replacement);
+    }
+    source
+}
+
+fn plan_descriptor(root: &Path, path: &Path) -> Value {
+    let bytes = fs::read(path).unwrap();
+    let relative = path
+        .strip_prefix(root)
+        .unwrap()
+        .to_string_lossy()
+        .replace('\\', "/");
+    json!({
+        "path": relative,
+        "bytes": bytes.len(),
+        "sha256": sha256(&bytes),
+    })
+}
+
 fn make_approved_electrical_review(
     directory: &Path,
     schematic: &Path,
@@ -204,6 +305,27 @@ fn make_clean_analysis(directory: &Path, board: &Path) -> (PathBuf, PathBuf, Pat
     assert_eq!(manifest["result"]["clean"], true);
     assert_eq!(manifest["result"]["violations"], 0);
     assert_eq!(manifest["result"]["routed_nets"], 1);
+    assert_eq!(manifest["result"]["unrouted_nets"], 0);
+    (manifest_path, checks_path, quality_path)
+}
+
+fn make_runner_clean_analysis(directory: &Path, board: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let output = Command::new(binary())
+        .arg("analyze-kicad")
+        .arg(board)
+        .arg("--output-dir")
+        .arg(directory)
+        .arg("--fail-on-violations")
+        .output()
+        .unwrap();
+    assert_success(&output, "runner analyze-kicad");
+    let manifest_path = directory.join("run.json");
+    let checks_path = directory.join("checks.json");
+    let quality_path = directory.join("quality.json");
+    let manifest = read_json(&manifest_path);
+    assert_eq!(manifest["input"]["sha256"], sha256_file(board));
+    assert_eq!(manifest["result"]["clean"], true);
+    assert_eq!(manifest["result"]["violations"], 0);
     assert_eq!(manifest["result"]["unrouted_nets"], 0);
     (manifest_path, checks_path, quality_path)
 }
@@ -420,6 +542,48 @@ fn passing_inputs(directory: &Path) -> (PipelineInputs, String, String) {
         schematic_sha256,
         board_sha256,
     )
+}
+
+fn passing_runner_plan(directory: &Path) -> PathBuf {
+    let circuit_spec = directory.join("circuit-spec-v2.json");
+    let schematic = directory.join("design.kicad_sch");
+    let board = directory.join("design.routed.kicad_pcb");
+    fs::write(&circuit_spec, RUNNER_CIRCUIT_SPEC).unwrap();
+    fs::write(&schematic, runner_schematic()).unwrap();
+    fs::write(&board, RUNNER_BOARD).unwrap();
+
+    let (electrical_policy, electrical_review, schematic_sha256) =
+        make_approved_electrical_review(directory, &schematic);
+    let analysis_directory = directory.join("runner-analysis");
+    let (analysis_manifest, analysis_checks, quality) =
+        make_runner_clean_analysis(&analysis_directory, &board);
+    let manufacturing_package = directory.join("runner-manufacturing.zip");
+    write_manufacturing_package(&manufacturing_package, &board);
+    let firmware_manifest = write_firmware_manifest(directory, &schematic_sha256);
+
+    let plan = json!({
+        "schema_version": 1,
+        "circuit_spec": plan_descriptor(directory, &circuit_spec),
+        "schematic": plan_descriptor(directory, &schematic),
+        "electrical_policy": plan_descriptor(directory, &electrical_policy),
+        "electrical_review": plan_descriptor(directory, &electrical_review),
+        "board": plan_descriptor(directory, &board),
+        "analysis_manifest": plan_descriptor(directory, &analysis_manifest),
+        "analysis_checks": plan_descriptor(directory, &analysis_checks),
+        "quality": plan_descriptor(directory, &quality),
+        "analysis_project": null,
+        "analysis_rules": null,
+        "analysis_dfm_profile": null,
+        "analysis_policy_pack": null,
+        "analysis_physical_profile": null,
+        "manufacturing_package": plan_descriptor(directory, &manufacturing_package),
+        "firmware_manifest": plan_descriptor(directory, &firmware_manifest),
+        "factory_receipt": null,
+        "require_factory": false,
+    });
+    let path = directory.join("deterministic-pipeline-plan.json");
+    write_json(&path, &plan);
+    path
 }
 
 fn missing_inputs(directory: &Path) -> PipelineInputs {
@@ -1642,4 +1806,293 @@ fn pipeline_schema_is_closed_and_never_clobbers_output() {
             .contains("refusing to overwrite existing output")
     );
     assert_eq!(fs::read(&schema_path).unwrap(), sentinel);
+}
+
+#[test]
+fn deterministic_pipeline_runner_approves_and_reproduces_the_complete_chain() {
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(temporary.path());
+    let first_report = temporary.path().join("runner-report-1.json");
+    let first = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&first_report)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&first, "run-deterministic-pipeline");
+    let report = read_json(&first_report);
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["approved"], true);
+    assert_eq!(report["failures"], json!([]));
+    assert_eq!(report["binding"]["approved"], true);
+    assert_eq!(report["pipeline"]["passed"], true);
+    assert_eq!(report["run_sha256"].as_str().unwrap().len(), 64);
+    assert!(
+        report["input_evidence"]
+            .as_array()
+            .unwrap()
+            .windows(2)
+            .all(|pair| pair[0]["role"].as_str().unwrap() < pair[1]["role"].as_str().unwrap())
+    );
+
+    let second_report = temporary.path().join("runner-report-2.json");
+    let second = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&second_report)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&second, "repeated run-deterministic-pipeline");
+    assert_eq!(
+        fs::read(first_report).unwrap(),
+        fs::read(second_report).unwrap()
+    );
+}
+
+#[test]
+fn deterministic_pipeline_runner_retains_digest_rejection_and_preflights_output() {
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(temporary.path());
+    let mut value = read_json(&plan);
+    value["board"]["sha256"] = Value::String("0".repeat(64));
+    write_json(&plan, &value);
+
+    let report_path = temporary.path().join("rejected-runner-report.json");
+    let rejected = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&report_path)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    let report = read_json(&report_path);
+    assert_eq!(report["approved"], false);
+    assert!(!report["failures"].as_array().unwrap().is_empty());
+    assert_eq!(report["binding"], Value::Null);
+    assert_eq!(report["pipeline"], Value::Null);
+
+    let occupied = temporary.path().join("occupied-runner-report.json");
+    let sentinel = b"preserve runner output\n";
+    fs::write(&occupied, sentinel).unwrap();
+    fs::write(&plan, b"not valid JSON").unwrap();
+    let preflight = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&occupied)
+        .output()
+        .unwrap();
+    assert!(!preflight.status.success());
+    assert!(
+        String::from_utf8_lossy(&preflight.stderr)
+            .contains("refusing to overwrite existing output")
+    );
+    assert_eq!(fs::read(occupied).unwrap(), sentinel);
+}
+
+#[test]
+fn deterministic_pipeline_runner_rejects_non_exact_firmware_and_symlink_inputs() {
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(temporary.path());
+    fs::write(
+        temporary.path().join("firmware/unexpected.txt"),
+        b"not authorized by the firmware bundle contract",
+    )
+    .unwrap();
+    let report_path = temporary.path().join("extra-firmware-report.json");
+    let extra = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&report_path)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert!(!extra.status.success());
+    let report = read_json(&report_path);
+    assert_eq!(report["approved"], false);
+    assert_eq!(report["binding"]["approved"], true);
+    assert_eq!(report["pipeline"], Value::Null);
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("firmware bundle"))
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let linked_temporary = tempfile::tempdir().unwrap();
+        let linked_plan = passing_runner_plan(linked_temporary.path());
+        let mut value = read_json(&linked_plan);
+        let board_relative = value["board"]["path"].as_str().unwrap();
+        let board = linked_temporary.path().join(board_relative);
+        let link = linked_temporary.path().join("board-link.kicad_pcb");
+        symlink(&board, &link).unwrap();
+        value["board"]["path"] = Value::String("board-link.kicad_pcb".into());
+        write_json(&linked_plan, &value);
+        let linked_report = linked_temporary.path().join("symlink-report.json");
+        let linked = Command::new(binary())
+            .arg("run-deterministic-pipeline")
+            .arg(&linked_plan)
+            .arg("--output")
+            .arg(&linked_report)
+            .arg("--require-approved")
+            .output()
+            .unwrap();
+        assert!(!linked.status.success());
+        let report = read_json(&linked_report);
+        assert_eq!(report["approved"], false);
+        assert_eq!(report["binding"], Value::Null);
+        assert_eq!(report["pipeline"], Value::Null);
+        assert!(
+            report["failures"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|failure| failure.as_str().unwrap().contains("symlink component"))
+        );
+    }
+}
+
+#[test]
+fn deterministic_pipeline_runner_retains_each_independently_runnable_gate() {
+    let pipeline_only = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(pipeline_only.path());
+    let mut value = read_json(&plan);
+    value["circuit_spec"]["sha256"] = Value::String("0".repeat(64));
+    write_json(&plan, &value);
+    let report_path = pipeline_only.path().join("pipeline-only-report.json");
+    let output = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&report_path)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report = read_json(&report_path);
+    assert_eq!(report["approved"], false);
+    assert_eq!(report["binding"], Value::Null);
+    assert_eq!(report["pipeline"]["passed"], true);
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| {
+                failure
+                    .as_str()
+                    .unwrap()
+                    .contains("circuit_spec: input SHA-256")
+            })
+    );
+
+    let binding_only = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(binding_only.path());
+    let mut value = read_json(&plan);
+    value["analysis_checks"]["sha256"] = Value::String("0".repeat(64));
+    write_json(&plan, &value);
+    let report_path = binding_only.path().join("binding-only-report.json");
+    let output = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&report_path)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let report = read_json(&report_path);
+    assert_eq!(report["approved"], false);
+    assert_eq!(report["binding"]["approved"], true);
+    assert_eq!(report["pipeline"], Value::Null);
+    assert!(
+        report["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| {
+                failure
+                    .as_str()
+                    .unwrap()
+                    .contains("analysis_checks: input SHA-256")
+            })
+    );
+}
+
+#[test]
+fn deterministic_pipeline_runner_keeps_output_outside_the_exact_firmware_bundle() {
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(temporary.path());
+    let firmware = temporary.path().join("firmware");
+    let report_path = firmware.join("report.json");
+    let output = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&report_path)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("must be outside the exact firmware bundle directory")
+    );
+    assert!(!report_path.exists());
+    let mut names = fs::read_dir(&firmware)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect::<Vec<_>>();
+    names.sort();
+    let mut expected = FIRMWARE_FILES
+        .iter()
+        .map(ToString::to_string)
+        .chain(std::iter::once("manifest.json".to_string()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(names, expected);
+}
+
+#[test]
+fn deterministic_pipeline_schemas_are_closed_and_no_clobber() {
+    let temporary = tempfile::tempdir().unwrap();
+    for (command, name) in [
+        ("deterministic-pipeline-plan-schema", "plan.schema.json"),
+        ("deterministic-pipeline-report-schema", "report.schema.json"),
+    ] {
+        let path = temporary.path().join(name);
+        let output = Command::new(binary())
+            .arg(command)
+            .arg("--output")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_success(&output, command);
+        let schema = read_json(&path);
+        assert_eq!(
+            schema["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
+        );
+        assert_eq!(schema["additionalProperties"], false);
+        assert_schema_objects_are_closed(&schema);
+
+        let collision = Command::new(binary())
+            .arg(command)
+            .arg("--output")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!collision.status.success());
+    }
 }

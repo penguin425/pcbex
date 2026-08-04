@@ -130,8 +130,9 @@ structured result under their aligned limits.
 This is an electrical/identity binding gate, not a board-quality or production
 gate.  It does not perform placement or footprint geometry checks, routing
 verification, DRC, DFM, Gerber/BOM/CPL generation, supplier lookup, hierarchy
-flattening, bus analysis, or multi-unit expansion.  Existing `pipeline-verify`
+flattening, bus analysis, or multi-unit expansion. Existing `pipeline-verify`
 v1 and v2 reports and phases are unchanged and do not consume this report.
-Pipeline integration is planned for the bounded-input deterministic runner in
-v1.417; until then, invoke this gate explicitly and retain its report beside
-the other design evidence.
+Version 1.417's bounded-input deterministic runner recomputes this gate from
+the same privately staged raw files and nests the resulting report beside the
+unchanged pipeline report; it never treats a copied board-binding report as an
+input. See [Bounded-input deterministic pipeline runner](DETERMINISTIC_PIPELINE_RUNNER.md).

@@ -604,6 +604,11 @@
     {
       "id": "circuit-kicad-board-binding",
       "release": "v1.416.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-input-deterministic-pipeline-runner",
+      "release": "v1.417.0",
       "status": "current"
     }
   ]

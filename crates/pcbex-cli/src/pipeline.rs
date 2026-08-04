@@ -48,6 +48,9 @@ const MAX_VIOLATIONS: usize = 100_000;
 const MAX_COMMAND_ARGUMENTS: usize = 256;
 const MAX_TEXT_CHARS: usize = 4096;
 const MAX_FAILURE_CHARS: usize = 4096;
+const MAX_PHASE_CHECKS: usize = 128;
+const MAX_PHASE_FAILURES: usize = 128;
+const MAX_PIPELINE_FAILURES: usize = 512;
 
 const ANALYSIS_ARTIFACTS: [&str; 7] = [
     "board.json",
@@ -106,13 +109,17 @@ impl PipelinePhase {
     }
 
     fn fail(&mut self, message: impl Into<String>) {
-        self.failures
-            .push(bound_text(&message.into(), MAX_FAILURE_CHARS));
+        if self.failures.len() < MAX_PHASE_FAILURES {
+            self.failures
+                .push(bound_text(&message.into(), MAX_FAILURE_CHARS));
+        }
     }
 
     fn check(&mut self, message: impl Into<String>) {
-        self.checks
-            .push(bound_text(&message.into(), MAX_TEXT_CHARS));
+        if self.checks.len() < MAX_PHASE_CHECKS {
+            self.checks
+                .push(bound_text(&message.into(), MAX_TEXT_CHARS));
+        }
     }
 
     fn finish(mut self) -> Self {
@@ -225,7 +232,7 @@ struct AnalysisManifest {
     artifacts: Vec<String>,
 }
 
-/// Validate every pipeline phase and retain all independent failures.
+/// Validate every pipeline phase and retain bounded independent failures.
 pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
     let (electrical, schematic_sha256) = electrical_phase(inputs);
     let (analysis, board_identity, analysis_binding) = analysis_phase(inputs);
@@ -244,15 +251,7 @@ pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
             manufacturing_identity.as_ref(),
         ));
     }
-    let failures = phases
-        .iter()
-        .flat_map(|phase| {
-            phase
-                .failures
-                .iter()
-                .map(|failure| bound_text(&format!("{}: {failure}", phase.name), MAX_FAILURE_CHARS))
-        })
-        .collect::<Vec<_>>();
+    let failures = collect_pipeline_failures(&phases);
     PipelineGateReport {
         schema_version: if factory_enabled { 2 } else { 1 },
         pipeline: if factory_enabled {
@@ -270,6 +269,19 @@ pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
         phases,
         failures,
     }
+}
+
+fn collect_pipeline_failures(phases: &[PipelinePhase]) -> Vec<String> {
+    phases
+        .iter()
+        .flat_map(|phase| {
+            phase
+                .failures
+                .iter()
+                .map(|failure| bound_text(&format!("{}: {failure}", phase.name), MAX_FAILURE_CHARS))
+        })
+        .take(MAX_PIPELINE_FAILURES)
+        .collect()
 }
 
 pub fn pipeline_gate_schema() -> Value {
@@ -331,7 +343,7 @@ fn pipeline_gate_schema_for(include_factory: bool) -> Value {
             "passed": {"type": "boolean"},
             "failures": {
                 "type": "array",
-                "maxItems": 512,
+                "maxItems": MAX_PIPELINE_FAILURES,
                 "items": {"type": "string", "minLength": 1, "maxLength": MAX_FAILURE_CHARS}
             }
         },
@@ -419,12 +431,12 @@ fn phase_schema(name: &str) -> Value {
             "passed": {"type": "boolean"},
             "checks": {
                 "type": "array",
-                "maxItems": 128,
+                "maxItems": MAX_PHASE_CHECKS,
                 "items": {"type": "string", "minLength": 1, "maxLength": MAX_TEXT_CHARS}
             },
             "failures": {
                 "type": "array",
-                "maxItems": 128,
+                "maxItems": MAX_PHASE_FAILURES,
                 "items": {"type": "string", "minLength": 1, "maxLength": MAX_FAILURE_CHARS}
             }
         },
@@ -2192,6 +2204,26 @@ mod tests {
                 1
             );
         }
+    }
+
+    #[test]
+    fn phase_and_aggregate_diagnostics_stay_within_schema_limits() {
+        let mut phases = Vec::new();
+        for index in 0..6 {
+            let mut phase = PipelinePhase::new(&format!("phase-{index}"));
+            for diagnostic in 0..(MAX_PHASE_FAILURES + 64) {
+                phase.fail(format!("failure-{diagnostic}"));
+                phase.check(format!("check-{diagnostic}"));
+            }
+            let phase = phase.finish();
+            assert_eq!(phase.failures.len(), MAX_PHASE_FAILURES);
+            assert_eq!(phase.checks.len(), MAX_PHASE_CHECKS);
+            phases.push(phase);
+        }
+        assert_eq!(
+            collect_pipeline_failures(&phases).len(),
+            MAX_PIPELINE_FAILURES
+        );
     }
 
     #[test]

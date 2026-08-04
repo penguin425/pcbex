@@ -161,8 +161,10 @@ verification](CIRCUIT_KICAD_HANDOFF.md) for the comparison boundary and
 retained rejection evidence.  v1.416 additionally provides the standalone
 `verify-circuit-kicad-board-binding` gate, which recalculates that handoff from
 the raw inputs and binds it to an actual `.kicad_pcb`.  It does not generate or
-modify a board, run geometry/routing/DRC/DFM checks, or integrate with
-`pipeline-verify`; see [Circuit-spec v2 to KiCad schematic and board binding
-verification](CIRCUIT_KICAD_BOARD_BINDING.md).  A generated design must still
+modify a board or run geometry/routing/DRC/DFM checks; see [Circuit-spec v2 to
+KiCad schematic and board binding verification](CIRCUIT_KICAD_BOARD_BINDING.md).
+The v1.417 [bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md)
+can recompute that standalone binding beside the unchanged `pipeline-verify`
+gate from one digest-bound snapshot plan. A generated design must still
 pass complete coverage ERC, simulation evidence, AI/human approval policy, PCB
 DRC, and manufacturing gates before production.
