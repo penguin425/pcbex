@@ -634,6 +634,11 @@
     {
       "id": "deterministic-kicad-schematic-writer",
       "release": "v1.422.0",
+      "status": "released"
+    },
+    {
+      "id": "kicad-schematic-writer-mcp-action-parity",
+      "release": "v1.423.0",
       "status": "current"
     }
   ]

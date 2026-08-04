@@ -10,6 +10,10 @@ inputs:
   board:
     description: Path to the current .kicad_pcb file in the caller workspace.
     required: true
+  circuit-spec:
+    description: Optional immutable-ERC-approved circuit-spec v2 to materialize as output-dir/circuit-spec.kicad_sch.
+    required: false
+    default: ""
   baseline-board:
     description: Optional path to a baseline .kicad_pcb file.
     required: false
@@ -1075,6 +1079,21 @@ outputs:
   artifact-dir:
     description: Directory containing all generated analysis artifacts.
     value: ${{ steps.analyze.outputs.artifact-dir }}
+  circuit-spec-schematic:
+    description: Fixed generated KiCad schematic path (output-dir/circuit-spec.kicad_sch), when circuit-spec is supplied.
+    value: ${{ steps.analyze.outputs.circuit-spec-schematic }}
+  circuit-spec-check:
+    description: Retained immutable ERC report for the supplied circuit-spec v2.
+    value: ${{ steps.analyze.outputs.circuit-spec-check }}
+  circuit-spec-approved:
+    description: Whether the supplied circuit-spec passed the immutable ERC floor.
+    value: ${{ steps.analyze.outputs.circuit-spec-approved }}
+  circuit-spec-schematic-bytes:
+    description: Verified byte count of the generated circuit-spec schematic.
+    value: ${{ steps.analyze.outputs.circuit-spec-schematic-bytes }}
+  circuit-spec-schematic-sha256:
+    description: Verified SHA-256 of the generated circuit-spec schematic.
+    value: ${{ steps.analyze.outputs.circuit-spec-schematic-sha256 }}
   pipeline-report:
     description: Fixed hardware pipeline verification report path (output-dir/pipeline-gate.json), when enabled.
     value: ${{ steps.analyze.outputs.pipeline-report }}
@@ -1427,6 +1446,7 @@ runs:
       env:
         PCBEX_BINARY: ${{ steps.build.outputs.binary }}
         PCBEX_BOARD: ${{ inputs.board }}
+        PCBEX_CIRCUIT_SPEC: ${{ inputs.circuit-spec }}
         PCBEX_BASELINE_BOARD: ${{ inputs.baseline-board }}
         PCBEX_SCHEMATIC: ${{ inputs.schematic }}
         PCBEX_BASELINE_SCHEMATIC: ${{ inputs.baseline-schematic }}

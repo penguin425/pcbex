@@ -57,6 +57,11 @@ write_output() {
 
 write_output status error
 write_output artifact-dir "$artifact_dir"
+write_output circuit-spec-check ""
+write_output circuit-spec-approved ""
+write_output circuit-spec-schematic ""
+write_output circuit-spec-schematic-bytes ""
+write_output circuit-spec-schematic-sha256 ""
 write_output sarif-dir ""
 write_output current-sarif ""
 write_output comparison-sarif ""
@@ -281,6 +286,81 @@ violation_count="$(
   cat "$current_dir/summary.md"
 } > "$comment_body"
 cat "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+
+circuit_spec_check=""
+circuit_spec_approved=""
+circuit_spec_schematic=""
+circuit_spec_schematic_bytes=""
+circuit_spec_schematic_sha256=""
+if [[ -n "${PCBEX_CIRCUIT_SPEC:-}" ]]; then
+  circuit_spec_check_candidate="${artifact_dir}/circuit-spec-check.json"
+  "$PCBEX_BINARY" check-circuit-spec \
+    "$PCBEX_CIRCUIT_SPEC" \
+    --output "$circuit_spec_check_candidate"
+  circuit_spec_approved="$(
+    PYTHONPATH="$GITHUB_ACTION_PATH/agent/src" python3 - "$circuit_spec_check_candidate" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+from pcbex_agent.bounded_io import read_bytes
+
+payload = read_bytes(Path(sys.argv[1]), max_bytes=16 * 1024 * 1024)
+confirmation = read_bytes(Path(sys.argv[1]), max_bytes=16 * 1024 * 1024)
+if payload != confirmation:
+    raise SystemExit("circuit-spec check changed between bounded reads")
+report = json.loads(payload)
+approved = report.get("electrical_review", {}).get("approved")
+if not isinstance(approved, bool):
+    raise SystemExit("circuit-spec check has no boolean electrical_review.approved")
+print(str(approved).lower())
+PY
+  )"
+  circuit_spec_check="$circuit_spec_check_candidate"
+  write_output circuit-spec-check "$circuit_spec_check"
+  write_output circuit-spec-approved "$circuit_spec_approved"
+  {
+    printf '\n## Circuit-spec immutable ERC\n\n'
+    printf '* Approved: `%s`\n' "$circuit_spec_approved"
+    printf '* Report: `%s`\n' "$circuit_spec_check"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+  if [[ "$circuit_spec_approved" != "true" ]]; then
+    echo "circuit-spec immutable ERC rejected the supplied design" >&2
+    exit 1
+  fi
+  circuit_spec_schematic="${artifact_dir}/circuit-spec.kicad_sch"
+  "$PCBEX_BINARY" write-circuit-spec-kicad-schematic \
+    "$PCBEX_CIRCUIT_SPEC" \
+    --output "$circuit_spec_schematic"
+  circuit_spec_identity="$(
+    PYTHONPATH="$GITHUB_ACTION_PATH/agent/src" python3 - "$circuit_spec_schematic" <<'PY'
+import hashlib
+from pathlib import Path
+import sys
+
+from pcbex_agent.bounded_io import read_bytes
+
+payload = read_bytes(Path(sys.argv[1]), max_bytes=64 * 1024 * 1024)
+confirmation = read_bytes(Path(sys.argv[1]), max_bytes=64 * 1024 * 1024)
+if payload != confirmation:
+    raise SystemExit("generated circuit-spec schematic changed between bounded reads")
+print(len(payload), hashlib.sha256(payload).hexdigest())
+PY
+  )"
+  read -r circuit_spec_schematic_bytes circuit_spec_schematic_sha256 \
+    <<< "$circuit_spec_identity"
+  if [[ ! "$circuit_spec_schematic_bytes" =~ ^[1-9][0-9]*$ ||
+    ! "$circuit_spec_schematic_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "generated circuit-spec schematic identity is malformed" >&2
+    exit 2
+  fi
+  {
+    printf '\n## Generated circuit-spec schematic\n\n'
+    printf '* Path: `%s`\n' "$circuit_spec_schematic"
+    printf '* Bytes: `%s`\n' "$circuit_spec_schematic_bytes"
+    printf '* SHA-256: `%s`\n' "$circuit_spec_schematic_sha256"
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
 
 manufacturing_feedback=""
 manufacturing_feedback_passed=""
@@ -3248,6 +3328,11 @@ write_output violation-count "$violation_count"
 write_output regression "$regression"
 write_output verified-policy-trust-state "$verified_policy_trust_state"
 write_output fetched-signed-policy-pack "$fetched_signed_policy_pack"
+write_output circuit-spec-check "$circuit_spec_check"
+write_output circuit-spec-approved "$circuit_spec_approved"
+write_output circuit-spec-schematic "$circuit_spec_schematic"
+write_output circuit-spec-schematic-bytes "$circuit_spec_schematic_bytes"
+write_output circuit-spec-schematic-sha256 "$circuit_spec_schematic_sha256"
 write_output policy-pack-fetch-receipt "$policy_pack_fetch_receipt"
 write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"

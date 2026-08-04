@@ -124,6 +124,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "compare-schematics",
         "route-schematic-review",
         "check-schematic",
+        "check-circuit-spec",
+        "write-circuit-spec-kicad-schematic",
         "circuit-kicad-board-binding-schema",
         "verify-circuit-kicad-board-binding",
         "prepare-ai-review",

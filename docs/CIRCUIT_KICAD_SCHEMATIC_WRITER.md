@@ -14,6 +14,44 @@ pcbex verify-circuit-kicad-handoff \
   --require-approved
 ```
 
+Version 1.423 exposes the same writer through MCP and the root composite
+Action. An MCP call is synchronous by default and supports optional Tasks:
+
+```json
+{
+  "name": "write_circuit_spec_kicad_schematic",
+  "arguments": {
+    "input": "circuit-spec-v2.json",
+    "output": "build/generated.kicad_sch"
+  }
+}
+```
+
+The tool response does not embed the generated document. Its `schematic`
+summary contains only the retained path, byte count, and SHA-256; the exact
+file remains at `output`. This preserves the 16 MiB MCP frame even though the
+writer permits a bounded document of up to 64 MiB.
+
+The Action keeps `board` required for backward-compatible hardware analysis
+and adds one opt-in input:
+
+```yaml
+- id: pcbex
+  uses: penguin425/pcbex@v1.423.0
+  with:
+    board: hardware/controller.kicad_pcb
+    circuit-spec: build/circuit-spec-v2.json
+```
+
+It first retains `output-dir/circuit-spec-check.json`. An ERC rejection
+publishes that report and `circuit-spec-approved: "false"` but never invokes
+the writer. Approval produces the fixed
+`output-dir/circuit-spec.kicad_sch` artifact and exposes
+`circuit-spec-schematic`, `circuit-spec-schematic-bytes`, and
+`circuit-spec-schematic-sha256`. The generated path is not substituted for
+the Action's `schematic` input and is not injected into either pipeline; a
+later trusted step must opt in to those operations explicitly.
+
 The command always normalizes the input and runs the immutable ERC safety
 floor. A rejected design produces no schematic. Before returning generated
 bytes, the writer re-imports them with pcbex's bounded KiCad parser and runs
@@ -68,5 +106,6 @@ This writer creates a logical handoff artifact, not a production layout. It
 does not support hierarchy, buses, multi-unit symbols, external library
 resolution, graphical symbol fidelity, editing or merging an existing
 schematic, PCB placement/routing, DRC/DFM, manufacturing export, MCP/Action
-orchestration, or pipeline approval. Downstream designs must still pass the
-normal schematic, board-binding, pipeline, manufacturing, and approval gates.
+implicit pipeline orchestration, or pipeline approval. Downstream designs must
+still pass the normal schematic, board-binding, pipeline, manufacturing, and
+approval gates.

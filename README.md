@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.422.0
+    uses: penguin425/pcbex@v1.423.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2145,6 +2145,28 @@ violation count, regression result, and optional PR comment URL.
 `upload-sarif` is opt-in because the calling job must grant
 `security-events: write`; artifact upload defaults to on.
 
+Version 1.423 adds opt-in circuit-spec writer parity. Supplying
+`circuit-spec` first retains the immutable ERC report at the fixed
+`${output-dir}/circuit-spec-check.json` path. A rejected design exposes
+`circuit-spec-check` and `circuit-spec-approved: "false"` before the Action
+fails, and no schematic is created. An approved design additionally emits
+`${output-dir}/circuit-spec.kicad_sch` and exposes its fixed path, byte count,
+and SHA-256:
+
+```yaml
+- id: generated-schematic
+  uses: penguin425/pcbex@v1.423.0
+  with:
+    board: hardware/controller.kicad_pcb
+    circuit-spec: build/circuit-spec-v2.json
+```
+
+The output names are `circuit-spec-schematic`,
+`circuit-spec-schematic-bytes`, and `circuit-spec-schematic-sha256`. The
+Action does not replace its `schematic` input with this artifact or inject it
+into either pipeline; callers must make that later trust decision explicitly.
+Writer generation adds no network access.
+
 Version 1.414.0 adds opt-in hardware-pipeline parity. Set
 `pipeline-verify: "true"` and provide the existing `board`/`schematic` plus
 the closed electrical review, final manufacturing ZIP, and firmware manifest;
@@ -2155,7 +2177,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.422.0` step:
+# Add these fields to a `penguin425/pcbex@v1.423.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -2421,6 +2443,34 @@ the retained file's exact byte count and SHA-256 plus its approval, failure
 count, and plan/run identities before trusting the summary. A required-approval
 rejection therefore returns `isError: true` with verified retained evidence;
 it never truncates a valid report to fit the protocol frame.
+
+Version 1.423 adds the task-compatible
+`write_circuit_spec_kicad_schematic` tool. It accepts only `input` and
+`output`, preflights an absent destination, invokes the same CLI writer, and
+revalidates the retained regular file under the writer's 64 MiB ceiling. The
+MCP result never embeds schematic text; `structuredContent.schematic` contains
+only `path`, `bytes`, and `sha256`, keeping every response within the 16 MiB
+frame boundary:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 9,
+  "method": "tools/call",
+  "params": {
+    "name": "write_circuit_spec_kicad_schematic",
+    "arguments": {
+      "input": "circuit-spec-v2.json",
+      "output": "build/generated.kicad_sch"
+    },
+    "task": {"ttl": 600000}
+  }
+}
+```
+
+The tool is closed-world and performs no network call. Existing destinations,
+aliases, links, writer rejection, cancellation, or retained-file identity
+changes fail without attributing stale bytes to the call.
 
 Analysis and routing tools require explicit output paths and may overwrite
 files there. MCP hosts should retain their normal user-approval prompt for
@@ -3017,11 +3067,18 @@ runs the existing semantic handoff verifier before returning them. An ERC,
 coverage, import, or handoff failure produces no output. The CLI atomically
 publishes one new file and refuses aliases, overwrites, and symlink paths.
 
+Version 1.423 exposes this writer as the metadata-only MCP tool
+`write_circuit_spec_kicad_schematic` and as the root Action's optional
+`circuit-spec` input. MCP returns only the retained path, bytes, and SHA-256;
+the Action first retains the immutable ERC report and uses the fixed
+`output-dir/circuit-spec.kicad_sch` destination. Neither integration silently
+replaces a caller's schematic or changes a pipeline plan.
+
 This is a logical handoff writer rather than an autorouter or symbol-library
 resolver. Hierarchy, buses, multi-unit symbols, external library lookup,
 existing-schematic mutation, placement/routing, DRC/DFM, and pipeline
-orchestration remain outside the v1 boundary. See
-[`docs/CIRCUIT_KICAD_SCHEMATIC_WRITER.md`](docs/CIRCUIT_KICAD_SCHEMATIC_WRITER.md)
+orchestration beyond the explicit writer call remain outside the v1 boundary.
+See [`docs/CIRCUIT_KICAD_SCHEMATIC_WRITER.md`](docs/CIRCUIT_KICAD_SCHEMATIC_WRITER.md)
 for the exact contract.
 
 ## Circuit-spec v2 to KiCad handoff verification
@@ -3140,7 +3197,7 @@ Minimal Action opt-in:
 
 ```yaml
 - id: deterministic-pipeline
-  uses: penguin425/pcbex@v1.422.0
+  uses: penguin425/pcbex@v1.423.0
   with:
     board: hardware/controller.kicad_pcb
     deterministic-pipeline-plan: hardware/pipeline-plan.json
@@ -4439,7 +4496,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.422.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.423.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
