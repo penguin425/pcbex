@@ -125,6 +125,7 @@ auditable release.
 | v1.412.1 | Hardened manufacturing filesystem boundaries | Pin manufacturing publication directories, double-read bounded sources, stream BOM/CPL output, cap extracted parts, and reserve complete-workspace quotas before package creation |
 | v1.413.0 | Digest-bound physical-profile injection | Apply one bounded geometry/DFM authority across placement, routing, analysis, and fabrication while binding its exact and canonical digests through manufacturing and pipeline verification |
 | v1.414.0 | MCP/Action hardware pipeline parity | Expose schematic, circuit-spec, and complete pipeline checks through MCP and opt-in composite Action inputs/outputs, retaining rejection reports before the final CI gate |
+| v1.415.0 | Verified circuit-to-KiCad handoff | Verify a closed flat/single-unit circuit-spec v2 against an existing KiCad schematic with source/canonical identities and retained ERC evidence; do not generate or mutate either input |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -140,12 +141,15 @@ applies atomically, and cannot relax existing manufacturing rules. Exact-source
 and domain-separated canonical SHA-256 identities are carried by schema-v2
 analysis and manufacturing manifests; pipeline verification reopens the
 authorized profile and rejects source, semantic, or cross-phase substitution.
-No-profile schema-v1 artifacts remain compatible. The current v1.414.0 release
-keeps that profile binding intact while forwarding the complete hardware
-pipeline through the composite GitHub Action and MCP: `check_schematic`,
-`check_circuit_spec`, and `pipeline_verify` retain closed reports, support
-optional MCP Tasks, and expose Action outputs and opt-in final fail gates.
+No-profile schema-v1 artifacts remain compatible. The current v1.415.0 release
+keeps that profile binding intact and adds a native digest-bound handoff gate:
+`verify-circuit-kicad-handoff` and MCP `verify_circuit_kicad_handoff` compare a
+closed flat/single-unit circuit-spec v2 subset with an existing KiCad
+schematic, run the native ERC checks, and retain rejection reports before a
+required-approval failure. Geometry/UUIDs, hierarchy/buses/power-symbol
+extras, multi-unit symbols, unresolved libraries/live suppliers, and all
+placement/routing/fabrication decisions remain outside this verifier; it is
+not a generator.
 
-With the MCP and Action paths now aligned, the next roadmap work is a verified
-circuit-to-KiCad handoff, followed by a headless schematic-to-manufacturing
-orchestrator and qualified live supplier selection.
+The next roadmap work is a headless schematic-to-manufacturing orchestrator,
+followed by qualified live supplier selection.

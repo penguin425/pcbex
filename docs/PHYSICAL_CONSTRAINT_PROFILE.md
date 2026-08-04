@@ -104,6 +104,9 @@ same profile bytes and canonical digest rather than allowing a second physical
 policy to enter during forwarding.
 
 The v1 profile does not perform vendor-specific CPL coordinate transforms and
-does not authorize a circuit-generation provider. Those boundaries remain
-vendor-neutral and are handled by the subsequent circuit-to-KiCad handoff and
-factory-profile milestones.
+does not authorize a circuit-generation provider. The native
+[circuit-to-KiCad handoff verification](CIRCUIT_KICAD_HANDOFF.md) only checks
+the closed circuit-spec v2 semantic subset; it does not generate a schematic
+or make placement, routing, supplier, or fabrication decisions. Those
+boundaries remain vendor-neutral and are handled by the subsequent headless
+schematic-to-manufacturing orchestrator and qualified supplier milestones.
