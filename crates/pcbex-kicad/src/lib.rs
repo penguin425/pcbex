@@ -158,9 +158,10 @@ pub use approval::{
     AiRiskSeverity, DeterministicPipelineIdentity, ExactArtifactIdentity, NativeKicadErcIdentity,
     SignedAiApproval, ai_review_request_json_schema, ai_review_request_sha256,
     ai_review_response_json_schema, approval_public_key, bind_ai_review_request,
-    bind_native_kicad_erc_to_ai_review_request, build_ai_review_request, parse_ai_review_response,
-    sign_ai_review, sign_ai_review_for_session, signed_ai_approval_json_schema,
-    verify_session_signed_ai_approval, verify_signed_ai_approval,
+    bind_native_kicad_erc_to_ai_review_request,
+    bind_native_kicad_erc_warning_policy_to_ai_review_request, build_ai_review_request,
+    parse_ai_review_response, sign_ai_review, sign_ai_review_for_session,
+    signed_ai_approval_json_schema, verify_session_signed_ai_approval, verify_signed_ai_approval,
 };
 mod approval_quorum;
 pub use approval_quorum::{

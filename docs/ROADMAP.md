@@ -136,6 +136,7 @@ auditable release.
 | v1.423.0 | KiCad schematic writer MCP/Action parity | Expose deterministic circuit-spec schematic generation through optional MCP Tasks and the root Action while retaining ERC evidence and returning only bounded path/byte/SHA identities instead of embedding schematic bytes |
 | v1.424.0 | Exact AI review artifact binding | Bind request-schema-v2 approvals to one exact generated schematic and approved deterministic plan/report/run, then live-rerun and cross-check the artifacts before CLI, MCP, and Action signing or verification while preserving request-schema-v1 workflows |
 | v1.425.0 | Native KiCad schematic ERC evidence | Run fixed error-only KiCad ERC under bounded private staging, retain deterministic normalized evidence, and bind fresh replay into request-schema-v3 approvals across CLI, MCP, Python, and Action while preserving v1/v2 workflows |
+| v1.426.0 | Native KiCad ERC warning policy | Gate explicit error-and-warning KiCad runs with closed fail-closed budgets, bind exact policy and report identities into request-schema-v4 approvals, and preserve the error-only v1/v3 contracts |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -234,7 +235,7 @@ forwards the same complete path groups, the Python adapter treats the new
 identities as evidence, and the root Action generates its fresh report before
 quorum verification. Request schema v1 remains unchanged.
 
-The current v1.425.0 milestone adds KiCad's independent schematic ERC as
+The v1.425.0 milestone adds KiCad's independent schematic ERC as
 replayable approval evidence. A shell-free bounded runner stages only the exact
 schematic under a fixed basename, isolates KiCad configuration/profile paths,
 uses a fixed error-only JSON invocation, validates exit/report consistency,
@@ -246,3 +247,17 @@ supports the runner synchronously and through optional Tasks, the Python
 adapter validates the closed v3 boundary, and the root Action forwards and
 publishes verified native identities. Native warnings remain an explicit later
 policy boundary; request schemas v1 and v2 remain byte-compatible.
+
+The current v1.426.0 milestone closes that warning-policy boundary without
+reinterpreting earlier evidence. Supplying an explicit bounded policy selects
+only KiCad error and warning severities, rejects every error, and treats
+unlisted warning types or ignored-check keys as policy failures. Global and
+per-type warning ceilings, normalized findings, exact policy-source identity,
+the domain-separated policy digest, policy failures, and approval are covered
+by a v2 native run digest. Retained reports are accepted only after stable
+reads and byte-identical fresh replay. Request schema v4/artifact binding v3
+accepts only native identity v2; request schema v3 remains restricted to the
+error-only native identity v1. CLI, MCP, Python review validation, and the root
+Action expose the same opt-in policy path and leave older workflows unchanged.
+Static policy files do not establish organization authority, expiry, or
+distribution trust; those remain a separate signed-governance boundary.

@@ -3,8 +3,10 @@
 Version 1.425 adds an opt-in AI review request schema v3 that can bind an
 approval to one exact generated KiCad schematic, one exact successful
 deterministic-pipeline execution, and one exact normalized native KiCad ERC
-run. Request schema v1 remains the unbound default; schema v2 remains
-backward-compatible when native ERC evidence is not supplied.
+run. Version 1.426 adds request schema v4 for native ERC warning-policy
+evidence. Request schema v1 remains the unbound default; schema v2 remains
+backward-compatible when native ERC evidence is not supplied, and schema v3
+retains its error-only meaning.
 
 ## Bound identities
 
@@ -16,14 +18,15 @@ The closed `artifact_binding` object contains no filesystem paths. It records:
 - the byte count and SHA-256 of the retained pipeline report, including its
   final newline; and
 - the domain-separated pipeline run SHA-256; and
-- for schema v3, the byte count and SHA-256 of the retained native KiCad ERC
-  report plus its domain-separated native run SHA-256.
+- for schema v3 or v4, the byte count and SHA-256 of the retained native KiCad
+  ERC report plus its domain-separated native run SHA-256. Report v2 itself
+  binds the exact and normalized warning-policy identities.
 
 These fields are covered by the request's normalized `request_sha256`.
 Existing ordinary and session-bound Ed25519 approval envelopes already sign
 that request digest, so their wire formats do not change. Request schema v2
-and v3, and session-bound approval envelope schema v2, are independent version
-numbers.
+through v4, and session-bound approval envelope schema v2, are independent
+version numbers.
 
 Paths are deliberately excluded. A byte-identical copied schematic is the
 same approved artifact, while a one-byte change invalidates the binding.
@@ -77,9 +80,36 @@ request schema v3 with artifact binding schema v2:
 
 Schema-v2 requests continue to require binding schema v1 and reject a native
 field; schema-v3 requests require binding schema v2 and reject a mixed or
-partial binding. The Python adapter accepts all three request versions,
+partial binding. Schema-v4 requests require binding schema v3 and native
+identity schema v2; schema v3 accepts only native identity v1. This strict
+matrix prevents warning evidence from being downgraded to the error-only
+contract. The Python adapter accepts all four request versions,
 treats these identities as immutable evidence rather than instructions, and
 continues to require response schema v1.
+
+## Warning-policy evidence (schema v4)
+
+Use the same runner with a trusted policy to select errors and warnings while
+leaving the v1 command behavior untouched:
+
+```sh
+pcbex run-native-kicad-erc generated.kicad_sch \
+  --warning-policy examples/native-kicad-warning-policy.json \
+  --output native-kicad-erc-warning.json \
+  --require-approved
+```
+
+The closed policy has a global warning maximum, sorted unique per-finding-type
+limits, and a sorted unique allowlist for KiCad ignored-check keys. Unlisted
+warning types and ignored checks reject; all errors reject independently of
+the policy. The report carries exact policy source bytes/SHA-256 and a
+domain-separated canonical policy digest. Supplying the report to
+`prepare-ai-review` also requires
+`--native-kicad-erc-warning-policy <trusted-path>` and produces request v4.
+Sign, single-approval verification, and quorum verification require the same
+path and reproduce the report before accepting it. The policy file is an
+external trust input and should not be controlled by an untrusted pull
+request.
 
 ## Creating a bound request
 
@@ -122,7 +152,9 @@ The deterministic report must be approved, and the native report must be a
 fresh byte-for-byte match. Missing, rejected, stale, symlinked, oversized,
 partially supplied, or independently valid but mixed artifacts fail before a
 bound request is written. Omitting the native report keeps this flow at
-request schema v2; supplying it produces schema v3.
+request schema v2; supplying error-only native evidence produces schema v3;
+supplying warning-policy native evidence and its trusted policy produces
+schema v4.
 
 ## Signing and consuming the approval
 
@@ -158,6 +190,12 @@ For schema-v3, append these options to each sign, verify, and quorum command:
 --native-kicad-erc-report native-kicad-erc.json --kicad-cli kicad-cli
 ```
 
+For schema-v4, also append:
+
+```sh
+--native-kicad-erc-warning-policy examples/native-kicad-warning-policy.json
+```
+
 `verify-ai-quorum` accepts the same three flags, plus the native report and
 optional executable override for schema v3, and performs live revalidation
 once before checking any candidate signatures or thresholds.
@@ -175,10 +213,10 @@ artifacts.
 ## MCP and GitHub Actions
 
 The existing MCP prepare, sign, verify, and quorum tools expose the optional
-schematic/pipeline paths and, for schema v3, the
-`native_kicad_erc_report`/`kicad_cli` pair. Their tools remain synchronous and
+schematic/pipeline paths, the `native_kicad_erc_report`/`kicad_cli` pair, and
+for schema v4 `native_kicad_erc_warning_policy`. Their tools remain synchronous and
 forbid MCP Tasks because they handle review outputs, signing keys, or quorum
-reports. The Python review adapter accepts request schemas v1, v2, and v3,
+reports. The Python review adapter accepts request schemas v1 through v4,
 treats artifact identities as untrusted evidence rather than instructions, and
 continues to require response schema v1.
 
@@ -189,6 +227,11 @@ into schema v3, also set `ai-review-native-kicad-erc-report` and optionally
 retained native report, and passes both artifacts to `verify-ai-quorum`, which
 reruns native ERC before accepting signatures. It never accepts a
 caller-asserted report as proof.
+
+To opt into schema v4, also set
+`ai-review-native-kicad-erc-warning-policy`. The Action publishes warning and
+policy-failure counts, canonical policy SHA-256, and exact policy-source
+byte/SHA identity after the CLI's fresh verification succeeds.
 
 The Action output `ai-review-artifacts-verified` becomes `true` only after the
 live artifact gate succeeds. The raw plan source is reported separately as

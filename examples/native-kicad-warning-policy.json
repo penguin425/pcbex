@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "id": "pcbex-generated-circuit-kicad-10",
+  "maximum_total_warnings": 11,
+  "warning_limits": [
+    {
+      "finding_type": "footprint_link_issues",
+      "maximum_count": 4
+    },
+    {
+      "finding_type": "lib_symbol_issues",
+      "maximum_count": 4
+    },
+    {
+      "finding_type": "multiple_net_names",
+      "maximum_count": 3
+    }
+  ],
+  "allowed_ignored_checks": [
+    "footprint_filter",
+    "four_way_junction",
+    "simulation_model_issue",
+    "single_global_label"
+  ]
+}

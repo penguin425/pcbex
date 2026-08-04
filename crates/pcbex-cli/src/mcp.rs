@@ -1056,6 +1056,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "input": {"type": "string"},
                     "output": {"type": "string"},
                     "kicad_cli": {"type": "string"},
+                    "warning_policy": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 }
             }),
@@ -3035,7 +3036,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "prepare_schematic_review",
             "Prepare AI schematic review",
-            "Recompute and bind schematic, electrical, simulation, and requirement evidence into a review request; a deterministic plan/report pair creates a live-verified schema-v2 artifact-bound request, while an additional native KiCad ERC report creates schema-v3 evidence.",
+            "Recompute and bind schematic, electrical, simulation, and requirement evidence into a review request; a deterministic plan/report pair creates a live-verified schema-v2 artifact-bound request, while native KiCad ERC evidence creates schema-v3 (error-only) or schema-v4 (warning-policy) evidence.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3059,6 +3060,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
                     "native_kicad_erc_report": {"type": "string"},
+                    "native_kicad_erc_warning_policy": {"type": "string"},
                     "kicad_cli": {"type": "string"},
                     "output": {"type": "string"},
                     "session_output": {"type": "string"}
@@ -3067,12 +3069,16 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "oneOf": [
                         {
                             "required": ["deterministic_pipeline_plan", "deterministic_pipeline_report"],
-                            "not": {"required": ["native_kicad_erc_report"]}
+                            "not": {"anyOf": [
+                                {"required": ["native_kicad_erc_report"]},
+                                {"required": ["native_kicad_erc_warning_policy"]}
+                            ]}
                         },
                         {"not": {"anyOf": [
                             {"required": ["deterministic_pipeline_plan"]},
                             {"required": ["deterministic_pipeline_report"]},
-                            {"required": ["native_kicad_erc_report"]}
+                            {"required": ["native_kicad_erc_report"]},
+                            {"required": ["native_kicad_erc_warning_policy"]}
                         ]}},
                         {"required": [
                             "deterministic_pipeline_plan",
@@ -3083,6 +3089,9 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                 }, {
                     "if": {"required": ["kicad_cli"]},
                     "then": {"required": ["native_kicad_erc_report"]}
+                }, {
+                    "if": {"required": ["native_kicad_erc_warning_policy"]},
+                    "then": {"required": ["native_kicad_erc_report"]}
                 }]
             }),
             false,
@@ -3092,7 +3101,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "sign_schematic_approval",
             "Sign AI schematic approval",
-            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Request-schema-v2/v3 artifacts are rerun and revalidated, including native KiCad ERC evidence, before the private key is read.",
+            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Request-schema-v2/v3/v4 artifacts are rerun and revalidated, including native KiCad ERC evidence, before the private key is read.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3109,6 +3118,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
                     "native_kicad_erc_report": {"type": "string"},
+                    "native_kicad_erc_warning_policy": {"type": "string"},
                     "kicad_cli": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
@@ -3121,13 +3131,17 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                                 "deterministic_pipeline_plan",
                                 "deterministic_pipeline_report"
                             ],
-                            "not": {"required": ["native_kicad_erc_report"]}
+                            "not": {"anyOf": [
+                                {"required": ["native_kicad_erc_report"]},
+                                {"required": ["native_kicad_erc_warning_policy"]}
+                            ]}
                         },
                         {"not": {"anyOf": [
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
                             {"required": ["deterministic_pipeline_report"]},
-                            {"required": ["native_kicad_erc_report"]}
+                            {"required": ["native_kicad_erc_report"]},
+                            {"required": ["native_kicad_erc_warning_policy"]}
                         ]}},
                         {"required": [
                             "generated_schematic",
@@ -3139,6 +3153,9 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                 }, {
                     "if": {"required": ["kicad_cli"]},
                     "then": {"required": ["native_kicad_erc_report"]}
+                }, {
+                    "if": {"required": ["native_kicad_erc_warning_policy"]},
+                    "then": {"required": ["native_kicad_erc_report"]}
                 }]
             }),
             false,
@@ -3148,7 +3165,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_schematic_approval",
             "Verify AI schematic approval",
-            "Strictly verify an Ed25519 approval against its exact request, AI response, and any live request-schema-v2/v3 artifacts, including native KiCad ERC evidence.",
+            "Strictly verify an Ed25519 approval against its exact request, AI response, and any live request-schema-v2/v3/v4 artifacts, including native KiCad ERC evidence.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3168,6 +3185,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
                     "native_kicad_erc_report": {"type": "string"},
+                    "native_kicad_erc_warning_policy": {"type": "string"},
                     "kicad_cli": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 },
@@ -3179,13 +3197,17 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                                 "deterministic_pipeline_plan",
                                 "deterministic_pipeline_report"
                             ],
-                            "not": {"required": ["native_kicad_erc_report"]}
+                            "not": {"anyOf": [
+                                {"required": ["native_kicad_erc_report"]},
+                                {"required": ["native_kicad_erc_warning_policy"]}
+                            ]}
                         },
                         {"not": {"anyOf": [
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
                             {"required": ["deterministic_pipeline_report"]},
-                            {"required": ["native_kicad_erc_report"]}
+                            {"required": ["native_kicad_erc_report"]},
+                            {"required": ["native_kicad_erc_warning_policy"]}
                         ]}},
                         {"required": [
                             "generated_schematic",
@@ -3197,6 +3219,9 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                 }, {
                     "if": {"required": ["kicad_cli"]},
                     "then": {"required": ["native_kicad_erc_report"]}
+                }, {
+                    "if": {"required": ["native_kicad_erc_warning_policy"]},
+                    "then": {"required": ["native_kicad_erc_report"]}
                 }]
             }),
             true,
@@ -3206,7 +3231,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_schematic_approval_quorum",
             "Verify AI schematic approval quorum",
-            "Verify independent signed reviews and any live request-schema-v2/v3 artifacts, including native KiCad ERC evidence, against one bound request, then enforce approval, provider, and model thresholds.",
+            "Verify independent signed reviews and any live request-schema-v2/v3/v4 artifacts, including native KiCad ERC evidence, against one bound request, then enforce approval, provider, and model thresholds.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3241,6 +3266,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
                     "native_kicad_erc_report": {"type": "string"},
+                    "native_kicad_erc_warning_policy": {"type": "string"},
                     "kicad_cli": {"type": "string"},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
@@ -3254,13 +3280,17 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                                 "deterministic_pipeline_plan",
                                 "deterministic_pipeline_report"
                             ],
-                            "not": {"required": ["native_kicad_erc_report"]}
+                            "not": {"anyOf": [
+                                {"required": ["native_kicad_erc_report"]},
+                                {"required": ["native_kicad_erc_warning_policy"]}
+                            ]}
                         },
                         {"not": {"anyOf": [
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
                             {"required": ["deterministic_pipeline_report"]},
-                            {"required": ["native_kicad_erc_report"]}
+                            {"required": ["native_kicad_erc_report"]},
+                            {"required": ["native_kicad_erc_warning_policy"]}
                         ]}},
                         {"required": [
                             "generated_schematic",
@@ -3271,6 +3301,9 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     ]
                 }, {
                     "if": {"required": ["kicad_cli"]},
+                    "then": {"required": ["native_kicad_erc_report"]}
+                }, {
+                    "if": {"required": ["native_kicad_erc_warning_policy"]},
                     "then": {"required": ["native_kicad_erc_report"]}
                 }]
             }),
@@ -5834,7 +5867,13 @@ fn run_native_kicad_erc_tool(
 ) -> std::result::Result<Value, Value> {
     reject_unknown(
         &arguments,
-        &["input", "output", "kicad_cli", "require_approved"],
+        &[
+            "input",
+            "output",
+            "kicad_cli",
+            "warning_policy",
+            "require_approved",
+        ],
     )?;
     let input = required_string(&arguments, "input")?;
     let output = required_string(&arguments, "output")?;
@@ -5851,6 +5890,12 @@ fn run_native_kicad_erc_tool(
         "--mcp-echo-report-summary".to_string(),
     ];
     optional_option(&arguments, "kicad_cli", "--kicad-cli", &mut command)?;
+    optional_option(
+        &arguments,
+        "warning_policy",
+        "--warning-policy",
+        &mut command,
+    )?;
     optional_flag(
         &arguments,
         "require_approved",
@@ -9686,6 +9731,7 @@ fn prepare_schematic_review(
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
             "native_kicad_erc_report",
+            "native_kicad_erc_warning_policy",
             "kicad_cli",
             "output",
             "session_output",
@@ -9700,6 +9746,14 @@ fn prepare_schematic_review(
         arguments.contains_key("policy_pack"),
     )?;
     let simulations = required_string_array(&arguments, "simulation_evidence", true)?;
+    let session_output = arguments
+        .get("session_output")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    // Treat request/session artifacts as no-clobber at the MCP boundary.  Do
+    // this check before dispatch so a failed or cancelled invocation cannot
+    // cause MCP to echo a pre-existing stale request as fresh evidence.
+    require_absent_outputs([Some(output.as_str()), session_output.as_deref()])?;
     let mut command = vec![
         "prepare-ai-review".into(),
         input,
@@ -9745,14 +9799,31 @@ fn prepare_schematic_review(
         &mut command,
     )?;
     let execution = execute(&command, cancellation)?;
-    let request = read_json_if_present(Path::new(&output));
-    let session_output = arguments
-        .get("session_output")
-        .and_then(Value::as_str)
-        .map(str::to_string);
-    let session = session_output
-        .as_deref()
-        .map(|path| read_json_if_present(Path::new(path)));
+    // Do not expose any retained artifact after a failed child process.  A
+    // successful child must still leave valid JSON at every requested output
+    // path; otherwise the MCP result fails closed instead of returning null
+    // or an unrelated file.
+    let request = if execution.success {
+        read_json_if_present(Path::new(&output))
+    } else {
+        Value::Null
+    };
+    let mut execution = require_retained_json(execution, &request, "prepare-ai-review output");
+    let session = if execution.success {
+        session_output
+            .as_deref()
+            .map(|path| read_json_if_present(Path::new(path)))
+    } else {
+        None
+    };
+    if let Some(session) = session.as_ref() {
+        execution = require_retained_json(execution, session, "prepare-ai-review session output");
+    }
+    let (request, session) = if execution.success {
+        (request, session)
+    } else {
+        (Value::Null, None)
+    };
     Ok(execution_result(
         execution,
         json!({
@@ -9778,6 +9849,7 @@ fn sign_schematic_approval(
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
             "native_kicad_erc_report",
+            "native_kicad_erc_warning_policy",
             "kicad_cli",
             "output",
             "require_approved",
@@ -9788,6 +9860,7 @@ fn sign_schematic_approval(
     let private_key = required_string(&arguments, "private_key")?;
     let signer_id = required_string(&arguments, "signer_id")?;
     let output = required_string(&arguments, "output")?;
+    require_absent_outputs([Some(output.as_str())])?;
     let mut command = vec![
         "sign-ai-review".into(),
         request,
@@ -9823,7 +9896,17 @@ fn sign_schematic_approval(
         &mut command,
     )?;
     let execution = execute(&command, cancellation)?;
-    let approval = read_json_if_present(Path::new(&output));
+    let approval = if execution.success {
+        read_json_if_present(Path::new(&output))
+    } else {
+        Value::Null
+    };
+    let execution = require_retained_json(execution, &approval, "sign-ai-review output");
+    let approval = if execution.success {
+        approval
+    } else {
+        Value::Null
+    };
     Ok(execution_result(
         execution,
         json!({"output": output, "approval": approval}),
@@ -9847,6 +9930,7 @@ fn verify_schematic_approval(
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
             "native_kicad_erc_report",
+            "native_kicad_erc_warning_policy",
             "kicad_cli",
             "require_approved",
         ],
@@ -9914,6 +9998,7 @@ fn verify_schematic_approval_quorum(
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
             "native_kicad_erc_report",
+            "native_kicad_erc_warning_policy",
             "kicad_cli",
             "output",
             "summary_output",
@@ -9930,6 +10015,11 @@ fn verify_schematic_approval_quorum(
     }
     let policy_pack = required_string(&arguments, "policy_pack")?;
     let output = required_string(&arguments, "output")?;
+    let summary_output = arguments
+        .get("summary_output")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    require_absent_outputs([Some(output.as_str()), summary_output.as_deref()])?;
     let mut command = vec!["verify-ai-quorum".into(), request];
     for approval in approvals {
         command.extend(["--approval".into(), approval]);
@@ -10018,7 +10108,30 @@ fn verify_schematic_approval_quorum(
         &mut command,
     )?;
     let execution = execute(&command, cancellation)?;
-    let report = read_json_if_present(Path::new(&output));
+    let report = if execution.success {
+        read_json_if_present(Path::new(&output))
+    } else {
+        Value::Null
+    };
+    let execution = require_retained_json(execution, &report, "verify-ai-quorum output");
+    // The CLI writes the optional Markdown summary in every successful
+    // quorum branch before returning.  Confirm that contract at the MCP
+    // boundary so a successful process cannot produce an incomplete result
+    // when the requested summary was missing or replaced.
+    let execution = if let Some(path) = summary_output.as_deref() {
+        require_retained_file(
+            execution,
+            Path::new(path),
+            "verify-ai-quorum summary output",
+        )
+    } else {
+        execution
+    };
+    let report = if execution.success {
+        report
+    } else {
+        Value::Null
+    };
     Ok(execution_result(
         execution,
         json!({"output": output, "report": report}),
@@ -12758,15 +12871,6 @@ fn trusted_deterministic_pipeline_summary(execution: &Execution, path: &Path) ->
 /// reports have a 32 MiB ceiling, so returning the complete document could
 /// exceed the 16 MiB MCP frame limit.
 fn trusted_native_kicad_erc_summary(execution: &Execution, path: &Path) -> Value {
-    const SUMMARY_FIELDS: [&str; 6] = [
-        "schema_version",
-        "approved",
-        "error_count",
-        "run_sha256",
-        "report_bytes",
-        "report_sha256",
-    ];
-
     if execution.stdout.len() > MAX_MCP_PROCESS_MESSAGE_BYTES {
         return Value::Null;
     }
@@ -12774,18 +12878,46 @@ fn trusted_native_kicad_erc_summary(execution: &Execution, path: &Path) -> Value
     let Some(object) = summary.as_object() else {
         return Value::Null;
     };
-    if object.len() != SUMMARY_FIELDS.len()
-        || SUMMARY_FIELDS
+    let schema_version = object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .filter(|value| matches!(*value, 1 | 2));
+    let Some(schema_version) = schema_version else {
+        return Value::Null;
+    };
+    let expected_fields_v1 = [
+        "schema_version",
+        "approved",
+        "error_count",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+    ];
+    let expected_fields_v2 = [
+        "schema_version",
+        "approved",
+        "error_count",
+        "warning_count",
+        "policy_failure_count",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+        "warning_policy_sha256",
+        "warning_policy_source_bytes",
+        "warning_policy_source_sha256",
+    ];
+    let expected_fields: &[&str] = if schema_version == 1 {
+        &expected_fields_v1
+    } else {
+        &expected_fields_v2
+    };
+    if object.len() != expected_fields.len()
+        || expected_fields
             .iter()
             .any(|field| !object.contains_key(*field))
     {
         return Value::Null;
     }
-
-    let schema_version = object
-        .get("schema_version")
-        .and_then(Value::as_u64)
-        .filter(|value| *value == 1);
     let approved = object.get("approved").and_then(Value::as_bool);
     let error_count = object.get("error_count").and_then(Value::as_u64);
     let run_sha256 = object
@@ -12800,15 +12932,27 @@ fn trusted_native_kicad_erc_summary(execution: &Execution, path: &Path) -> Value
         .get("report_sha256")
         .and_then(Value::as_str)
         .filter(|value| is_lowercase_sha256(value));
+    let warning_count = object.get("warning_count").and_then(Value::as_u64);
+    let policy_failure_count = object.get("policy_failure_count").and_then(Value::as_u64);
+    let warning_policy_sha256 = object
+        .get("warning_policy_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let warning_policy_source_bytes = object
+        .get("warning_policy_source_bytes")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0);
+    let warning_policy_source_sha256 = object
+        .get("warning_policy_source_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
     let (
-        Some(schema_version),
         Some(approved),
         Some(error_count),
         Some(run_sha256),
         Some(report_bytes),
         Some(report_sha256),
     ) = (
-        schema_version,
         approved,
         error_count,
         run_sha256,
@@ -12818,6 +12962,15 @@ fn trusted_native_kicad_erc_summary(execution: &Execution, path: &Path) -> Value
     else {
         return Value::Null;
     };
+    if schema_version == 2
+        && (warning_count.is_none()
+            || policy_failure_count.is_none()
+            || warning_policy_sha256.is_none()
+            || warning_policy_source_bytes.is_none()
+            || warning_policy_source_sha256.is_none())
+    {
+        return Value::Null;
+    }
 
     if report_bytes > crate::native_kicad_erc::MAX_REPORT_BYTES {
         return Value::Null;
@@ -12840,13 +12993,61 @@ fn trusted_native_kicad_erc_summary(execution: &Execution, path: &Path) -> Value
         || report_object.get("approved").and_then(Value::as_bool) != Some(approved)
         || report_object.get("error_count").and_then(Value::as_u64) != Some(error_count)
         || report_object.get("run_sha256").and_then(Value::as_str) != Some(run_sha256)
-        || report_object
-            .get("findings")
-            .and_then(Value::as_array)
-            .is_none_or(|findings| findings.len() as u64 != error_count)
-        || approved != (error_count == 0)
     {
         return Value::Null;
+    }
+    let Some(findings) = report_object.get("findings").and_then(Value::as_array) else {
+        return Value::Null;
+    };
+    let actual_error_count = findings
+        .iter()
+        .filter(|finding| finding.get("severity").and_then(Value::as_str) == Some("error"))
+        .count() as u64;
+    let actual_warning_count = findings
+        .iter()
+        .filter(|finding| finding.get("severity").and_then(Value::as_str) == Some("warning"))
+        .count() as u64;
+    if actual_error_count != error_count {
+        return Value::Null;
+    }
+    if schema_version == 1 {
+        if findings.len() as u64 != error_count || approved != (error_count == 0) {
+            return Value::Null;
+        }
+    } else {
+        let warning_count = warning_count.expect("validated above");
+        let policy_failure_count = policy_failure_count.expect("validated above");
+        if findings.len() as u64 != error_count.saturating_add(warning_count)
+            || actual_warning_count != warning_count
+            || report_object.get("warning_count").and_then(Value::as_u64) != Some(warning_count)
+            || report_object
+                .get("policy_failures")
+                .and_then(Value::as_array)
+                .is_none_or(|failures| failures.len() as u64 != policy_failure_count)
+            || approved != (error_count == 0 && policy_failure_count == 0)
+        {
+            return Value::Null;
+        }
+        let Some(policy) = report_object
+            .get("warning_policy")
+            .and_then(Value::as_object)
+        else {
+            return Value::Null;
+        };
+        if policy.get("policy").and_then(Value::as_object).is_none() {
+            return Value::Null;
+        }
+        if policy.get("policy_sha256").and_then(Value::as_str) != warning_policy_sha256 {
+            return Value::Null;
+        }
+        let Some(source) = policy.get("source").and_then(Value::as_object) else {
+            return Value::Null;
+        };
+        if source.get("bytes").and_then(Value::as_u64) != warning_policy_source_bytes
+            || source.get("sha256").and_then(Value::as_str) != warning_policy_source_sha256
+        {
+            return Value::Null;
+        }
     }
 
     summary
@@ -12991,9 +13192,10 @@ fn append_complete_options(
 }
 
 /// Append the optional AI-review artifact identity flags while enforcing the
-/// schema-version groups shared by prepare/sign/verify/quorum.  Native ERC
-/// evidence upgrades a complete deterministic artifact set to schema v3; a
-/// KiCad executable is meaningful only for that native evidence path.
+/// schema-version groups shared by prepare/sign/verify/quorum.  Error-only
+/// native ERC evidence upgrades a complete deterministic artifact set to
+/// schema v3; a warning policy upgrades it to schema v4.  A KiCad executable
+/// is meaningful only for that native evidence path.
 fn append_native_ai_review_options(
     arguments: &Map<String, Value>,
     options: &[(&str, &str)],
@@ -13001,6 +13203,7 @@ fn append_native_ai_review_options(
     command: &mut Vec<String>,
 ) -> std::result::Result<(), Value> {
     let native_supplied = arguments.contains_key("native_kicad_erc_report");
+    let warning_policy_supplied = arguments.contains_key("native_kicad_erc_warning_policy");
     let supplied = options
         .iter()
         .filter(|(name, _)| arguments.contains_key(*name))
@@ -13016,11 +13219,22 @@ fn append_native_ai_review_options(
             "detail": "kicad_cli requires native_kicad_erc_report"
         }));
     }
+    if warning_policy_supplied && !native_supplied {
+        return Err(json!({
+            "detail": "native_kicad_erc_warning_policy requires native_kicad_erc_report"
+        }));
+    }
     if native_supplied {
         optional_option(
             arguments,
             "native_kicad_erc_report",
             "--native-kicad-erc-report",
+            command,
+        )?;
+        optional_option(
+            arguments,
+            "native_kicad_erc_warning_policy",
+            "--native-kicad-erc-warning-policy",
             command,
         )?;
         optional_option(arguments, "kicad_cli", "--kicad-cli", command)?;
@@ -13389,6 +13603,7 @@ mod tests {
             "deterministic_pipeline_plan": "plan.json",
             "deterministic_pipeline_report": "report.json",
             "native_kicad_erc_report": "native-erc.json",
+            "native_kicad_erc_warning_policy": "warning-policy.json",
             "kicad_cli": "kicad-cli"
         });
         let mut command = vec!["verify-ai-quorum".to_string()];
@@ -13421,6 +13636,8 @@ mod tests {
                 "report.json",
                 "--native-kicad-erc-report",
                 "native-erc.json",
+                "--native-kicad-erc-warning-policy",
+                "warning-policy.json",
                 "--kicad-cli",
                 "kicad-cli"
             ]
@@ -13476,6 +13693,34 @@ mod tests {
             error["detail"],
             "kicad_cli requires native_kicad_erc_report"
         );
+
+        let policy_without_native = json!({
+            "generated_schematic": "generated.kicad_sch",
+            "deterministic_pipeline_plan": "plan.json",
+            "deterministic_pipeline_report": "report.json",
+            "native_kicad_erc_warning_policy": "warning-policy.json"
+        });
+        let error = append_native_ai_review_options(
+            policy_without_native.as_object().unwrap(),
+            &[
+                ("generated_schematic", "--generated-schematic"),
+                (
+                    "deterministic_pipeline_plan",
+                    "--deterministic-pipeline-plan",
+                ),
+                (
+                    "deterministic_pipeline_report",
+                    "--deterministic-pipeline-report",
+                ),
+            ],
+            "generated_schematic, deterministic_pipeline_plan, and deterministic_pipeline_report",
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error["detail"],
+            "native_kicad_erc_warning_policy requires native_kicad_erc_report"
+        );
     }
 
     #[test]
@@ -13499,6 +13744,27 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("must be supplied together")
+        );
+
+        let warning_policy_without_native = prepare_schematic_review(
+            json!({
+                "input": "generated.kicad_sch",
+                "electrical_review": "electrical.json",
+                "requirements": ["power"],
+                "deterministic_pipeline_plan": "plan.json",
+                "deterministic_pipeline_report": "report.json",
+                "native_kicad_erc_warning_policy": "warning-policy.json",
+                "output": "request.json"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            warning_policy_without_native["detail"],
+            "native_kicad_erc_warning_policy requires native_kicad_erc_report"
         );
 
         let sign = sign_schematic_approval(
@@ -13776,6 +14042,10 @@ mod tests {
         );
         assert_eq!(
             named("run_native_kicad_erc")["inputSchema"]["properties"]["kicad_cli"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("run_native_kicad_erc")["inputSchema"]["properties"]["warning_policy"]["type"],
             "string"
         );
         assert_eq!(
@@ -14241,6 +14511,11 @@ mod tests {
         );
         assert_eq!(
             named("prepare_schematic_review")["inputSchema"]["properties"]["deterministic_pipeline_plan"]
+                ["type"],
+            "string"
+        );
+        assert_eq!(
+            named("prepare_schematic_review")["inputSchema"]["properties"]["native_kicad_erc_warning_policy"]
                 ["type"],
             "string"
         );
@@ -14806,6 +15081,80 @@ mod tests {
     }
 
     #[test]
+    fn native_kicad_erc_warning_summary_is_strictly_policy_bound() {
+        let directory = tempfile::tempdir().unwrap();
+        let report_path = directory.path().join("native-erc-warning.json");
+        let policy_source = br#"{"schema_version":1,"maximum_total_warnings":1}"#;
+        let policy_sha256 = sha256_hex(policy_source);
+        let policy_source_sha256 = sha256_hex(policy_source);
+        let report = json!({
+            "schema_version": 2,
+            "engine": "pcbex",
+            "engine_version": "1.426.0",
+            "kicad_version": "10.0.5",
+            "source": {"bytes": 1, "sha256": "a".repeat(64)},
+            "invocation": {
+                "command": "sch erc",
+                "format": "json",
+                "units": "mm",
+                "severity": "error,warning",
+                "exit_code_violations": true
+            },
+            "ignored_checks": [],
+            "findings": [{"severity": "warning"}],
+            "error_count": 0,
+            "warning_count": 1,
+            "policy_failures": [],
+            "approved": true,
+            "run_sha256": "b".repeat(64),
+            "warning_policy": {
+                "source": {
+                    "bytes": policy_source.len(),
+                    "sha256": policy_source_sha256
+                },
+                "policy_sha256": policy_sha256,
+                "policy": {"schema_version": 1}
+            }
+        });
+        let rendered = format!("{}\n", serde_json::to_string(&report).unwrap());
+        std::fs::write(&report_path, rendered.as_bytes()).unwrap();
+        let summary = json!({
+            "schema_version": 2,
+            "approved": true,
+            "error_count": 0,
+            "warning_count": 1,
+            "policy_failure_count": 0,
+            "run_sha256": "b".repeat(64),
+            "report_bytes": rendered.len(),
+            "report_sha256": sha256_hex(rendered.as_bytes()),
+            "warning_policy_sha256": policy_sha256,
+            "warning_policy_source_bytes": policy_source.len(),
+            "warning_policy_source_sha256": policy_source_sha256
+        });
+        let execution = Execution {
+            success: true,
+            exit_code: Some(5),
+            stdout: serde_json::to_vec(&summary).unwrap(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            trusted_native_kicad_erc_summary(&execution, &report_path),
+            summary
+        );
+
+        let mut tampered = summary.clone();
+        tampered["warning_count"] = json!(0);
+        let tampered_execution = Execution {
+            stdout: serde_json::to_vec(&tampered).unwrap(),
+            ..execution
+        };
+        assert_eq!(
+            trusted_native_kicad_erc_summary(&tampered_execution, &report_path),
+            Value::Null
+        );
+    }
+
+    #[test]
     fn new_pipeline_tools_reject_preexisting_outputs_as_stale_evidence() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("old-check.json");
@@ -14940,6 +15289,190 @@ mod tests {
             std::fs::read(&deterministic_output).unwrap(),
             br#"{"approved":true}"#
         );
+    }
+
+    #[test]
+    fn ai_review_tools_reject_preexisting_outputs_as_stale_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let request_output = directory.path().join("old-request.json");
+        std::fs::write(&request_output, br#"{"approved":true}"#).unwrap();
+        let error = prepare_schematic_review(
+            json!({
+                "input": "missing-schematic.kicad_sch",
+                "electrical_review": "missing-review.json",
+                "requirements": ["intent=works"],
+                "output": request_output,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&request_output).unwrap(),
+            br#"{"approved":true}"#
+        );
+
+        let session_output = directory.path().join("old-session.json");
+        std::fs::write(&session_output, br#"{"request_sha256":"stale"}"#).unwrap();
+        let request_without_session = directory.path().join("new-request.json");
+        let error = prepare_schematic_review(
+            json!({
+                "input": "missing-schematic.kicad_sch",
+                "electrical_review": "missing-review.json",
+                "requirements": ["intent=works"],
+                "output": request_without_session,
+                "session_output": session_output,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&session_output).unwrap(),
+            br#"{"request_sha256":"stale"}"#
+        );
+
+        let approval_output = directory.path().join("old-approval.json");
+        std::fs::write(&approval_output, br#"{"approved":true}"#).unwrap();
+        let error = sign_schematic_approval(
+            json!({
+                "request": "missing-request.json",
+                "response": "missing-response.json",
+                "private_key": "missing-private.key",
+                "signer_id": "reviewer",
+                "output": approval_output,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&approval_output).unwrap(),
+            br#"{"approved":true}"#
+        );
+
+        let quorum_output = directory.path().join("old-quorum.json");
+        std::fs::write(&quorum_output, br#"{"approved":true}"#).unwrap();
+        let error = verify_schematic_approval_quorum(
+            json!({
+                "request": "missing-request.json",
+                "approvals": ["missing-approval.json"],
+                "responses": ["missing-response.json"],
+                "policy_pack": "missing-policy-pack.json",
+                "output": quorum_output,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&quorum_output).unwrap(),
+            br#"{"approved":true}"#
+        );
+
+        let summary_output = directory.path().join("old-quorum-summary.md");
+        std::fs::write(&summary_output, b"stale quorum summary\n").unwrap();
+        let quorum_without_summary = directory.path().join("new-quorum.json");
+        let error = verify_schematic_approval_quorum(
+            json!({
+                "request": "missing-request.json",
+                "approvals": ["missing-approval.json"],
+                "responses": ["missing-response.json"],
+                "policy_pack": "missing-policy-pack.json",
+                "output": quorum_without_summary,
+                "summary_output": summary_output,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&summary_output).unwrap(),
+            b"stale quorum summary\n"
+        );
+    }
+
+    #[test]
+    fn ai_review_tools_never_return_retained_json_after_child_failure() {
+        let directory = tempfile::tempdir().unwrap();
+
+        let request_output = directory.path().join("request.json");
+        let result = prepare_schematic_review(
+            json!({
+                "input": "missing-schematic.kicad_sch",
+                "electrical_review": "missing-review.json",
+                "requirements": ["intent=works"],
+                "output": request_output,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["request"], Value::Null);
+        assert!(!request_output.exists());
+
+        let approval_output = directory.path().join("approval.json");
+        let result = sign_schematic_approval(
+            json!({
+                "request": "missing-request.json",
+                "response": "missing-response.json",
+                "private_key": "missing-private.key",
+                "signer_id": "reviewer",
+                "output": approval_output,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["approval"], Value::Null);
+        assert!(!approval_output.exists());
     }
 
     #[test]

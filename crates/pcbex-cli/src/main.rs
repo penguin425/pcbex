@@ -80,8 +80,9 @@ use pcbex_kicad::{
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
     approval_public_key, approval_transparency_log_json_schema, approval_transparency_log_sha256,
     audit_approval_log_gossip_organization_registry_history, bind_ai_review_request,
-    bind_native_kicad_erc_to_ai_review_request, build_ai_review_request, build_ai_review_session,
-    check_schematic, circuit_kicad_board_binding_report_json_schema,
+    bind_native_kicad_erc_to_ai_review_request,
+    bind_native_kicad_erc_warning_policy_to_ai_review_request, build_ai_review_request,
+    build_ai_review_session, check_schematic, circuit_kicad_board_binding_report_json_schema,
     circuit_kicad_handoff_report_json_schema, circuit_spec_check_json_schema,
     circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch, compare_electrical_reviews,
     compare_schematics, create_approval_log_anchor_proof, create_approval_log_consistency_proof,
@@ -241,8 +242,11 @@ use manufacturing_package::{
     write_manufacturing_package_with_workspace_reservation,
 };
 use native_kicad_erc::{
-    native_kicad_erc_report_schema, render_native_kicad_erc_report, run_native_kicad_erc,
-    verify_native_kicad_erc_report,
+    native_kicad_erc_report_schema, native_kicad_erc_warning_policy_schema,
+    native_kicad_erc_warning_report_schema, render_native_kicad_erc_report,
+    render_native_kicad_erc_warning_report, run_native_kicad_erc,
+    run_native_kicad_erc_with_warning_policy, verify_native_kicad_erc_report,
+    verify_native_kicad_erc_report_with_warning_policy,
 };
 use pipeline::{
     PipelineInputs, pipeline_factory_gate_schema, pipeline_gate_schema, verify_pipeline,
@@ -818,6 +822,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed native KiCad ERC warning-policy JSON Schema.
+    NativeKicadErcWarningPolicySchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed normalized native KiCad ERC warning-policy report JSON Schema.
+    NativeKicadErcWarningReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Run KiCad's native schematic ERC in an isolated, bounded environment.
     RunNativeKicadErc {
         /// Exact `.kicad_sch` source to stage and check.
@@ -828,7 +842,10 @@ enum Command {
         /// KiCad CLI executable or path. The command is invoked directly without a shell.
         #[arg(long, default_value = "kicad-cli")]
         kicad_cli: PathBuf,
-        /// Fail after retaining the report when native ERC finds an electrical error.
+        /// Closed warning policy used to evaluate native ERC warnings. Omit for v1 error-only ERC.
+        #[arg(long, value_name = "PATH")]
+        warning_policy: Option<PathBuf>,
+        /// Fail after retaining the report when native ERC is not approved.
         #[arg(long)]
         require_approved: bool,
         /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
@@ -3310,6 +3327,13 @@ enum Command {
         /// KiCad CLI executable used to reproduce native ERC evidence.
         #[arg(long, value_name = "PATH", requires = "native_kicad_erc_report")]
         kicad_cli: Option<PathBuf>,
+        /// Warning policy used to reproduce and verify schema-v2 native ERC evidence.
+        #[arg(
+            long = "native-kicad-erc-warning-policy",
+            value_name = "PATH",
+            requires = "native_kicad_erc_report"
+        )]
+        native_kicad_erc_warning_policy: Option<PathBuf>,
         #[arg(long, conflicts_with = "policy_pack")]
         policy: Option<PathBuf>,
         #[arg(long = "simulation-evidence")]
@@ -3375,6 +3399,13 @@ enum Command {
         /// KiCad CLI executable used to reproduce native ERC evidence.
         #[arg(long, value_name = "PATH", requires = "native_kicad_erc_report")]
         kicad_cli: Option<PathBuf>,
+        /// Warning policy used to reproduce and verify schema-v2 native ERC evidence.
+        #[arg(
+            long = "native-kicad-erc-warning-policy",
+            value_name = "PATH",
+            requires = "native_kicad_erc_report"
+        )]
+        native_kicad_erc_warning_policy: Option<PathBuf>,
         #[arg(long)]
         private_key: PathBuf,
         #[arg(long)]
@@ -3428,6 +3459,13 @@ enum Command {
         /// KiCad CLI executable used to reproduce native ERC evidence.
         #[arg(long, value_name = "PATH", requires = "native_kicad_erc_report")]
         kicad_cli: Option<PathBuf>,
+        /// Warning policy used to reproduce and verify schema-v2 native ERC evidence.
+        #[arg(
+            long = "native-kicad-erc-warning-policy",
+            value_name = "PATH",
+            requires = "native_kicad_erc_report"
+        )]
+        native_kicad_erc_warning_policy: Option<PathBuf>,
         #[arg(
             long,
             conflicts_with = "policy_pack",
@@ -3482,6 +3520,13 @@ enum Command {
         /// KiCad CLI executable used to reproduce native ERC evidence.
         #[arg(long, value_name = "PATH", requires = "native_kicad_erc_report")]
         kicad_cli: Option<PathBuf>,
+        /// Warning policy used to reproduce and verify schema-v2 native ERC evidence.
+        #[arg(
+            long = "native-kicad-erc-warning-policy",
+            value_name = "PATH",
+            requires = "native_kicad_erc_report"
+        )]
+        native_kicad_erc_warning_policy: Option<PathBuf>,
         /// Signed approval envelope; repeat once per reviewer.
         #[arg(long = "approval", required = true)]
         approvals: Vec<PathBuf>,
@@ -5275,38 +5320,97 @@ fn run_cli() -> Result<()> {
                 "native KiCad ERC report schema output",
             )?;
         }
+        Command::NativeKicadErcWarningPolicySchema { output } => {
+            write_closed_schema(
+                &native_kicad_erc_warning_policy_schema(),
+                output.as_deref(),
+                "native KiCad ERC warning policy schema output",
+            )?;
+        }
+        Command::NativeKicadErcWarningReportSchema { output } => {
+            write_closed_schema(
+                &native_kicad_erc_warning_report_schema(),
+                output.as_deref(),
+                "native KiCad ERC warning report schema output",
+            )?;
+        }
         Command::RunNativeKicadErc {
             input,
             output,
             kicad_cli,
+            warning_policy,
             require_approved,
             mcp_echo_report_summary,
         } => {
-            let prepared = prepare_pipeline_output(&output, &[input.as_path()])?;
-            let report = run_native_kicad_erc(&input, kicad_cli.as_os_str(), None)?;
-            let rendered = render_native_kicad_erc_report(&report)?;
-            persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
-            if mcp_echo_report_summary {
-                let summary = serde_json::json!({
-                    "schema_version": report.schema_version,
-                    "approved": report.approved,
-                    "error_count": report.error_count,
-                    "run_sha256": report.run_sha256,
-                    "report_bytes": rendered.len(),
-                    "report_sha256": hex::encode(Sha256::digest(&rendered)),
-                });
-                serde_json::to_writer(&mut io::stdout(), &summary)?;
-                io::stdout().write_all(b"\n")?;
-                io::stdout().flush()?;
+            let mut authorized_inputs = vec![input.as_path()];
+            if let Some(policy) = warning_policy.as_deref() {
+                authorized_inputs.push(policy);
             }
-            eprintln!(
-                "native KiCad ERC: {}; {} error(s); report={}",
-                if report.approved { "approved" } else { "rejected" },
-                report.error_count,
-                output.display()
-            );
-            if require_approved && !report.approved {
-                bail!("native KiCad schematic ERC rejected");
+            let prepared = prepare_pipeline_output(&output, &authorized_inputs)?;
+            if let Some(policy) = warning_policy.as_deref() {
+                let report = run_native_kicad_erc_with_warning_policy(
+                    &input,
+                    policy,
+                    kicad_cli.as_os_str(),
+                    None,
+                )?;
+                let rendered = render_native_kicad_erc_warning_report(&report)?;
+                persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
+                if mcp_echo_report_summary {
+                    let summary = serde_json::json!({
+                        "schema_version": report.schema_version,
+                        "approved": report.approved,
+                        "error_count": report.error_count,
+                        "warning_count": report.warning_count,
+                        "policy_failure_count": report.policy_failures.len(),
+                        "warning_policy_sha256": report.warning_policy.policy_sha256,
+                        "warning_policy_source_bytes": report.warning_policy.source.bytes,
+                        "warning_policy_source_sha256": report.warning_policy.source.sha256,
+                        "run_sha256": report.run_sha256,
+                        "report_bytes": rendered.len(),
+                        "report_sha256": hex::encode(Sha256::digest(&rendered)),
+                    });
+                    serde_json::to_writer(&mut io::stdout(), &summary)?;
+                    io::stdout().write_all(b"\n")?;
+                    io::stdout().flush()?;
+                }
+                eprintln!(
+                    "native KiCad ERC warning policy: {}; {} error(s), {} warning(s), {} policy failure(s); report={}",
+                    if report.approved { "approved" } else { "rejected" },
+                    report.error_count,
+                    report.warning_count,
+                    report.policy_failures.len(),
+                    output.display()
+                );
+                if require_approved && !report.approved {
+                    bail!("native KiCad schematic ERC warning policy rejected");
+                }
+            } else {
+                let report = run_native_kicad_erc(&input, kicad_cli.as_os_str(), None)?;
+                let rendered = render_native_kicad_erc_report(&report)?;
+                persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
+                if mcp_echo_report_summary {
+                    let summary = serde_json::json!({
+                        "schema_version": report.schema_version,
+                        "approved": report.approved,
+                        "error_count": report.error_count,
+                        "run_sha256": report.run_sha256,
+                        "report_bytes": rendered.len(),
+                        "report_sha256": hex::encode(Sha256::digest(&rendered)),
+                    });
+                    serde_json::to_writer(&mut io::stdout(), &summary)?;
+                    io::stdout().write_all(b"\n")?;
+                    io::stdout().flush()?;
+                }
+                eprintln!(
+                    "native KiCad ERC: {}; {} error(s); report={}",
+                    if report.approved { "approved" } else { "rejected" },
+                    report.error_count,
+                    output.display()
+                );
+                if require_approved && !report.approved {
+                    bail!("native KiCad schematic ERC rejected");
+                }
             }
         }
         Command::RunDeterministicPipeline {
@@ -11232,6 +11336,7 @@ fn run_cli() -> Result<()> {
             deterministic_pipeline_report,
             native_kicad_erc_report,
             kicad_cli,
+            native_kicad_erc_warning_policy,
             policy,
             simulation_evidence,
             requirements,
@@ -11325,19 +11430,38 @@ fn run_cli() -> Result<()> {
                         "native KiCad ERC evidence requires a deterministic artifact binding"
                     ))?;
                 let executable = kicad_cli.as_deref().unwrap_or_else(|| Path::new("kicad-cli"));
-                let (native_identity, schematic_identity) = verify_native_kicad_erc_report(
-                    &input,
-                    native_report,
-                    executable.as_os_str(),
-                    None,
-                )?;
+                let (native_identity, schematic_identity) =
+                    if let Some(warning_policy) = native_kicad_erc_warning_policy.as_deref() {
+                        verify_native_kicad_erc_report_with_warning_policy(
+                            &input,
+                            native_report,
+                            warning_policy,
+                            executable.as_os_str(),
+                            None,
+                        )?
+                    } else {
+                        verify_native_kicad_erc_report(
+                            &input,
+                            native_report,
+                            executable.as_os_str(),
+                            None,
+                        )?
+                    };
                 if schematic_identity != expected_binding.generated_schematic {
                     bail!(
                         "native KiCad ERC report schematic identity does not match the generated schematic binding"
                     );
                 }
-                bind_native_kicad_erc_to_ai_review_request(&request, native_identity)
+                if native_kicad_erc_warning_policy.is_some() {
+                    bind_native_kicad_erc_warning_policy_to_ai_review_request(
+                        &request,
+                        native_identity,
+                    )
                     .map_err(anyhow::Error::msg)?
+                } else {
+                    bind_native_kicad_erc_to_ai_review_request(&request, native_identity)
+                        .map_err(anyhow::Error::msg)?
+                }
             } else {
                 request
             };
@@ -11407,6 +11531,7 @@ fn run_cli() -> Result<()> {
             deterministic_pipeline_report,
             native_kicad_erc_report,
             kicad_cli,
+            native_kicad_erc_warning_policy,
             private_key,
             signer_id,
             session,
@@ -11420,6 +11545,7 @@ fn run_cli() -> Result<()> {
                 deterministic_pipeline_plan.as_deref(),
                 deterministic_pipeline_report.as_deref(),
                 native_kicad_erc_report.as_deref(),
+                native_kicad_erc_warning_policy.as_deref(),
                 kicad_cli.as_deref(),
             )?;
             let response_source = fs::read_to_string(&response)
@@ -11462,6 +11588,7 @@ fn run_cli() -> Result<()> {
             deterministic_pipeline_report,
             native_kicad_erc_report,
             kicad_cli,
+            native_kicad_erc_warning_policy,
             public_key,
             policy_pack,
             session,
@@ -11475,6 +11602,7 @@ fn run_cli() -> Result<()> {
                 deterministic_pipeline_plan.as_deref(),
                 deterministic_pipeline_report.as_deref(),
                 native_kicad_erc_report.as_deref(),
+                native_kicad_erc_warning_policy.as_deref(),
                 kicad_cli.as_deref(),
             )?;
             let (response, _) = read_described_json::<AiReviewResponse>(&response)?;
@@ -11539,6 +11667,7 @@ fn run_cli() -> Result<()> {
             deterministic_pipeline_report,
             native_kicad_erc_report,
             kicad_cli,
+            native_kicad_erc_warning_policy,
             approvals,
             responses,
             policy_pack,
@@ -11570,6 +11699,7 @@ fn run_cli() -> Result<()> {
                 deterministic_pipeline_plan.as_deref(),
                 deterministic_pipeline_report.as_deref(),
                 native_kicad_erc_report.as_deref(),
+                native_kicad_erc_warning_policy.as_deref(),
                 kicad_cli.as_deref(),
             )?;
             let pack = load_policy_pack(&policy_pack)?.0;
@@ -16196,6 +16326,7 @@ fn verify_bound_ai_review_artifacts(
     deterministic_pipeline_plan: Option<&Path>,
     deterministic_pipeline_report: Option<&Path>,
     native_kicad_erc_report: Option<&Path>,
+    native_kicad_erc_warning_policy: Option<&Path>,
     kicad_cli: Option<&Path>,
 ) -> Result<()> {
     ai_review_request_sha256(request).map_err(anyhow::Error::msg)?;
@@ -16205,6 +16336,7 @@ fn verify_bound_ai_review_artifacts(
                 || deterministic_pipeline_plan.is_some()
                 || deterministic_pipeline_report.is_some()
                 || native_kicad_erc_report.is_some()
+                || native_kicad_erc_warning_policy.is_some()
                 || kicad_cli.is_some()
             {
                 bail!(
@@ -16214,7 +16346,10 @@ fn verify_bound_ai_review_artifacts(
             Ok(())
         }
         2 => {
-            if native_kicad_erc_report.is_some() || kicad_cli.is_some() {
+            if native_kicad_erc_report.is_some()
+                || native_kicad_erc_warning_policy.is_some()
+                || kicad_cli.is_some()
+            {
                 bail!(
                     "AI review request schema version 2 does not accept native KiCad ERC evidence"
                 );
@@ -16241,6 +16376,11 @@ fn verify_bound_ai_review_artifacts(
             Ok(())
         }
         3 => {
+            if native_kicad_erc_warning_policy.is_some() {
+                bail!(
+                    "AI review request schema version 3 does not accept native KiCad ERC warning policy evidence"
+                );
+            }
             let (Some(schematic), Some(plan), Some(report), Some(native_report)) = (
                 generated_schematic,
                 deterministic_pipeline_plan,
@@ -16278,6 +16418,51 @@ fn verify_bound_ai_review_artifacts(
             if expected.native_kicad_erc.as_ref() != Some(&native_identity) {
                 bail!(
                     "live native KiCad ERC evidence does not match the AI review request binding"
+                );
+            }
+            Ok(())
+        }
+        4 => {
+            let (Some(schematic), Some(plan), Some(report), Some(native_report), Some(policy)) = (
+                generated_schematic,
+                deterministic_pipeline_plan,
+                deterministic_pipeline_report,
+                native_kicad_erc_report,
+                native_kicad_erc_warning_policy,
+            ) else {
+                bail!(
+                    "AI review request schema version 4 requires --generated-schematic, --deterministic-pipeline-plan, --deterministic-pipeline-report, --native-kicad-erc-report, and --native-kicad-erc-warning-policy"
+                );
+            };
+            let expected = request
+                .artifact_binding
+                .as_ref()
+                .expect("validated schema-v4 request has an artifact binding");
+            let observed = verify_ai_review_artifact_binding(request, schematic, plan, report)?;
+            if observed.generated_schematic != expected.generated_schematic
+                || observed.pipeline != expected.pipeline
+            {
+                bail!(
+                    "live generated schematic and deterministic pipeline artifacts do not match the AI review request binding"
+                );
+            }
+            let executable = kicad_cli.unwrap_or_else(|| Path::new("kicad-cli"));
+            let (native_identity, schematic_identity) =
+                verify_native_kicad_erc_report_with_warning_policy(
+                    schematic,
+                    native_report,
+                    policy,
+                    executable.as_os_str(),
+                    None,
+                )?;
+            if schematic_identity != expected.generated_schematic {
+                bail!(
+                    "native KiCad ERC report schematic identity does not match the generated schematic binding"
+                );
+            }
+            if expected.native_kicad_erc.as_ref() != Some(&native_identity) {
+                bail!(
+                    "live native KiCad ERC warning-policy evidence does not match the AI review request binding"
                 );
             }
             Ok(())
@@ -17279,6 +17464,237 @@ mod tests {
             .expect("CLI parser test thread starts")
             .join()
             .expect("CLI parser test thread succeeds")
+    }
+
+    #[test]
+    fn parses_native_warning_policy_schema_commands_and_runner_flag() {
+        let policy_schema =
+            parse_cli(&["pcbex", "native-kicad-erc-warning-policy-schema"]).unwrap();
+        assert!(matches!(
+            *policy_schema.command,
+            Command::NativeKicadErcWarningPolicySchema { output: None }
+        ));
+
+        let report_schema = parse_cli(&[
+            "pcbex",
+            "native-kicad-erc-warning-report-schema",
+            "--output",
+            "warning-report.schema.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *report_schema.command,
+            Command::NativeKicadErcWarningReportSchema { output: Some(path) }
+                if path.as_os_str() == "warning-report.schema.json"
+        ));
+
+        let runner = parse_cli(&[
+            "pcbex",
+            "run-native-kicad-erc",
+            "input.kicad_sch",
+            "--output",
+            "erc.json",
+            "--warning-policy",
+            "policy.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *runner.command,
+            Command::RunNativeKicadErc {
+                warning_policy: Some(policy),
+                ..
+            } if policy.as_os_str() == "policy.json"
+        ));
+    }
+
+    #[test]
+    fn warning_policy_ai_flags_require_native_report_and_preserve_v1_defaults() {
+        let rejected = parse_cli(&[
+            "pcbex",
+            "prepare-ai-review",
+            "input.kicad_sch",
+            "--electrical-review",
+            "review.json",
+            "--requirement",
+            "intent=works",
+            "--output",
+            "request.json",
+            "--native-kicad-erc-warning-policy",
+            "policy.json",
+        ]);
+        assert!(rejected.is_err());
+        assert!(
+            parse_cli(&[
+                "pcbex",
+                "sign-ai-review",
+                "request.json",
+                "response.json",
+                "--private-key",
+                "private.key",
+                "--signer-id",
+                "reviewer",
+                "--output",
+                "approval.json",
+                "--native-kicad-erc-warning-policy",
+                "policy.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_cli(&[
+                "pcbex",
+                "verify-ai-approval",
+                "approval.json",
+                "request.json",
+                "response.json",
+                "--public-key",
+                "public.key",
+                "--native-kicad-erc-warning-policy",
+                "policy.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_cli(&[
+                "pcbex",
+                "verify-ai-quorum",
+                "request.json",
+                "--approval",
+                "approval.json",
+                "--response",
+                "response.json",
+                "--policy-pack",
+                "policy-pack.json",
+                "--output",
+                "quorum.json",
+                "--native-kicad-erc-warning-policy",
+                "policy.json",
+            ])
+            .is_err()
+        );
+
+        let legacy = parse_cli(&[
+            "pcbex",
+            "prepare-ai-review",
+            "input.kicad_sch",
+            "--electrical-review",
+            "review.json",
+            "--requirement",
+            "intent=works",
+            "--output",
+            "request.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *legacy.command,
+            Command::PrepareAiReview {
+                native_kicad_erc_report: None,
+                native_kicad_erc_warning_policy: None,
+                kicad_cli: None,
+                ..
+            }
+        ));
+
+        let v2 = parse_cli(&[
+            "pcbex",
+            "prepare-ai-review",
+            "input.kicad_sch",
+            "--electrical-review",
+            "review.json",
+            "--requirement",
+            "intent=works",
+            "--output",
+            "request.json",
+            "--deterministic-pipeline-plan",
+            "plan.json",
+            "--deterministic-pipeline-report",
+            "run.json",
+            "--native-kicad-erc-report",
+            "erc.json",
+            "--native-kicad-erc-warning-policy",
+            "policy.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *v2.command,
+            Command::PrepareAiReview {
+                native_kicad_erc_report: Some(report),
+                native_kicad_erc_warning_policy: Some(policy),
+                ..
+            } if report.as_os_str() == "erc.json" && policy.as_os_str() == "policy.json"
+        ));
+    }
+
+    #[test]
+    fn warning_policy_cannot_downgrade_a_schema_v3_request() {
+        let mut schematic =
+            import_schematic(include_str!("../../../examples/simple.kicad_sch")).unwrap();
+        for symbol in &mut schematic.symbols {
+            symbol.dnp = true;
+        }
+        let electrical_policy = ElectricalPolicy::default();
+        let electrical_review = check_schematic(&schematic, &electrical_policy).unwrap();
+        let request = build_ai_review_request(
+            schematic,
+            &electrical_policy,
+            electrical_review,
+            "a".repeat(64),
+            Vec::new(),
+            vec![AiRequirement {
+                id: "power".into(),
+                text: "Power inputs are intentional".into(),
+            }],
+            false,
+        )
+        .unwrap();
+        let binding = pcbex_kicad::AiReviewArtifactBinding {
+            schema_version: 1,
+            generated_schematic: pcbex_kicad::ExactArtifactIdentity {
+                bytes: 101,
+                sha256: "b".repeat(64),
+            },
+            pipeline: pcbex_kicad::DeterministicPipelineIdentity {
+                plan_source: pcbex_kicad::ExactArtifactIdentity {
+                    bytes: 202,
+                    sha256: "c".repeat(64),
+                },
+                plan_sha256: "d".repeat(64),
+                report: pcbex_kicad::ExactArtifactIdentity {
+                    bytes: 303,
+                    sha256: "e".repeat(64),
+                },
+                run_sha256: "f".repeat(64),
+            },
+            native_kicad_erc: None,
+        };
+        let request = bind_ai_review_request(&request, &binding).unwrap();
+        let request = bind_native_kicad_erc_to_ai_review_request(
+            &request,
+            pcbex_kicad::NativeKicadErcIdentity {
+                schema_version: 1,
+                report: pcbex_kicad::ExactArtifactIdentity {
+                    bytes: 404,
+                    sha256: "1".repeat(64),
+                },
+                run_sha256: "2".repeat(64),
+            },
+        )
+        .unwrap();
+        let error = verify_bound_ai_review_artifacts(
+            &request,
+            None,
+            None,
+            None,
+            None,
+            Some(Path::new("warning-policy.json")),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("schema version 3 does not accept native KiCad ERC warning policy")
+        );
     }
 
     #[cfg(unix)]

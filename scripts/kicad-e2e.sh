@@ -148,6 +148,127 @@ assert schema["properties"]["invocation"]["additionalProperties"] is False
 assert schema["$defs"]["finding"]["properties"]["severity"] == {"const": "error"}
 PY
 
+# Warning-policy mode is a separate, opt-in report contract. The generated
+# circuit is expected to retain 11 known KiCad 10 warnings while remaining
+# error-free. Repeat the run to prove volatile KiCad fields are normalized.
+native_warning_policy="examples/native-kicad-warning-policy.json"
+native_warning_first="$output_directory/circuit-spec-v2.native-warning.first.json"
+native_warning_second="$output_directory/circuit-spec-v2.native-warning.second.json"
+"$pcbex_binary" run-native-kicad-erc "$generated_schematic" \
+  --warning-policy "$native_warning_policy" \
+  --output "$native_warning_first" --require-approved
+"$pcbex_binary" run-native-kicad-erc "$generated_schematic" \
+  --warning-policy "$native_warning_policy" \
+  --output "$native_warning_second" --require-approved
+cmp "$native_warning_first" "$native_warning_second"
+python3 - "$generated_schematic" "$native_warning_policy" "$native_warning_first" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+schematic = Path(sys.argv[1]).read_bytes()
+policy_bytes = Path(sys.argv[2]).read_bytes()
+policy = json.loads(policy_bytes)
+report = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+assert set(report) == {
+    "schema_version", "engine", "engine_version", "kicad_version", "source",
+    "invocation", "ignored_checks", "findings", "error_count", "warning_count",
+    "warning_counts", "warning_policy", "policy_failures", "approved",
+    "run_sha256",
+}
+assert report["schema_version"] == 2
+assert report["source"] == {
+    "bytes": len(schematic),
+    "sha256": hashlib.sha256(schematic).hexdigest(),
+}
+assert report["invocation"] == {
+    "command": "sch erc",
+    "format": "json",
+    "units": "mm",
+    "severities": ["error", "warning"],
+    "exit_code_violations": True,
+}
+assert report["error_count"] == 0
+assert report["warning_count"] == 11
+assert report["warning_counts"] == [
+    {"finding_type": "footprint_link_issues", "count": 4},
+    {"finding_type": "lib_symbol_issues", "count": 4},
+    {"finding_type": "multiple_net_names", "count": 3},
+]
+assert len(report["findings"]) == 11
+assert {finding["severity"] for finding in report["findings"]} == {"warning"}
+assert report["policy_failures"] == []
+assert report["approved"] is True
+assert report["warning_policy"]["source"] == {
+    "bytes": len(policy_bytes),
+    "sha256": hashlib.sha256(policy_bytes).hexdigest(),
+}
+assert report["warning_policy"]["policy"] == policy
+assert len(report["warning_policy"]["policy_sha256"]) == 64
+assert len(report["run_sha256"]) == 64
+PY
+
+# Tightening the global budget must retain a valid rejected report before the
+# final gate fails.
+strict_warning_policy="$output_directory/native-kicad-warning-policy.strict.json"
+python3 - "$native_warning_policy" "$strict_warning_policy" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+policy = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+policy["id"] = "pcbex-generated-circuit-kicad-10-strict"
+policy["maximum_total_warnings"] = 10
+Path(sys.argv[2]).write_text(
+    json.dumps(policy, ensure_ascii=False, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+native_warning_rejected="$output_directory/circuit-spec-v2.native-warning.rejected.json"
+if "$pcbex_binary" run-native-kicad-erc "$generated_schematic" \
+  --warning-policy "$strict_warning_policy" \
+  --output "$native_warning_rejected" --require-approved; then
+  echo "expected native KiCad ERC warning-policy rejection" >&2
+  exit 1
+fi
+jq -e '
+  .schema_version == 2 and
+  .approved == false and
+  .error_count == 0 and
+  .warning_count == 11 and
+  (.policy_failures | length) == 1 and
+  .policy_failures[0].code == "total" and
+  .policy_failures[0].actual_count == 11 and
+  .policy_failures[0].maximum_count == 10
+' "$native_warning_rejected" >/dev/null
+
+native_warning_policy_schema="$output_directory/native-kicad-warning-policy.schema.json"
+native_warning_report_schema="$output_directory/native-kicad-warning-report.schema.json"
+"$pcbex_binary" native-kicad-erc-warning-policy-schema \
+  --output "$native_warning_policy_schema"
+"$pcbex_binary" native-kicad-erc-warning-report-schema \
+  --output "$native_warning_report_schema"
+python3 - "$native_warning_policy_schema" "$native_warning_report_schema" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+policy_schema = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+report_schema = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+assert policy_schema["$id"].endswith("/schemas/native-kicad-erc-warning-policy-v1.json")
+assert report_schema["$id"].endswith("/schemas/native-kicad-erc-v2.json")
+assert policy_schema["additionalProperties"] is False
+assert report_schema["additionalProperties"] is False
+assert report_schema["properties"]["schema_version"] == {"const": 2}
+assert report_schema["properties"]["invocation"]["properties"]["severities"] == {
+    "const": ["error", "warning"]
+}
+assert report_schema["$defs"]["finding"]["properties"]["severity"] == {
+    "enum": ["error", "warning"]
+}
+PY
+
 for fixture in "${fixtures[@]}"; do
   name=$(basename "$fixture" .kicad_pcb)
   first="$output_directory/$name.routed.kicad_pcb"

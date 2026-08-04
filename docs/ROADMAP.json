@@ -649,6 +649,11 @@
     {
       "id": "native-kicad-schematic-erc-evidence",
       "release": "v1.425.0",
+      "status": "released"
+    },
+    {
+      "id": "native-kicad-erc-warning-policy",
+      "release": "v1.426.0",
       "status": "current"
     }
   ]

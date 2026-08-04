@@ -37,7 +37,7 @@ and adds one opt-in input:
 
 ```yaml
 - id: pcbex
-  uses: penguin425/pcbex@v1.425.0
+  uses: penguin425/pcbex@v1.426.0
   with:
     board: hardware/controller.kicad_pcb
     circuit-spec: build/circuit-spec-v2.json
@@ -76,8 +76,9 @@ When a circuit net has `voltage_uv`, the writer intentionally emits both the
 declared net name and its canonical voltage label. That is how the existing
 handoff gate proves the voltage annotation survived, but KiCad may report its
 advisory `multiple_net_names` warning when those two names differ. The pcbex
-immutable ERC result remains the publication gate; this v1 boundary does not
-claim a warning-free native KiCad ERC report.
+immutable ERC result remains the publication gate. Native ERC report v1 does
+not claim a warning-free result; report v2 can apply an explicit warning
+budget without weakening the error gate.
 
 ## Native KiCad ERC handoff
 
@@ -88,23 +89,34 @@ schematic through the bounded native runner:
 ```sh
 pcbex run-native-kicad-erc build/circuit-spec.kicad_sch \
   --output build/native-kicad-erc.json --require-approved
+
+pcbex run-native-kicad-erc build/circuit-spec.kicad_sch \
+  --warning-policy examples/native-kicad-warning-policy.json \
+  --output build/native-kicad-erc-warning.json --require-approved
 ```
 
 The runner stages only the schematic bytes in a private directory and invokes
 KiCad with `--severity-error`; it does not load a sibling `.kicad_pro` or
-other sidecar. KiCad warnings are outside this v1 native approval/report
-contract (the current writer fixture has 11 known warnings under an
-all-severity invocation), while every electrical error rejects the native
-report. A rejected report is retained before `--require-approved` returns a
+other sidecar. KiCad warnings are outside the v1 native approval/report
+contract. The opt-in v2 contract invokes explicit error and warning severities
+and accepts the current writer fixture's 11 known warnings only under the
+closed sample policy; unlisted warnings, excessive counts, unapproved ignored
+checks, and every electrical error reject. A rejected report is retained
+before `--require-approved` returns a
 failure, so CI can inspect the exact evidence. The normalized report binds the
 writer output's source byte count/SHA-256 and a deterministic native run
 digest. See [`NATIVE_KICAD_ERC.md`](NATIVE_KICAD_ERC.md).
 
-When this report is supplied to `prepare-ai-review` together with the
+When a v1 report is supplied to `prepare-ai-review` together with the
 deterministic plan and retained report, the request becomes schema v3 with an
 artifact binding schema v2. Signing, verification, quorum, MCP, the Python
 adapter, and the composite Action accept the same opt-in native evidence; the
 legacy v1 unbound and v2 deterministic-only flows remain unchanged.
+
+Supplying a v2 report plus
+`--native-kicad-erc-warning-policy examples/native-kicad-warning-policy.json`
+produces request schema v4/artifact binding v3/native identity v2. The same
+trusted policy path is mandatory during signing and both verification modes.
 
 Normalization makes part, pin, net, and connection ordering independent of the
 source JSON order. Output contains no timestamp, source path, random value, or
