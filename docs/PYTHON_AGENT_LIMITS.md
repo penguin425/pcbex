@@ -86,8 +86,12 @@ parsed violation, fail closed and cannot publish a repaired board.
 
 POSIX children start in a new session and are killed by process group. Windows
 children are attached to a kill-on-close Job Object immediately after spawn.
-Windows necessarily has a small post-spawn assignment race, and a POSIX
-descendant that deliberately creates another session can escape the group.
+On Darwin only, an initial process-group `EPERM` is treated as an exited-group
+race when `poll()` has reaped the direct child and a signal-zero group probe
+returns `ESRCH`. A live child, an existing group, an unauthorized probe, or any
+other probe result remains a cleanup failure. Windows necessarily has a small
+post-spawn assignment race, and a POSIX descendant that deliberately creates
+another session can escape the group.
 The runner is not a CPU, memory, filesystem, network, syscall, or privilege
 sandbox.
 

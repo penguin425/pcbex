@@ -654,6 +654,11 @@
     {
       "id": "native-kicad-erc-warning-policy",
       "release": "v1.426.0",
+      "status": "released"
+    },
+    {
+      "id": "darwin-process-group-cleanup-race",
+      "release": "v1.426.1",
       "status": "current"
     }
   ]

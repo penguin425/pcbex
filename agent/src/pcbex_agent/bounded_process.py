@@ -17,11 +17,13 @@ cleaned up rather than silently falling back to direct-process termination.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import errno
 import math
 import os
 import queue
 import signal
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Mapping, Sequence
@@ -387,6 +389,31 @@ def _first_failure(
     return stdout_state.error or stderr_state.error or writer_state.error
 
 
+def _darwin_exited_process_group_is_gone(
+    process: subprocess.Popen[bytes], error: OSError
+) -> bool:
+    """Return whether a Darwin ``killpg`` EPERM is an exited-group race.
+
+    Darwin can report EPERM while the direct child is exiting.  Treat that
+    result as benign only after ``poll`` has reaped the direct child and a
+    signal-zero probe proves that the process group no longer exists.  A live
+    child, an existing group, or any probe error remains a cleanup failure.
+    """
+
+    if sys.platform != "darwin" or error.errno != errno.EPERM:
+        return False
+    try:
+        if process.poll() is None:
+            return False
+    except OSError:
+        return False
+    try:
+        os.killpg(process.pid, 0)
+    except OSError as probe_error:
+        return probe_error.errno == errno.ESRCH
+    return False
+
+
 def _kill_process_tree(process: subprocess.Popen[bytes], job: Any) -> list[str]:
     failures: list[str] = []
     if job is not None:
@@ -403,7 +430,8 @@ def _kill_process_tree(process: subprocess.Popen[bytes], job: Any) -> list[str]:
         except ProcessLookupError:
             pass
         except OSError as exc:
-            failures.append(f"could not terminate POSIX process group: {exc}")
+            if not _darwin_exited_process_group_is_gone(process, exc):
+                failures.append(f"could not terminate POSIX process group: {exc}")
     try:
         process.kill()
     except ProcessLookupError:
