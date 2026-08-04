@@ -609,6 +609,11 @@
     {
       "id": "bounded-input-deterministic-pipeline-runner",
       "release": "v1.417.0",
+      "status": "released"
+    },
+    {
+      "id": "mcp-deterministic-pipeline-runner-parity",
+      "release": "v1.418.0",
       "status": "current"
     }
   ]

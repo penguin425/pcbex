@@ -8,6 +8,8 @@ canonical schematic and raw board identities, and retains one deterministic
 aggregate report.
 It does not generate or repair a design, start external tools, call an AI or a
 network service, submit a package, or place an order.
+Version 1.418 exposes the same boundary through synchronous MCP calls and
+optional MCP Tasks without changing the plan or report schemas.
 
 ## Commands
 
@@ -37,6 +39,31 @@ are rejected and never overwritten. The report output must be outside the
 firmware bundle directory: that directory is an exact eight-file input contract,
 and a report or atomic output reservation inside it would become an unauthorized
 ninth entry.
+
+## MCP parity
+
+The MCP server exposes `run_deterministic_pipeline` with the same explicit
+`plan`, `output`, and optional `require_approved` arguments. Protocol
+2025-11-25 clients may request optional Tasks and use the normal `tasks/get`,
+`tasks/result`, `tasks/list`, and `tasks/cancel` methods; older negotiated
+protocols execute the same tool synchronously.
+
+A runner report may approach 128 MiB while one MCP request or response is
+limited to 16 MiB. The tool therefore retains the complete report only at the
+authorized `output` and returns a compact `report_summary` containing
+`schema_version`, `approved`, `plan_sha256`, `run_sha256`, `failure_count`,
+`report_bytes`, and `report_sha256`. The MCP bridge stable-reads the retained
+regular file within the runner limit and verifies its exact byte count,
+SHA-256, decision, failure count, and plan/run identities against a compact
+child-process echo. Unknown or malformed summary fields, a changed file, or a
+digest mismatch produce no trusted summary. With `require_approved: true`, a
+rejected run returns `isError: true` only after the full report has been
+atomically retained and its summary verified.
+
+The MCP wrapper adds no discovery, mutation, network, AI, factory submission,
+or ordering behavior. Existing output paths are rejected before execution,
+and the runner's stronger alias, symlink, firmware-directory, and no-clobber
+checks remain authoritative.
 
 ## Closed input plan
 
@@ -101,6 +128,5 @@ not erase evidence from the other.
 
 The runner does not add a phase to `pipeline-verify` and does not change its
 schema-v1 or factory-bound schema-v2 reports. Those reports remain independently
-usable and auditable. MCP and composite-Action parity for this aggregate runner
-is deliberately deferred to v1.418; v1.417 exposes the native Rust/CLI boundary
-only.
+usable and auditable. Version 1.418 adds MCP parity; composite-Action parity is
+planned for v1.419.

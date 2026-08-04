@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use pcbex_core::dfm_profiles;
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
@@ -452,6 +453,7 @@ impl McpServer {
                     | "verify_circuit_kicad_handoff"
                     | "verify_circuit_kicad_board_binding"
                     | "pipeline_verify"
+                    | "run_deterministic_pipeline"
             )
         ) {
             return error_response(
@@ -994,6 +996,24 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "factory_receipt": {"type": "string"},
                     "require_factory": {"type": "boolean", "default": false},
                     "output": {"type": "string"}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "run_deterministic_pipeline",
+            "Run deterministic hardware pipeline",
+            "Run a closed, digest-bound deterministic pipeline plan and retain its aggregate report, including rejected reports before an optional approval gate fails.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["plan", "output"],
+                "properties": {
+                    "plan": {"type": "string"},
+                    "output": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
                 }
             }),
             false,
@@ -4546,6 +4566,9 @@ fn call_tool(
             verify_circuit_kicad_board_binding(arguments, cancellation)?
         }
         "pipeline_verify" => pipeline_verify(arguments, cancellation)?,
+        "run_deterministic_pipeline" => {
+            run_deterministic_pipeline_tool(arguments, cancellation)?
+        }
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
         "compare_manufacturing_feedback" => {
@@ -5562,6 +5585,48 @@ fn pipeline_verify(
     Ok(execution_result(
         execution,
         json!({"output": output, "report": report}),
+    ))
+}
+
+fn run_deterministic_pipeline_tool(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["plan", "output", "require_approved"])?;
+    let plan = required_string(&arguments, "plan")?;
+    let output = required_string(&arguments, "output")?;
+    // Refuse stale evidence before starting the child.  The runner performs
+    // the stronger path-component, alias, and atomic-publish checks after it
+    // has parsed the closed plan.
+    require_absent_outputs([Some(output.as_str())])?;
+    let mut command = vec![
+        "run-deterministic-pipeline".to_string(),
+        plan.clone(),
+        "--output".to_string(),
+        output.clone(),
+        // The child emits a compact digest-bound summary on stdout when this
+        // hidden MCP-only switch is present.  Comparing that summary with a
+        // stable read of the retained file prevents a concurrent writer from
+        // replacing evidence while keeping the MCP frame below 16 MiB even
+        // when the CLI report is near its 128 MiB bound.
+        "--mcp-echo-report-summary".to_string(),
+    ];
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let report_summary = trusted_deterministic_pipeline_summary(&execution, Path::new(&output));
+    let execution = require_retained_json(
+        execution,
+        &report_summary,
+        "deterministic pipeline output summary",
+    );
+    Ok(execution_result(
+        execution,
+        json!({"plan": plan, "output": output, "report_summary": report_summary}),
     ))
 }
 
@@ -12192,6 +12257,128 @@ fn trusted_echoed_json(execution: &Execution, path: &Path) -> Value {
     }
 }
 
+/// Verify the compact stdout bridge emitted by the deterministic pipeline
+/// child against a stable, bounded read of the atomically retained report.
+///
+/// The runner report is allowed to be larger than the MCP 16 MiB frame limit,
+/// so MCP returns only this authenticated summary.  Every field is checked,
+/// unknown fields are rejected, and the report's own top-level identity fields
+/// are compared before the summary is trusted.
+fn trusted_deterministic_pipeline_summary(execution: &Execution, path: &Path) -> Value {
+    const SUMMARY_FIELDS: [&str; 7] = [
+        "schema_version",
+        "approved",
+        "plan_sha256",
+        "run_sha256",
+        "failure_count",
+        "report_bytes",
+        "report_sha256",
+    ];
+
+    if execution.stdout.len() > MAX_MCP_PROCESS_MESSAGE_BYTES {
+        return Value::Null;
+    }
+    let summary = serde_json::from_slice::<Value>(&execution.stdout).unwrap_or(Value::Null);
+    let Some(object) = summary.as_object() else {
+        return Value::Null;
+    };
+    if object.len() != SUMMARY_FIELDS.len()
+        || SUMMARY_FIELDS
+            .iter()
+            .any(|field| !object.contains_key(*field))
+    {
+        return Value::Null;
+    }
+
+    let schema_version = object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .filter(|value| *value == 1);
+    let approved = object.get("approved").and_then(Value::as_bool);
+    let plan_sha256 = object
+        .get("plan_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let run_sha256 = object
+        .get("run_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let failure_count = object.get("failure_count").and_then(Value::as_u64);
+    let report_bytes = object
+        .get("report_bytes")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0);
+    let report_sha256 = object
+        .get("report_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let (
+        Some(schema_version),
+        Some(approved),
+        Some(plan_sha256),
+        Some(run_sha256),
+        Some(failure_count),
+        Some(report_bytes),
+        Some(report_sha256),
+    ) = (
+        schema_version,
+        approved,
+        plan_sha256,
+        run_sha256,
+        failure_count,
+        report_bytes,
+        report_sha256,
+    )
+    else {
+        return Value::Null;
+    };
+
+    let max_report_bytes =
+        (crate::deterministic_pipeline_runner::MAX_REPORT_BYTES as u64).saturating_add(1);
+    if report_bytes > max_report_bytes || failure_count > 128 {
+        return Value::Null;
+    }
+    let Ok(retained) = crate::bounded_io::read_with_limit(path, max_report_bytes) else {
+        return Value::Null;
+    };
+    if retained.len() as u64 != report_bytes || sha256_hex(&retained) != report_sha256 {
+        return Value::Null;
+    }
+    let Ok(report) = serde_json::from_slice::<Value>(&retained) else {
+        return Value::Null;
+    };
+    let Some(report_object) = report.as_object() else {
+        return Value::Null;
+    };
+    if report_object.get("schema_version").and_then(Value::as_u64) != Some(schema_version)
+        || report_object.get("approved").and_then(Value::as_bool) != Some(approved)
+        || report_object.get("plan_sha256").and_then(Value::as_str) != Some(plan_sha256)
+        || report_object.get("run_sha256").and_then(Value::as_str) != Some(run_sha256)
+        || report_object
+            .get("failures")
+            .and_then(Value::as_array)
+            .is_none_or(|failures| failures.len() as u64 != failure_count)
+        || approved != (failure_count == 0)
+    {
+        return Value::Null;
+    }
+
+    summary
+}
+
+fn is_lowercase_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
 fn require_retained_file(mut execution: Execution, path: &Path, label: &str) -> Execution {
     if execution.success
         && !matches!(
@@ -12586,7 +12773,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 145);
+        assert_eq!(tools.len(), 146);
         let named = |name: &str| {
             tools
                 .iter()
@@ -12706,6 +12893,26 @@ mod tests {
         assert_eq!(
             named("pipeline_verify")["execution"]["taskSupport"],
             "optional"
+        );
+        assert_eq!(
+            named("run_deterministic_pipeline")["inputSchema"]["required"],
+            json!(["plan", "output"])
+        );
+        assert_eq!(
+            named("run_deterministic_pipeline")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("run_deterministic_pipeline")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("run_deterministic_pipeline")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            named("run_deterministic_pipeline")["annotations"]["destructiveHint"],
+            true
         );
         assert_eq!(
             named("route_kicad")["inputSchema"]["properties"]["physical_profile"]["type"],
@@ -13434,6 +13641,15 @@ mod tests {
                 }),
             ),
             (
+                16,
+                "run_deterministic_pipeline",
+                json!({
+                    "plan": "pipeline-plan.json",
+                    "output": "pipeline-report.json",
+                    "require_approved": "yes"
+                }),
+            ),
+            (
                 14,
                 "verify_circuit_kicad_handoff",
                 json!({
@@ -13538,6 +13754,46 @@ mod tests {
     }
 
     #[test]
+    fn deterministic_pipeline_summary_is_digest_bound_and_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let report_path = directory.path().join("pipeline-report.json");
+        let report = json!({
+            "schema_version": 1,
+            "approved": false,
+            "plan_sha256": "a".repeat(64),
+            "run_sha256": "b".repeat(64),
+            "failures": ["pipeline rejected"]
+        });
+        let rendered = format!("{}\n", serde_json::to_string(&report).unwrap());
+        std::fs::write(&report_path, rendered.as_bytes()).unwrap();
+        let summary = json!({
+            "schema_version": 1,
+            "approved": false,
+            "plan_sha256": "a".repeat(64),
+            "run_sha256": "b".repeat(64),
+            "failure_count": 1,
+            "report_bytes": rendered.len(),
+            "report_sha256": sha256_hex(rendered.as_bytes())
+        });
+        let execution = Execution {
+            success: false,
+            exit_code: Some(1),
+            stdout: serde_json::to_vec(&summary).unwrap(),
+            stderr: "required approval rejected after retaining a report".into(),
+        };
+        assert_eq!(
+            trusted_deterministic_pipeline_summary(&execution, &report_path),
+            summary
+        );
+
+        std::fs::write(&report_path, b"{}\n").unwrap();
+        assert_eq!(
+            trusted_deterministic_pipeline_summary(&execution, &report_path),
+            Value::Null
+        );
+    }
+
+    #[test]
     fn new_pipeline_tools_reject_preexisting_outputs_as_stale_evidence() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("old-check.json");
@@ -13619,6 +13875,33 @@ mod tests {
         );
         assert_eq!(
             std::fs::read(&board_binding_output).unwrap(),
+            br#"{"approved":true}"#
+        );
+
+        let deterministic_output = directory.path().join("old-deterministic.json");
+        std::fs::write(&deterministic_output, br#"{"approved":true}"#).unwrap();
+        let response = server
+            .handle_message(request(
+                33,
+                "tools/call",
+                json!({
+                    "name": "run_deterministic_pipeline",
+                    "arguments": {
+                        "plan": "missing-plan.json",
+                        "output": deterministic_output
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["data"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&deterministic_output).unwrap(),
             br#"{"approved":true}"#
         );
     }
@@ -13718,6 +14001,7 @@ mod tests {
             "verify_circuit_kicad_handoff",
             "verify_circuit_kicad_board_binding",
             "pipeline_verify",
+            "run_deterministic_pipeline",
         ]
         .into_iter()
         .enumerate()
