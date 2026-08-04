@@ -154,6 +154,26 @@ Optional `net_classes` define per-class track width, clearance, via dimensions,
 and allowed layers. Assign a class by setting a net's `class` field. Routing and
 internal rule checking both apply the class; unspecified nets use board defaults.
 
+## Native KiCad schematic ERC
+
+Run KiCad's deterministic, error-only schematic ERC and retain a normalized
+report for CI or AI approval:
+
+```sh
+pcbex run-native-kicad-erc hardware/generated.kicad_sch \
+  --output build/native-kicad-erc.json --require-approved
+pcbex native-kicad-erc-report-schema \
+  --output build/native-kicad-erc.schema.json
+```
+
+The runner uses a private staged input with no `.kicad_pro` sidecar, bounds
+KiCad and report I/O, refuses output overwrite/symlinks, and retains a
+rejected report before `--require-approved` fails. Warnings are outside this
+v1 gate; only native ERC errors determine `approved`. Native evidence can be
+added to AI request schema v3 (artifact binding v2) with
+`--native-kicad-erc-report`; schema v1/v2 flows remain compatible. See
+[`docs/NATIVE_KICAD_ERC.md`](docs/NATIVE_KICAD_ERC.md).
+
 ## KiCad boards
 
 Route a placed KiCad board with a closed, straight-segment `Edge.Cuts` outline:
@@ -2282,10 +2302,14 @@ legacy envelopes.
 
 Version 1.424 additionally accepts `ai-review-generated-schematic` together
 with `deterministic-pipeline-plan`. This opts the quorum into request-schema-v2
-artifact binding. The Action runs the plan once before quorum verification,
-forces that fresh report to be approved, and passes the generated schematic,
-raw plan, and fixed retained report to the same CLI live-verification gate;
-the quorum command independently reruns the plan before accepting signatures.
+artifact binding. Version 1.425 additionally accepts
+`ai-review-native-kicad-erc-report` (and `ai-review-kicad-cli`) to opt into
+request-schema-v3 native KiCad ERC evidence. The Action runs the plan and,
+when enabled, reads the retained native report before quorum verification;
+the CLI live-verification gate independently reruns the fixed error-only
+native ERC check and the deterministic plan before accepting signatures. See
+[`docs/AI_REVIEW_ARTIFACT_BINDING.md`](docs/AI_REVIEW_ARTIFACT_BINDING.md) and
+[`docs/NATIVE_KICAD_ERC.md`](docs/NATIVE_KICAD_ERC.md).
 Only after that gate succeeds, the Action exposes
 `ai-review-artifacts-verified`, generated-schematic byte/SHA outputs, raw plan
 source byte/SHA outputs, normalized `ai-review-pipeline-plan-sha256`, retained
@@ -3210,9 +3234,12 @@ call, submission, or ordering behavior.
 Version 1.424 can cryptographically join that deterministic evidence to an AI
 schematic approval. `prepare-ai-review` request schema v2 records the exact
 generated schematic, raw/normalized plan, retained report, and run identities.
-The signing and verification commands rerun the plan and require the retained
-report to match the fresh compact JSON plus final newline exactly; a stored
-digest or self-consistent report alone is never trusted.
+Version 1.425 can additionally bind the normalized native KiCad ERC report as
+request schema v3/artifact binding v2. The signing and verification commands
+rerun every enabled gate and require retained reports to match fresh compact
+JSON plus final newline exactly; a stored digest or self-consistent report
+alone is never trusted. See
+[`docs/AI_REVIEW_ARTIFACT_BINDING.md`](docs/AI_REVIEW_ARTIFACT_BINDING.md).
 
 Minimal Action opt-in:
 
@@ -3538,7 +3565,9 @@ pcbex verify-ai-approval \
 Version 1.424 adds opt-in request schema v2 for production pipelines. It binds
 the signature to the exact generated schematic bytes, raw and normalized
 deterministic plan identities, and the exact approved runner report and run
-identity. First retain an approved report, then pass the same plan/report while
+identity. Version 1.425 adds optional native KiCad ERC evidence as request
+schema v3/artifact binding v2. First retain the approved reports, then pass
+the same plan/report paths (and `--native-kicad-erc-report` for v3) while
 preparing the request:
 
 ```sh
@@ -3546,17 +3575,22 @@ pcbex run-deterministic-pipeline pipeline-plan.json \
   --output deterministic-pipeline-report.json \
   --require-approved
 
+pcbex run-native-kicad-erc generated.kicad_sch \
+  --output native-kicad-erc.json --require-approved
+
 pcbex prepare-ai-review generated.kicad_sch \
   --electrical-review electrical-review.json \
   --policy-pack organization-policy-pack.json \
   --deterministic-pipeline-plan pipeline-plan.json \
   --deterministic-pipeline-report deterministic-pipeline-report.json \
+  --native-kicad-erc-report native-kicad-erc.json \
   --output ai-review-request.json
 
 pcbex sign-ai-review ai-review-request.json ai-review-response.json \
   --generated-schematic generated.kicad_sch \
   --deterministic-pipeline-plan pipeline-plan.json \
   --deterministic-pipeline-report deterministic-pipeline-report.json \
+  --native-kicad-erc-report native-kicad-erc.json \
   --private-key .secrets/schematic-approval.key \
   --signer-id production-ci \
   --output signed-approval.json --require-approved
@@ -3566,15 +3600,17 @@ pcbex verify-ai-approval \
   --generated-schematic generated.kicad_sch \
   --deterministic-pipeline-plan pipeline-plan.json \
   --deterministic-pipeline-report deterministic-pipeline-report.json \
+  --native-kicad-erc-report native-kicad-erc.json \
   --public-key schematic-approval.pub --require-approved
 ```
 
 Prepare, sign, approval verification, and quorum verification each stable-read
-the three artifacts, rerun the closed pipeline, require an approved report,
-and compare the freshly rendered report byte-for-byte. The request's raw
-electrical-review digest and recomputed electrical result must also match the
-plan and circuit handoff. This rejects stale, changed, or independently valid
-but mixed artifacts; a byte-identical copy at another path remains valid.
+the four artifacts, rerun the closed pipeline and native KiCad ERC, require
+both reports to be approved, and compare the freshly rendered reports
+byte-for-byte. The request's raw electrical-review digest and recomputed
+electrical result must also match the plan and circuit handoff. This rejects
+stale, changed, or independently valid but mixed artifacts; a byte-identical
+copy at another path remains valid.
 Schema-v1 requests remain supported without these flags and reject them when
 supplied. Request schema v2 is distinct from the existing session-bound signed
 approval envelope schema v2. See

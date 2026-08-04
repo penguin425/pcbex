@@ -143,6 +143,9 @@ write_output ai-review-pipeline-plan-sha256 ""
 write_output ai-review-pipeline-report-bytes ""
 write_output ai-review-pipeline-report-sha256 ""
 write_output ai-review-pipeline-run-sha256 ""
+write_output ai-review-native-kicad-erc-report-bytes ""
+write_output ai-review-native-kicad-erc-report-sha256 ""
+write_output ai-review-native-kicad-erc-run-sha256 ""
 write_output human-escalation ""
 write_output human-escalation-approved ""
 write_output schematic-approval-met ""
@@ -192,6 +195,11 @@ ai_review_pipeline_plan_sha256=""
 ai_review_pipeline_report_bytes=""
 ai_review_pipeline_report_sha256=""
 ai_review_pipeline_run_sha256=""
+ai_review_native_kicad_erc_report="${PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT:-}"
+ai_review_kicad_cli="${PCBEX_AI_REVIEW_KICAD_CLI:-kicad-cli}"
+ai_review_native_kicad_erc_report_bytes=""
+ai_review_native_kicad_erc_report_sha256=""
+ai_review_native_kicad_erc_run_sha256=""
 
 if [[ "$deterministic_pipeline_require_approved" != "true" &&
   "$deterministic_pipeline_require_approved" != "false" ]]; then
@@ -214,6 +222,14 @@ if [[ -n "$ai_review_generated_schematic" && $ai_quorum_inputs -ne 3 ]]; then
   echo "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC requires the complete AI quorum input set" >&2
   exit 2
 fi
+if [[ -n "$ai_review_native_kicad_erc_report" && $ai_quorum_inputs -ne 3 ]]; then
+  echo "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT requires the complete AI quorum input set" >&2
+  exit 2
+fi
+if [[ -n "$ai_review_native_kicad_erc_report" && -z "$ai_review_generated_schematic" ]]; then
+  echo "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT requires PCBEX_AI_REVIEW_GENERATED_SCHEMATIC" >&2
+  exit 2
+fi
 if ((ai_quorum_inputs == 3)) &&
   [[ -z "${PCBEX_POLICY_PACK:-}" &&
     -z "${PCBEX_SIGNED_POLICY_PACK:-}" &&
@@ -232,6 +248,14 @@ else
 fi
 if [[ -n "$ai_review_generated_schematic" && -z "$deterministic_pipeline_plan" ]]; then
   echo "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC requires PCBEX_DETERMINISTIC_PIPELINE_PLAN" >&2
+  exit 2
+fi
+if [[ -n "$ai_review_native_kicad_erc_report" && -z "$deterministic_pipeline_plan" ]]; then
+  echo "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT requires PCBEX_DETERMINISTIC_PIPELINE_PLAN" >&2
+  exit 2
+fi
+if [[ -n "$ai_review_native_kicad_erc_report" && -z "$ai_review_kicad_cli" ]]; then
+  echo "PCBEX_AI_REVIEW_KICAD_CLI must not be empty when a native KiCad ERC report is supplied" >&2
   exit 2
 fi
 
@@ -2252,6 +2276,70 @@ PY
     exit 2
   fi
 fi
+if [[ -n "$ai_review_native_kicad_erc_report" ]]; then
+  ai_review_native_kicad_erc_identity_values="$(
+    PYTHONPATH="$GITHUB_ACTION_PATH/agent/src" python3 - \
+      "$ai_review_native_kicad_erc_report" <<'PY'
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path
+
+from pcbex_agent.bounded_io import read_bytes
+
+MAX_BYTES = 32 * 1024 * 1024
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+path = Path(sys.argv[1])
+payload = read_bytes(path, max_bytes=MAX_BYTES)
+confirmation = read_bytes(path, max_bytes=MAX_BYTES)
+if payload != confirmation:
+    raise ValueError(f"native KiCad ERC report changed between bounded reads: {path}")
+try:
+    value = json.loads(
+        payload.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=lambda constant: (_ for _ in ()).throw(
+            ValueError(f"non-standard JSON number: {constant}")
+        ),
+    )
+except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as error:
+    raise ValueError(f"native KiCad ERC report is not valid JSON: {error}") from error
+if type(value) is not dict:
+    raise ValueError("native KiCad ERC report must be a JSON object")
+run_sha256 = value.get("run_sha256")
+if not isinstance(run_sha256, str) or SHA256_RE.fullmatch(run_sha256) is None:
+    raise ValueError("native KiCad ERC report run_sha256 is malformed")
+print(len(payload), hashlib.sha256(payload).hexdigest(), run_sha256)
+PY
+  )" || {
+    echo "unable to read native KiCad ERC report identity" >&2
+    exit 2
+  }
+  read -r \
+    ai_review_native_kicad_erc_report_bytes \
+    ai_review_native_kicad_erc_report_sha256 \
+    ai_review_native_kicad_erc_run_sha256 \
+    <<< "$ai_review_native_kicad_erc_identity_values"
+  if [[ ! "$ai_review_native_kicad_erc_report_bytes" =~ ^[1-9][0-9]*$ ||
+    "$ai_review_native_kicad_erc_report_bytes" -gt $((32 * 1024 * 1024)) ||
+    ! "$ai_review_native_kicad_erc_report_sha256" =~ ^[0-9a-f]{64}$ ||
+    ! "$ai_review_native_kicad_erc_run_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "native KiCad ERC report identities are malformed" >&2
+    exit 2
+  fi
+fi
 if ((ai_quorum_inputs == 3)); then
   if [[ -z "$effective_policy_pack" ]]; then
     echo "AI approval quorum verification requires a policy pack or signed policy pack" >&2
@@ -2275,6 +2363,11 @@ if ((ai_quorum_inputs == 3)); then
       --generated-schematic "$ai_review_generated_schematic"
       --deterministic-pipeline-plan "$deterministic_pipeline_plan"
       --deterministic-pipeline-report "$deterministic_pipeline_report")
+    if [[ -n "$ai_review_native_kicad_erc_report" ]]; then
+      quorum_arguments+=(
+        --native-kicad-erc-report "$ai_review_native_kicad_erc_report"
+        --kicad-cli "$ai_review_kicad_cli")
+    fi
   fi
   if [[ -n "${PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY:-}" ]]; then
     quorum_arguments+=( \
@@ -3505,6 +3598,9 @@ write_output ai-review-pipeline-plan-sha256 "$ai_review_pipeline_plan_sha256"
 write_output ai-review-pipeline-report-bytes "$ai_review_pipeline_report_bytes"
 write_output ai-review-pipeline-report-sha256 "$ai_review_pipeline_report_sha256"
 write_output ai-review-pipeline-run-sha256 "$ai_review_pipeline_run_sha256"
+write_output ai-review-native-kicad-erc-report-bytes "$ai_review_native_kicad_erc_report_bytes"
+write_output ai-review-native-kicad-erc-report-sha256 "$ai_review_native_kicad_erc_report_sha256"
+write_output ai-review-native-kicad-erc-run-sha256 "$ai_review_native_kicad_erc_run_sha256"
 write_output human-escalation "$human_escalation"
 write_output human-escalation-approved "$human_escalation_approved"
 write_output schematic-approval-met "$schematic_approval_met"

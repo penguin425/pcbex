@@ -1203,6 +1203,7 @@ pub(crate) fn verify_ai_review_artifact_binding(
             },
             run_sha256: report.run_sha256,
         },
+        native_kicad_erc: None,
     })
 }
 

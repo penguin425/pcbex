@@ -37,7 +37,7 @@ and adds one opt-in input:
 
 ```yaml
 - id: pcbex
-  uses: penguin425/pcbex@v1.424.0
+  uses: penguin425/pcbex@v1.425.0
   with:
     board: hardware/controller.kicad_pcb
     circuit-spec: build/circuit-spec-v2.json
@@ -78,6 +78,33 @@ handoff gate proves the voltage annotation survived, but KiCad may report its
 advisory `multiple_net_names` warning when those two names differ. The pcbex
 immutable ERC result remains the publication gate; this v1 boundary does not
 claim a warning-free native KiCad ERC report.
+
+## Native KiCad ERC handoff
+
+Writer publication and pcbex's immutable circuit-spec ERC remain the first
+gates. To add KiCad's independent electrical checker, run the retained
+schematic through the bounded native runner:
+
+```sh
+pcbex run-native-kicad-erc build/circuit-spec.kicad_sch \
+  --output build/native-kicad-erc.json --require-approved
+```
+
+The runner stages only the schematic bytes in a private directory and invokes
+KiCad with `--severity-error`; it does not load a sibling `.kicad_pro` or
+other sidecar. KiCad warnings are outside this v1 native approval/report
+contract (the current writer fixture has 11 known warnings under an
+all-severity invocation), while every electrical error rejects the native
+report. A rejected report is retained before `--require-approved` returns a
+failure, so CI can inspect the exact evidence. The normalized report binds the
+writer output's source byte count/SHA-256 and a deterministic native run
+digest. See [`NATIVE_KICAD_ERC.md`](NATIVE_KICAD_ERC.md).
+
+When this report is supplied to `prepare-ai-review` together with the
+deterministic plan and retained report, the request becomes schema v3 with an
+artifact binding schema v2. Signing, verification, quorum, MCP, the Python
+adapter, and the composite Action accept the same opt-in native evidence; the
+legacy v1 unbound and v2 deterministic-only flows remain unchanged.
 
 Normalization makes part, pin, net, and connection ordering independent of the
 source JSON order. Output contains no timestamp, source path, random value, or
