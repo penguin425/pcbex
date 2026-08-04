@@ -730,6 +730,14 @@ inputs:
     description: Optional generated .kicad_sch whose exact bytes are bound by a schema-v2 AI review request; requires the complete AI quorum set and deterministic-pipeline-plan.
     required: false
     default: ""
+  ai-review-native-kicad-erc-report:
+    description: Optional normalized native KiCad ERC report whose exact bytes and run identity are bound by an AI review request schema-v3; requires the complete AI quorum set, generated schematic, and deterministic-pipeline-plan.
+    required: false
+    default: ""
+  ai-review-kicad-cli:
+    description: KiCad CLI executable used to fresh-verify the native ERC report; used only when ai-review-native-kicad-erc-report is supplied.
+    required: false
+    default: "kicad-cli"
   ai-review-session:
     description: Optional time-bound challenge requiring session-bound v2 AI approvals.
     required: false
@@ -1368,6 +1376,15 @@ outputs:
   ai-review-pipeline-run-sha256:
     description: Deterministic pipeline run identity bound by the AI review request.
     value: ${{ steps.analyze.outputs.ai-review-pipeline-run-sha256 }}
+  ai-review-native-kicad-erc-report-bytes:
+    description: Exact byte count of the normalized native KiCad ERC report bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-native-kicad-erc-report-bytes }}
+  ai-review-native-kicad-erc-report-sha256:
+    description: Exact SHA-256 of the normalized native KiCad ERC report bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-native-kicad-erc-report-sha256 }}
+  ai-review-native-kicad-erc-run-sha256:
+    description: Native KiCad ERC run identity bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-native-kicad-erc-run-sha256 }}
   human-escalation:
     description: Verified dual-control human-escalation JSON path, when supplied.
     value: ${{ steps.analyze.outputs.human-escalation }}
@@ -1639,6 +1656,8 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS: ${{ inputs.policy-lifecycle-log-remote-gossip-timeout-seconds }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
         PCBEX_AI_REVIEW_GENERATED_SCHEMATIC: ${{ inputs.ai-review-generated-schematic }}
+        PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT: ${{ inputs.ai-review-native-kicad-erc-report }}
+        PCBEX_AI_REVIEW_KICAD_CLI: ${{ inputs.ai-review-kicad-cli }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
         PCBEX_AI_RESPONSE_FILES: ${{ inputs.ai-response-files }}

@@ -42,6 +42,9 @@ AI_ARTIFACT_OUTPUTS = (
     "ai-review-pipeline-report-bytes",
     "ai-review-pipeline-report-sha256",
     "ai-review-pipeline-run-sha256",
+    "ai-review-native-kicad-erc-report-bytes",
+    "ai-review-native-kicad-erc-report-sha256",
+    "ai-review-native-kicad-erc-run-sha256",
 )
 
 REPORT_KEYS = {
@@ -355,6 +358,20 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         fake_binary = root / "fake-pcbex"
         self._write_fake_binary(fake_binary)
         self._write_plan(root)
+        (root / "native-erc-report.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "engine_version": "10.0.5-test",
+                    "approved": True,
+                    "violations": [],
+                    "run_sha256": "c" * 64,
+                },
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         return root, fake_binary
 
     def _valid_run(
@@ -383,7 +400,11 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertIn("  deterministic-pipeline-plan:\n", action)
         self.assertIn("  deterministic-pipeline-require-approved:\n", action)
         self.assertIn("  ai-review-generated-schematic:\n", action)
+        self.assertIn("  ai-review-native-kicad-erc-report:\n", action)
+        self.assertIn("  ai-review-kicad-cli:\n", action)
         self.assertIn("PCBEX_AI_REVIEW_GENERATED_SCHEMATIC", action)
+        self.assertIn("PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT", action)
+        self.assertIn("PCBEX_AI_REVIEW_KICAD_CLI", action)
         for name in DETERMINISTIC_OUTPUTS:
             self.assertIn(f"  {name}:\n", action)
         for name in AI_ARTIFACT_OUTPUTS:
@@ -459,6 +480,42 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         )
         self.assertEqual(outputs["ai-review-pipeline-run-sha256"], "b" * 64)
 
+    def test_native_kicad_erc_binding_forwards_cli_and_publishes_exact_identities(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+                "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT": "native-erc-report.json",
+                "PCBEX_AI_REVIEW_KICAD_CLI": "kicad-cli-10",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self._commands(root),
+            ["analyze-kicad", "run-deterministic-pipeline", "verify-ai-quorum"],
+        )
+        arguments = (root / "arguments").read_text(encoding="utf-8").splitlines()
+        native_index = arguments.index("--native-kicad-erc-report")
+        self.assertEqual(arguments[native_index + 1], "native-erc-report.json")
+        self.assertEqual(arguments[native_index + 2], "--kicad-cli")
+        self.assertEqual(arguments[native_index + 3], "kicad-cli-10")
+        report_bytes = (root / "native-erc-report.json").read_bytes()
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(
+            outputs["ai-review-native-kicad-erc-report-bytes"], str(len(report_bytes))
+        )
+        self.assertEqual(
+            outputs["ai-review-native-kicad-erc-report-sha256"],
+            self._sha256(report_bytes),
+        )
+        self.assertEqual(outputs["ai-review-native-kicad-erc-run-sha256"], "c" * 64)
+
     def test_legacy_ai_quorum_keeps_v1_arguments_without_artifact_flags(self):
         root, fake_binary = self._prepare_fixture()
         result = self._run_script(
@@ -476,8 +533,13 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertNotIn("--generated-schematic", arguments)
         self.assertNotIn("--deterministic-pipeline-plan", arguments)
         self.assertNotIn("--deterministic-pipeline-report", arguments)
+        self.assertNotIn("--native-kicad-erc-report", arguments)
+        self.assertNotIn("--kicad-cli", arguments)
         outputs = self._outputs(root / "github-output")
         self.assertEqual(outputs["ai-review-artifacts-verified"], "")
+        self.assertEqual(outputs["ai-review-native-kicad-erc-report-bytes"], "")
+        self.assertEqual(outputs["ai-review-native-kicad-erc-report-sha256"], "")
+        self.assertEqual(outputs["ai-review-native-kicad-erc-run-sha256"], "")
 
     def test_generated_schematic_requires_complete_quorum_and_runner_plan(self):
         root, fake_binary = self._prepare_fixture()
@@ -501,6 +563,52 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self._commands(root), [])
+
+    def test_native_kicad_erc_report_requires_complete_bound_workflow(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={"PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT": "native-erc-report.json"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+                "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT": "native-erc-report.json",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+        root, fake_binary = self._prepare_fixture()
+        (root / "native-erc-report.json").write_text(
+            '{"run_sha256":"BAD"}\n', encoding="utf-8"
+        )
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+                "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT": "native-erc-report.json",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("verify-ai-quorum", self._commands(root))
 
     def test_ai_quorum_preflight_fails_before_analysis_or_runner(self):
         root, fake_binary = self._prepare_fixture()

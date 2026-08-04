@@ -644,6 +644,11 @@
     {
       "id": "exact-ai-review-artifact-binding",
       "release": "v1.424.0",
+      "status": "released"
+    },
+    {
+      "id": "native-kicad-schematic-erc-evidence",
+      "release": "v1.425.0",
       "status": "current"
     }
   ]

@@ -21,6 +21,7 @@ const AI_REVIEW_PLAN_SOURCE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 // then publishes one final newline; the retained report is therefore bounded
 // by the full shared 128 MiB limit.
 const AI_REVIEW_REPORT_MAX_BYTES: u64 = 128 * 1024 * 1024;
+const AI_REVIEW_NATIVE_KICAD_ERC_REPORT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 const SIGNATURE_DOMAIN: &str = "pcbex-ai-schematic-approval-v1";
 const SESSION_SIGNATURE_DOMAIN: &str = "pcbex-ai-schematic-approval-session-v2";
 
@@ -59,13 +60,119 @@ pub struct DeterministicPipelineIdentity {
     pub run_sha256: String,
 }
 
-/// Artifact identities covered by an AI schematic review request.
+/// The retained native KiCad ERC report and the deterministic native run that
+/// produced it.  The report identity is deliberately separate from the
+/// deterministic-pipeline report: native ERC is an additional, independently
+/// reproducible evidence source.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeKicadErcIdentity {
+    pub schema_version: u32,
+    pub report: ExactArtifactIdentity,
+    pub run_sha256: String,
+}
+
+/// Artifact identities covered by an AI schematic review request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AiReviewArtifactBinding {
     pub schema_version: u32,
     pub generated_schematic: ExactArtifactIdentity,
     pub pipeline: DeterministicPipelineIdentity,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_kicad_erc: Option<NativeKicadErcIdentity>,
+}
+
+#[derive(Default)]
+enum NativeKicadErcField {
+    #[default]
+    Missing,
+    Null,
+    Identity(NativeKicadErcIdentity),
+}
+
+impl<'de> Deserialize<'de> for NativeKicadErcField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct NativeKicadErcFieldVisitor;
+
+        impl<'de> Visitor<'de> for NativeKicadErcFieldVisitor {
+            type Value = NativeKicadErcField;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a native KiCad ERC identity object")
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(NativeKicadErcField::Null)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(NativeKicadErcField::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                NativeKicadErcIdentity::deserialize(deserializer).map(NativeKicadErcField::Identity)
+            }
+        }
+
+        deserializer.deserialize_option(NativeKicadErcFieldVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AiReviewArtifactBindingWire {
+    schema_version: u32,
+    generated_schematic: ExactArtifactIdentity,
+    pipeline: DeterministicPipelineIdentity,
+    #[serde(default)]
+    native_kicad_erc: NativeKicadErcField,
+}
+
+impl<'de> Deserialize<'de> for AiReviewArtifactBinding {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = AiReviewArtifactBindingWire::deserialize(deserializer)?;
+        let native_kicad_erc = match (wire.schema_version, wire.native_kicad_erc) {
+            (1, NativeKicadErcField::Missing) => None,
+            (1, NativeKicadErcField::Null | NativeKicadErcField::Identity(_)) => {
+                return Err(D::Error::custom(
+                    "AI review artifact binding schema version 1 must not contain native_kicad_erc",
+                ));
+            }
+            (2, NativeKicadErcField::Identity(identity)) => Some(identity),
+            (2, NativeKicadErcField::Missing | NativeKicadErcField::Null) => {
+                return Err(D::Error::custom(
+                    "AI review artifact binding schema version 2 requires native_kicad_erc",
+                ));
+            }
+            (version, _) => {
+                return Err(D::Error::custom(format!(
+                    "unsupported AI review artifact binding schema version {version}"
+                )));
+            }
+        };
+        Ok(Self {
+            schema_version: wire.schema_version,
+            generated_schematic: wire.generated_schematic,
+            pipeline: wire.pipeline,
+            native_kicad_erc,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -90,7 +197,7 @@ enum ArtifactBindingField {
     #[default]
     Missing,
     Null,
-    Binding(AiReviewArtifactBinding),
+    Binding(Box<AiReviewArtifactBinding>),
 }
 
 impl<'de> Deserialize<'de> for ArtifactBindingField {
@@ -126,6 +233,7 @@ impl<'de> Deserialize<'de> for ArtifactBindingField {
                 D: serde::Deserializer<'de>,
             {
                 AiReviewArtifactBinding::deserialize(deserializer)
+                    .map(Box::new)
                     .map(ArtifactBindingField::Binding)
             }
         }
@@ -159,7 +267,7 @@ impl<'de> Deserialize<'de> for AiReviewRequest {
         let wire = AiReviewRequestWire::deserialize(deserializer)?;
         let artifact_binding = match wire.artifact_binding {
             ArtifactBindingField::Missing => None,
-            ArtifactBindingField::Binding(binding) => Some(binding),
+            ArtifactBindingField::Binding(binding) => Some(*binding),
             ArtifactBindingField::Null => {
                 return Err(D::Error::custom(
                     "AI review request artifact_binding must be an object when present",
@@ -366,11 +474,58 @@ where
     }
     ai_review_request_sha256(request)?;
     let binding = binding.borrow();
+    if binding.schema_version != 1 || binding.native_kicad_erc.is_some() {
+        return Err(
+            "legacy AI review binding requires artifact binding schema version 1 without native evidence"
+                .into(),
+        );
+    }
     validate_artifact_binding(binding)?;
 
     let mut bound = request.clone();
     bound.schema_version = 2;
     bound.artifact_binding = Some(binding.clone());
+    bound.request_sha256.clear();
+    bound.request_sha256 = request_body_sha256(&bound)?;
+    Ok(bound)
+}
+
+/// Add an exact native KiCad ERC identity to a valid v2 request, producing a
+/// v3 request with a fresh body digest.  The legacy binder intentionally
+/// remains v1 -> v2 only so callers cannot silently upgrade a request without
+/// supplying the native evidence identity.
+pub fn bind_native_kicad_erc_to_ai_review_request<B>(
+    request: &AiReviewRequest,
+    native_kicad_erc: B,
+) -> Result<AiReviewRequest, String>
+where
+    B: Borrow<NativeKicadErcIdentity>,
+{
+    if request.schema_version != 2 {
+        return Err(
+            "only an AI review request schema version 2 can be bound to native KiCad ERC".into(),
+        );
+    }
+    let binding = request
+        .artifact_binding
+        .as_ref()
+        .ok_or_else(|| "schema version 2 requires an artifact binding".to_owned())?;
+    if binding.schema_version != 1 || binding.native_kicad_erc.is_some() {
+        return Err(
+            "native KiCad ERC binding requires an artifact binding schema version 1 without native evidence"
+                .into(),
+        );
+    }
+    ai_review_request_sha256(request)?;
+    let native_kicad_erc = native_kicad_erc.borrow();
+    validate_native_kicad_erc_identity(native_kicad_erc)?;
+
+    let mut bound = request.clone();
+    let mut binding = binding.clone();
+    binding.schema_version = 2;
+    binding.native_kicad_erc = Some(native_kicad_erc.clone());
+    bound.schema_version = 3;
+    bound.artifact_binding = Some(binding);
     bound.request_sha256.clear();
     bound.request_sha256 = request_body_sha256(&bound)?;
     Ok(bound)
@@ -401,7 +556,27 @@ pub fn ai_review_request_sha256(request: &AiReviewRequest) -> Result<String, Str
             return Err("AI review request schema version 2 requires an artifact binding".into());
         }
         2 => {
-            validate_artifact_binding(request.artifact_binding.as_ref().unwrap())?;
+            let binding = request.artifact_binding.as_ref().unwrap();
+            if binding.schema_version != 1 {
+                return Err(
+                    "AI review request schema version 2 requires artifact binding schema version 1"
+                        .into(),
+                );
+            }
+            validate_artifact_binding(binding)?;
+        }
+        3 if request.artifact_binding.is_none() => {
+            return Err("AI review request schema version 3 requires an artifact binding".into());
+        }
+        3 => {
+            let binding = request.artifact_binding.as_ref().unwrap();
+            if binding.schema_version != 2 {
+                return Err(
+                    "AI review request schema version 3 requires artifact binding schema version 2"
+                        .into(),
+                );
+            }
+            validate_artifact_binding(binding)?;
         }
         version => {
             return Err(format!(
@@ -434,12 +609,6 @@ fn validate_artifact_identity(
 }
 
 fn validate_artifact_binding(binding: &AiReviewArtifactBinding) -> Result<(), String> {
-    if binding.schema_version != 1 {
-        return Err(format!(
-            "unsupported AI review artifact binding schema version {}",
-            binding.schema_version
-        ));
-    }
     validate_artifact_identity(
         &binding.generated_schematic,
         "generated schematic artifact",
@@ -457,7 +626,37 @@ fn validate_artifact_binding(binding: &AiReviewArtifactBinding) -> Result<(), St
         AI_REVIEW_REPORT_MAX_BYTES,
     )?;
     validate_sha256(&binding.pipeline.run_sha256, "pipeline run SHA-256")?;
-    Ok(())
+    match binding.schema_version {
+        1 if binding.native_kicad_erc.is_none() => Ok(()),
+        1 => Err(
+            "AI review artifact binding schema version 1 must not contain native_kicad_erc".into(),
+        ),
+        2 => binding
+            .native_kicad_erc
+            .as_ref()
+            .ok_or_else(|| {
+                "AI review artifact binding schema version 2 requires native_kicad_erc".into()
+            })
+            .and_then(validate_native_kicad_erc_identity),
+        version => Err(format!(
+            "unsupported AI review artifact binding schema version {version}"
+        )),
+    }
+}
+
+fn validate_native_kicad_erc_identity(identity: &NativeKicadErcIdentity) -> Result<(), String> {
+    if identity.schema_version != 1 {
+        return Err(format!(
+            "unsupported native KiCad ERC identity schema version {}",
+            identity.schema_version
+        ));
+    }
+    validate_artifact_identity(
+        &identity.report,
+        "native KiCad ERC report",
+        AI_REVIEW_NATIVE_KICAD_ERC_REPORT_MAX_BYTES,
+    )?;
+    validate_sha256(&identity.run_sha256, "native KiCad ERC run SHA-256")
 }
 
 fn validate_request_contents(request: &AiReviewRequest) -> Result<(), String> {
@@ -993,7 +1192,7 @@ fn string_schema() -> Value {
 pub fn ai_review_request_json_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://github.com/penguin425/pcbex/schemas/ai-review-request-v2.json",
+        "$id": "https://github.com/penguin425/pcbex/schemas/ai-review-request-v3.json",
         "title": "pcbex AI schematic review request",
         "type": "object",
         "additionalProperties": false,
@@ -1004,7 +1203,7 @@ pub fn ai_review_request_json_schema() -> Value {
             "evidence_ids", "approval_policy"
         ],
         "properties": {
-            "schema_version": {"enum": [1, 2]},
+            "schema_version": {"enum": [1, 2, 3]},
             "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "schematic": schematic_json_schema(),
             "electrical_policy": electrical_policy_json_schema(),
@@ -1036,7 +1235,25 @@ pub fn ai_review_request_json_schema() -> Value {
             },
             {
                 "if": {"properties": {"schema_version": {"const": 2}}},
-                "then": {"required": ["artifact_binding"]}
+                "then": {
+                    "required": ["artifact_binding"],
+                    "properties": {
+                        "artifact_binding": {
+                            "properties": {"schema_version": {"const": 1}}
+                        }
+                    }
+                }
+            },
+            {
+                "if": {"properties": {"schema_version": {"const": 3}}},
+                "then": {
+                    "required": ["artifact_binding"],
+                    "properties": {
+                        "artifact_binding": {
+                            "properties": {"schema_version": {"const": 2}}
+                        }
+                    }
+                }
             }
         ],
         "$defs": {
@@ -1091,7 +1308,7 @@ pub fn ai_review_request_json_schema() -> Value {
                 "additionalProperties": false,
                 "required": ["schema_version", "generated_schematic", "pipeline"],
                 "properties": {
-                    "schema_version": {"const": 1},
+                    "schema_version": {"enum": [1, 2]},
                     "generated_schematic": {
                         "allOf": [
                             {"$ref": "#/$defs/exact_artifact_identity"},
@@ -1100,7 +1317,35 @@ pub fn ai_review_request_json_schema() -> Value {
                             }}}
                         ]
                     },
-                    "pipeline": {"$ref": "#/$defs/pipeline"}
+                    "pipeline": {"$ref": "#/$defs/pipeline"},
+                    "native_kicad_erc": {"$ref": "#/$defs/native_kicad_erc"}
+                },
+                "allOf": [
+                    {
+                        "if": {"properties": {"schema_version": {"const": 1}}},
+                        "then": {"not": {"required": ["native_kicad_erc"]}}
+                    },
+                    {
+                        "if": {"properties": {"schema_version": {"const": 2}}},
+                        "then": {"required": ["native_kicad_erc"]}
+                    }
+                ]
+            },
+            "native_kicad_erc": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["schema_version", "report", "run_sha256"],
+                "properties": {
+                    "schema_version": {"const": 1},
+                    "report": {
+                        "allOf": [
+                            {"$ref": "#/$defs/exact_artifact_identity"},
+                            {"properties": {"bytes": {
+                                "maximum": AI_REVIEW_NATIVE_KICAD_ERC_REPORT_MAX_BYTES
+                            }}}
+                        ]
+                    },
+                    "run_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
                 }
             }
         }
@@ -1285,6 +1530,18 @@ mod tests {
                 },
                 run_sha256: "f".repeat(64),
             },
+            native_kicad_erc: None,
+        }
+    }
+
+    fn native_kicad_erc_identity() -> NativeKicadErcIdentity {
+        NativeKicadErcIdentity {
+            schema_version: 1,
+            report: ExactArtifactIdentity {
+                bytes: 404,
+                sha256: "1".repeat(64),
+            },
+            run_sha256: "2".repeat(64),
         }
     }
 
@@ -1323,6 +1580,10 @@ mod tests {
         assert_ne!(bound.request_sha256, request.request_sha256);
         assert_eq!(
             bound.request_sha256,
+            "90580c5ede53b42a1bf1acade6dcf09759ac55144c371f6fc4623c4c19c169b8"
+        );
+        assert_eq!(
+            bound.request_sha256,
             ai_review_request_sha256(&bound).unwrap()
         );
         assert!(
@@ -1333,6 +1594,119 @@ mod tests {
         assert_eq!(
             bound,
             bind_ai_review_request(&request, binding.clone()).unwrap()
+        );
+    }
+
+    #[test]
+    fn binds_v2_request_to_native_kicad_erc_v3() {
+        let request = bind_ai_review_request(&approved_request(), artifact_binding()).unwrap();
+        let native = native_kicad_erc_identity();
+        let bound = bind_native_kicad_erc_to_ai_review_request(&request, &native).unwrap();
+
+        assert_eq!(bound.schema_version, 3);
+        assert_eq!(bound.artifact_binding.as_ref().unwrap().schema_version, 2);
+        assert_eq!(
+            bound.artifact_binding.as_ref().unwrap().native_kicad_erc,
+            Some(native.clone())
+        );
+        assert_eq!(
+            bound.request_sha256,
+            ai_review_request_sha256(&bound).unwrap()
+        );
+
+        let encoded = serde_json::to_vec(&bound).unwrap();
+        let reparsed: AiReviewRequest = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(reparsed, bound);
+        assert_eq!(
+            ai_review_request_sha256(&reparsed).unwrap(),
+            bound.request_sha256
+        );
+    }
+
+    #[test]
+    fn native_binding_version_mixes_and_missing_or_null_evidence_fail_closed() {
+        let request_v1 = approved_request();
+        let binding_v1 = artifact_binding();
+        let native = native_kicad_erc_identity();
+
+        let mut request_with_native_v1 = request_v1.clone();
+        let mut binding_with_native_v1 = binding_v1.clone();
+        binding_with_native_v1.native_kicad_erc = Some(native.clone());
+        request_with_native_v1.artifact_binding = Some(binding_with_native_v1);
+        assert!(ai_review_request_sha256(&request_with_native_v1).is_err());
+
+        let request_v2 = bind_ai_review_request(&request_v1, binding_v1).unwrap();
+        let mut request_v2_with_native_binding = request_v2.clone();
+        request_v2_with_native_binding
+            .artifact_binding
+            .as_mut()
+            .unwrap()
+            .schema_version = 2;
+        request_v2_with_native_binding.request_sha256 =
+            request_body_sha256(&request_v2_with_native_binding).unwrap();
+        assert!(ai_review_request_sha256(&request_v2_with_native_binding).is_err());
+
+        let mut request_v3_missing_binding = request_v2.clone();
+        request_v3_missing_binding.schema_version = 3;
+        request_v3_missing_binding.request_sha256 =
+            request_body_sha256(&request_v3_missing_binding).unwrap();
+        assert!(ai_review_request_sha256(&request_v3_missing_binding).is_err());
+
+        let mut request_v3_missing_native =
+            bind_native_kicad_erc_to_ai_review_request(&request_v2, &native).unwrap();
+        request_v3_missing_native
+            .artifact_binding
+            .as_mut()
+            .unwrap()
+            .native_kicad_erc = None;
+        request_v3_missing_native.request_sha256 =
+            request_body_sha256(&request_v3_missing_native).unwrap();
+        assert!(ai_review_request_sha256(&request_v3_missing_native).is_err());
+
+        let mut json_v3 = serde_json::to_value(
+            bind_native_kicad_erc_to_ai_review_request(&request_v2, &native).unwrap(),
+        )
+        .unwrap();
+        json_v3["artifact_binding"]["native_kicad_erc"] = Value::Null;
+        assert!(serde_json::from_value::<AiReviewRequest>(json_v3).is_err());
+    }
+
+    #[test]
+    fn native_binding_unknown_fields_and_size_limits_fail_closed() {
+        let request_v2 = bind_ai_review_request(&approved_request(), artifact_binding()).unwrap();
+        let native = native_kicad_erc_identity();
+        let mut unknown = serde_json::to_value(&native).unwrap();
+        unknown["unknown"] = json!(true);
+        assert!(serde_json::from_value::<NativeKicadErcIdentity>(unknown).is_err());
+
+        let mut unknown_binding = serde_json::to_value(&request_v2).unwrap();
+        unknown_binding["artifact_binding"]["native_kicad_erc"] =
+            serde_json::to_value(&native).unwrap();
+        unknown_binding["artifact_binding"]["native_kicad_erc"]["unknown"] = json!(true);
+        unknown_binding["schema_version"] = json!(3);
+        assert!(serde_json::from_value::<AiReviewRequest>(unknown_binding).is_err());
+
+        let mut at_limit = native.clone();
+        at_limit.report.bytes = AI_REVIEW_NATIVE_KICAD_ERC_REPORT_MAX_BYTES;
+        assert!(bind_native_kicad_erc_to_ai_review_request(&request_v2, &at_limit).is_ok());
+
+        let mut too_large = at_limit;
+        too_large.report.bytes += 1;
+        assert!(bind_native_kicad_erc_to_ai_review_request(&request_v2, &too_large).is_err());
+
+        let schema = ai_review_request_json_schema();
+        assert_eq!(
+            schema["$id"],
+            json!("https://github.com/penguin425/pcbex/schemas/ai-review-request-v3.json")
+        );
+        assert_eq!(
+            schema["properties"]["schema_version"]["enum"],
+            json!([1, 2, 3])
+        );
+        assert_eq!(
+            schema["$defs"]["native_kicad_erc"]["properties"]["report"]["allOf"][1]["properties"]["bytes"]
+                ["maximum"],
+            json!(AI_REVIEW_NATIVE_KICAD_ERC_REPORT_MAX_BYTES)
         );
     }
 
@@ -1371,6 +1745,11 @@ mod tests {
         let mut bad_binding_schema = binding.clone();
         bad_binding_schema.schema_version = 2;
         assert!(bind_ai_review_request(&request, bad_binding_schema).is_err());
+
+        let mut native_binding = binding.clone();
+        native_binding.schema_version = 2;
+        native_binding.native_kicad_erc = Some(native_kicad_erc_identity());
+        assert!(bind_ai_review_request(&request, native_binding).is_err());
 
         let mut unknown = serde_json::to_value(binding).unwrap();
         unknown["pipeline"]["unknown"] = json!(true);

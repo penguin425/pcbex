@@ -60,6 +60,94 @@ PY
 jq -e '.approved == true and .counts.errors == 0' \
   "$generated_handoff" >/dev/null
 
+# Native KiCad ERC is a second, independent electrical gate.  The runner uses
+# a private staged directory and an error-only invocation, so KiCad's
+# timestamp/source-path fields cannot make the retained evidence unstable.
+native_erc_first="$output_directory/circuit-spec-v2.native-erc.first.json"
+native_erc_second="$output_directory/circuit-spec-v2.native-erc.second.json"
+"$pcbex_binary" run-native-kicad-erc "$generated_schematic" \
+  --output "$native_erc_first" --require-approved
+"$pcbex_binary" run-native-kicad-erc "$generated_schematic" \
+  --output "$native_erc_second" --require-approved
+cmp "$native_erc_first" "$native_erc_second"
+python3 - "$generated_schematic" "$native_erc_first" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+schematic = Path(sys.argv[1])
+report_path = Path(sys.argv[2])
+source = schematic.read_bytes()
+report = json.loads(report_path.read_text(encoding="utf-8"))
+assert set(report) == {
+    "schema_version", "engine", "engine_version", "kicad_version", "source",
+    "invocation", "ignored_checks", "findings", "error_count", "approved",
+    "run_sha256",
+}
+assert report["schema_version"] == 1
+assert report["engine"] == "pcbex"
+assert report["engine_version"]
+assert report["kicad_version"]
+assert report["source"] == {
+    "bytes": len(source),
+    "sha256": hashlib.sha256(source).hexdigest(),
+}
+assert report["invocation"] == {
+    "command": "sch erc",
+    "format": "json",
+    "units": "mm",
+    "severity": "error",
+    "exit_code_violations": True,
+}
+assert isinstance(report["ignored_checks"], list)
+assert report["findings"] == []
+assert report["error_count"] == 0
+assert report["approved"] is True
+assert len(report["run_sha256"]) == 64
+assert all(character in "0123456789abcdef" for character in report["run_sha256"])
+PY
+
+# A known-bad schematic must still publish its rejected evidence before the
+# --require-approved gate returns non-zero.  This protects CI diagnostics and
+# prevents a failed check from being mistaken for a missing report.
+native_erc_rejected="$output_directory/simple.native-erc.json"
+if "$pcbex_binary" run-native-kicad-erc examples/simple.kicad_sch \
+  --output "$native_erc_rejected" --require-approved; then
+  echo "expected native KiCad ERC rejection for examples/simple.kicad_sch" >&2
+  exit 1
+fi
+test -s "$native_erc_rejected"
+jq -e '
+  .schema_version == 1 and
+  .engine == "pcbex" and
+  .approved == false and
+  (.error_count | type == "number" and . > 0) and
+  (.findings | length) == .error_count and
+  .invocation.severity == "error"
+' "$native_erc_rejected" >/dev/null
+
+native_erc_schema="$output_directory/native-kicad-erc.schema.json"
+"$pcbex_binary" native-kicad-erc-report-schema --output "$native_erc_schema"
+python3 - "$native_erc_schema" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+schema = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert schema["$id"].endswith("/schemas/native-kicad-erc-v1.json")
+assert schema["additionalProperties"] is False
+assert {
+    "schema_version", "engine", "engine_version", "kicad_version", "source",
+    "invocation", "ignored_checks", "findings", "error_count", "approved",
+    "run_sha256",
+}.issubset(schema["required"])
+assert schema["properties"]["schema_version"] == {"const": 1}
+assert schema["properties"]["engine"] == {"const": "pcbex"}
+assert schema["properties"]["invocation"]["additionalProperties"] is False
+assert schema["$defs"]["finding"]["properties"]["severity"] == {"const": "error"}
+PY
+
 for fixture in "${fixtures[@]}"; do
   name=$(basename "$fixture" .kicad_pcb)
   first="$output_directory/$name.routed.kicad_pcb"

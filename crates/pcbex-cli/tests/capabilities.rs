@@ -176,6 +176,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "factory-feedback-loop",
         "deterministic-pipeline-plan-schema",
         "deterministic-pipeline-report-schema",
+        "native-kicad-erc-report-schema",
+        "run-native-kicad-erc",
         "run-deterministic-pipeline",
         "pipeline-schema",
         "pipeline-verify",
@@ -245,6 +247,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "C11 firmware source bundle",
         "C++17 firmware source bundle",
         "Python host pinout helper",
+        "Native KiCad schematic ERC report v1",
     ] {
         assert!(
             report["output_contracts"]

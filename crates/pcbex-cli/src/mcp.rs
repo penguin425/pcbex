@@ -460,6 +460,7 @@ impl McpServer {
                     | "verify_circuit_kicad_board_binding"
                     | "pipeline_verify"
                     | "run_deterministic_pipeline"
+                    | "run_native_kicad_erc"
             )
         ) {
             return error_response(
@@ -1036,6 +1037,25 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                 "properties": {
                     "plan": {"type": "string"},
                     "output": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "run_native_kicad_erc",
+            "Run native KiCad ERC",
+            "Run KiCad's native electrical rules checker against a schematic and retain its closed, digest-bound report, including rejected reports before an optional approval gate fails.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "output"],
+                "properties": {
+                    "input": {"type": "string"},
+                    "output": {"type": "string"},
+                    "kicad_cli": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 }
             }),
@@ -3015,7 +3035,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "prepare_schematic_review",
             "Prepare AI schematic review",
-            "Recompute and bind schematic, electrical, simulation, and requirement evidence into a review request; an optional deterministic plan/report pair creates a live-verified artifact-bound request.",
+            "Recompute and bind schematic, electrical, simulation, and requirement evidence into a review request; a deterministic plan/report pair creates a live-verified schema-v2 artifact-bound request, while an additional native KiCad ERC report creates schema-v3 evidence.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3038,17 +3058,31 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "allow_no_simulation": {"type": "boolean", "default": false},
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
+                    "native_kicad_erc_report": {"type": "string"},
+                    "kicad_cli": {"type": "string"},
                     "output": {"type": "string"},
                     "session_output": {"type": "string"}
                 },
                 "allOf": [{
                     "oneOf": [
-                        {"required": ["deterministic_pipeline_plan", "deterministic_pipeline_report"]},
+                        {
+                            "required": ["deterministic_pipeline_plan", "deterministic_pipeline_report"],
+                            "not": {"required": ["native_kicad_erc_report"]}
+                        },
                         {"not": {"anyOf": [
                             {"required": ["deterministic_pipeline_plan"]},
-                            {"required": ["deterministic_pipeline_report"]}
-                        ]}}
+                            {"required": ["deterministic_pipeline_report"]},
+                            {"required": ["native_kicad_erc_report"]}
+                        ]}},
+                        {"required": [
+                            "deterministic_pipeline_plan",
+                            "deterministic_pipeline_report",
+                            "native_kicad_erc_report"
+                        ]}
                     ]
+                }, {
+                    "if": {"required": ["kicad_cli"]},
+                    "then": {"required": ["native_kicad_erc_report"]}
                 }]
             }),
             false,
@@ -3058,7 +3092,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "sign_schematic_approval",
             "Sign AI schematic approval",
-            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Request-schema-v2 artifacts are rerun and revalidated before the private key is read.",
+            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Request-schema-v2/v3 artifacts are rerun and revalidated, including native KiCad ERC evidence, before the private key is read.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3074,22 +3108,37 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "generated_schematic": {"type": "string"},
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
+                    "native_kicad_erc_report": {"type": "string"},
+                    "kicad_cli": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 },
                 "allOf": [{
                     "oneOf": [
-                        {"required": [
-                            "generated_schematic",
-                            "deterministic_pipeline_plan",
-                            "deterministic_pipeline_report"
-                        ]},
+                        {
+                            "required": [
+                                "generated_schematic",
+                                "deterministic_pipeline_plan",
+                                "deterministic_pipeline_report"
+                            ],
+                            "not": {"required": ["native_kicad_erc_report"]}
+                        },
                         {"not": {"anyOf": [
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
-                            {"required": ["deterministic_pipeline_report"]}
-                        ]}}
+                            {"required": ["deterministic_pipeline_report"]},
+                            {"required": ["native_kicad_erc_report"]}
+                        ]}},
+                        {"required": [
+                            "generated_schematic",
+                            "deterministic_pipeline_plan",
+                            "deterministic_pipeline_report",
+                            "native_kicad_erc_report"
+                        ]}
                     ]
+                }, {
+                    "if": {"required": ["kicad_cli"]},
+                    "then": {"required": ["native_kicad_erc_report"]}
                 }]
             }),
             false,
@@ -3099,7 +3148,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_schematic_approval",
             "Verify AI schematic approval",
-            "Strictly verify an Ed25519 approval against its exact request, AI response, and any live request-schema-v2 artifacts.",
+            "Strictly verify an Ed25519 approval against its exact request, AI response, and any live request-schema-v2/v3 artifacts, including native KiCad ERC evidence.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3118,21 +3167,36 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "generated_schematic": {"type": "string"},
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
+                    "native_kicad_erc_report": {"type": "string"},
+                    "kicad_cli": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 },
                 "allOf": [{
                     "oneOf": [
-                        {"required": [
-                            "generated_schematic",
-                            "deterministic_pipeline_plan",
-                            "deterministic_pipeline_report"
-                        ]},
+                        {
+                            "required": [
+                                "generated_schematic",
+                                "deterministic_pipeline_plan",
+                                "deterministic_pipeline_report"
+                            ],
+                            "not": {"required": ["native_kicad_erc_report"]}
+                        },
                         {"not": {"anyOf": [
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
-                            {"required": ["deterministic_pipeline_report"]}
-                        ]}}
+                            {"required": ["deterministic_pipeline_report"]},
+                            {"required": ["native_kicad_erc_report"]}
+                        ]}},
+                        {"required": [
+                            "generated_schematic",
+                            "deterministic_pipeline_plan",
+                            "deterministic_pipeline_report",
+                            "native_kicad_erc_report"
+                        ]}
                     ]
+                }, {
+                    "if": {"required": ["kicad_cli"]},
+                    "then": {"required": ["native_kicad_erc_report"]}
                 }]
             }),
             true,
@@ -3142,7 +3206,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_schematic_approval_quorum",
             "Verify AI schematic approval quorum",
-            "Verify independent signed reviews and any live request-schema-v2 artifacts against one bound request, then enforce approval, provider, and model thresholds.",
+            "Verify independent signed reviews and any live request-schema-v2/v3 artifacts, including native KiCad ERC evidence, against one bound request, then enforce approval, provider, and model thresholds.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3176,23 +3240,38 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "generated_schematic": {"type": "string"},
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
+                    "native_kicad_erc_report": {"type": "string"},
+                    "kicad_cli": {"type": "string"},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
                     "require_quorum": {"type": "boolean", "default": false}
                 },
                 "allOf": [{
                     "oneOf": [
-                        {"required": [
-                            "generated_schematic",
-                            "deterministic_pipeline_plan",
-                            "deterministic_pipeline_report"
-                        ]},
+                        {
+                            "required": [
+                                "generated_schematic",
+                                "deterministic_pipeline_plan",
+                                "deterministic_pipeline_report"
+                            ],
+                            "not": {"required": ["native_kicad_erc_report"]}
+                        },
                         {"not": {"anyOf": [
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
-                            {"required": ["deterministic_pipeline_report"]}
-                        ]}}
+                            {"required": ["deterministic_pipeline_report"]},
+                            {"required": ["native_kicad_erc_report"]}
+                        ]}},
+                        {"required": [
+                            "generated_schematic",
+                            "deterministic_pipeline_plan",
+                            "deterministic_pipeline_report",
+                            "native_kicad_erc_report"
+                        ]}
                     ]
+                }, {
+                    "if": {"required": ["kicad_cli"]},
+                    "then": {"required": ["native_kicad_erc_report"]}
                 }]
             }),
             false,
@@ -4657,6 +4736,7 @@ fn call_tool(
         "run_deterministic_pipeline" => {
             run_deterministic_pipeline_tool(arguments, cancellation)?
         }
+        "run_native_kicad_erc" => run_native_kicad_erc_tool(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
         "compare_manufacturing_feedback" => {
@@ -5745,6 +5825,48 @@ fn run_deterministic_pipeline_tool(
     Ok(execution_result(
         execution,
         json!({"plan": plan, "output": output, "report_summary": report_summary}),
+    ))
+}
+
+fn run_native_kicad_erc_tool(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &["input", "output", "kicad_cli", "require_approved"],
+    )?;
+    let input = required_string(&arguments, "input")?;
+    let output = required_string(&arguments, "output")?;
+    // Refuse stale evidence before starting the child so a rejected or
+    // cancelled native run can never be mistaken for a fresh report.
+    require_absent_outputs([Some(output.as_str())])?;
+    let mut command = vec![
+        "run-native-kicad-erc".to_string(),
+        input,
+        "--output".to_string(),
+        output.clone(),
+        // Native reports are allowed to exceed the MCP frame limit; the
+        // child therefore emits a compact authenticated summary for MCP.
+        "--mcp-echo-report-summary".to_string(),
+    ];
+    optional_option(&arguments, "kicad_cli", "--kicad-cli", &mut command)?;
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let report_summary = trusted_native_kicad_erc_summary(&execution, Path::new(&output));
+    let execution = require_retained_json(
+        execution,
+        &report_summary,
+        "native KiCad ERC output summary",
+    );
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report_summary": report_summary}),
     ))
 }
 
@@ -9563,6 +9685,8 @@ fn prepare_schematic_review(
             "allow_no_simulation",
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
+            "native_kicad_erc_report",
+            "kicad_cli",
             "output",
             "session_output",
         ],
@@ -9598,7 +9722,7 @@ fn prepare_schematic_review(
         "--allow-no-simulation",
         &mut command,
     )?;
-    append_complete_options(
+    append_native_ai_review_options(
         &arguments,
         &[
             (
@@ -9653,6 +9777,8 @@ fn sign_schematic_approval(
             "generated_schematic",
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
+            "native_kicad_erc_report",
+            "kicad_cli",
             "output",
             "require_approved",
         ],
@@ -9674,7 +9800,7 @@ fn sign_schematic_approval(
         output.clone(),
     ];
     optional_option(&arguments, "session", "--session", &mut command)?;
-    append_complete_options(
+    append_native_ai_review_options(
         &arguments,
         &[
             ("generated_schematic", "--generated-schematic"),
@@ -9720,6 +9846,8 @@ fn verify_schematic_approval(
             "generated_schematic",
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
+            "native_kicad_erc_report",
+            "kicad_cli",
             "require_approved",
         ],
     )?;
@@ -9737,7 +9865,7 @@ fn verify_schematic_approval(
     optional_option(&arguments, "public_key", "--public-key", &mut command)?;
     optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
     optional_option(&arguments, "session", "--session", &mut command)?;
-    append_complete_options(
+    append_native_ai_review_options(
         &arguments,
         &[
             ("generated_schematic", "--generated-schematic"),
@@ -9785,6 +9913,8 @@ fn verify_schematic_approval_quorum(
             "generated_schematic",
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
+            "native_kicad_erc_report",
+            "kicad_cli",
             "output",
             "summary_output",
             "require_quorum",
@@ -9858,7 +9988,7 @@ fn verify_schematic_approval_quorum(
         "--reviewer-routing-policy",
         &mut command,
     )?;
-    append_complete_options(
+    append_native_ai_review_options(
         &arguments,
         &[
             ("generated_schematic", "--generated-schematic"),
@@ -12623,6 +12753,105 @@ fn trusted_deterministic_pipeline_summary(execution: &Execution, path: &Path) ->
     summary
 }
 
+/// Verify the compact stdout bridge emitted by the native KiCad ERC child
+/// against a stable bounded read of its retained normalized report.  Native
+/// reports have a 32 MiB ceiling, so returning the complete document could
+/// exceed the 16 MiB MCP frame limit.
+fn trusted_native_kicad_erc_summary(execution: &Execution, path: &Path) -> Value {
+    const SUMMARY_FIELDS: [&str; 6] = [
+        "schema_version",
+        "approved",
+        "error_count",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+    ];
+
+    if execution.stdout.len() > MAX_MCP_PROCESS_MESSAGE_BYTES {
+        return Value::Null;
+    }
+    let summary = serde_json::from_slice::<Value>(&execution.stdout).unwrap_or(Value::Null);
+    let Some(object) = summary.as_object() else {
+        return Value::Null;
+    };
+    if object.len() != SUMMARY_FIELDS.len()
+        || SUMMARY_FIELDS
+            .iter()
+            .any(|field| !object.contains_key(*field))
+    {
+        return Value::Null;
+    }
+
+    let schema_version = object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .filter(|value| *value == 1);
+    let approved = object.get("approved").and_then(Value::as_bool);
+    let error_count = object.get("error_count").and_then(Value::as_u64);
+    let run_sha256 = object
+        .get("run_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let report_bytes = object
+        .get("report_bytes")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0);
+    let report_sha256 = object
+        .get("report_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let (
+        Some(schema_version),
+        Some(approved),
+        Some(error_count),
+        Some(run_sha256),
+        Some(report_bytes),
+        Some(report_sha256),
+    ) = (
+        schema_version,
+        approved,
+        error_count,
+        run_sha256,
+        report_bytes,
+        report_sha256,
+    )
+    else {
+        return Value::Null;
+    };
+
+    if report_bytes > crate::native_kicad_erc::MAX_REPORT_BYTES {
+        return Value::Null;
+    }
+    let Ok(retained) =
+        crate::bounded_io::read_with_limit(path, crate::native_kicad_erc::MAX_REPORT_BYTES)
+    else {
+        return Value::Null;
+    };
+    if retained.len() as u64 != report_bytes || sha256_hex(&retained) != report_sha256 {
+        return Value::Null;
+    }
+    let Ok(report) = serde_json::from_slice::<Value>(&retained) else {
+        return Value::Null;
+    };
+    let Some(report_object) = report.as_object() else {
+        return Value::Null;
+    };
+    if report_object.get("schema_version").and_then(Value::as_u64) != Some(schema_version)
+        || report_object.get("approved").and_then(Value::as_bool) != Some(approved)
+        || report_object.get("error_count").and_then(Value::as_u64) != Some(error_count)
+        || report_object.get("run_sha256").and_then(Value::as_str) != Some(run_sha256)
+        || report_object
+            .get("findings")
+            .and_then(Value::as_array)
+            .is_none_or(|findings| findings.len() as u64 != error_count)
+        || approved != (error_count == 0)
+    {
+        return Value::Null;
+    }
+
+    summary
+}
+
 fn is_lowercase_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -12757,6 +12986,44 @@ fn append_complete_options(
     require_complete_option_set(arguments, &names, label)?;
     for (name, option) in options {
         optional_option(arguments, name, option, command)?;
+    }
+    Ok(())
+}
+
+/// Append the optional AI-review artifact identity flags while enforcing the
+/// schema-version groups shared by prepare/sign/verify/quorum.  Native ERC
+/// evidence upgrades a complete deterministic artifact set to schema v3; a
+/// KiCad executable is meaningful only for that native evidence path.
+fn append_native_ai_review_options(
+    arguments: &Map<String, Value>,
+    options: &[(&str, &str)],
+    label: &str,
+    command: &mut Vec<String>,
+) -> std::result::Result<(), Value> {
+    let native_supplied = arguments.contains_key("native_kicad_erc_report");
+    let supplied = options
+        .iter()
+        .filter(|(name, _)| arguments.contains_key(*name))
+        .count();
+    if native_supplied && supplied != options.len() {
+        return Err(json!({
+            "detail": format!("{label} and native_kicad_erc_report must be supplied together")
+        }));
+    }
+    append_complete_options(arguments, options, label, command)?;
+    if arguments.contains_key("kicad_cli") && !native_supplied {
+        return Err(json!({
+            "detail": "kicad_cli requires native_kicad_erc_report"
+        }));
+    }
+    if native_supplied {
+        optional_option(
+            arguments,
+            "native_kicad_erc_report",
+            "--native-kicad-erc-report",
+            command,
+        )?;
+        optional_option(arguments, "kicad_cli", "--kicad-cli", command)?;
     }
     Ok(())
 }
@@ -13116,6 +13383,102 @@ mod tests {
     }
 
     #[test]
+    fn native_ai_review_artifact_options_forward_and_require_complete_groups() {
+        let complete = json!({
+            "generated_schematic": "generated.kicad_sch",
+            "deterministic_pipeline_plan": "plan.json",
+            "deterministic_pipeline_report": "report.json",
+            "native_kicad_erc_report": "native-erc.json",
+            "kicad_cli": "kicad-cli"
+        });
+        let mut command = vec!["verify-ai-quorum".to_string()];
+        append_native_ai_review_options(
+            complete.as_object().unwrap(),
+            &[
+                ("generated_schematic", "--generated-schematic"),
+                (
+                    "deterministic_pipeline_plan",
+                    "--deterministic-pipeline-plan",
+                ),
+                (
+                    "deterministic_pipeline_report",
+                    "--deterministic-pipeline-report",
+                ),
+            ],
+            "generated_schematic, deterministic_pipeline_plan, and deterministic_pipeline_report",
+            &mut command,
+        )
+        .unwrap();
+        assert_eq!(
+            command,
+            vec![
+                "verify-ai-quorum",
+                "--generated-schematic",
+                "generated.kicad_sch",
+                "--deterministic-pipeline-plan",
+                "plan.json",
+                "--deterministic-pipeline-report",
+                "report.json",
+                "--native-kicad-erc-report",
+                "native-erc.json",
+                "--kicad-cli",
+                "kicad-cli"
+            ]
+        );
+
+        let partial_native = json!({
+            "generated_schematic": "generated.kicad_sch",
+            "deterministic_pipeline_plan": "plan.json",
+            "native_kicad_erc_report": "native-erc.json"
+        });
+        let error = append_native_ai_review_options(
+            partial_native.as_object().unwrap(),
+            &[
+                ("generated_schematic", "--generated-schematic"),
+                (
+                    "deterministic_pipeline_plan",
+                    "--deterministic-pipeline-plan",
+                ),
+                (
+                    "deterministic_pipeline_report",
+                    "--deterministic-pipeline-report",
+                ),
+            ],
+            "generated_schematic, deterministic_pipeline_plan, and deterministic_pipeline_report",
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("must be supplied together")
+        );
+
+        let cli_without_native = json!({"kicad_cli": "kicad-cli"});
+        let error = append_native_ai_review_options(
+            cli_without_native.as_object().unwrap(),
+            &[
+                (
+                    "deterministic_pipeline_plan",
+                    "--deterministic-pipeline-plan",
+                ),
+                (
+                    "deterministic_pipeline_report",
+                    "--deterministic-pipeline-report",
+                ),
+            ],
+            "deterministic_pipeline_plan and deterministic_pipeline_report",
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error["detail"],
+            "kicad_cli requires native_kicad_erc_report"
+        );
+    }
+
+    #[test]
     fn ai_review_handlers_reject_partial_artifact_binding_before_dispatch() {
         let prepare = prepare_schematic_review(
             json!({
@@ -13246,7 +13609,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 147);
+        assert_eq!(tools.len(), 148);
         let named = |name: &str| {
             tools
                 .iter()
@@ -13409,6 +13772,18 @@ mod tests {
         );
         assert_eq!(
             named("run_deterministic_pipeline")["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named("run_native_kicad_erc")["inputSchema"]["properties"]["kicad_cli"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("run_native_kicad_erc")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("run_native_kicad_erc")["annotations"]["destructiveHint"],
             true
         );
         assert_eq!(
@@ -14375,6 +14750,57 @@ mod tests {
         std::fs::write(&report_path, b"{}\n").unwrap();
         assert_eq!(
             trusted_deterministic_pipeline_summary(&execution, &report_path),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn native_kicad_erc_summary_is_digest_bound_and_bounded() {
+        let directory = tempfile::tempdir().unwrap();
+        let report_path = directory.path().join("native-erc.json");
+        let report = json!({
+            "schema_version": 1,
+            "engine": "pcbex",
+            "engine_version": "1.424.0",
+            "kicad_version": "9.0.0",
+            "source": {"bytes": 1, "sha256": "a".repeat(64)},
+            "invocation": {
+                "command": "sch erc",
+                "format": "json",
+                "units": "mm",
+                "severity": "error",
+                "exit_code_violations": true
+            },
+            "ignored_checks": [],
+            "findings": [],
+            "error_count": 0,
+            "approved": true,
+            "run_sha256": "b".repeat(64)
+        });
+        let rendered = format!("{}\n", serde_json::to_string(&report).unwrap());
+        std::fs::write(&report_path, rendered.as_bytes()).unwrap();
+        let summary = json!({
+            "schema_version": 1,
+            "approved": true,
+            "error_count": 0,
+            "run_sha256": "b".repeat(64),
+            "report_bytes": rendered.len(),
+            "report_sha256": sha256_hex(rendered.as_bytes())
+        });
+        let execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stdout: serde_json::to_vec(&summary).unwrap(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            trusted_native_kicad_erc_summary(&execution, &report_path),
+            summary
+        );
+
+        std::fs::write(&report_path, b"{}\n").unwrap();
+        assert_eq!(
+            trusted_native_kicad_erc_summary(&execution, &report_path),
             Value::Null
         );
     }

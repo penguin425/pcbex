@@ -2198,6 +2198,211 @@ fn ai_review_artifact_binding_revalidates_the_exact_pipeline_and_schematic() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn ai_review_v3_replays_exact_native_kicad_erc_evidence() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(temporary.path());
+    let schematic = temporary.path().join("design.kicad_sch");
+    let policy = temporary.path().join("electrical-policy.json");
+    let review = temporary.path().join("electrical-review.json");
+    let pipeline_report = temporary.path().join("pipeline-report.json");
+    let native_report = temporary.path().join("native-erc.json");
+    let fake_kicad = temporary.path().join("fake-kicad-cli");
+    fs::write(
+        &fake_kicad,
+        br##"#!/bin/sh
+set -eu
+report=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output' ]; then
+    report="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+test -n "$report"
+printf '%s\n' '{"$schema":"https://schemas.kicad.org/erc.v1.json","coordinate_units":"mm","date":"2026-08-05T00:00:00","ignored_checks":[],"included_severities":["error"],"kicad_version":"10.0.5-test","sheets":[{"path":"/","uuid_path":"/root","violations":[]}],"source":"input.kicad_sch"}' > "$report"
+"##,
+    )
+    .unwrap();
+    fs::set_permissions(&fake_kicad, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let pipeline = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&pipeline_report)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&pipeline, "pipeline for schema-v3 AI review");
+
+    let native = Command::new(binary())
+        .arg("run-native-kicad-erc")
+        .arg(&schematic)
+        .arg("--output")
+        .arg(&native_report)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&native, "native ERC for schema-v3 AI review");
+    let native_value = read_json(&native_report);
+    assert_eq!(native_value["approved"], true);
+    assert_eq!(native_value["error_count"], 0);
+
+    let request = temporary.path().join("request-v3.json");
+    let prepared = Command::new(binary())
+        .arg("prepare-ai-review")
+        .arg(&schematic)
+        .arg("--electrical-review")
+        .arg(&review)
+        .arg("--policy")
+        .arg(&policy)
+        .arg("--requirement")
+        .arg("power=Power input treatment is intentional")
+        .arg("--allow-no-simulation")
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--output")
+        .arg(&request)
+        .output()
+        .unwrap();
+    assert_success(&prepared, "prepare schema-v3 AI review");
+    let request_value = read_json(&request);
+    assert_eq!(request_value["schema_version"], 3);
+    let binding = &request_value["artifact_binding"];
+    assert_eq!(binding["schema_version"], 2);
+    assert_eq!(binding["native_kicad_erc"]["schema_version"], 1);
+    let native_bytes = fs::read(&native_report).unwrap();
+    assert_eq!(
+        binding["native_kicad_erc"]["report"]["bytes"],
+        native_bytes.len()
+    );
+    assert_eq!(
+        binding["native_kicad_erc"]["report"]["sha256"],
+        sha256(&native_bytes)
+    );
+    assert_eq!(
+        binding["native_kicad_erc"]["run_sha256"],
+        native_value["run_sha256"]
+    );
+
+    let response = temporary.path().join("response-v3.json");
+    write_json(
+        &response,
+        &json!({
+            "schema_version": 1,
+            "request_sha256": request_value["request_sha256"],
+            "model": {"provider": "test-provider", "model": "native-reviewer", "version": "1"},
+            "decision": "approve",
+            "summary": "The deterministic and native electrical evidence passes.",
+            "requirements": [{
+                "id": "power",
+                "status": "pass",
+                "rationale": "The exact native ERC evidence reports no errors.",
+                "evidence_refs": ["electrical-review"]
+            }],
+            "risks": []
+        }),
+    );
+    let private_key = temporary.path().join("approval.key");
+    let public_key = temporary.path().join("approval.pub");
+    let keygen = Command::new(binary())
+        .arg("approval-keygen")
+        .arg("--private-key")
+        .arg(&private_key)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert_success(&keygen, "approval-keygen for schema-v3 AI review");
+
+    let approval = temporary.path().join("approval-v3.json");
+    let signed = Command::new(binary())
+        .arg("sign-ai-review")
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--private-key")
+        .arg(&private_key)
+        .arg("--signer-id")
+        .arg("native-binding-test")
+        .arg("--output")
+        .arg(&approval)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&signed, "sign schema-v3 AI review");
+
+    let verified = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--public-key")
+        .arg(&public_key)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&verified, "verify schema-v3 AI approval");
+
+    let mut changed_native_report = native_bytes.clone();
+    changed_native_report.push(b'\n');
+    fs::write(&native_report, changed_native_report).unwrap();
+    let changed = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert!(!changed.status.success());
+    assert!(String::from_utf8_lossy(&changed.stderr).contains("retained native KiCad ERC report"));
+}
+
 #[test]
 fn deterministic_pipeline_runner_retains_digest_rejection_and_preflights_output() {
     let temporary = tempfile::tempdir().unwrap();

@@ -284,6 +284,35 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertIn("The response schema remains v1", prompts[0])
 
+    @staticmethod
+    def _bound_review_v3_fixture():
+        request, response = AdapterTests._bound_review_fixture()
+        request["schema_version"] = 3
+        request["artifact_binding"]["schema_version"] = 2
+        request["artifact_binding"]["native_kicad_erc"] = {
+            "schema_version": 1,
+            "report": {"bytes": 512, "sha256": "1" * 64},
+            "run_sha256": "2" * 64,
+        }
+        return request, response
+
+    def test_schematic_review_adapter_accepts_bound_v3_native_kicad_erc(self):
+        request, response = self._bound_review_v3_fixture()
+        prompts: list[str] = []
+        result = review_schematic_with_llm(
+            request,
+            lambda prompt: (prompts.append(prompt), json.dumps(response))[1],
+        )
+        self.assertEqual(result["schema_version"], 1)
+        self.assertIn(
+            "schema-v3 request, the native KiCad ERC report identity and run digest",
+            prompts[0],
+        )
+        self.assertIn(
+            "The response schema remains v1 even when the request is schema v2 or schema v3",
+            prompts[0],
+        )
+
     def test_schematic_review_adapter_rejects_v1_artifact_binding_presence(self):
         request, _response = self._managed_review_fixture()
         for binding in (None, {}):
@@ -317,6 +346,63 @@ class AdapterTests(unittest.TestCase):
                 malformed = {**request, "artifact_binding": binding}
                 with self.assertRaises(ReviewError):
                     review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_mixed_artifact_binding_versions(self):
+        request, _response = self._bound_review_v3_fixture()
+        cases = {
+            "v3 request with v1 binding": {
+                **request,
+                "artifact_binding": {
+                    key: value
+                    for key, value in request["artifact_binding"].items()
+                    if key != "native_kicad_erc"
+                },
+            },
+            "v2 request with v2 binding": {
+                **request,
+                "schema_version": 2,
+            },
+        }
+        for name, malformed in cases.items():
+            with self.subTest(case=name), self.assertRaises(ReviewError):
+                review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_malformed_v3_native_binding(self):
+        request, _response = self._bound_review_v3_fixture()
+        native = request["artifact_binding"]["native_kicad_erc"]
+        cases = {
+            "null native binding": None,
+            "unknown native field": {**native, "unexpected": True},
+            "wrong native schema": {**native, "schema_version": 2},
+            "null report": {**native, "report": None},
+            "unknown report field": {
+                **native,
+                "report": {**native["report"], "path": "erc.json"},
+            },
+            "boolean report bytes": {
+                **native,
+                "report": {**native["report"], "bytes": False},
+            },
+            "noncanonical native run digest": {
+                **native,
+                "run_sha256": "A" * 64,
+            },
+        }
+        for name, value in cases.items():
+            with self.subTest(case=name):
+                malformed = json.loads(json.dumps(request))
+                malformed["artifact_binding"]["native_kicad_erc"] = value
+                with self.assertRaises(ReviewError):
+                    review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_oversize_v3_native_report(self):
+        request, _response = self._bound_review_v3_fixture()
+        malformed = json.loads(json.dumps(request))
+        malformed["artifact_binding"]["native_kicad_erc"]["report"]["bytes"] = (
+            32 * 1024 * 1024 + 1
+        )
+        with self.assertRaises(ReviewError):
+            review_schematic_with_llm(malformed, lambda _prompt: "{}")
 
     def test_schematic_review_adapter_rejects_oversize_and_non_boolean_bytes(self):
         request, _response = self._bound_review_fixture()

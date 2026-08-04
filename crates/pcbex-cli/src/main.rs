@@ -80,17 +80,18 @@ use pcbex_kicad::{
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
     approval_public_key, approval_transparency_log_json_schema, approval_transparency_log_sha256,
     audit_approval_log_gossip_organization_registry_history, bind_ai_review_request,
-    build_ai_review_request, build_ai_review_session, check_schematic,
-    circuit_kicad_board_binding_report_json_schema, circuit_kicad_handoff_report_json_schema,
-    circuit_spec_check_json_schema, circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch,
-    compare_electrical_reviews, compare_schematics, create_approval_log_anchor_proof,
-    create_approval_log_consistency_proof, electrical_explanation_json_schema,
-    electrical_policy_json_schema, electrical_review_comparison_json_schema,
-    electrical_review_json_schema, electrical_review_to_junit, electrical_review_to_sarif,
-    electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
-    explain_electrical_review, human_escalation_report_json_schema, import as import_kicad,
-    import_schematic, manufacturing_gerber_layers, manufacturing_parts,
-    new_approval_log_gossip_observer_trust_state, new_approval_log_gossip_organization_registry,
+    bind_native_kicad_erc_to_ai_review_request, build_ai_review_request, build_ai_review_session,
+    check_schematic, circuit_kicad_board_binding_report_json_schema,
+    circuit_kicad_handoff_report_json_schema, circuit_spec_check_json_schema,
+    circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch, compare_electrical_reviews,
+    compare_schematics, create_approval_log_anchor_proof, create_approval_log_consistency_proof,
+    electrical_explanation_json_schema, electrical_policy_json_schema,
+    electrical_review_comparison_json_schema, electrical_review_json_schema,
+    electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
+    electrical_waiver_set_json_schema, explain_electrical_review,
+    human_escalation_report_json_schema, import as import_kicad, import_schematic,
+    manufacturing_gerber_layers, manufacturing_parts, new_approval_log_gossip_observer_trust_state,
+    new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
     parse_and_check_circuit_spec_v2, parse_circuit_spec_v2, parse_electrical_policy,
@@ -172,6 +173,7 @@ mod manufacturing_feedback;
 mod manufacturing_limits;
 mod manufacturing_package;
 mod mcp;
+mod native_kicad_erc;
 mod physical_profile;
 mod pipeline;
 mod policy_deployment;
@@ -237,6 +239,10 @@ use manufacturing_package::{
     KiCadIdentity, KiCadProjectInput, collect_staged_artifacts, normalize_kicad_artifacts,
     prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
     write_manufacturing_package_with_workspace_reservation,
+};
+use native_kicad_erc::{
+    native_kicad_erc_report_schema, render_native_kicad_erc_report, run_native_kicad_erc,
+    verify_native_kicad_erc_report,
 };
 use pipeline::{
     PipelineInputs, pipeline_factory_gate_schema, pipeline_gate_schema, verify_pipeline,
@@ -806,6 +812,28 @@ enum Command {
     DeterministicPipelineReportSchema {
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+    /// Print the closed normalized native KiCad schematic ERC report JSON Schema.
+    NativeKicadErcReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Run KiCad's native schematic ERC in an isolated, bounded environment.
+    RunNativeKicadErc {
+        /// Exact `.kicad_sch` source to stage and check.
+        input: PathBuf,
+        /// New normalized report path; existing, aliased, or symlinked destinations are refused.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// KiCad CLI executable or path. The command is invoked directly without a shell.
+        #[arg(long, default_value = "kicad-cli")]
+        kicad_cli: PathBuf,
+        /// Fail after retaining the report when native ERC finds an electrical error.
+        #[arg(long)]
+        require_approved: bool,
+        /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
+        #[arg(long, hide = true)]
+        mcp_echo_report_summary: bool,
     },
     /// Snapshot and verify one digest-bound hardware pipeline plan without side effects.
     RunDeterministicPipeline {
@@ -3272,6 +3300,16 @@ enum Command {
         /// Exact retained runner report; requires the matching plan.
         #[arg(long, value_name = "PATH", requires = "deterministic_pipeline_plan")]
         deterministic_pipeline_report: Option<PathBuf>,
+        /// Exact normalized native KiCad ERC report; it is rerun before request creation.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["deterministic_pipeline_plan", "deterministic_pipeline_report"]
+        )]
+        native_kicad_erc_report: Option<PathBuf>,
+        /// KiCad CLI executable used to reproduce native ERC evidence.
+        #[arg(long, value_name = "PATH", requires = "native_kicad_erc_report")]
+        kicad_cli: Option<PathBuf>,
         #[arg(long, conflicts_with = "policy_pack")]
         policy: Option<PathBuf>,
         #[arg(long = "simulation-evidence")]
@@ -3323,6 +3361,20 @@ enum Command {
             requires_all = ["generated_schematic", "deterministic_pipeline_plan"]
         )]
         deterministic_pipeline_report: Option<PathBuf>,
+        /// Normalized native KiCad ERC report required by a schema-v3 request.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = [
+                "generated_schematic",
+                "deterministic_pipeline_plan",
+                "deterministic_pipeline_report"
+            ]
+        )]
+        native_kicad_erc_report: Option<PathBuf>,
+        /// KiCad CLI executable used to reproduce native ERC evidence.
+        #[arg(long, value_name = "PATH", requires = "native_kicad_erc_report")]
+        kicad_cli: Option<PathBuf>,
         #[arg(long)]
         private_key: PathBuf,
         #[arg(long)]
@@ -3362,6 +3414,20 @@ enum Command {
             requires_all = ["generated_schematic", "deterministic_pipeline_plan"]
         )]
         deterministic_pipeline_report: Option<PathBuf>,
+        /// Normalized native KiCad ERC report required by a schema-v3 request.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = [
+                "generated_schematic",
+                "deterministic_pipeline_plan",
+                "deterministic_pipeline_report"
+            ]
+        )]
+        native_kicad_erc_report: Option<PathBuf>,
+        /// KiCad CLI executable used to reproduce native ERC evidence.
+        #[arg(long, value_name = "PATH", requires = "native_kicad_erc_report")]
+        kicad_cli: Option<PathBuf>,
         #[arg(
             long,
             conflicts_with = "policy_pack",
@@ -3402,6 +3468,20 @@ enum Command {
             requires_all = ["generated_schematic", "deterministic_pipeline_plan"]
         )]
         deterministic_pipeline_report: Option<PathBuf>,
+        /// Normalized native KiCad ERC report required by a schema-v3 request.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = [
+                "generated_schematic",
+                "deterministic_pipeline_plan",
+                "deterministic_pipeline_report"
+            ]
+        )]
+        native_kicad_erc_report: Option<PathBuf>,
+        /// KiCad CLI executable used to reproduce native ERC evidence.
+        #[arg(long, value_name = "PATH", requires = "native_kicad_erc_report")]
+        kicad_cli: Option<PathBuf>,
         /// Signed approval envelope; repeat once per reviewer.
         #[arg(long = "approval", required = true)]
         approvals: Vec<PathBuf>,
@@ -5065,6 +5145,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "Python host pinout helper",
             "Circuit specification v2",
             "Circuit-spec immutable ERC check v1",
+            "Native KiCad schematic ERC report v1",
             "SPDX JSON",
         ],
     }
@@ -5186,6 +5267,47 @@ fn run_cli() -> Result<()> {
                 output.as_deref(),
                 "deterministic pipeline report schema output",
             )?;
+        }
+        Command::NativeKicadErcReportSchema { output } => {
+            write_closed_schema(
+                &native_kicad_erc_report_schema(),
+                output.as_deref(),
+                "native KiCad ERC report schema output",
+            )?;
+        }
+        Command::RunNativeKicadErc {
+            input,
+            output,
+            kicad_cli,
+            require_approved,
+            mcp_echo_report_summary,
+        } => {
+            let prepared = prepare_pipeline_output(&output, &[input.as_path()])?;
+            let report = run_native_kicad_erc(&input, kicad_cli.as_os_str(), None)?;
+            let rendered = render_native_kicad_erc_report(&report)?;
+            persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
+            if mcp_echo_report_summary {
+                let summary = serde_json::json!({
+                    "schema_version": report.schema_version,
+                    "approved": report.approved,
+                    "error_count": report.error_count,
+                    "run_sha256": report.run_sha256,
+                    "report_bytes": rendered.len(),
+                    "report_sha256": hex::encode(Sha256::digest(&rendered)),
+                });
+                serde_json::to_writer(&mut io::stdout(), &summary)?;
+                io::stdout().write_all(b"\n")?;
+                io::stdout().flush()?;
+            }
+            eprintln!(
+                "native KiCad ERC: {}; {} error(s); report={}",
+                if report.approved { "approved" } else { "rejected" },
+                report.error_count,
+                output.display()
+            );
+            if require_approved && !report.approved {
+                bail!("native KiCad schematic ERC rejected");
+            }
         }
         Command::RunDeterministicPipeline {
             plan,
@@ -11108,6 +11230,8 @@ fn run_cli() -> Result<()> {
             electrical_review,
             deterministic_pipeline_plan,
             deterministic_pipeline_report,
+            native_kicad_erc_report,
+            kicad_cli,
             policy,
             simulation_evidence,
             requirements,
@@ -11193,6 +11317,30 @@ fn run_cli() -> Result<()> {
                     )
                 }
             };
+            let request = if let Some(native_report) = native_kicad_erc_report.as_deref() {
+                let expected_binding = request
+                    .artifact_binding
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "native KiCad ERC evidence requires a deterministic artifact binding"
+                    ))?;
+                let executable = kicad_cli.as_deref().unwrap_or_else(|| Path::new("kicad-cli"));
+                let (native_identity, schematic_identity) = verify_native_kicad_erc_report(
+                    &input,
+                    native_report,
+                    executable.as_os_str(),
+                    None,
+                )?;
+                if schematic_identity != expected_binding.generated_schematic {
+                    bail!(
+                        "native KiCad ERC report schematic identity does not match the generated schematic binding"
+                    );
+                }
+                bind_native_kicad_erc_to_ai_review_request(&request, native_identity)
+                    .map_err(anyhow::Error::msg)?
+            } else {
+                request
+            };
             let prepared_session = if let Some(session_output) = session_output.as_ref() {
                 if session_output.0.as_ref() == output.as_path() {
                     bail!("AI review request and session output paths must differ");
@@ -11257,6 +11405,8 @@ fn run_cli() -> Result<()> {
             generated_schematic,
             deterministic_pipeline_plan,
             deterministic_pipeline_report,
+            native_kicad_erc_report,
+            kicad_cli,
             private_key,
             signer_id,
             session,
@@ -11269,6 +11419,8 @@ fn run_cli() -> Result<()> {
                 generated_schematic.as_deref(),
                 deterministic_pipeline_plan.as_deref(),
                 deterministic_pipeline_report.as_deref(),
+                native_kicad_erc_report.as_deref(),
+                kicad_cli.as_deref(),
             )?;
             let response_source = fs::read_to_string(&response)
                 .with_context(|| format!("reading {}", response.display()))?;
@@ -11308,6 +11460,8 @@ fn run_cli() -> Result<()> {
             generated_schematic,
             deterministic_pipeline_plan,
             deterministic_pipeline_report,
+            native_kicad_erc_report,
+            kicad_cli,
             public_key,
             policy_pack,
             session,
@@ -11320,6 +11474,8 @@ fn run_cli() -> Result<()> {
                 generated_schematic.as_deref(),
                 deterministic_pipeline_plan.as_deref(),
                 deterministic_pipeline_report.as_deref(),
+                native_kicad_erc_report.as_deref(),
+                kicad_cli.as_deref(),
             )?;
             let (response, _) = read_described_json::<AiReviewResponse>(&response)?;
             let public_key = if let Some(path) = policy_pack {
@@ -11381,6 +11537,8 @@ fn run_cli() -> Result<()> {
             generated_schematic,
             deterministic_pipeline_plan,
             deterministic_pipeline_report,
+            native_kicad_erc_report,
+            kicad_cli,
             approvals,
             responses,
             policy_pack,
@@ -11411,6 +11569,8 @@ fn run_cli() -> Result<()> {
                 generated_schematic.as_deref(),
                 deterministic_pipeline_plan.as_deref(),
                 deterministic_pipeline_report.as_deref(),
+                native_kicad_erc_report.as_deref(),
+                kicad_cli.as_deref(),
             )?;
             let pack = load_policy_pack(&policy_pack)?.0;
             validate_ai_request_against_policy_pack(&request, &pack)?;
@@ -16035,21 +16195,43 @@ fn verify_bound_ai_review_artifacts(
     generated_schematic: Option<&Path>,
     deterministic_pipeline_plan: Option<&Path>,
     deterministic_pipeline_report: Option<&Path>,
+    native_kicad_erc_report: Option<&Path>,
+    kicad_cli: Option<&Path>,
 ) -> Result<()> {
     ai_review_request_sha256(request).map_err(anyhow::Error::msg)?;
-    match (
-        request.artifact_binding.as_ref(),
-        generated_schematic,
-        deterministic_pipeline_plan,
-        deterministic_pipeline_report,
-    ) {
-        (None, None, None, None) if request.schema_version == 1 => Ok(()),
-        (None, _, _, _) => {
-            bail!("AI review request schema version 1 does not accept live artifact binding paths")
+    match request.schema_version {
+        1 => {
+            if generated_schematic.is_some()
+                || deterministic_pipeline_plan.is_some()
+                || deterministic_pipeline_report.is_some()
+                || native_kicad_erc_report.is_some()
+                || kicad_cli.is_some()
+            {
+                bail!(
+                    "AI review request schema version 1 does not accept live artifact binding paths"
+                );
+            }
+            Ok(())
         }
-        (Some(expected), Some(schematic), Some(plan), Some(report))
-            if request.schema_version == 2 =>
-        {
+        2 => {
+            if native_kicad_erc_report.is_some() || kicad_cli.is_some() {
+                bail!(
+                    "AI review request schema version 2 does not accept native KiCad ERC evidence"
+                );
+            }
+            let (Some(schematic), Some(plan), Some(report)) = (
+                generated_schematic,
+                deterministic_pipeline_plan,
+                deterministic_pipeline_report,
+            ) else {
+                bail!(
+                    "AI review request schema version 2 requires --generated-schematic, --deterministic-pipeline-plan, and --deterministic-pipeline-report"
+                );
+            };
+            let expected = request
+                .artifact_binding
+                .as_ref()
+                .expect("validated schema-v2 request has an artifact binding");
             let observed = verify_ai_review_artifact_binding(request, schematic, plan, report)?;
             if &observed != expected {
                 bail!(
@@ -16058,9 +16240,49 @@ fn verify_bound_ai_review_artifacts(
             }
             Ok(())
         }
-        (Some(_), _, _, _) => bail!(
-            "AI review request schema version 2 requires --generated-schematic, --deterministic-pipeline-plan, and --deterministic-pipeline-report"
-        ),
+        3 => {
+            let (Some(schematic), Some(plan), Some(report), Some(native_report)) = (
+                generated_schematic,
+                deterministic_pipeline_plan,
+                deterministic_pipeline_report,
+                native_kicad_erc_report,
+            ) else {
+                bail!(
+                    "AI review request schema version 3 requires --generated-schematic, --deterministic-pipeline-plan, --deterministic-pipeline-report, and --native-kicad-erc-report"
+                );
+            };
+            let expected = request
+                .artifact_binding
+                .as_ref()
+                .expect("validated schema-v3 request has an artifact binding");
+            let observed = verify_ai_review_artifact_binding(request, schematic, plan, report)?;
+            if observed.generated_schematic != expected.generated_schematic
+                || observed.pipeline != expected.pipeline
+            {
+                bail!(
+                    "live generated schematic and deterministic pipeline artifacts do not match the AI review request binding"
+                );
+            }
+            let executable = kicad_cli.unwrap_or_else(|| Path::new("kicad-cli"));
+            let (native_identity, schematic_identity) = verify_native_kicad_erc_report(
+                schematic,
+                native_report,
+                executable.as_os_str(),
+                None,
+            )?;
+            if schematic_identity != expected.generated_schematic {
+                bail!(
+                    "native KiCad ERC report schematic identity does not match the generated schematic binding"
+                );
+            }
+            if expected.native_kicad_erc.as_ref() != Some(&native_identity) {
+                bail!(
+                    "live native KiCad ERC evidence does not match the AI review request binding"
+                );
+            }
+            Ok(())
+        }
+        version => bail!("unsupported AI review request schema version {version}"),
     }
 }
 
