@@ -2150,8 +2150,9 @@ Version 1.414.0 adds opt-in hardware-pipeline parity. Set
 the closed electrical review, final manufacturing ZIP, and firmware manifest;
 `pipeline-electrical-policy`, `pipeline-factory-receipt`, and
 `pipeline-require-factory` are optional. The Action forwards the generated
-analysis manifests, the effective physical profile/policy, and these inputs to
-`pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
+analysis manifests, any automatically discovered sibling `.kicad_pro` and
+`.kicad_dru` inputs, the effective physical profile/policy, and these inputs
+to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
 # Add these fields to a `penguin425/pcbex@v1.414.0` step:

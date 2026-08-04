@@ -3000,6 +3000,34 @@ elif [[ "$pipeline_verify" == "true" ]]; then
     --manufacturing-package "$PCBEX_PIPELINE_MANUFACTURING_PACKAGE" \
     --firmware-manifest "$PCBEX_PIPELINE_FIRMWARE_MANIFEST" \
     --output "$pipeline_report")
+  if [[ "$PCBEX_BOARD" == */* ]]; then
+    board_directory="${PCBEX_BOARD%/*}"
+  else
+    board_directory=""
+  fi
+  board_basename="${PCBEX_BOARD##*/}"
+  board_stem_basename="${board_basename%.*}"
+  if [[ "$board_basename" == .* ]]; then
+    board_basename_suffix="${board_basename#*.}"
+    if [[ "$board_basename_suffix" != *.* ]]; then
+      board_stem_basename="$board_basename"
+    fi
+  fi
+  if [[ -n "$board_directory" ]]; then
+    board_stem="$board_directory/$board_stem_basename"
+  elif [[ "$PCBEX_BOARD" == /* ]]; then
+    board_stem="/$board_stem_basename"
+  else
+    board_stem="$board_stem_basename"
+  fi
+  analysis_project_path="${board_stem}.kicad_pro"
+  analysis_rules_path="${board_stem}.kicad_dru"
+  if [[ -e "$analysis_project_path" ]]; then
+    pipeline_arguments+=(--analysis-project "$analysis_project_path")
+  fi
+  if [[ -e "$analysis_rules_path" ]]; then
+    pipeline_arguments+=(--analysis-rules "$analysis_rules_path")
+  fi
   if [[ -n "${PCBEX_PIPELINE_ELECTRICAL_POLICY:-}" ]]; then
     pipeline_arguments+=(--electrical-policy "$PCBEX_PIPELINE_ELECTRICAL_POLICY")
   fi

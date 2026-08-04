@@ -60,10 +60,11 @@ The repository composite Action keeps pipeline verification opt-in. Set
 | `pipeline-require-factory` | No (defaults to `false`) | Require the receipt-bound v2 factory phase |
 
 The Action supplies its generated `run.json`, `checks.json`, and `quality.json`
-alongside these paths, and forwards the effective DFM/policy-pack and physical
-profile selected for analysis. `pipeline-verify: "false"` is the default;
-dependent pipeline inputs are rejected when the opt-in is disabled. The Action
-exposes `pipeline-report` (the retained
+alongside these paths. It independently derives and forwards any sibling
+`.kicad_pro` and `.kicad_dru` files auto-discovered for the board, plus the
+effective DFM/policy-pack and physical profile selected for analysis.
+`pipeline-verify: "false"` is the default; dependent pipeline inputs are
+rejected when the opt-in is disabled. The Action exposes `pipeline-report` (the retained
 `output-dir/pipeline-gate.json`) and `pipeline-passed` (`true` or `false`).
 Normal phase rejections are read back as structured evidence, added to the Job
 Summary/PR comment and retained artifact bundle, and only then does the final

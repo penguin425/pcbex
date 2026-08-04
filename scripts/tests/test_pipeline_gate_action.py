@@ -54,6 +54,8 @@ class PipelineGateActionTests(unittest.TestCase):
             'pipeline_arguments+=(--analysis-physical-profile "$PCBEX_PHYSICAL_PROFILE")',
             document,
         )
+        self.assertIn('pipeline_arguments+=(--analysis-project "$analysis_project_path")', document)
+        self.assertIn('pipeline_arguments+=(--analysis-rules "$analysis_rules_path")', document)
         self.assertIn('ci_runtime.py" exec', document)
         self.assertNotIn("eval ", document)
         self.assertNotIn("curl", document)
@@ -126,6 +128,7 @@ class PipelineGateActionTests(unittest.TestCase):
         pipeline_passed: str = "true",
         pipeline_exit: str = "0",
         complete_pipeline_inputs: bool = True,
+        board: str = "board.kicad_pcb",
         extra: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         output_dir = directory / "artifacts"
@@ -135,7 +138,7 @@ class PipelineGateActionTests(unittest.TestCase):
             "GITHUB_OUTPUT": str(directory / "github-output"),
             "GITHUB_STEP_SUMMARY": str(directory / "step-summary"),
             "PCBEX_BINARY": str(fake_binary),
-            "PCBEX_BOARD": "board.kicad_pcb",
+            "PCBEX_BOARD": board,
             "PCBEX_OUTPUT_DIR": "artifacts",
             "PCBEX_PIPELINE_VERIFY": pipeline_verify,
             "PCBEX_PIPELINE_TEST_PASSED": pipeline_passed,
@@ -199,6 +202,62 @@ class PipelineGateActionTests(unittest.TestCase):
             summary = (directory / "step-summary").read_text(encoding="utf-8")
             self.assertIn("# pcbex hardware pipeline gate", summary)
             self.assertIn("Passed: `true`", summary)
+
+    def test_pipeline_forwards_auto_detected_project_and_rules_siblings(self):
+        cases = (
+            ("both", "controller.kicad_pcb", ("controller.kicad_pro", "controller.kicad_dru")),
+            ("project-only", "controller.kicad_pcb", ("controller.kicad_pro",)),
+            ("rules-only", "controller.kicad_pcb", ("controller.kicad_dru",)),
+            ("none", "controller.kicad_pcb", ()),
+            (
+                "nested-dot-directory",
+                "nested.v1/controller.kicad_pcb",
+                ("nested.v1/controller.kicad_pro", "nested.v1/controller.kicad_dru"),
+            ),
+            ("no-extension", "controller", ("controller.kicad_pro",)),
+            ("hidden-basename", ".controller", (".controller.kicad_pro",)),
+        )
+        for name, board_name, siblings in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory(
+                prefix="pcbex-pipeline-siblings-"
+            ) as raw:
+                directory = Path(raw)
+                fake_binary = directory / "fake-pcbex"
+                self._write_fake_binary(fake_binary)
+                board = directory / board_name
+                board.parent.mkdir(parents=True, exist_ok=True)
+                board.write_text("(fake pcb)\n", encoding="utf-8")
+                for sibling in siblings:
+                    sibling_path = directory / sibling
+                    sibling_path.parent.mkdir(parents=True, exist_ok=True)
+                    sibling_path.write_text("{}\n", encoding="utf-8")
+                result = self._run_script(
+                    directory,
+                    fake_binary,
+                    pipeline_verify="true",
+                    board=board_name,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                arguments = (directory / "arguments").read_text(encoding="utf-8")
+                self.assertIn("COMMAND=pipeline-verify", arguments)
+                expected_project = next(
+                    (sibling for sibling in siblings if sibling.endswith(".kicad_pro")),
+                    None,
+                )
+                expected_rules = next(
+                    (sibling for sibling in siblings if sibling.endswith(".kicad_dru")),
+                    None,
+                )
+                if expected_project is not None:
+                    self.assertIn("--analysis-project", arguments)
+                    self.assertIn(expected_project, arguments)
+                else:
+                    self.assertNotIn("--analysis-project", arguments)
+                if expected_rules is not None:
+                    self.assertIn("--analysis-rules", arguments)
+                    self.assertIn(expected_rules, arguments)
+                else:
+                    self.assertNotIn("--analysis-rules", arguments)
 
     def test_pipeline_gate_accepts_current_schematic_without_diff_baseline(self):
         with tempfile.TemporaryDirectory(prefix="pcbex-pipeline-current-schematic-") as raw:
