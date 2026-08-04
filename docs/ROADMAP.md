@@ -137,6 +137,7 @@ auditable release.
 | v1.424.0 | Exact AI review artifact binding | Bind request-schema-v2 approvals to one exact generated schematic and approved deterministic plan/report/run, then live-rerun and cross-check the artifacts before CLI, MCP, and Action signing or verification while preserving request-schema-v1 workflows |
 | v1.425.0 | Native KiCad schematic ERC evidence | Run fixed error-only KiCad ERC under bounded private staging, retain deterministic normalized evidence, and bind fresh replay into request-schema-v3 approvals across CLI, MCP, Python, and Action while preserving v1/v2 workflows |
 | v1.426.0 | Native KiCad ERC warning policy | Gate explicit error-and-warning KiCad runs with closed fail-closed budgets, bind exact policy and report identities into request-schema-v4 approvals, and preserve the error-only v1/v3 contracts |
+| v1.426.1 | Darwin process-group cleanup race | Preserve the primary bounded-process failure when Darwin reports a transient `killpg` `EPERM` only after the direct child is reaped and a signal-zero probe proves the process group is gone; retain every live or ambiguous cleanup failure |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -248,7 +249,7 @@ adapter validates the closed v3 boundary, and the root Action forwards and
 publishes verified native identities. Native warnings remain an explicit later
 policy boundary; request schemas v1 and v2 remain byte-compatible.
 
-The current v1.426.0 milestone closes that warning-policy boundary without
+The v1.426.0 milestone closes that warning-policy boundary without
 reinterpreting earlier evidence. Supplying an explicit bounded policy selects
 only KiCad error and warning severities, rejects every error, and treats
 unlisted warning types or ignored-check keys as policy failures. Global and
@@ -261,3 +262,11 @@ error-only native identity v1. CLI, MCP, Python review validation, and the root
 Action expose the same opt-in policy path and leave older workflows unchanged.
 Static policy files do not establish organization authority, expiry, or
 distribution trust; those remain a separate signed-governance boundary.
+
+The current v1.426.1 maintenance milestone closes a Darwin process-group
+cleanup race in the Python supervisor. A `killpg(SIGKILL)` `EPERM` is treated
+as benign only when `poll()` confirms and reaps the exited direct child and a
+single `killpg(pid, 0)` probe returns `ESRCH`, proving the group is gone. Live
+children, existing groups, unauthorized probes, non-Darwin platforms, and all
+other errors continue to fail closed as cleanup failures; the supervisor does
+not retry group termination after the probe.

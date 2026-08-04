@@ -1,3 +1,4 @@
+import errno
 import os
 from pathlib import Path
 import sys
@@ -130,6 +131,199 @@ class BoundedProcessTests(unittest.TestCase):
             )
         self.assertEqual(context.exception.stream, "stderr")
         self.assertEqual(context.exception.limit, 7)
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "killpg"),
+        "POSIX killpg is required",
+    )
+    def test_darwin_exited_group_race_preserves_output_limit_error(self):
+        real_popen = bounded_process.subprocess.Popen
+        processes = []
+        killpg_calls = []
+
+        def record_popen(*args, **kwargs):
+            process = real_popen(*args, **kwargs)
+            processes.append(process)
+            return process
+
+        def killpg_with_exited_group_race(pgid, sig):
+            killpg_calls.append((pgid, sig))
+            if sig == bounded_process.signal.SIGKILL:
+                self.assertEqual(len(processes), 1)
+                processes[0].wait(timeout=5)
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            self.assertEqual(sig, 0)
+            raise ProcessLookupError(errno.ESRCH, "No such process")
+
+        with (
+            patch.object(bounded_process.sys, "platform", "darwin"),
+            patch.object(
+                bounded_process.subprocess,
+                "Popen",
+                side_effect=record_popen,
+            ),
+            patch.object(
+                bounded_process.os,
+                "killpg",
+                side_effect=killpg_with_exited_group_race,
+            ),
+            self.assertRaises(ProcessOutputLimitExceeded) as context,
+        ):
+            run_bounded(
+                _python("import sys; sys.stderr.buffer.write(b'x' * 8)"),
+                timeout_seconds=5,
+                max_stdout_bytes=1024,
+                max_stderr_bytes=7,
+            )
+
+        self.assertEqual(context.exception.stream, "stderr")
+        self.assertEqual(
+            [sig for _, sig in killpg_calls],
+            [bounded_process.signal.SIGKILL, 0],
+        )
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "killpg"),
+        "POSIX killpg is required",
+    )
+    def test_darwin_live_group_eperm_remains_cleanup_failure(self):
+        class LiveProcess:
+            pid = 1234
+
+            def __init__(self):
+                self.kill_calls = 0
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                self.kill_calls += 1
+
+        process = LiveProcess()
+        with (
+            patch.object(bounded_process.sys, "platform", "darwin"),
+            patch.object(
+                bounded_process.os,
+                "killpg",
+                side_effect=PermissionError(errno.EPERM, "Operation not permitted"),
+            ) as killpg,
+        ):
+            failures = bounded_process._kill_process_tree(process, None)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("POSIX process group", failures[0])
+        self.assertEqual(
+            killpg.call_args_list,
+            [((1234, bounded_process.signal.SIGKILL),)],
+        )
+        self.assertEqual(process.kill_calls, 1)
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "killpg"),
+        "POSIX killpg is required",
+    )
+    def test_darwin_exited_existing_group_eperm_remains_cleanup_failure(self):
+        class ExitedProcess:
+            pid = 1234
+
+            def poll(self):
+                return 0
+
+            def kill(self):
+                return None
+
+        calls = []
+
+        def killpg_with_existing_group(pgid, sig):
+            calls.append((pgid, sig))
+            if sig == bounded_process.signal.SIGKILL:
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            self.assertEqual(sig, 0)
+
+        with (
+            patch.object(bounded_process.sys, "platform", "darwin"),
+            patch.object(
+                bounded_process.os,
+                "killpg",
+                side_effect=killpg_with_existing_group,
+            ),
+        ):
+            failures = bounded_process._kill_process_tree(ExitedProcess(), None)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("POSIX process group", failures[0])
+        self.assertEqual(
+            [sig for _, sig in calls],
+            [bounded_process.signal.SIGKILL, 0],
+        )
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "killpg"),
+        "POSIX killpg is required",
+    )
+    def test_darwin_exited_unauthorized_group_probe_remains_cleanup_failure(self):
+        class ExitedProcess:
+            pid = 1234
+
+            def poll(self):
+                return 0
+
+            def kill(self):
+                return None
+
+        calls = []
+
+        def killpg_with_unauthorized_probe(pgid, sig):
+            calls.append((pgid, sig))
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+
+        with (
+            patch.object(bounded_process.sys, "platform", "darwin"),
+            patch.object(
+                bounded_process.os,
+                "killpg",
+                side_effect=killpg_with_unauthorized_probe,
+            ),
+        ):
+            failures = bounded_process._kill_process_tree(ExitedProcess(), None)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("POSIX process group", failures[0])
+        self.assertEqual(
+            [sig for _, sig in calls],
+            [bounded_process.signal.SIGKILL, 0],
+        )
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "killpg"),
+        "POSIX killpg is required",
+    )
+    def test_non_darwin_eperm_remains_cleanup_failure(self):
+        class ExitedProcess:
+            pid = 1234
+
+            def poll(self):
+                return 0
+
+            def kill(self):
+                return None
+
+        with (
+            patch.object(bounded_process.sys, "platform", "linux"),
+            patch.object(
+                bounded_process.os,
+                "killpg",
+                side_effect=PermissionError(errno.EPERM, "Operation not permitted"),
+            ) as killpg,
+        ):
+            failures = bounded_process._kill_process_tree(ExitedProcess(), None)
+
+        self.assertEqual(len(failures), 1)
+        self.assertIn("POSIX process group", failures[0])
+        self.assertEqual(
+            killpg.call_args_list,
+            [((1234, bounded_process.signal.SIGKILL),)],
+        )
 
     def test_simultaneous_stdout_stderr_flood_does_not_deadlock(self):
         script = (
