@@ -27,6 +27,11 @@ const MAX_CONCURRENT_TASKS: usize = 4;
 const MAX_MCP_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MCP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MCP_PROCESS_MESSAGE_BYTES: usize = 4 * 1024;
+// The writer emits a KiCad document that may be larger than the generic MCP
+// response/file-reader ceiling.  Keep this command-specific bound tied to the
+// writer's own limit, while returning only an authenticated summary over MCP.
+const MAX_CIRCUIT_KICAD_SCHEMATIC_BYTES: u64 =
+    pcbex_kicad::CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES as u64;
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -450,6 +455,7 @@ impl McpServer {
                     | "route_kicad"
                     | "check_schematic"
                     | "check_circuit_spec"
+                    | "write_circuit_spec_kicad_schematic"
                     | "verify_circuit_kicad_handoff"
                     | "verify_circuit_kicad_board_binding"
                     | "pipeline_verify"
@@ -919,6 +925,23 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "input": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "write_circuit_spec_kicad_schematic",
+            "Write circuit-spec KiCad schematic",
+            "Write an immutable-ERC-approved circuit-spec v2 as a deterministic flat KiCad schematic and return only its bounded digest summary.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "output"],
+                "properties": {
+                    "input": {"type": "string"},
+                    "output": {"type": "string"}
                 }
             }),
             false,
@@ -4559,6 +4582,9 @@ fn call_tool(
         "analyze_kicad" => analyze_kicad(arguments, cancellation)?,
         "check_schematic" => check_schematic(arguments, cancellation)?,
         "check_circuit_spec" => check_circuit_spec(arguments, cancellation)?,
+        "write_circuit_spec_kicad_schematic" => {
+            write_circuit_spec_kicad_schematic(arguments, cancellation)?
+        }
         "verify_circuit_kicad_handoff" => {
             verify_circuit_kicad_handoff(arguments, cancellation)?
         }
@@ -5420,6 +5446,36 @@ fn check_circuit_spec(
     Ok(execution_result(
         execution,
         json!({"output": output, "check": check}),
+    ))
+}
+
+fn write_circuit_spec_kicad_schematic(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["input", "output"])?;
+    let input = required_string(&arguments, "input")?;
+    let output = required_string(&arguments, "output")?;
+    // The CLI bridge performs the authoritative symlink/alias checks.  This
+    // preflight prevents a stale artifact from being mistaken for a result
+    // when the child rejects or is cancelled before publishing its output.
+    require_absent_outputs([Some(output.as_str())])?;
+    let command = vec![
+        "write-circuit-spec-kicad-schematic".into(),
+        input.clone(),
+        "--output".into(),
+        output.clone(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let (execution, schematic) =
+        require_retained_circuit_kicad_schematic(execution, Path::new(&output));
+    Ok(execution_result(
+        execution,
+        json!({
+            "input": input,
+            "output": output,
+            "schematic": schematic
+        }),
     ))
 }
 
@@ -12247,6 +12303,71 @@ fn require_retained_json(mut execution: Execution, value: &Value, label: &str) -
     execution
 }
 
+/// Read the generated schematic without ever placing its body in an MCP
+/// response.  The generic retained-file helper is intentionally capped at the
+/// 16 MiB transport limit; this writer has its own 64 MiB bound and therefore
+/// needs a dedicated identity-checked reader.
+fn require_retained_circuit_kicad_schematic(
+    mut execution: Execution,
+    path: &Path,
+) -> (Execution, Value) {
+    if !execution.success {
+        return (execution, Value::Null);
+    }
+
+    let summary = match read_circuit_kicad_schematic(path) {
+        Ok(bytes) => json!({
+            "path": path.display().to_string(),
+            "bytes": bytes.len() as u64,
+            "sha256": sha256_hex(&bytes)
+        }),
+        Err(error) => {
+            execution.success = false;
+            if execution.stderr.is_empty() {
+                execution.stderr = format!(
+                    "generated KiCad schematic was not retained as a stable regular file: {error}"
+                );
+            }
+            Value::Null
+        }
+    };
+    (execution, summary)
+}
+
+/// Read and authenticate one writer output.  `read_with_limit` performs
+/// descriptor/path identity checks and a second content pass; the surrounding
+/// metadata checks close the post-child replacement window at the helper
+/// boundary as well.  A replacement, in-place mutation, symlink, directory,
+/// disappearance, or oversized document all fail closed.
+fn read_circuit_kicad_schematic(path: &Path) -> io::Result<Vec<u8>> {
+    let before = crate::bounded_io::symlink_metadata(path)?;
+    if !before.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "output is not a regular non-symlink file: {}",
+                path.display()
+            ),
+        ));
+    }
+    let bytes = crate::bounded_io::read_with_limit(path, MAX_CIRCUIT_KICAD_SCHEMATIC_BYTES)?;
+    let after = crate::bounded_io::symlink_metadata(path)?;
+    if !after.file_type().is_file()
+        || !crate::bounded_io::same_file(&before, &after)
+        || before.len() != after.len()
+        || after.len() != bytes.len() as u64
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "output identity changed while being retained: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(bytes)
+}
+
 fn trusted_echoed_json(execution: &Execution, path: &Path) -> Value {
     let echoed = serde_json::from_slice(&execution.stdout).unwrap_or(Value::Null);
     let retained = read_json_if_present(path);
@@ -12773,7 +12894,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 146);
+        assert_eq!(tools.len(), 147);
         let named = |name: &str| {
             tools
                 .iter()
@@ -12857,6 +12978,30 @@ mod tests {
         assert_eq!(
             named("check_circuit_spec")["execution"]["taskSupport"],
             "optional"
+        );
+        assert_eq!(
+            named("write_circuit_spec_kicad_schematic")["inputSchema"]["required"],
+            json!(["input", "output"])
+        );
+        assert_eq!(
+            named("write_circuit_spec_kicad_schematic")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("write_circuit_spec_kicad_schematic")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("write_circuit_spec_kicad_schematic")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            named("write_circuit_spec_kicad_schematic")["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named("write_circuit_spec_kicad_schematic")["annotations"]["openWorldHint"],
+            false
         );
         assert_eq!(
             named("verify_circuit_kicad_handoff")["inputSchema"]["required"],
@@ -13615,6 +13760,16 @@ mod tests {
                 json!({"input": "", "output": "check.json"}),
             ),
             (
+                17,
+                "write_circuit_spec_kicad_schematic",
+                json!({"input": "input.json", "output": "design.kicad_sch", "extra": true}),
+            ),
+            (
+                18,
+                "write_circuit_spec_kicad_schematic",
+                json!({"input": "", "output": "design.kicad_sch"}),
+            ),
+            (
                 13,
                 "check_schematic",
                 json!({
@@ -13754,6 +13909,57 @@ mod tests {
     }
 
     #[test]
+    fn writer_summary_is_bounded_and_identity_checked() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("generated.kicad_sch");
+        let contents = b"(kicad_sch\n  (version 20231120)\n)\n";
+        std::fs::write(&output, contents).unwrap();
+        let execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stdout: Vec::new(),
+            stderr: String::new(),
+        };
+        let (retained, summary) = require_retained_circuit_kicad_schematic(execution, &output);
+        assert!(retained.success);
+        assert_eq!(summary["path"], output.display().to_string());
+        assert_eq!(summary["bytes"], contents.len() as u64);
+        assert_eq!(summary["sha256"], sha256_hex(contents));
+        assert!(summary.get("content").is_none());
+
+        let oversized = directory.path().join("oversized.kicad_sch");
+        std::fs::File::create(&oversized)
+            .unwrap()
+            .set_len(MAX_CIRCUIT_KICAD_SCHEMATIC_BYTES + 1)
+            .unwrap();
+        let execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stdout: Vec::new(),
+            stderr: String::new(),
+        };
+        let (failed, summary) = require_retained_circuit_kicad_schematic(execution, &oversized);
+        assert!(!failed.success);
+        assert!(failed.stderr.contains("not retained"));
+        assert_eq!(summary, Value::Null);
+
+        #[cfg(unix)]
+        {
+            let link = directory.path().join("linked.kicad_sch");
+            std::os::unix::fs::symlink(&output, &link).unwrap();
+            let execution = Execution {
+                success: true,
+                exit_code: Some(0),
+                stdout: Vec::new(),
+                stderr: String::new(),
+            };
+            let (failed, summary) = require_retained_circuit_kicad_schematic(execution, &link);
+            assert!(!failed.success);
+            assert_eq!(summary, Value::Null);
+        }
+    }
+
+    #[test]
     fn deterministic_pipeline_summary_is_digest_bound_and_bounded() {
         let directory = tempfile::tempdir().unwrap();
         let report_path = directory.path().join("pipeline-report.json");
@@ -13820,6 +14026,30 @@ mod tests {
                 .contains("stale MCP evidence")
         );
         assert_eq!(std::fs::read(&output).unwrap(), br#"{"approved":true}"#);
+
+        let schematic_output = directory.path().join("old-generated.kicad_sch");
+        std::fs::write(&schematic_output, b"old schematic").unwrap();
+        let response = server
+            .handle_message(request(
+                34,
+                "tools/call",
+                json!({
+                    "name": "write_circuit_spec_kicad_schematic",
+                    "arguments": {
+                        "input": "missing-spec.json",
+                        "output": schematic_output
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["data"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(std::fs::read(&schematic_output).unwrap(), b"old schematic");
 
         let handoff_output = directory.path().join("old-handoff.json");
         std::fs::write(&handoff_output, br#"{"approved":true}"#).unwrap();
@@ -13998,6 +14228,7 @@ mod tests {
         for (index, name) in [
             "check_schematic",
             "check_circuit_spec",
+            "write_circuit_spec_kicad_schematic",
             "verify_circuit_kicad_handoff",
             "verify_circuit_kicad_board_binding",
             "pipeline_verify",

@@ -181,9 +181,11 @@ bundle v2 itself still stops at the checked circuit specification and SKiDL.
 As an explicit downstream v1.422 step,
 `write-circuit-spec-kicad-schematic` can convert that approved specification
 to the closed flat/single-unit `.kicad_sch` subset, re-import it, and require
-the existing semantic handoff to pass before publication. It does not place or
-route a board or authorize fabrication. See [Deterministic circuit-spec v2 to
-KiCad schematic writer](CIRCUIT_KICAD_SCHEMATIC_WRITER.md) and
+the existing semantic handoff to pass before publication. Version 1.423 makes
+that same explicit step available through MCP and the root Action with
+digest-only response metadata and no implicit pipeline substitution. It does
+not place or route a board or authorize fabrication. See
+[Deterministic circuit-spec v2 to KiCad schematic writer](CIRCUIT_KICAD_SCHEMATIC_WRITER.md) and
 [Circuit-spec v2 to KiCad schematic handoff
 verification](CIRCUIT_KICAD_HANDOFF.md) for the generation and comparison
 boundaries. v1.416 additionally provides the standalone

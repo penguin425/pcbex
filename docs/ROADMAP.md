@@ -133,6 +133,7 @@ auditable release.
 | v1.420.0 | Bounded supplier inventory snapshot ingestion | Fetch one closed HTTPS catalog feed under deadline, byte, secret, and no-clobber bounds, then bind the exact response to a replayable local snapshot and receipt while selection stays offline |
 | v1.421.0 | Catalog-to-generation provenance | Bind one retained supplier fetch receipt and normalized snapshot to the recomputed catalog selection, exact circuit-generation bundle bytes, and generated SKiDL in a closed replay-verifiable sidecar without adding network access or changing generation bundle v2 |
 | v1.422.0 | Deterministic KiCad schematic writer | Convert an immutable-ERC-approved circuit-spec v2 into a bounded, deterministic flat/single-unit `.kicad_sch`, then re-import and verify the exact semantic handoff before atomic no-clobber publication |
+| v1.423.0 | KiCad schematic writer MCP/Action parity | Expose deterministic circuit-spec schematic generation through optional MCP Tasks and the root Action while retaining ERC evidence and returning only bounded path/byte/SHA identities instead of embedding schematic bytes |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -199,7 +200,7 @@ invocations and bundle bytes remain compatible when the provenance inputs are
 not supplied. The bridge performs no fetch, supplier-native translation,
 substitution, reservation, purchase, datasheet validation, or fabrication.
 
-The current v1.422.0 milestone closes the next downstream gap with a
+The v1.422.0 release closed the next downstream gap with a
 deterministic `.kicad_sch` writer for the same closed circuit-spec v2 subset.
 Only immutable-ERC-approved flat, single-unit designs are emitted. Synthetic
 embedded symbol definitions, fixed grid placement, stable domain-separated
@@ -209,3 +210,14 @@ the existing semantic handoff verifier before the CLI atomically publishes a
 new file. Hierarchy, buses, multi-unit symbols, external library resolution,
 placement/routing, DRC/DFM, and existing-schematic mutation remain later
 boundaries.
+
+The current v1.423.0 milestone exposes that exact writer through two bounded
+integration surfaces. MCP supports synchronous calls and optional Tasks,
+preflights an absent destination, revalidates the retained file under the
+writer's 64 MiB ceiling, and returns only its path, byte count, and SHA-256 so
+the 16 MiB protocol frame never contains the schematic body. The root Action
+accepts an opt-in `circuit-spec`, retains its immutable ERC report, emits the
+fixed `${output-dir}/circuit-spec.kicad_sch` artifact only after approval, and
+publishes the same byte and digest identity. Neither surface substitutes the
+generated file for `schematic`, changes the deterministic pipeline, performs
+network access, or authorizes placement, routing, or fabrication.

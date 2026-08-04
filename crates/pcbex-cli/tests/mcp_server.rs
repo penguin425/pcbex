@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
@@ -447,6 +448,77 @@ fn stdio_server_check_circuit_spec_success_requires_and_retains_output() {
         true
     );
     assert!(check.is_file());
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn stdio_server_write_circuit_spec_kicad_schematic_returns_only_digest_summary() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let input = root.join("examples/circuit-spec-v2.json");
+    let output = temporary_directory("mcp-write-circuit-spec");
+    fs::create_dir_all(&output).unwrap();
+    let schematic = output.join("generated.kicad_sch");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let initialized = initialize(
+        &mut stdin,
+        &mut stdout,
+        json!("initialize-write-circuit-spec"),
+    );
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "write-circuit-spec",
+            "method": "tools/call",
+            "params": {
+                "name": "write_circuit_spec_kicad_schematic",
+                "arguments": {
+                    "input": input,
+                    "output": schematic
+                }
+            }
+        }),
+    );
+    let response = receive(&mut stdout);
+    assert_eq!(response["id"], "write-circuit-spec");
+    assert_eq!(response["result"]["isError"], false);
+    let structured = &response["result"]["structuredContent"];
+    assert_eq!(structured["ok"], true);
+    assert_eq!(
+        structured["schematic"]["path"],
+        schematic.display().to_string()
+    );
+    let bytes = fs::read(&schematic).unwrap();
+    assert_eq!(structured["schematic"]["bytes"], bytes.len() as u64);
+    let mut hasher = Sha256::new();
+    hasher.update(&bytes);
+    assert_eq!(
+        structured["schematic"]["sha256"],
+        hex::encode(hasher.finalize())
+    );
+    assert!(structured["schematic"].get("content").is_none());
+    assert!(response.to_string().len() < 16 * 1024 * 1024);
 
     drop(stdin);
     assert!(child.wait().unwrap().success());
