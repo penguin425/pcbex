@@ -1097,7 +1097,7 @@ fn stable_id(domain: &[u8], bytes: &[u8]) -> String {
     format!("pcbex-{}", hex::encode(hasher.finalize()))
 }
 
-fn format_voltage_uv(value: i64) -> String {
+pub(crate) fn format_voltage_uv(value: i64) -> String {
     if value % 1_000_000 == 0 {
         format!("{}V", value / 1_000_000)
     } else {

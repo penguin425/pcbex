@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.414.0
+    uses: penguin425/pcbex@v1.415.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2155,7 +2155,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.414.0` step:
+# Add these fields to a `penguin425/pcbex@v1.415.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -2361,6 +2361,15 @@ For the complete gate, call `pipeline_verify` with `schematic`,
 bindings are selected. A caller that supports Tasks may add
 `"task": {"ttl": 600000}` to the request and retrieve the retained result with
 `tasks/get` and `tasks/result`.
+
+Version 1.415.0 adds `verify_circuit_kicad_handoff`, a task-compatible
+digest-bound verifier for an existing flat/single-unit KiCad schematic and a
+circuit-spec v2. It returns source/canonical identities, native circuit and
+schematic check/review evidence, findings, counts, and `approved`; a failed
+`require_approved` call retains that report for the caller. Geometry/UUIDs,
+hierarchy, buses, power-symbol extras, multi-unit symbols, unresolved
+libraries, live suppliers, placement, routing, and fabrication remain outside
+this closed verifier.
 
 Analysis and routing tools require explicit output paths and may overwrite
 files there. MCP hosts should retain their normal user-approval prompt for
@@ -2888,6 +2897,40 @@ the closed fields and selection semantics. Generated SKiDL keeps the selected
 MPNs in `_PCBEX_MPN_BY_REFERENCE` and, for snapshot selection, records
 `_PCBEX_CATALOG_RECEIPT_SHA256`; it does not pass an unsupported `mpn=`
 keyword to `Part`.
+
+## Circuit-spec v2 to KiCad handoff verification
+
+When a KiCad schematic is authored separately, pcbex can verify it against an
+exact circuit-spec v2 without generating or modifying either file. Emit the
+closed native contract and run the digest-bound semantic gate:
+
+```sh
+pcbex circuit-kicad-handoff-schema \
+  --output circuit-kicad-handoff.schema.json
+
+pcbex verify-circuit-kicad-handoff \
+  circuit-spec-v2.json hardware/controller.kicad_sch \
+  --policy electrical-policy.json \
+  --output build/circuit-kicad-handoff.json \
+  --require-approved
+```
+
+The report binds source byte counts and SHA-256 identities, canonical circuit
+and schematic identities, the effective policy identity, native circuit and
+schematic ERC/check results, findings, counts, and the final `approved`
+decision. `--require-approved` fails after writing the report, so rejected
+comparisons retain machine-readable evidence for CI and review. The MCP
+server exposes the same contract as `verify_circuit_kicad_handoff`.
+
+The v1 comparison is intentionally closed: flat, single-unit symbols with
+exact symbol/reference/value, pin/electrical type, explicit net-label and
+canonical voltage-label sets, net membership, footprint, and pcbex metadata.
+Geometry, drawing style, and UUIDs are ignored. Hierarchy,
+buses, power-symbol extras, multi-unit symbols, unresolved libraries, live
+supplier checks, and every placement/routing/DRC/fabrication decision remain
+outside this verifier. See
+[`docs/CIRCUIT_KICAD_HANDOFF.md`](docs/CIRCUIT_KICAD_HANDOFF.md) for the
+schema boundary and retained rejection behavior.
 
 ## Schematic electrical IR
 
@@ -4181,7 +4224,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.414.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.415.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

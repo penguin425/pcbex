@@ -49,6 +49,57 @@ fn temporary_directory(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("pcbex-{name}-{}-{unique}", std::process::id()))
 }
 
+const HANDOFF_CIRCUIT_SPEC: &str = r#"{
+  "schema_version": 2,
+  "parts": [
+    {"reference":"U1","lib_id":"MCU:Chip","value":"Chip","footprint":"Package:QFN","mpn":null,"power":{"rail_voltage_uv":null,"max_voltage_uv":null,"requires_decoupling":false,"decoupling":false},"pins":[{"number":"1","name":"OUT","net":"SIGNAL","electrical_type":"output"},{"number":"2","name":"VCC","net":"VCC","electrical_type":"passive"}]},
+    {"reference":"R1","lib_id":"Device:R","value":"10k","footprint":"Resistor_SMD:R_0603","mpn":null,"power":{"rail_voltage_uv":null,"max_voltage_uv":null,"requires_decoupling":false,"decoupling":false},"pins":[{"number":"1","name":"~","net":"SIGNAL","electrical_type":"passive"},{"number":"2","name":"~","net":"VCC","electrical_type":"passive"}]}
+  ],
+  "nets": [
+    {"name":"SIGNAL","voltage_uv":null,"connections":[{"reference":"U1","pin":"1"},{"reference":"R1","pin":"1"}]},
+    {"name":"VCC","voltage_uv":null,"connections":[{"reference":"U1","pin":"2"},{"reference":"R1","pin":"2"}]}
+  ]
+}"#;
+
+fn handoff_schematic() -> String {
+    let mut source = include_str!("../../../examples/simple.kicad_sch").to_string();
+    source = source.replace("(pin power_in line", "(pin passive line");
+    source = source.replace(
+        r##"  (no_connect
+    (at 42.54 20)
+    (uuid 00000000-0000-0000-0000-000000000015))"##,
+        r##"  (global_label "VCC"
+    (shape input)
+    (at 42.54 20 0)
+    (effects (font (size 1.27 1.27)) (justify left))
+    (uuid 00000000-0000-0000-0000-000000000015)
+    (property "Intersheetrefs" "${INTERSHEET_REFS}"
+      (at 42.54 20 0)
+      (effects (font (size 1.27 1.27)) hide)))"##,
+    );
+    source = source.replace(
+        r##"    (property "Footprint" "Package:QFN"
+      (at 12.54 20 0)
+      (effects (font (size 1.27 1.27)) hide))"##,
+        r##"    (property "Footprint" "Package:QFN"
+      (at 12.54 20 0)
+      (effects (font (size 1.27 1.27)) hide))
+    (property "pcbex:requires_decoupling" "false")
+    (property "pcbex:decoupling" "false")"##,
+    );
+    source = source.replace(
+        r##"    (property "Footprint" "Resistor_SMD:R_0603"
+      (at 40 20 0)
+      (effects (font (size 1.27 1.27)) hide))"##,
+        r##"    (property "Footprint" "Resistor_SMD:R_0603"
+      (at 40 20 0)
+      (effects (font (size 1.27 1.27)) hide))
+    (property "pcbex:requires_decoupling" "false")
+    (property "pcbex:decoupling" "false")"##,
+    );
+    source
+}
+
 #[test]
 fn stdio_server_negotiates_and_returns_failed_gate_artifacts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -437,6 +488,105 @@ fn stdio_server_pipeline_verify_retains_rejected_report() {
         2
     );
     assert!(report.is_file());
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn stdio_server_handoff_retains_success_and_rejected_reports() {
+    let output = temporary_directory("mcp-handoff");
+    fs::create_dir_all(&output).unwrap();
+    let spec = output.join("circuit.json");
+    let schematic = output.join("design.kicad_sch");
+    fs::write(&spec, HANDOFF_CIRCUIT_SPEC).unwrap();
+    fs::write(&schematic, handoff_schematic()).unwrap();
+    let approved_report = output.join("approved.json");
+    let rejected_report = output.join("rejected.json");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let initialized = initialize(&mut stdin, &mut stdout, json!("initialize-handoff"));
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "handoff-success",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_circuit_kicad_handoff",
+                "arguments": {
+                    "circuit_spec": spec,
+                    "schematic": schematic,
+                    "output": approved_report,
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let success = receive(&mut stdout);
+    assert_eq!(success["id"], "handoff-success");
+    assert_eq!(success["result"]["isError"], false);
+    assert_eq!(success["result"]["structuredContent"]["ok"], true);
+    assert_eq!(
+        success["result"]["structuredContent"]["report"]["approved"],
+        true
+    );
+    assert!(approved_report.is_file());
+
+    let mut changed = fs::read_to_string(&schematic).unwrap();
+    changed = changed.replace("(property \"Value\" \"10k\"", "(property \"Value\" \"9k\"");
+    fs::write(&schematic, changed).unwrap();
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "handoff-rejected",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_circuit_kicad_handoff",
+                "arguments": {
+                    "circuit_spec": spec,
+                    "schematic": schematic,
+                    "output": rejected_report,
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let rejected = receive(&mut stdout);
+    assert_eq!(rejected["id"], "handoff-rejected");
+    assert_eq!(rejected["result"]["isError"], true);
+    assert_eq!(rejected["result"]["structuredContent"]["ok"], false);
+    assert_eq!(
+        rejected["result"]["structuredContent"]["report"]["approved"],
+        false
+    );
+    assert!(
+        rejected["result"]["structuredContent"]["report"]["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["code"] == "symbol_mismatch")
+    );
+    assert!(rejected_report.is_file());
 
     drop(stdin);
     assert!(child.wait().unwrap().success());

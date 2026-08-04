@@ -594,6 +594,11 @@
     {
       "id": "mcp-action-pipeline-parity",
       "release": "v1.414.0",
+      "status": "released"
+    },
+    {
+      "id": "verified-circuit-kicad-handoff",
+      "release": "v1.415.0",
       "status": "current"
     }
   ]

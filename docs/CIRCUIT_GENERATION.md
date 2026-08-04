@@ -148,11 +148,16 @@ verification is a separate boundary. The generated review proves that the
 declared intent is internally consistent, not that an unverified model chose
 the correct real-world component rating.
 
-## Scope
+## Scope and KiCad handoff
 
-This release ends at a checked circuit specification and deterministic SKiDL
-source. It does not query live supplier inventory, verify datasheet ratings,
-produce a `.kicad_sch`, place or route a board, or authorize fabrication. A
-generated design must still pass the normal KiCad import, complete-coverage
-ERC, simulation evidence, AI/human approval policy, PCB DRC, and manufacturing
-gates before production.
+Generation still ends at a checked circuit specification and deterministic
+SKiDL source. It does not query live supplier inventory, verify datasheet
+ratings, generate a `.kicad_sch`, place or route a board, or authorize
+fabrication. When a schematic is authored separately, the native
+`verify-circuit-kicad-handoff` gate can verify its closed flat/single-unit
+semantic subset against the exact circuit-spec v2 intent; it is a verifier,
+not a converter. See [Circuit-spec v2 to KiCad schematic handoff
+verification](CIRCUIT_KICAD_HANDOFF.md) for the comparison boundary and
+retained rejection evidence. A generated design must still pass complete
+coverage ERC, simulation evidence, AI/human approval policy, PCB DRC, and
+manufacturing gates before production.

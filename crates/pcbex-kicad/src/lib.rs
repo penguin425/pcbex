@@ -217,6 +217,13 @@ pub use circuit_spec::{
     circuit_spec_v2_sha256, circuit_spec_v2_to_schematic, normalize_circuit_spec_v2,
     parse_and_check_circuit_spec_v2, parse_circuit_spec_v2,
 };
+mod circuit_handoff;
+pub use circuit_handoff::{
+    CIRCUIT_KICAD_HANDOFF_ENGINE_VERSION, CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES,
+    CIRCUIT_KICAD_HANDOFF_REPORT_SCHEMA_VERSION, CIRCUIT_KICAD_HANDOFF_SCHEMA_VERSION,
+    CircuitKicadHandoffFinding, CircuitKicadHandoffFindingCounts, CircuitKicadHandoffReport,
+    circuit_kicad_handoff_report_json_schema, verify_circuit_kicad_handoff,
+};
 mod manufacturing;
 pub use manufacturing::{
     MAX_MANUFACTURING_PARTS, ManufacturingPart, manufacturing_gerber_layers, manufacturing_parts,

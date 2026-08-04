@@ -449,6 +449,7 @@ impl McpServer {
                     | "route_kicad"
                     | "check_schematic"
                     | "check_circuit_spec"
+                    | "verify_circuit_kicad_handoff"
                     | "pipeline_verify"
             )
         ) {
@@ -913,6 +914,26 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                 "required": ["input", "output"],
                 "properties": {
                     "input": {"type": "string"},
+                    "output": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "verify_circuit_kicad_handoff",
+            "Verify circuit-to-KiCad handoff",
+            "Verify that a circuit-spec v2 and KiCad schematic represent the same normalized electrical design, retaining the closed handoff report on rejection.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["circuit_spec", "schematic", "output"],
+                "properties": {
+                    "circuit_spec": {"type": "string"},
+                    "schematic": {"type": "string"},
+                    "policy": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
                 }
@@ -4496,6 +4517,9 @@ fn call_tool(
         "analyze_kicad" => analyze_kicad(arguments, cancellation)?,
         "check_schematic" => check_schematic(arguments, cancellation)?,
         "check_circuit_spec" => check_circuit_spec(arguments, cancellation)?,
+        "verify_circuit_kicad_handoff" => {
+            verify_circuit_kicad_handoff(arguments, cancellation)?
+        }
         "pipeline_verify" => pipeline_verify(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
@@ -5322,6 +5346,53 @@ fn check_circuit_spec(
     Ok(execution_result(
         execution,
         json!({"output": output, "check": check}),
+    ))
+}
+
+fn verify_circuit_kicad_handoff(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "circuit_spec",
+            "schematic",
+            "policy",
+            "output",
+            "require_approved",
+        ],
+    )?;
+    let circuit_spec = required_string(&arguments, "circuit_spec")?;
+    let schematic = required_string(&arguments, "schematic")?;
+    optional_string(&arguments, "policy")?;
+    let output = required_string(&arguments, "output")?;
+    require_absent_outputs([Some(output.as_str())])?;
+    let mut command = vec![
+        "verify-circuit-kicad-handoff".into(),
+        circuit_spec,
+        schematic,
+        "--output".into(),
+        output.clone(),
+        "--mcp-echo-report".into(),
+    ];
+    optional_option(&arguments, "policy", "--policy", &mut command)?;
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    // Trust a retained handoff report only when the child itself echoed the
+    // exact JSON after its atomic no-clobber publish and the retained file
+    // still matches.  This prevents a concurrent creator from injecting a
+    // stale report into a failed MCP call between preflight and readback.
+    let report = trusted_echoed_json(&execution, Path::new(&output));
+    let execution = require_retained_json(execution, &report, "handoff output");
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
     ))
 }
 
@@ -11936,6 +12007,7 @@ fn request_remote_approval_transparency_witness(
 struct Execution {
     success: bool,
     exit_code: Option<i32>,
+    stdout: Vec<u8>,
     stderr: String,
 }
 
@@ -11960,6 +12032,7 @@ fn execute(
     Ok(Execution {
         success: output.status.success(),
         exit_code: output.status.code(),
+        stdout: output.stdout,
         stderr: bounded_process_message(&output.stderr),
     })
 }
@@ -12006,6 +12079,16 @@ fn require_retained_json(mut execution: Execution, value: &Value, label: &str) -
         }
     }
     execution
+}
+
+fn trusted_echoed_json(execution: &Execution, path: &Path) -> Value {
+    let echoed = serde_json::from_slice(&execution.stdout).unwrap_or(Value::Null);
+    let retained = read_json_if_present(path);
+    if echoed.is_object() && echoed == retained {
+        echoed
+    } else {
+        Value::Null
+    }
 }
 
 fn require_retained_file(mut execution: Execution, path: &Path, label: &str) -> Execution {
@@ -12402,7 +12485,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 143);
+        assert_eq!(tools.len(), 144);
         let named = |name: &str| {
             tools
                 .iter()
@@ -12485,6 +12568,18 @@ mod tests {
         );
         assert_eq!(
             named("check_circuit_spec")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("verify_circuit_kicad_handoff")["inputSchema"]["required"],
+            json!(["circuit_spec", "schematic", "output"])
+        );
+        assert_eq!(
+            named("verify_circuit_kicad_handoff")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("verify_circuit_kicad_handoff")["execution"]["taskSupport"],
             "optional"
         );
         assert_eq!(
@@ -13225,6 +13320,16 @@ mod tests {
                     "require_factory": "yes"
                 }),
             ),
+            (
+                14,
+                "verify_circuit_kicad_handoff",
+                json!({
+                    "circuit_spec": "circuit.json",
+                    "schematic": "design.kicad_sch",
+                    "output": "handoff.json",
+                    "require_approved": "yes"
+                }),
+            ),
         ] {
             let response = server
                 .handle_message(request(
@@ -13242,6 +13347,7 @@ mod tests {
         let execution = Execution {
             success: true,
             exit_code: Some(0),
+            stdout: Vec::new(),
             stderr: String::new(),
         };
         let failed = require_retained_json(execution, &Value::Null, "review");
@@ -13252,6 +13358,7 @@ mod tests {
         let execution = Execution {
             success: true,
             exit_code: Some(0),
+            stdout: Vec::new(),
             stderr: String::new(),
         };
         let retained = require_retained_json(execution, &json!({"approved": true}), "review");
@@ -13264,6 +13371,7 @@ mod tests {
         let execution = Execution {
             success: true,
             exit_code: Some(0),
+            stdout: Vec::new(),
             stderr: String::new(),
         };
         let failed = require_retained_file(execution, &empty, "JUnit");
@@ -13275,11 +13383,34 @@ mod tests {
         let execution = Execution {
             success: true,
             exit_code: Some(0),
+            stdout: Vec::new(),
             stderr: String::new(),
         };
         let retained = require_retained_file(execution, &present, "JUnit");
         assert!(retained.success);
         assert!(retained.stderr.is_empty());
+
+        let report = directory.path().join("handoff.json");
+        std::fs::write(&report, br#"{"approved":true}"#).unwrap();
+        let untrusted = Execution {
+            success: false,
+            exit_code: Some(1),
+            stdout: Vec::new(),
+            stderr: "child failed before retaining a report".into(),
+        };
+        assert_eq!(trusted_echoed_json(&untrusted, &report), Value::Null);
+        let trusted = Execution {
+            success: false,
+            exit_code: Some(1),
+            stdout: br#"{"approved":true}"#.to_vec(),
+            stderr: "required approval rejected after retaining a report".into(),
+        };
+        assert_eq!(
+            trusted_echoed_json(&trusted, &report),
+            json!({"approved": true})
+        );
+        std::fs::write(&report, br#"{"approved":false}"#).unwrap();
+        assert_eq!(trusted_echoed_json(&trusted, &report), Value::Null);
     }
 
     #[test]
@@ -13309,6 +13440,34 @@ mod tests {
                 .contains("stale MCP evidence")
         );
         assert_eq!(std::fs::read(&output).unwrap(), br#"{"approved":true}"#);
+
+        let handoff_output = directory.path().join("old-handoff.json");
+        std::fs::write(&handoff_output, br#"{"approved":true}"#).unwrap();
+        let response = server
+            .handle_message(request(
+                31,
+                "tools/call",
+                json!({
+                    "name": "verify_circuit_kicad_handoff",
+                    "arguments": {
+                        "circuit_spec": "missing-spec.json",
+                        "schematic": "missing-schematic.kicad_sch",
+                        "output": handoff_output
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["data"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&handoff_output).unwrap(),
+            br#"{"approved":true}"#
+        );
     }
 
     #[test]
@@ -13400,9 +13559,14 @@ mod tests {
 
     #[test]
     fn new_pipeline_tools_accept_task_augmented_calls() {
-        for (index, name) in ["check_schematic", "check_circuit_spec", "pipeline_verify"]
-            .into_iter()
-            .enumerate()
+        for (index, name) in [
+            "check_schematic",
+            "check_circuit_spec",
+            "verify_circuit_kicad_handoff",
+            "pipeline_verify",
+        ]
+        .into_iter()
+        .enumerate()
         {
             let mut server = ready_server();
             let created = server
