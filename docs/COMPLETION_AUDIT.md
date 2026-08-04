@@ -221,6 +221,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Circuit-spec/KiCad schematic-board binding | Standalone native verification recalculates the raw v1.415 handoff and binds exact reference/footprint identity, value/MPN/BOM/DNP metadata, pin-to-pad number/net/no-connect state, and complete net/footprint/pad coverage to the actual board using canonical names from the imported schematic; source, canonical, and binding digests are deterministic and rejected reports are retained atomically | Board-binding schema and Rust/CLI/MCP regressions cover exact and duplicate/missing/extra records, terminal-less raw nets, reserved net 0, declared no-connect pads, the empty unconnected unnumbered-NPTH exception, nested-handoff rejection, bounded inputs, source/electrical digest behavior, output collisions, and retained failures |
 | Bounded-input deterministic pipeline runner | One closed plan authorizes every raw circuit, schematic, board, review, analysis, manufacturing, firmware, and optional factory input by relative path, byte count, and SHA-256; private snapshots feed the standalone board-binding and existing pipeline gates in process, whose canonical schematic and raw board identities are cross-bound into one domain-separated no-side-effect report | Unit and CLI E2E cover closed schemas, unsafe paths and digest mismatches, exact original firmware-directory enforcement, stable staged basenames, independent gate evidence retention, output preflight/no-clobber behavior, complete end-to-end approval, and byte-identical repeated reports |
 | MCP deterministic pipeline runner parity | The closed v1.417 runner is available synchronously and through optional MCP Tasks with the same explicit plan, output, and approval gate; complete reports remain retained while a compact summary authenticates their exact bytes and top-level decision without exceeding the 16 MiB MCP frame | Tool-schema, typed-argument, task allow-list, stale-output, digest-mutation, CLI bridge, synchronous rejection, and task-result E2E regressions cover no-clobber retention and the 128 MiB report/16 MiB response boundary |
+| Composite-Action deterministic pipeline runner parity | Root Action opt-in accepts the same closed plan and optional approval gate, retains the fixed `output-dir/deterministic-pipeline-report.json`, and publishes seven outputs only after revalidating report bytes, SHA-256, identities, counts, schema, and decision; valid rejection evidence is published before the final required-approval failure | Action input/output/static-contract, empty-plan compatibility, fixed-path/no-clobber, retained-rejection, stale/digest-mismatch, and output-authentication regressions |
 
 ## Final verification commands
 
@@ -238,7 +239,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.418.0 exposes 892 Rust tests and 156 Python tests. The release workflow
+Version 1.419.0 exposes 892 Rust tests and 156 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

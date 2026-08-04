@@ -42,6 +42,14 @@ inputs:
     description: Opt in to the deterministic hardware pipeline verification gate using the current board, schematic, and analysis artifacts; dependent pipeline inputs are required when true.
     required: false
     default: "false"
+  deterministic-pipeline-plan:
+    description: Optional workspace-relative closed deterministic pipeline plan; empty disables the deterministic pipeline runner.
+    required: false
+    default: ""
+  deterministic-pipeline-require-approved:
+    description: Require the deterministic pipeline plan to produce an approved report after retaining and verifying its evidence.
+    required: false
+    default: "false"
   pipeline-electrical-policy:
     description: Optional electrical policy JSON path for pipeline verification.
     required: false
@@ -1073,6 +1081,30 @@ outputs:
   pipeline-passed:
     description: Whether hardware pipeline verification passed.
     value: ${{ steps.analyze.outputs.pipeline-passed }}
+  deterministic-pipeline-report:
+    description: Fixed deterministic pipeline report path (output-dir/deterministic-pipeline-report.json), when enabled.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-report }}
+  deterministic-pipeline-schema-version:
+    description: Verified deterministic pipeline report schema version.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-schema-version }}
+  deterministic-pipeline-approved:
+    description: Whether the verified deterministic pipeline report is approved.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-approved }}
+  deterministic-pipeline-plan-sha256:
+    description: Verified deterministic pipeline plan identity.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-plan-sha256 }}
+  deterministic-pipeline-run-sha256:
+    description: Verified deterministic pipeline run identity.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-run-sha256 }}
+  deterministic-pipeline-failure-count:
+    description: Verified number of deterministic pipeline failures.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-failure-count }}
+  deterministic-pipeline-report-bytes:
+    description: Verified retained deterministic pipeline report byte count.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-report-bytes }}
+  deterministic-pipeline-report-sha256:
+    description: Verified retained deterministic pipeline report SHA-256.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-report-sha256 }}
   current-sarif:
     description: SARIF report for the current board.
     value: ${{ steps.analyze.outputs.current-sarif }}
@@ -1403,6 +1435,8 @@ runs:
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
         PCBEX_PHYSICAL_PROFILE: ${{ inputs.physical-profile }}
         PCBEX_PIPELINE_VERIFY: ${{ inputs.pipeline-verify }}
+        PCBEX_DETERMINISTIC_PIPELINE_PLAN: ${{ inputs.deterministic-pipeline-plan }}
+        PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED: ${{ inputs.deterministic-pipeline-require-approved }}
         PCBEX_PIPELINE_ELECTRICAL_POLICY: ${{ inputs.pipeline-electrical-policy }}
         PCBEX_PIPELINE_ELECTRICAL_REVIEW: ${{ inputs.pipeline-electrical-review }}
         PCBEX_PIPELINE_MANUFACTURING_PACKAGE: ${{ inputs.pipeline-manufacturing-package }}
@@ -1678,6 +1712,10 @@ runs:
         PCBEX_ANALYSIS_STATUS: ${{ steps.analyze.outputs.status }}
         PCBEX_PIPELINE_VERIFY: ${{ inputs.pipeline-verify }}
         PCBEX_PIPELINE_PASSED: ${{ steps.analyze.outputs.pipeline-passed }}
+        PCBEX_DETERMINISTIC_PIPELINE_PLAN: ${{ inputs.deterministic-pipeline-plan }}
+        PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED: ${{ inputs.deterministic-pipeline-require-approved }}
+        PCBEX_DETERMINISTIC_PIPELINE_APPROVED: ${{ steps.analyze.outputs.deterministic-pipeline-approved }}
+        PCBEX_DETERMINISTIC_PIPELINE_REPORT: ${{ steps.analyze.outputs.deterministic-pipeline-report }}
         PCBEX_VIOLATION_COUNT: ${{ steps.analyze.outputs.violation-count }}
         PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
         PCBEX_MANUFACTURING_FEEDBACK_PASSED: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
@@ -1744,6 +1782,13 @@ runs:
         set -euo pipefail
         if [[ "$PCBEX_PIPELINE_VERIFY" == "true" && "$PCBEX_PIPELINE_PASSED" != "true" ]]; then
           echo "::error::pcbex pipeline verification is absent or did not pass"
+          exit 1
+        fi
+        if [[ -n "$PCBEX_DETERMINISTIC_PIPELINE_PLAN" &&
+          "$PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED" == "true" &&
+          ( "$PCBEX_DETERMINISTIC_PIPELINE_APPROVED" != "true" ||
+            -z "$PCBEX_DETERMINISTIC_PIPELINE_REPORT" ) ]]; then
+          echo "::error::pcbex deterministic pipeline report is absent or not approved"
           exit 1
         fi
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
