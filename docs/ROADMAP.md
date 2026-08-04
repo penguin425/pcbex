@@ -126,6 +126,7 @@ auditable release.
 | v1.413.0 | Digest-bound physical-profile injection | Apply one bounded geometry/DFM authority across placement, routing, analysis, and fabrication while binding its exact and canonical digests through manufacturing and pipeline verification |
 | v1.414.0 | MCP/Action hardware pipeline parity | Expose schematic, circuit-spec, and complete pipeline checks through MCP and opt-in composite Action inputs/outputs, retaining rejection reports before the final CI gate |
 | v1.415.0 | Verified circuit-to-KiCad handoff | Verify a closed flat/single-unit circuit-spec v2 against an existing KiCad schematic with source/canonical identities and retained ERC evidence; do not generate or mutate either input |
+| v1.416.0 | Circuit-spec/KiCad schematic-board binding | Recalculate the raw v1.415 handoff and bind exact references, footprint metadata, pin/pad connectivity, no-connect states, and complete net/footprint/pad coverage to the actual `.kicad_pcb`, with source/canonical/binding digests and retained deterministic rejection evidence |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -141,15 +142,25 @@ applies atomically, and cannot relax existing manufacturing rules. Exact-source
 and domain-separated canonical SHA-256 identities are carried by schema-v2
 analysis and manufacturing manifests; pipeline verification reopens the
 authorized profile and rejects source, semantic, or cross-phase substitution.
-No-profile schema-v1 artifacts remain compatible. The current v1.415.0 release
-keeps that profile binding intact and adds a native digest-bound handoff gate:
-`verify-circuit-kicad-handoff` and MCP `verify_circuit_kicad_handoff` compare a
-closed flat/single-unit circuit-spec v2 subset with an existing KiCad
-schematic, run the native ERC checks, and retain rejection reports before a
-required-approval failure. Geometry/UUIDs, hierarchy/buses/power-symbol
-extras, multi-unit symbols, unresolved libraries/live suppliers, and all
-placement/routing/fabrication decisions remain outside this verifier; it is
-not a generator.
+No-profile schema-v1 artifacts remain compatible. The v1.415.0 handoff release
+is now retained as a released schematic-only boundary. The current v1.416.0
+release keeps that contract and adds the standalone
+`verify-circuit-kicad-board-binding` CLI/API boundary plus MCP
+`verify_circuit_kicad_board_binding`. It recalculates the handoff from raw
+circuit and schematic bytes, then compares exact reference/footprint
+identifier, value, MPN, assembly metadata, pin-to-pad number/net/no-connect
+state, and complete net/footprint/pad coverage against the actual board.  Raw
+terminal-less nets remain visible, while net 0 is validated as the board's
+reserved no-net identifier rather than a circuit terminal.  Board-net matching
+uses canonical names from the imported schematic.  Declared no-connect pins
+remain unconnected on their same-numbered pads; only an empty unconnected NPTH
+mechanical pad may be added without a pin number.  Source, canonical, and
+binding digests, bounded input checks, deterministic findings, atomic
+no-clobber outputs, and retained rejection reports are part of the closed
+contract.  Hierarchy, buses,
+multi-unit/nested handoffs, geometry, routing, DRC, and DFM remain outside it,
+and existing pipeline v1/v2 phases are unchanged.
 
-The next roadmap work is a headless schematic-to-manufacturing orchestrator,
-followed by qualified live supplier selection.
+The next milestone (v1.417.0) is a bound-input deterministic pipeline runner
+that can compose these standalone gates without changing the existing v1/v2
+report contracts. Qualified live supplier selection remains a later boundary.

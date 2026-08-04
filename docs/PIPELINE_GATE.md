@@ -11,6 +11,13 @@ Production jobs should supply both `--factory-receipt` and
 flag; `--require-factory` by itself enables v2 and retains a failure when the
 receipt is missing. The gate never submits the package or contacts the factory.
 
+The standalone v1.416 `verify-circuit-kicad-board-binding` command is a
+separate pre-pipeline identity gate.  It binds a circuit-spec v2 to an actual
+KiCad schematic and board, but it does not add a phase to this v1 report or the
+factory-bound v2 report.  Existing v1/v2 invocations and schemas remain
+unchanged; the bounded-input deterministic pipeline runner planned for v1.417
+is the future integration point.
+
 ```text
 pcbex pipeline-verify \
   --schematic hardware/controller.kicad_sch \

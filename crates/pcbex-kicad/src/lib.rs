@@ -224,6 +224,15 @@ pub use circuit_handoff::{
     CircuitKicadHandoffFinding, CircuitKicadHandoffFindingCounts, CircuitKicadHandoffReport,
     circuit_kicad_handoff_report_json_schema, verify_circuit_kicad_handoff,
 };
+mod circuit_board_binding;
+pub use circuit_board_binding::{
+    CIRCUIT_KICAD_BOARD_BINDING_ENGINE_VERSION, CIRCUIT_KICAD_BOARD_BINDING_MAX_BOARD_BYTES,
+    CIRCUIT_KICAD_BOARD_BINDING_MAX_REPORT_BYTES,
+    CIRCUIT_KICAD_BOARD_BINDING_REPORT_SCHEMA_VERSION, CIRCUIT_KICAD_BOARD_BINDING_SCHEMA_VERSION,
+    CircuitKicadBoardBindingFinding, CircuitKicadBoardBindingFindingCounts,
+    CircuitKicadBoardBindingReport, circuit_kicad_board_binding_report_json_schema,
+    verify_circuit_kicad_board_binding,
+};
 mod manufacturing;
 pub use manufacturing::{
     MAX_MANUFACTURING_PARTS, ManufacturingPart, manufacturing_gerber_layers, manufacturing_parts,

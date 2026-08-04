@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.415.0
+    uses: penguin425/pcbex@v1.416.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2155,7 +2155,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.415.0` step:
+# Add these fields to a `penguin425/pcbex@v1.416.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -2295,7 +2295,7 @@ JSON-RPC messages. Expected analysis or regression gate failures use
 `isError: true` while retaining structured manifests and artifact paths;
 malformed requests remain JSON-RPC errors so an agent can correct its call.
 Each request and serialized response is capped at 16 MiB. Tool subprocesses
-have a 600-second deadline, 8 MiB stdout ceiling, and 1 MiB stderr ceiling;
+have a 600-second deadline, 16 MiB stdout ceiling, and 1 MiB stderr ceiling;
 expired tasks actively cancel their running child.
 
 For 2025-11-25 clients, the server also implements the experimental MCP Tasks
@@ -2370,6 +2370,30 @@ schematic check/review evidence, findings, counts, and `approved`; a failed
 hierarchy, buses, power-symbol extras, multi-unit symbols, unresolved
 libraries, live suppliers, placement, routing, and fabrication remain outside
 this closed verifier.
+
+Version 1.416.0 adds the standalone `verify_circuit_kicad_board_binding`
+operation.  It recalculates the v1.415 handoff from the raw circuit-spec v2 and
+KiCad schematic, then binds the exact references, footprint metadata, pin/pad
+numbers, nets, no-connect states, and assembly metadata to the actual
+`.kicad_pcb`.  Board-net matching uses canonical net names from the imported
+schematic; KiCad net 0 is a reserved no-net identifier, not a circuit terminal,
+and remains validated.  The operation returns source, canonical, and binding
+digests plus deterministically ordered findings for semantic mismatches;
+ambiguous duplicate net declarations are malformed input.  Declared
+no-connect pins map to same-numbered unconnected pads (`net 0` and an absent
+net field are equivalent); only an empty, unconnected NPTH mechanical pad may
+appear as an extra unnumbered pad, and a numbered NPTH pad cannot satisfy a
+circuit pin.  Binding-relevant pad size, copper-layer membership, drill, and
+supported custom-polygon structure fail closed.  It is task-compatible,
+retains rejected reports before a required-approval failure, and rejects
+bounded-input violations atomically.
+Geometry, routing, DRC/DFM, hierarchy, buses, and multi-unit/nested handoffs
+remain outside this strict closed subset.  Emit its schema with
+`circuit-kicad-board-binding-schema` and see
+[`docs/CIRCUIT_KICAD_BOARD_BINDING.md`](docs/CIRCUIT_KICAD_BOARD_BINDING.md)
+for the CLI, MCP, and retained-report contract.  This operation is not a new
+`pipeline-verify` phase; deterministic pipeline integration is planned for
+v1.417.
 
 Analysis and routing tools require explicit output paths and may overwrite
 files there. MCP hosts should retain their normal user-approval prompt for
@@ -2931,6 +2955,39 @@ supplier checks, and every placement/routing/DRC/fabrication decision remain
 outside this verifier. See
 [`docs/CIRCUIT_KICAD_HANDOFF.md`](docs/CIRCUIT_KICAD_HANDOFF.md) for the
 schema boundary and retained rejection behavior.
+
+## Circuit-spec v2 to KiCad schematic and board binding
+
+Bind the same closed circuit intent to both an authored schematic and the
+actual board with the standalone v1.416 gate:
+
+```sh
+pcbex circuit-kicad-board-binding-schema \
+  --output circuit-kicad-board-binding.schema.json
+
+pcbex verify-circuit-kicad-board-binding \
+  circuit-spec-v2.json hardware/controller.kicad_sch \
+  hardware/controller.kicad_pcb \
+  --policy electrical-policy.json \
+  --output build/circuit-kicad-board-binding.json \
+  --require-approved
+```
+
+The gate recomputes the v1.415 handoff from raw inputs, then compares exact
+references, footprint identifiers/values/MPNs/assembly metadata, pin-to-pad
+number/net/no-connect state, and complete net/footprint/pad coverage.  It
+uses canonical net names from the imported schematic rather than inventing
+board labels from the circuit JSON.  It retains terminal-less raw nets and
+validates net 0 as a reserved no-net identifier.  Declared no-connect pins use
+same-numbered unconnected pads; only an empty, unconnected NPTH mechanical pad
+may be added without a pin number.  Source, canonical, and binding SHA-256
+identities and deterministic findings are retained in the
+closed report; malformed or oversized inputs and output collisions fail within
+the bounded atomic contract.  Hierarchy, buses, multi-unit/nested handoffs,
+geometry, routing, DRC, and DFM are rejected or out of scope.  The MCP tool is
+`verify_circuit_kicad_board_binding` with the same raw input and output
+arguments.  This is not a new `pipeline-verify` phase; v1/v2 pipeline reports
+remain unchanged until the deterministic runner planned for v1.417.
 
 ## Schematic electrical IR
 
@@ -4224,7 +4281,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.415.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.416.0
   with:
     request: hardware/ai-review-request.json
     provider: openai
