@@ -21,6 +21,8 @@ The optional catalog contracts are available from the Python agent:
 ```sh
 PYTHONPATH=agent/src python3 -m pcbex_agent catalog-snapshot-schema
 PYTHONPATH=agent/src python3 -m pcbex_agent catalog-selection-receipt-schema
+PYTHONPATH=agent/src python3 -m pcbex_agent catalog-fetch-receipt-schema
+PYTHONPATH=agent/src python3 -m pcbex_agent catalog-generation-provenance-schema
 ```
 
 The closed generation-bundle schema can embed those exact native contracts:
@@ -78,6 +80,14 @@ silently substituted for a text match. The checked-in
 its seven-day validity window must be refreshed with new inventory for a real
 run.
 
+To bind a retained v1.420 fetch to the exact v1.421 generation outputs, add
+both `--catalog-fetch-receipt FETCH.json` and
+`--catalog-provenance-output PROVENANCE.json`. The pair requires the snapshot,
+is validated before any provider/native child starts, and evaluates selection
+at the receipt's fetch timestamp. It performs no network operation. The
+sidecar is separate so `circuit-generation-v2` remains byte/schema compatible
+for existing consumers.
+
 ## Correction and acceptance rules
 
 The provider receives the exact Rust JSON Schema and untrusted requirements.
@@ -133,6 +143,16 @@ The generation result is the closed `circuit-generation-v2` bundle. Its
 non-null when resolution is enabled. Consumers must branch on bundle
 `schema_version: 2`, not infer the contract from the package version.
 
+When the provenance flag pair is present, the CLI revalidates the fetch
+receipt, normalized snapshot, embedded selection receipt, reconstructed input
+spec, resolved spec, final native check/history, exact bundle bytes, and exact
+SKiDL bytes before publishing. The closed sidecar records their SHA-256
+bindings plus provider, endpoint identity, normalized catalog digest, and
+evaluation timestamp; it contains no credential or local path. Bundle and
+optional SKiDL publication are individually atomic, and the sidecar is
+published last. See [Catalog snapshots and MPN selection](CATALOG_SELECTION.md)
+for the complete replay contract and intentional per-file transaction limit.
+
 ## Circuit-spec v2 boundary
 
 The v2 contract uses explicit pin electrical types and integer microvolts.
@@ -154,7 +174,9 @@ Generation still ends at a checked circuit specification and deterministic
 SKiDL source. It never queries live supplier inventory implicitly. The
 standalone v1.420 `fetch-catalog-snapshot` pre-step may acquire a caller-owned
 closed feed before generation, but generation itself consumes only that
-retained local snapshot. It does not map arbitrary supplier-native responses,
+retained local snapshot. The v1.421 provenance option verifies and binds the
+retained fetch evidence but does not repeat the request. It does not map
+arbitrary supplier-native responses,
 verify datasheet ratings, generate a `.kicad_sch`, place or route a board, or
 authorize fabrication. When a schematic is authored separately, the native
 `verify-circuit-kicad-handoff` gate can verify its closed flat/single-unit

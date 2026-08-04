@@ -624,6 +624,11 @@
     {
       "id": "bounded-supplier-inventory-snapshot-ingestion",
       "release": "v1.420.0",
+      "status": "released"
+    },
+    {
+      "id": "catalog-generation-provenance",
+      "release": "v1.421.0",
       "status": "current"
     }
   ]

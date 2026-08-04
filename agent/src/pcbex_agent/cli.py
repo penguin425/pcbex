@@ -9,20 +9,29 @@ from .bounded_io import (
     BoundedIOError,
     atomic_write,
     atomic_write_text_no_clobber,
+    read_bytes,
     read_text,
     validate_no_clobber_path,
 )
 from .catalog import (
+    MAX_CATALOG_RAW_BYTES,
     CatalogError,
     catalog_parts_from_json,
     catalog_receipt_json_schema,
     catalog_snapshot_json_schema,
     load_catalog_snapshot,
 )
+from .catalog_provenance import (
+    CatalogGenerationProvenanceError,
+    build_catalog_generation_provenance,
+    catalog_generation_provenance_json_schema,
+)
 from .supplier_inventory import (
+    MAXIMUM_RECEIPT_BYTES,
     SupplierInventoryError,
     catalog_fetch_receipt_json_schema,
     fetch_catalog_snapshot,
+    validate_catalog_fetch_receipt,
 )
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
@@ -56,6 +65,43 @@ from .skidl import (
 )
 
 MAXIMUM_AGENT_FILE_BYTES = 32 * 1024 * 1024
+
+
+class _DuplicateJSONKey(ValueError):
+    pass
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateJSONKey
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value: str) -> object:
+    raise ValueError
+
+
+def _strict_json_object(raw: bytes, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(
+            raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        _DuplicateJSONKey,
+        ValueError,
+        RecursionError,
+    ):
+        raise CircuitGenerationError(f"{label} is not strict JSON") from None
+    if not isinstance(value, dict):
+        raise CircuitGenerationError(f"{label} must be a JSON object")
+    return value
 
 
 def _read_text(path: Path) -> str:
@@ -192,6 +238,19 @@ def main() -> None:
         help="closed local catalog snapshot used to verify or assign every MPN",
     )
     generate_circuit.add_argument(
+        "--catalog-fetch-receipt",
+        type=Path,
+        help=(
+            "retained supplier fetch receipt to validate before generation; "
+            "requires --catalog-snapshot and --catalog-provenance-output"
+        ),
+    )
+    generate_circuit.add_argument(
+        "--catalog-provenance-output",
+        type=Path,
+        help="write the closed fetch-to-generation provenance sidecar",
+    )
+    generate_circuit.add_argument(
         "--allow-out-of-stock",
         action="store_true",
         help="allow selection when the snapshot reports insufficient stock",
@@ -246,6 +305,11 @@ def main() -> None:
         help="write the closed catalog-fetch receipt JSON Schema",
     )
     catalog_fetch_schema.add_argument("-o", "--output", type=Path)
+    catalog_provenance_schema = sub.add_parser(
+        "catalog-generation-provenance-schema",
+        help="write the closed catalog-to-generation provenance JSON Schema",
+    )
+    catalog_provenance_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -393,23 +457,70 @@ def main() -> None:
                 raise CircuitGenerationError(
                     "catalog policy options require --catalog-snapshot"
                 )
+            if (args.catalog_fetch_receipt is None) != (
+                args.catalog_provenance_output is None
+            ):
+                raise CircuitGenerationError(
+                    "--catalog-fetch-receipt and --catalog-provenance-output "
+                    "must be supplied together"
+                )
+            if (
+                args.catalog_fetch_receipt is not None
+                and args.catalog_snapshot is None
+            ):
+                raise CircuitGenerationError(
+                    "catalog provenance requires --catalog-snapshot"
+                )
             output_paths = [args.output]
             if args.skidl_output:
                 output_paths.append(args.skidl_output)
+            if args.catalog_provenance_output:
+                output_paths.append(args.catalog_provenance_output)
             normalized_paths: list[Path] = []
             for path in output_paths:
                 if any(_paths_are_same(path, other) for other in normalized_paths):
                     raise CircuitGenerationError(
-                        "circuit bundle and SKiDL output paths must differ"
+                        "circuit bundle, SKiDL, and catalog provenance output "
+                        "paths must differ"
                     )
                 validate_no_clobber_path(path)
                 normalized_paths.append(path)
             requirements = _read_text(args.requirements)
-            catalog_snapshot = (
-                load_catalog_snapshot(args.catalog_snapshot)
-                if args.catalog_snapshot is not None
-                else None
-            )
+            fetch_receipt_raw: bytes | None = None
+            snapshot_raw: bytes | None = None
+            catalog_evaluated_at: int | None = None
+            if args.catalog_fetch_receipt is not None:
+                snapshot_raw = read_bytes(
+                    args.catalog_snapshot,
+                    max_bytes=MAX_CATALOG_RAW_BYTES,
+                )
+                fetch_receipt_raw = read_bytes(
+                    args.catalog_fetch_receipt,
+                    max_bytes=MAXIMUM_RECEIPT_BYTES,
+                )
+                fetch_receipt = _strict_json_object(
+                    fetch_receipt_raw,
+                    "catalog fetch receipt",
+                )
+                fetch_binding = validate_catalog_fetch_receipt(
+                    fetch_receipt,
+                    snapshot_raw,
+                )
+                catalog_evaluated_at = fetch_binding["fetched_at_unix"]
+                catalog_snapshot = load_catalog_snapshot(
+                    args.catalog_snapshot,
+                    evaluated_at_unix=catalog_evaluated_at,
+                )
+                if catalog_snapshot.raw_bytes != snapshot_raw:
+                    raise CircuitGenerationError(
+                        "catalog snapshot changed during provenance preflight"
+                    )
+            else:
+                catalog_snapshot = (
+                    load_catalog_snapshot(args.catalog_snapshot)
+                    if args.catalog_snapshot is not None
+                    else None
+                )
             bundle = generate_circuit_with_command(
                 requirements,
                 args.pcbex,
@@ -421,8 +532,26 @@ def main() -> None:
                 require_available=not args.allow_out_of_stock,
                 require_basic=args.require_basic,
                 allow_footprint_fallback=args.allow_footprint_fallback,
+                evaluated_at_unix=catalog_evaluated_at,
             )
             rendered = json.dumps(bundle, indent=2, ensure_ascii=False) + "\n"
+            provenance_rendered: str | None = None
+            if args.catalog_provenance_output is not None:
+                if fetch_receipt_raw is None or snapshot_raw is None:
+                    raise CircuitGenerationError(
+                        "catalog provenance inputs were not retained"
+                    )
+                skidl_raw = bundle["skidl"].encode("utf-8", errors="strict")
+                provenance = build_catalog_generation_provenance(
+                    fetch_receipt_raw,
+                    args.catalog_snapshot,
+                    rendered.encode("utf-8", errors="strict"),
+                    skidl_raw,
+                    evaluated_at_unix=catalog_evaluated_at,
+                )
+                provenance_rendered = (
+                    json.dumps(provenance, indent=2, ensure_ascii=False) + "\n"
+                )
             atomic_write_text_no_clobber(
                 args.output,
                 rendered,
@@ -434,12 +563,21 @@ def main() -> None:
                     bundle["skidl"],
                     max_bytes=MAXIMUM_AGENT_FILE_BYTES,
                 )
+            if args.catalog_provenance_output and provenance_rendered is not None:
+                atomic_write_text_no_clobber(
+                    args.catalog_provenance_output,
+                    provenance_rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
         except (
             OSError,
             BoundedIOError,
+            CatalogGenerationProvenanceError,
             CircuitGenerationError,
             CatalogError,
             ProviderError,
+            SupplierInventoryError,
+            UnicodeError,
         ) as error:
             raise SystemExit(f"circuit generation failed: {error}") from error
     elif args.command == "circuit-generation-schema":
@@ -491,14 +629,17 @@ def main() -> None:
         "catalog-snapshot-schema",
         "catalog-selection-receipt-schema",
         "catalog-fetch-receipt-schema",
+        "catalog-generation-provenance-schema",
     }:
         try:
             if args.command == "catalog-snapshot-schema":
                 schema = catalog_snapshot_json_schema()
             elif args.command == "catalog-selection-receipt-schema":
                 schema = catalog_receipt_json_schema()
-            else:
+            elif args.command == "catalog-fetch-receipt-schema":
                 schema = catalog_fetch_receipt_json_schema()
+            else:
+                schema = catalog_generation_provenance_json_schema()
             rendered = json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
             if args.output:
                 validate_no_clobber_path(args.output)
@@ -509,7 +650,12 @@ def main() -> None:
                 )
             else:
                 print(rendered, end="")
-        except (OSError, BoundedIOError, CatalogError) as error:
+        except (
+            OSError,
+            BoundedIOError,
+            CatalogError,
+            CatalogGenerationProvenanceError,
+        ) as error:
             raise SystemExit(f"catalog schema failed: {error}") from error
     else:
         if _paths_are_same(args.output, args.report):
