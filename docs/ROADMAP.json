@@ -659,6 +659,11 @@
     {
       "id": "darwin-process-group-cleanup-race",
       "release": "v1.426.1",
+      "status": "released"
+    },
+    {
+      "id": "standalone-native-kicad-erc-action-gate",
+      "release": "v1.427.0",
       "status": "current"
     }
   ]

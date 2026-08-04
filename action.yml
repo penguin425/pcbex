@@ -26,6 +26,22 @@ inputs:
     description: Optional accepted .kicad_sch file; required together with schematic.
     required: false
     default: ""
+  native-kicad-erc-schematic:
+    description: Optional .kicad_sch file for the standalone native KiCad schematic ERC gate; independent of AI review and deterministic pipeline inputs.
+    required: false
+    default: ""
+  native-kicad-erc-warning-policy:
+    description: Optional closed native KiCad ERC warning policy for the standalone gate; requires native-kicad-erc-schematic.
+    required: false
+    default: ""
+  native-kicad-erc-kicad-cli:
+    description: KiCad CLI executable used by the standalone native ERC gate.
+    required: false
+    default: "kicad-cli"
+  native-kicad-erc-require-approved:
+    description: Fail after publishing the standalone native KiCad ERC report unless it is approved.
+    required: false
+    default: "false"
   schematic-reviewer-routing-policy:
     description: Optional strict reviewer-routing policy applied to the schematic semantic diff.
     required: false
@@ -1110,6 +1126,42 @@ outputs:
   circuit-spec-schematic-sha256:
     description: Verified SHA-256 of the generated circuit-spec schematic.
     value: ${{ steps.analyze.outputs.circuit-spec-schematic-sha256 }}
+  native-kicad-erc-report:
+    description: Fixed standalone native KiCad ERC report path (output-dir/native-kicad-erc.json), when enabled.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-report }}
+  native-kicad-erc-schema-version:
+    description: Verified standalone native KiCad ERC report schema version.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-schema-version }}
+  native-kicad-erc-approved:
+    description: Whether the standalone native KiCad ERC report is approved.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-approved }}
+  native-kicad-erc-error-count:
+    description: Error finding count from the standalone native KiCad ERC report.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-error-count }}
+  native-kicad-erc-warning-count:
+    description: Warning finding count from the standalone native KiCad ERC warning-policy report.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-warning-count }}
+  native-kicad-erc-policy-failure-count:
+    description: Warning-policy failure count from the standalone native KiCad ERC report.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-policy-failure-count }}
+  native-kicad-erc-warning-policy-sha256:
+    description: Domain-separated canonical SHA-256 of the standalone native KiCad ERC warning policy.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-warning-policy-sha256 }}
+  native-kicad-erc-warning-policy-source-bytes:
+    description: Exact byte count of the standalone native KiCad ERC warning-policy source (empty for report schema v1).
+    value: ${{ steps.analyze.outputs.native-kicad-erc-warning-policy-source-bytes }}
+  native-kicad-erc-warning-policy-source-sha256:
+    description: Exact SHA-256 of the standalone native KiCad ERC warning-policy source (empty for report schema v1).
+    value: ${{ steps.analyze.outputs.native-kicad-erc-warning-policy-source-sha256 }}
+  native-kicad-erc-run-sha256:
+    description: Standalone native KiCad ERC run identity.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-run-sha256 }}
+  native-kicad-erc-report-bytes:
+    description: Exact byte count of the standalone normalized native KiCad ERC report.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-report-bytes }}
+  native-kicad-erc-report-sha256:
+    description: Exact SHA-256 of the standalone normalized native KiCad ERC report.
+    value: ${{ steps.analyze.outputs.native-kicad-erc-report-sha256 }}
   pipeline-report:
     description: Fixed hardware pipeline verification report path (output-dir/pipeline-gate.json), when enabled.
     value: ${{ steps.analyze.outputs.pipeline-report }}
@@ -1517,6 +1569,10 @@ runs:
         PCBEX_BASELINE_BOARD: ${{ inputs.baseline-board }}
         PCBEX_SCHEMATIC: ${{ inputs.schematic }}
         PCBEX_BASELINE_SCHEMATIC: ${{ inputs.baseline-schematic }}
+        PCBEX_NATIVE_KICAD_ERC_SCHEMATIC: ${{ inputs.native-kicad-erc-schematic }}
+        PCBEX_NATIVE_KICAD_ERC_WARNING_POLICY: ${{ inputs.native-kicad-erc-warning-policy }}
+        PCBEX_NATIVE_KICAD_ERC_KICAD_CLI: ${{ inputs.native-kicad-erc-kicad-cli }}
+        PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED: ${{ inputs.native-kicad-erc-require-approved }}
         PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY: ${{ inputs.schematic-reviewer-routing-policy }}
         PCBEX_FAB: ${{ inputs.fab }}
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
@@ -1807,6 +1863,10 @@ runs:
         PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED: ${{ inputs.deterministic-pipeline-require-approved }}
         PCBEX_DETERMINISTIC_PIPELINE_APPROVED: ${{ steps.analyze.outputs.deterministic-pipeline-approved }}
         PCBEX_DETERMINISTIC_PIPELINE_REPORT: ${{ steps.analyze.outputs.deterministic-pipeline-report }}
+        PCBEX_NATIVE_KICAD_ERC_SCHEMATIC: ${{ inputs.native-kicad-erc-schematic }}
+        PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED: ${{ inputs.native-kicad-erc-require-approved }}
+        PCBEX_NATIVE_KICAD_ERC_APPROVED: ${{ steps.analyze.outputs.native-kicad-erc-approved }}
+        PCBEX_NATIVE_KICAD_ERC_REPORT: ${{ steps.analyze.outputs.native-kicad-erc-report }}
         PCBEX_VIOLATION_COUNT: ${{ steps.analyze.outputs.violation-count }}
         PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
         PCBEX_MANUFACTURING_FEEDBACK_PASSED: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
@@ -1880,6 +1940,13 @@ runs:
           ( "$PCBEX_DETERMINISTIC_PIPELINE_APPROVED" != "true" ||
             -z "$PCBEX_DETERMINISTIC_PIPELINE_REPORT" ) ]]; then
           echo "::error::pcbex deterministic pipeline report is absent or not approved"
+          exit 1
+        fi
+        if [[ -n "$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC" &&
+          "$PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED" == "true" &&
+          ( "$PCBEX_NATIVE_KICAD_ERC_APPROVED" != "true" ||
+            -z "$PCBEX_NATIVE_KICAD_ERC_REPORT" ) ]]; then
+          echo "::error::pcbex native KiCad ERC report is absent or not approved"
           exit 1
         fi
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then

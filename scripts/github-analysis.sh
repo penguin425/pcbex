@@ -15,6 +15,19 @@ for variable in "${required_variables[@]}"; do
   fi
 done
 
+analysis_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+PYTHONPATH="$analysis_script_dir" python3 - "$PCBEX_OUTPUT_DIR" <<'PY'
+import sys
+
+from ci_runtime import ExecutionBoundaryError, validate_relative_output_root
+
+try:
+    validate_relative_output_root(sys.argv[1])
+except (ExecutionBoundaryError, OSError, TypeError, ValueError) as error:
+    print(f"invalid PCBEX_OUTPUT_DIR: {error}", file=sys.stderr)
+    raise SystemExit(2)
+PY
+
 case "${PCBEX_OUTPUT_DIR}" in
   /) echo "refusing to use the filesystem root as PCBEX_OUTPUT_DIR" >&2; exit 2 ;;
 esac
@@ -62,6 +75,18 @@ write_output circuit-spec-approved ""
 write_output circuit-spec-schematic ""
 write_output circuit-spec-schematic-bytes ""
 write_output circuit-spec-schematic-sha256 ""
+write_output native-kicad-erc-report ""
+write_output native-kicad-erc-schema-version ""
+write_output native-kicad-erc-approved ""
+write_output native-kicad-erc-error-count ""
+write_output native-kicad-erc-warning-count ""
+write_output native-kicad-erc-policy-failure-count ""
+write_output native-kicad-erc-warning-policy-sha256 ""
+write_output native-kicad-erc-warning-policy-source-bytes ""
+write_output native-kicad-erc-warning-policy-source-sha256 ""
+write_output native-kicad-erc-run-sha256 ""
+write_output native-kicad-erc-report-bytes ""
+write_output native-kicad-erc-report-sha256 ""
 write_output sarif-dir ""
 write_output current-sarif ""
 write_output comparison-sarif ""
@@ -190,6 +215,24 @@ deterministic_pipeline_report_bytes=""
 deterministic_pipeline_report_sha256=""
 deterministic_pipeline_rc=0
 deterministic_pipeline_summary_json=""
+native_kicad_erc_schematic="${PCBEX_NATIVE_KICAD_ERC_SCHEMATIC:-}"
+native_kicad_erc_warning_policy="${PCBEX_NATIVE_KICAD_ERC_WARNING_POLICY:-}"
+native_kicad_erc_kicad_cli="${PCBEX_NATIVE_KICAD_ERC_KICAD_CLI-kicad-cli}"
+native_kicad_erc_require_approved="${PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED:-false}"
+native_kicad_erc_report=""
+native_kicad_erc_schema_version=""
+native_kicad_erc_approved=""
+native_kicad_erc_error_count=""
+native_kicad_erc_warning_count=""
+native_kicad_erc_policy_failure_count=""
+native_kicad_erc_warning_policy_sha256=""
+native_kicad_erc_warning_policy_source_bytes=""
+native_kicad_erc_warning_policy_source_sha256=""
+native_kicad_erc_run_sha256=""
+native_kicad_erc_report_bytes=""
+native_kicad_erc_report_sha256=""
+native_kicad_erc_rc=0
+native_kicad_erc_summary_json=""
 ai_review_generated_schematic="${PCBEX_AI_REVIEW_GENERATED_SCHEMATIC:-}"
 ai_review_artifacts_verified=""
 ai_review_generated_schematic_bytes=""
@@ -215,6 +258,23 @@ ai_review_native_kicad_erc_warning_policy_source_sha256=""
 if [[ "$deterministic_pipeline_require_approved" != "true" &&
   "$deterministic_pipeline_require_approved" != "false" ]]; then
   echo "PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED must be true or false" >&2
+  exit 2
+fi
+if [[ "$native_kicad_erc_require_approved" != "true" &&
+  "$native_kicad_erc_require_approved" != "false" ]]; then
+  echo "PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED must be true or false" >&2
+  exit 2
+fi
+if [[ -n "$native_kicad_erc_warning_policy" && -z "$native_kicad_erc_schematic" ]]; then
+  echo "PCBEX_NATIVE_KICAD_ERC_WARNING_POLICY requires PCBEX_NATIVE_KICAD_ERC_SCHEMATIC" >&2
+  exit 2
+fi
+if [[ "$native_kicad_erc_require_approved" == "true" && -z "$native_kicad_erc_schematic" ]]; then
+  echo "PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED requires PCBEX_NATIVE_KICAD_ERC_SCHEMATIC" >&2
+  exit 2
+fi
+if [[ -n "$native_kicad_erc_schematic" && -z "$native_kicad_erc_kicad_cli" ]]; then
+  echo "PCBEX_NATIVE_KICAD_ERC_KICAD_CLI must not be empty when standalone native ERC is enabled" >&2
   exit 2
 fi
 ai_quorum_inputs=0
@@ -383,6 +443,170 @@ violation_count="$(
   cat "$current_dir/summary.md"
 } > "$comment_body"
 cat "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+
+if [[ -n "$native_kicad_erc_schematic" ]]; then
+  native_kicad_erc_report_candidate="${artifact_dir}/native-kicad-erc.json"
+  if [[ -e "$native_kicad_erc_report_candidate" ||
+    -L "$native_kicad_erc_report_candidate" ]]; then
+    echo "refusing to reuse an existing standalone native KiCad ERC report" >&2
+    native_kicad_erc_rc=2
+  else
+    native_kicad_erc_arguments=(
+      run-native-kicad-erc
+      --output "$native_kicad_erc_report_candidate"
+      --kicad-cli "$native_kicad_erc_kicad_cli"
+      --mcp-echo-report-summary
+    )
+    native_kicad_erc_summary_arguments=(
+      --verify
+      "--schematic=$native_kicad_erc_schematic"
+      "--report=$native_kicad_erc_report_candidate"
+    )
+    if [[ -n "$native_kicad_erc_warning_policy" ]]; then
+      native_kicad_erc_arguments+=(
+        --warning-policy "$native_kicad_erc_warning_policy"
+      )
+      native_kicad_erc_summary_arguments+=(
+        "--warning-policy=$native_kicad_erc_warning_policy"
+      )
+    fi
+    native_kicad_erc_arguments+=(-- "$native_kicad_erc_schematic")
+    native_kicad_erc_summary_json=""
+    if native_kicad_erc_summary_json="$(
+      python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
+        --timeout-seconds 600 \
+        --max-stdout-bytes 4096 \
+        --max-stderr-bytes 8388608 \
+        --output-root "$PCBEX_OUTPUT_DIR" \
+        -- "$PCBEX_BINARY" "${native_kicad_erc_arguments[@]}" |
+      python3 "$GITHUB_ACTION_PATH/scripts/native_kicad_erc_summary.py" \
+        "${native_kicad_erc_summary_arguments[@]}"
+    )"; then
+      native_kicad_erc_rc=0
+    else
+      native_kicad_erc_rc=$?
+    fi
+  fi
+
+  if [[ -f "$native_kicad_erc_report_candidate" &&
+    ! -L "$native_kicad_erc_report_candidate" &&
+    -n "$native_kicad_erc_summary_json" ]]; then
+    native_kicad_erc_summary_values=""
+    if native_kicad_erc_summary_values="$(
+      python3 - "$native_kicad_erc_summary_json" <<'PY'
+import json
+import sys
+
+v1_fields = (
+    "schema_version",
+    "approved",
+    "error_count",
+    "run_sha256",
+    "report_bytes",
+    "report_sha256",
+)
+v2_fields = v1_fields + (
+    "warning_count",
+    "policy_failure_count",
+    "warning_policy_sha256",
+    "warning_policy_source_bytes",
+    "warning_policy_source_sha256",
+)
+value = json.loads(sys.argv[1])
+if type(value) is not dict:
+    raise SystemExit(2)
+schema_version = value.get("schema_version")
+expected = v1_fields if schema_version == 1 else v2_fields if schema_version == 2 else ()
+if not expected or set(value) != set(expected) or len(value) != len(expected):
+    raise SystemExit(2)
+for field in v2_fields:
+    item = value.get(field, "")
+    if type(item) is bool:
+        rendered = str(item).lower()
+    elif type(item) in (int, str):
+        rendered = str(item)
+    else:
+        raise SystemExit(2)
+    print(f"{field}={rendered}")
+PY
+    )"; then
+      while IFS='=' read -r field value; do
+        case "$field" in
+          schema_version) native_kicad_erc_schema_version="$value" ;;
+          approved) native_kicad_erc_approved="$value" ;;
+          error_count) native_kicad_erc_error_count="$value" ;;
+          warning_count) native_kicad_erc_warning_count="$value" ;;
+          policy_failure_count) native_kicad_erc_policy_failure_count="$value" ;;
+          warning_policy_sha256) native_kicad_erc_warning_policy_sha256="$value" ;;
+          warning_policy_source_bytes) native_kicad_erc_warning_policy_source_bytes="$value" ;;
+          warning_policy_source_sha256) native_kicad_erc_warning_policy_source_sha256="$value" ;;
+          run_sha256) native_kicad_erc_run_sha256="$value" ;;
+          report_bytes) native_kicad_erc_report_bytes="$value" ;;
+          report_sha256) native_kicad_erc_report_sha256="$value" ;;
+          *) native_kicad_erc_rc=2 ;;
+        esac
+      done <<< "$native_kicad_erc_summary_values"
+      if [[ ! "$native_kicad_erc_schema_version" =~ ^[12]$ ||
+        ! "$native_kicad_erc_approved" =~ ^(true|false)$ ||
+        ! "$native_kicad_erc_error_count" =~ ^(0|[1-9][0-9]*)$ ||
+        ! "$native_kicad_erc_run_sha256" =~ ^[0-9a-f]{64}$ ||
+        ! "$native_kicad_erc_report_bytes" =~ ^[1-9][0-9]*$ ||
+        ! "$native_kicad_erc_report_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+        native_kicad_erc_rc=2
+      elif [[ "$native_kicad_erc_schema_version" == "2" ]] &&
+        { [[ ! "$native_kicad_erc_warning_count" =~ ^(0|[1-9][0-9]*)$ ]] ||
+          [[ ! "$native_kicad_erc_policy_failure_count" =~ ^(0|[1-9][0-9]*)$ ]] ||
+          [[ ! "$native_kicad_erc_warning_policy_sha256" =~ ^[0-9a-f]{64}$ ]] ||
+          [[ ! "$native_kicad_erc_warning_policy_source_bytes" =~ ^[1-9][0-9]*$ ]] ||
+          [[ ! "$native_kicad_erc_warning_policy_source_sha256" =~ ^[0-9a-f]{64}$ ]]; }; then
+        native_kicad_erc_rc=2
+      elif [[ "$native_kicad_erc_schema_version" == "1" ]] &&
+        [[ -n "$native_kicad_erc_warning_count" ||
+          -n "$native_kicad_erc_policy_failure_count" ||
+          -n "$native_kicad_erc_warning_policy_sha256" ||
+          -n "$native_kicad_erc_warning_policy_source_bytes" ||
+          -n "$native_kicad_erc_warning_policy_source_sha256" ]]; then
+        native_kicad_erc_rc=2
+      fi
+      if ((native_kicad_erc_rc == 0)); then
+        native_kicad_erc_report="$native_kicad_erc_report_candidate"
+      fi
+    else
+      native_kicad_erc_rc=2
+    fi
+  else
+    native_kicad_erc_rc=2
+  fi
+
+  if ((native_kicad_erc_rc != 0)); then
+    native_kicad_erc_report=""
+    native_kicad_erc_schema_version=""
+    native_kicad_erc_approved=""
+    native_kicad_erc_error_count=""
+    native_kicad_erc_warning_count=""
+    native_kicad_erc_policy_failure_count=""
+    native_kicad_erc_warning_policy_sha256=""
+    native_kicad_erc_warning_policy_source_bytes=""
+    native_kicad_erc_warning_policy_source_sha256=""
+    native_kicad_erc_run_sha256=""
+    native_kicad_erc_report_bytes=""
+    native_kicad_erc_report_sha256=""
+  fi
+  {
+    printf '\n# pcbex standalone native KiCad ERC\n\n'
+    printf -- '- Approved: `%s`\n' "${native_kicad_erc_approved:-unavailable}"
+    printf -- '- Errors: `%s`\n' "${native_kicad_erc_error_count:-unavailable}"
+    if [[ -n "$native_kicad_erc_warning_count" ]]; then
+      printf -- '- Warnings: `%s`\n' "$native_kicad_erc_warning_count"
+      printf -- '- Warning-policy failures: `%s`\n' "$native_kicad_erc_policy_failure_count"
+    fi
+    if [[ -n "$native_kicad_erc_report" ]]; then
+      printf -- '- Report: `%s`\n' "$native_kicad_erc_report"
+    else
+      printf -- '- Report: unavailable\n'
+    fi
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
 
 circuit_spec_check=""
 circuit_spec_approved=""
@@ -4001,6 +4225,18 @@ write_output circuit-spec-approved "$circuit_spec_approved"
 write_output circuit-spec-schematic "$circuit_spec_schematic"
 write_output circuit-spec-schematic-bytes "$circuit_spec_schematic_bytes"
 write_output circuit-spec-schematic-sha256 "$circuit_spec_schematic_sha256"
+write_output native-kicad-erc-report "$native_kicad_erc_report"
+write_output native-kicad-erc-schema-version "$native_kicad_erc_schema_version"
+write_output native-kicad-erc-approved "$native_kicad_erc_approved"
+write_output native-kicad-erc-error-count "$native_kicad_erc_error_count"
+write_output native-kicad-erc-warning-count "$native_kicad_erc_warning_count"
+write_output native-kicad-erc-policy-failure-count "$native_kicad_erc_policy_failure_count"
+write_output native-kicad-erc-warning-policy-sha256 "$native_kicad_erc_warning_policy_sha256"
+write_output native-kicad-erc-warning-policy-source-bytes "$native_kicad_erc_warning_policy_source_bytes"
+write_output native-kicad-erc-warning-policy-source-sha256 "$native_kicad_erc_warning_policy_source_sha256"
+write_output native-kicad-erc-run-sha256 "$native_kicad_erc_run_sha256"
+write_output native-kicad-erc-report-bytes "$native_kicad_erc_report_bytes"
+write_output native-kicad-erc-report-sha256 "$native_kicad_erc_report_sha256"
 write_output policy-pack-fetch-receipt "$policy_pack_fetch_receipt"
 write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
@@ -4118,6 +4354,10 @@ write_output deterministic-pipeline-run-sha256 "$deterministic_pipeline_run_sha2
 write_output deterministic-pipeline-failure-count "$deterministic_pipeline_failure_count"
 write_output deterministic-pipeline-report-bytes "$deterministic_pipeline_report_bytes"
 write_output deterministic-pipeline-report-sha256 "$deterministic_pipeline_report_sha256"
+if [[ -n "$native_kicad_erc_schematic" && "$native_kicad_erc_rc" != "0" ]]; then
+  write_output status error
+  exit 1
+fi
 if [[ "$pipeline_verify" == "true" && "$pipeline_passed" != "true" ]]; then
   write_output status error
   exit 1

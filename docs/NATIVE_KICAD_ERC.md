@@ -46,6 +46,68 @@ approval from the normalized findings: every error rejects, while warnings
 must fit both the global and per-type budgets. `--require-approved` returns a
 non-zero status only after publishing valid rejected evidence.
 
+## Standalone composite Action (v1.427.0)
+
+The root `action.yml` exposes the native runner as an independent opt-in gate.
+The Action's `board` input remains required for backward-compatible hardware
+analysis; there is no schematic-only Action mode. Set
+`native-kicad-erc-schematic` to run this gate without supplying AI review
+inputs or a deterministic pipeline plan:
+
+```yaml
+- id: native-erc
+  uses: penguin425/pcbex@v1.427.0
+  with:
+    board: hardware/controller.kicad_pcb
+    native-kicad-erc-schematic: hardware/controller.kicad_sch
+    native-kicad-erc-require-approved: "true"
+    # native-kicad-erc-warning-policy: hardware/native-kicad-warning-policy.json
+```
+
+`native-kicad-erc-warning-policy` is optional. Omitting it selects the
+error-only v1 report; supplying it selects the closed warning-policy v2
+report. `native-kicad-erc-kicad-cli` defaults to `kicad-cli`, is invoked as a
+trusted toolchain executable without a shell, and must not be selected from
+pull-request-controlled content. `native-kicad-erc-require-approved` defaults
+to `"false"`, so a valid rejected report can complete the Action for review.
+When it is `"true"`, the Action first publishes valid rejection evidence and
+then the final `always()` enforcement step fails if the report is absent or
+unapproved.
+
+For an enabled valid run, the normalized report is retained at the fixed
+`${output-dir}/native-kicad-erc.json` path and is included in the bounded
+artifact tree, Job Summary, and generated PR comment when comment publication
+is explicitly enabled. The Action exposes these twelve outputs:
+
+| Output | Meaning |
+| --- | --- |
+| `native-kicad-erc-report` | Fixed retained report path |
+| `native-kicad-erc-schema-version` | Report schema version (`1` or `2`) |
+| `native-kicad-erc-approved` | Normalized approval decision |
+| `native-kicad-erc-error-count` | Native error finding count |
+| `native-kicad-erc-warning-count` | Warning finding count (empty for v1) |
+| `native-kicad-erc-policy-failure-count` | Warning-policy failures (empty for v1) |
+| `native-kicad-erc-warning-policy-sha256` | Canonical policy digest (empty for v1) |
+| `native-kicad-erc-warning-policy-source-bytes` | Exact policy source bytes (empty for v1) |
+| `native-kicad-erc-warning-policy-source-sha256` | Exact policy source SHA-256 (empty for v1) |
+| `native-kicad-erc-run-sha256` | Domain-separated native run identity |
+| `native-kicad-erc-report-bytes` | Exact retained report bytes |
+| `native-kicad-erc-report-sha256` | Exact retained report SHA-256 |
+
+The standalone inputs and outputs are deliberately separate from the
+`ai-review-native-kicad-erc-report` and other `ai-review-*` retained-report
+inputs. Supplying `native-kicad-erc-schematic` does not replace the Action's
+`schematic`, create a deterministic plan, or automatically connect the
+report to AI approval; callers must pass a retained report through that
+separate flow explicitly.
+
+The Action requires `output-dir` to be absent or an empty real directory. A
+stale or aliased output, symlinked destination or parent, malformed compact
+runner summary, digest mismatch, input mutation, fatal KiCad/runner error, or
+other invalid native evidence fails closed and publishes no native report
+identity. Valid rejected evidence is retained before the optional final gate,
+so the artifact, summary, and comment remain available for diagnosis.
+
 ## Warning policy
 
 The static policy schema v1 has exactly these fields:

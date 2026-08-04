@@ -138,6 +138,7 @@ auditable release.
 | v1.425.0 | Native KiCad schematic ERC evidence | Run fixed error-only KiCad ERC under bounded private staging, retain deterministic normalized evidence, and bind fresh replay into request-schema-v3 approvals across CLI, MCP, Python, and Action while preserving v1/v2 workflows |
 | v1.426.0 | Native KiCad ERC warning policy | Gate explicit error-and-warning KiCad runs with closed fail-closed budgets, bind exact policy and report identities into request-schema-v4 approvals, and preserve the error-only v1/v3 contracts |
 | v1.426.1 | Darwin process-group cleanup race | Preserve the primary bounded-process failure when Darwin reports a transient `killpg` `EPERM` only after the direct child is reaped and a signal-zero probe proves the process group is gone; retain every live or ambiguous cleanup failure |
+| v1.427.0 | Standalone native KiCad ERC Action gate | Run error-only or warning-policy native schematic ERC from the root Action without AI or deterministic-pipeline inputs, authenticate retained report/source/policy identities, and publish rejection evidence before optional approval enforcement |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -263,10 +264,25 @@ Action expose the same opt-in policy path and leave older workflows unchanged.
 Static policy files do not establish organization authority, expiry, or
 distribution trust; those remain a separate signed-governance boundary.
 
-The current v1.426.1 maintenance milestone closes a Darwin process-group
+The v1.426.1 maintenance milestone closes a Darwin process-group
 cleanup race in the Python supervisor. A `killpg(SIGKILL)` `EPERM` is treated
 as benign only when `poll()` confirms and reaps the exited direct child and a
 single `killpg(pid, 0)` probe returns `ESRCH`, proving the group is gone. Live
 children, existing groups, unauthorized probes, non-Darwin platforms, and all
 other errors continue to fail closed as cleanup failures; the supervisor does
 not retry group termination after the probe.
+
+The current v1.427.0 milestone exposes native KiCad schematic ERC as a root
+composite-Action gate independent of AI approval and deterministic-pipeline
+inputs. A dedicated schematic input selects error-only report v1 or, with an
+explicit warning policy, report v2. The Action runs the existing bounded Rust
+runner under the CI process supervisor, then independently revalidates the
+compact child summary against canonical retained report bytes, the exact
+schematic, the optional policy source, counts, decisions, and domain-separated
+identities before publishing twelve outputs. Valid rejection evidence remains
+in the bounded artifact tree, Job Summary, and optional trusted PR comment;
+approval enforcement occurs only in the final `always()` gate. Missing,
+stale, linked, malformed, noncanonical, mutated, or digest-inconsistent
+evidence fails closed. The root Action continues to require a board, and the
+standalone report is not automatically connected to the separate AI review
+artifact flow.

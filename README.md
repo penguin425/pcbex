@@ -180,6 +180,36 @@ v3/v2/v1, while warning-policy evidence maps to v4/v3/v2. Older flows remain
 compatible. See
 [`docs/NATIVE_KICAD_ERC.md`](docs/NATIVE_KICAD_ERC.md).
 
+Version 1.427.0 adds a standalone native ERC gate to the root composite Action.
+The Action still requires `board`; set `native-kicad-erc-schematic` to opt in
+without enabling AI review or a deterministic pipeline plan. Add
+`native-kicad-erc-warning-policy` for report v2; omit it for error-only report
+v1. `native-kicad-erc-kicad-cli` defaults to `kicad-cli` and is a trusted
+toolchain input, while `native-kicad-erc-require-approved` defaults to
+`"false"`:
+
+```yaml
+- id: native-erc
+  uses: penguin425/pcbex@v1.427.0
+  with:
+    board: hardware/controller.kicad_pcb
+    native-kicad-erc-schematic: hardware/controller.kicad_sch
+    native-kicad-erc-require-approved: "true"
+    # native-kicad-erc-warning-policy: hardware/native-kicad-warning-policy.json
+```
+
+When enabled, a valid report is retained at the fixed
+`${output-dir}/native-kicad-erc.json` path. The Action publishes rejection
+evidence to the artifact bundle and Job Summary (and to the PR comment when
+that separately opt-in publication is enabled) before the final `always()`
+gate fails for an unapproved report. Fatal, malformed, stale, aliased, or
+digest-mismatched native evidence fails closed. Its twelve `native-kicad-erc-*`
+outputs expose the report path, schema/approval/count fields, warning-policy
+identities, run identity, and report byte/SHA identities; warning-policy fields
+are empty for report v1. This standalone path does not automatically populate
+the `ai-review-*` retained-report flow; connect that flow explicitly when its
+separate AI approval contract is intended.
+
 ## KiCad boards
 
 Route a placed KiCad board with a closed, straight-segment `Edge.Cuts` outline:
