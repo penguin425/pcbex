@@ -46,38 +46,41 @@ approval from the normalized findings: every error rejects, while warnings
 must fit both the global and per-type budgets. `--require-approved` returns a
 non-zero status only after publishing valid rejected evidence.
 
-## Standalone composite Action (v1.427.0)
+## Boardless composite Action (v1.428.0)
 
-The root `action.yml` exposes the native runner as an independent opt-in gate.
-The Action's `board` input remains required for backward-compatible hardware
-analysis; there is no schematic-only Action mode. Set
-`native-kicad-erc-schematic` to run this gate without supplying AI review
-inputs or a deterministic pipeline plan:
+The focused public Action runs native ERC in repositories that have a KiCad
+schematic but no PCB board. The caller must install a trusted KiCad CLI; the
+Action builds the pinned pcbex source from its release and needs no `board`, AI
+review, or deterministic-pipeline input:
 
 ```yaml
 - id: native-erc
-  uses: penguin425/pcbex@v1.427.0
+  uses: penguin425/pcbex/actions/native-kicad-erc@v1.428.0
   with:
-    board: hardware/controller.kicad_pcb
-    native-kicad-erc-schematic: hardware/controller.kicad_sch
-    native-kicad-erc-require-approved: "true"
-    # native-kicad-erc-warning-policy: hardware/native-kicad-warning-policy.json
+    schematic: hardware/controller.kicad_sch
+    require-approved: "true"
+    # warning-policy: hardware/native-kicad-warning-policy.json
+    # kicad-cli: kicad-cli
+    # output-dir: pcbex-native-kicad-erc
+    # artifact-name: pcbex-native-kicad-erc
+    # upload-artifact: "true"
+    # retention-days: "14"
 ```
 
-`native-kicad-erc-warning-policy` is optional. Omitting it selects the
-error-only v1 report; supplying it selects the closed warning-policy v2
-report. `native-kicad-erc-kicad-cli` defaults to `kicad-cli`, is invoked as a
-trusted toolchain executable without a shell, and must not be selected from
-pull-request-controlled content. `native-kicad-erc-require-approved` defaults
-to `"false"`, so a valid rejected report can complete the Action for review.
-When it is `"true"`, the Action first publishes valid rejection evidence and
-then the final `always()` enforcement step fails if the report is absent or
-unapproved.
+`warning-policy` is optional. Omitting it selects the error-only v1 report;
+supplying it selects the closed warning-policy v2 report. `kicad-cli` defaults
+to `kicad-cli`, is invoked as a trusted executable without a shell, and must
+not be selected from pull-request-controlled content. `require-approved`
+defaults to `"false"`, so a valid rejected report can complete the Action for
+review. When it is `"true"`, the Action first scans and uploads valid rejection
+evidence and then the final `always()` enforcement step fails if the report is
+absent or unapproved. Set distinct `output-dir` and `artifact-name` values for
+multiple invocations in one job.
 
 For an enabled valid run, the normalized report is retained at the fixed
 `${output-dir}/native-kicad-erc.json` path and is included in the bounded
-artifact tree, Job Summary, and generated PR comment when comment publication
-is explicitly enabled. The Action exposes these twelve outputs:
+artifact tree and Job Summary. The Action additionally exposes `status` and
+`artifact-dir`, plus these twelve root-compatible outputs:
 
 | Output | Meaning |
 | --- | --- |
@@ -94,19 +97,33 @@ is explicitly enabled. The Action exposes these twelve outputs:
 | `native-kicad-erc-report-bytes` | Exact retained report bytes |
 | `native-kicad-erc-report-sha256` | Exact retained report SHA-256 |
 
-The standalone inputs and outputs are deliberately separate from the
+The focused inputs and outputs are deliberately separate from the
 `ai-review-native-kicad-erc-report` and other `ai-review-*` retained-report
-inputs. Supplying `native-kicad-erc-schematic` does not replace the Action's
-`schematic`, create a deterministic plan, or automatically connect the
-report to AI approval; callers must pass a retained report through that
-separate flow explicitly.
+inputs. Running this Action does not create a deterministic plan or
+automatically connect the report to AI approval; callers must pass a retained
+report through that separate flow explicitly.
 
 The Action requires `output-dir` to be absent or an empty real directory. A
+schematic and optional policy must be existing regular files addressed by
+portable caller-workspace-relative paths; absolute paths, traversal, and
+linked components are rejected before the build. Output-directory components
+are restricted to ASCII letters, digits, dot, underscore, and hyphen so the
+artifact uploader cannot reinterpret the verified directory as a glob. A
 stale or aliased output, symlinked destination or parent, malformed compact
 runner summary, digest mismatch, input mutation, fatal KiCad/runner error, or
 other invalid native evidence fails closed and publishes no native report
 identity. Valid rejected evidence is retained before the optional final gate,
-so the artifact, summary, and comment remain available for diagnosis.
+so the artifact and summary remain available for diagnosis.
+
+## Root Action compatibility (v1.427.0 and later)
+
+The root `penguin425/pcbex` Action retains its independent opt-in native ERC
+gate and remains board-required. Existing callers can continue to use
+`native-kicad-erc-schematic`, `native-kicad-erc-warning-policy`,
+`native-kicad-erc-kicad-cli`, and `native-kicad-erc-require-approved`; its
+twelve output names are identical to the focused Action. The root Action also
+supports its separate hardware analysis, PR comment, deterministic-pipeline,
+and AI review features. v1.428.0 does not change that contract.
 
 ## Warning policy
 

@@ -139,6 +139,7 @@ auditable release.
 | v1.426.0 | Native KiCad ERC warning policy | Gate explicit error-and-warning KiCad runs with closed fail-closed budgets, bind exact policy and report identities into request-schema-v4 approvals, and preserve the error-only v1/v3 contracts |
 | v1.426.1 | Darwin process-group cleanup race | Preserve the primary bounded-process failure when Darwin reports a transient `killpg` `EPERM` only after the direct child is reaped and a signal-zero probe proves the process group is gone; retain every live or ambiguous cleanup failure |
 | v1.427.0 | Standalone native KiCad ERC Action gate | Run error-only or warning-policy native schematic ERC from the root Action without AI or deterministic-pipeline inputs, authenticate retained report/source/policy identities, and publish rejection evidence before optional approval enforcement |
+| v1.428.0 | Boardless native KiCad ERC Action | Provide a focused public composite Action that runs authenticated native schematic ERC without a board, preserves the root Action contract, publishes the same twelve identities, and retains bounded rejection evidence before its final approval gate |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -272,7 +273,7 @@ children, existing groups, unauthorized probes, non-Darwin platforms, and all
 other errors continue to fail closed as cleanup failures; the supervisor does
 not retry group termination after the probe.
 
-The current v1.427.0 milestone exposes native KiCad schematic ERC as a root
+The v1.427.0 milestone exposes native KiCad schematic ERC as a root
 composite-Action gate independent of AI approval and deterministic-pipeline
 inputs. A dedicated schematic input selects error-only report v1 or, with an
 explicit warning policy, report v2. The Action runs the existing bounded Rust
@@ -286,3 +287,20 @@ stale, linked, malformed, noncanonical, mutated, or digest-inconsistent
 evidence fails closed. The root Action continues to require a board, and the
 standalone report is not automatically connected to the separate AI review
 artifact flow.
+
+The current v1.428.0 milestone adds a focused public Action at
+`actions/native-kicad-erc` for schematic-only repositories. It accepts one
+required schematic plus an optional closed warning policy and never requests
+or analyzes a board. The dedicated runner reuses the existing bounded process,
+filesystem, canonical-report, source, policy, and digest authentication
+boundaries; it publishes the same twelve `native-kicad-erc-*` identities as
+the root Action. Caller inputs are confined to regular workspace-relative
+files, and literal output components exclude artifact glob interpretation.
+The output tree is scanned before its pinned artifact upload,
+and a separate final `always()` gate enforces execution, scan, upload, and
+optional approval only after valid evidence is observable. Unit tests exercise
+approved, rejected, malformed, fatal, option-like, stale, linked, and escaping
+inputs, while the KiCad 10 E2E workflow invokes both an approved and a rejected
+local composite Action. The root Action remains board-required and unchanged,
+and neither Action automatically joins native evidence to the separate AI
+approval flow.

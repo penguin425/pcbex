@@ -37,7 +37,7 @@ and adds one opt-in input:
 
 ```yaml
 - id: pcbex
-  uses: penguin425/pcbex@v1.427.0
+  uses: penguin425/pcbex@v1.428.0
   with:
     board: hardware/controller.kicad_pcb
     circuit-spec: build/circuit-spec-v2.json

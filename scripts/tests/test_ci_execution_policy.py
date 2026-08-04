@@ -10,6 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 ACTION = ROOT / "action.yml"
+BOARDLESS_NATIVE_ERC_ACTION = ROOT / "actions" / "native-kicad-erc" / "action.yml"
 
 EXPECTED_TIMEOUTS = {
     "ci.yml": {
@@ -164,6 +165,19 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("id: artifact-boundary", document)
         self.assertGreaterEqual(
             document.count("steps.artifact-boundary.outputs.safe == 'true'"), 3
+        )
+
+    def test_boardless_native_erc_action_is_bounded_and_gates_after_upload(self):
+        document = BOARDLESS_NATIVE_ERC_ACTION.read_text(encoding="utf-8")
+        self.assertGreaterEqual(document.count('scripts/ci_runtime.py" exec'), 4)
+        self.assertIn("--timeout-seconds 900", document)
+        self.assertIn("--max-total-bytes 33554432", document)
+        self.assertIn("id: artifact-boundary", document)
+        self.assertIn("steps.artifact-boundary.outputs.safe == 'true'", document)
+        self.assertIn("if: ${{ always() }}", document)
+        self.assertLess(
+            document.index("Upload native ERC evidence"),
+            document.index("Enforce native ERC gate"),
         )
 
     def test_shared_runtime_boundaries_run_on_macos_and_windows(self):

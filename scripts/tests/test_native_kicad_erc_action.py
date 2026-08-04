@@ -21,6 +21,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 ACTION = ROOT / "action.yml"
 ANALYSIS_SCRIPT = ROOT / "scripts" / "github-analysis.sh"
+BOARDLESS_ACTION = ROOT / "actions" / "native-kicad-erc" / "action.yml"
+BOARDLESS_SCRIPT = ROOT / "scripts" / "native-kicad-erc-action.sh"
+BOARDLESS_GATE = ROOT / "scripts" / "native-kicad-erc-action-gate.sh"
 
 NATIVE_INPUTS = (
     "native-kicad-erc-schematic",
@@ -41,6 +44,16 @@ NATIVE_OUTPUTS = (
     "native-kicad-erc-run-sha256",
     "native-kicad-erc-report-bytes",
     "native-kicad-erc-report-sha256",
+)
+BOARDLESS_INPUTS = (
+    "schematic",
+    "warning-policy",
+    "kicad-cli",
+    "require-approved",
+    "output-dir",
+    "upload-artifact",
+    "artifact-name",
+    "retention-days",
 )
 
 
@@ -79,7 +92,11 @@ class NativeKicadErcActionTests(unittest.TestCase):
                     try:
                         return argv[argv.index(flag) + 1]
                     except (ValueError, IndexError):
-                        return default
+                        prefix = flag + "="
+                        return next(
+                            (item[len(prefix):] for item in argv if item.startswith(prefix)),
+                            default,
+                        )
 
                 if command == "analyze-kicad":
                     output_dir = Path(value("--output-dir"))
@@ -101,6 +118,10 @@ class NativeKicadErcActionTests(unittest.TestCase):
 
                 if command != "run-native-kicad-erc":
                     raise SystemExit(0)
+
+                if mode == "fatal":
+                    print("synthetic native ERC failure", file=sys.stderr)
+                    raise SystemExit(9)
 
                 output = Path(value("--output"))
                 source_path = next(
@@ -170,7 +191,7 @@ class NativeKicadErcActionTests(unittest.TestCase):
                     report = {
                         "schema_version": 2,
                         "engine": "pcbex",
-                        "engine_version": "1.427.0-test",
+                        "engine_version": "1.428.0-test",
                         "kicad_version": "10.0.5-test",
                         "source": source,
                         "invocation": {
@@ -212,7 +233,7 @@ class NativeKicadErcActionTests(unittest.TestCase):
                     report = {
                         "schema_version": 1,
                         "engine": "pcbex",
-                        "engine_version": "1.427.0-test",
+                        "engine_version": "1.428.0-test",
                         "kicad_version": "10.0.5-test",
                         "source": source,
                         "invocation": {
@@ -359,6 +380,98 @@ class NativeKicadErcActionTests(unittest.TestCase):
             ["bash", str(ANALYSIS_SCRIPT)],
             cwd=root,
             env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    @classmethod
+    def _run_boardless(
+        cls,
+        root: Path,
+        fake_binary: Path,
+        *,
+        schematic: str = "design.kicad_sch",
+        warning_policy: str = "",
+        require_approved: str = "false",
+        kicad_cli: str = "fake-kicad-cli",
+        mode: str = "success-v1",
+        output_dir: str = "artifacts",
+        policy_bytes: bytes | None = None,
+        extra: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        source = root / "design.kicad_sch"
+        source.write_text("(kicad_sch (version 20231120))\n", encoding="utf-8")
+        if policy_bytes is None:
+            if mode == "reject-v2":
+                policy_bytes = (
+                    b'{"schema_version":1,"id":"strict-test-policy",'
+                    b'"maximum_total_warnings":0,"warning_limits":[{'
+                    b'"finding_type":"warning_type","maximum_count":0}],'
+                    b'"allowed_ignored_checks":[]}\n'
+                )
+            else:
+                policy_bytes = (
+                    b'{"schema_version":1,"id":"test-warning-policy",'
+                    b'"maximum_total_warnings":1,"warning_limits":[{'
+                    b'"finding_type":"warning_type","maximum_count":1}],'
+                    b'"allowed_ignored_checks":["ignored"]}\n'
+                )
+        (root / "warning-policy.json").write_bytes(policy_bytes)
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "GITHUB_OUTPUT": str(root / "github-output"),
+            "GITHUB_STEP_SUMMARY": str(root / "step-summary"),
+            "PCBEX_BINARY": str(fake_binary),
+            "PCBEX_OUTPUT_DIR": output_dir,
+            "PCBEX_NATIVE_KICAD_ERC_SCHEMATIC": schematic,
+            "PCBEX_NATIVE_KICAD_ERC_WARNING_POLICY": warning_policy,
+            "PCBEX_NATIVE_KICAD_ERC_KICAD_CLI": kicad_cli,
+            "PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED": require_approved,
+            "PCBEX_NATIVE_KICAD_ERC_TEST_MODE": mode,
+            "PCBEX_NATIVE_SOURCE": str(source),
+            "PCBEX_TEST_ARGUMENTS": str(root / "arguments"),
+        }
+        if extra:
+            env.update(extra)
+        return subprocess.run(
+            ["bash", str(BOARDLESS_SCRIPT)],
+            cwd=root,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    @staticmethod
+    def _top_level_mapping_keys(document: str, section: str) -> tuple[str, ...]:
+        lines = document.splitlines()
+        start = lines.index(f"{section}:") + 1
+        keys: list[str] = []
+        for line in lines[start:]:
+            if line and not line.startswith(" "):
+                break
+            if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
+                keys.append(line.strip()[:-1])
+        return tuple(keys)
+
+    @staticmethod
+    def _run_boardless_gate(**overrides: str) -> subprocess.CompletedProcess[str]:
+        values = {
+            "PCBEX_PREFLIGHT_VALID": "true",
+            "PCBEX_NATIVE_ERC_OUTCOME": "success",
+            "PCBEX_NATIVE_ERC_STATUS": "ok",
+            "PCBEX_NATIVE_ERC_REPORT": "artifacts/native-kicad-erc.json",
+            "PCBEX_NATIVE_ERC_APPROVED": "true",
+            "PCBEX_ARTIFACT_SAFE": "true",
+            "PCBEX_UPLOAD_ARTIFACT": "false",
+            "PCBEX_UPLOAD_OUTCOME": "skipped",
+            "PCBEX_REQUIRE_APPROVED": "false",
+        }
+        values.update(overrides)
+        return subprocess.run(
+            ["bash", str(BOARDLESS_GATE)],
+            env={"PATH": os.environ.get("PATH", ""), **values},
             check=False,
             capture_output=True,
             text=True,
@@ -624,6 +737,299 @@ class NativeKicadErcActionTests(unittest.TestCase):
                 outputs = self._outputs(root / "github-output")
                 self.assertEqual(outputs.get("native-kicad-erc-report", ""), "")
                 self.assertEqual(outputs.get("native-kicad-erc-approved", ""), "")
+
+    def test_boardless_manifest_declares_exact_contract_and_ordered_final_gate(self):
+        document = BOARDLESS_ACTION.read_text(encoding="utf-8")
+        self.assertEqual(
+            self._top_level_mapping_keys(document, "inputs"), BOARDLESS_INPUTS
+        )
+        self.assertEqual(
+            set(self._top_level_mapping_keys(document, "outputs")),
+            {"status", "artifact-dir", *NATIVE_OUTPUTS},
+        )
+        self.assertIn("  schematic:\n", document)
+        self.assertIn("    required: true\n", document)
+        self.assertNotIn("  board:\n", document)
+        self.assertIn("if: ${{ always() }}", document)
+        self.assertIn("native-kicad-erc-action-gate.sh", document)
+        self.assertLess(
+            document.index("Upload native ERC evidence"),
+            document.index("Enforce native ERC gate"),
+        )
+        self.assertIn(
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1",
+            document,
+        )
+
+    def test_boardless_runner_is_bounded_and_never_analyzes_a_board(self):
+        document = BOARDLESS_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("run-native-kicad-erc", document)
+        self.assertIn("--mcp-echo-report-summary", document)
+        self.assertIn('ci_runtime.py" exec', document)
+        self.assertIn("native_kicad_erc_summary.py", document)
+        self.assertIn('+=(-- "$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC")', document)
+        for forbidden in ("analyze-kicad", "PCBEX_BOARD", "eval ", "curl", "wget"):
+            self.assertNotIn(forbidden, document)
+
+    def test_boardless_v1_publishes_exact_identities_and_summary(self):
+        root, fake_binary = self._prepare()
+        result = self._run_boardless(root, fake_binary)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self._invocations(root / "arguments", "analyze-kicad"))
+        invocation = self._invocations(
+            root / "arguments", "run-native-kicad-erc"
+        )[0]
+        self.assertEqual(invocation[-2:], ["--", "design.kicad_sch"])
+        self.assertNotIn("--require-approved", invocation)
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs["status"], "ok")
+        self.assertEqual(outputs["artifact-dir"], "artifacts")
+        self.assertEqual(
+            outputs["native-kicad-erc-report"],
+            "artifacts/native-kicad-erc.json",
+        )
+        report_bytes = (root / outputs["native-kicad-erc-report"]).read_bytes()
+        self.assertEqual(outputs["native-kicad-erc-schema-version"], "1")
+        self.assertEqual(outputs["native-kicad-erc-approved"], "true")
+        self.assertEqual(outputs["native-kicad-erc-error-count"], "0")
+        self.assertEqual(outputs["native-kicad-erc-warning-count"], "")
+        self.assertEqual(
+            outputs["native-kicad-erc-report-bytes"], str(len(report_bytes))
+        )
+        self.assertEqual(
+            outputs["native-kicad-erc-report-sha256"],
+            hashlib.sha256(report_bytes).hexdigest(),
+        )
+        summary = (root / "step-summary").read_text(encoding="utf-8")
+        self.assertIn("boardless native KiCad ERC", summary)
+        self.assertIn("Approved: `true`", summary)
+        self.assertIn("Errors: `0`", summary)
+
+    def test_boardless_valid_rejections_are_retained_before_optional_gate(self):
+        for mode, policy in (("reject-v1", ""), ("reject-v2", "warning-policy.json")):
+            with self.subTest(mode=mode):
+                root, fake_binary = self._prepare()
+                result = self._run_boardless(
+                    root,
+                    fake_binary,
+                    mode=mode,
+                    warning_policy=policy,
+                    require_approved="true",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                outputs = self._outputs(root / "github-output")
+                self.assertEqual(outputs["status"], "ok")
+                self.assertEqual(outputs["native-kicad-erc-approved"], "false")
+                self.assertTrue(
+                    (root / outputs["native-kicad-erc-report"]).is_file()
+                )
+                gate = self._run_boardless_gate(
+                    PCBEX_NATIVE_ERC_REPORT=outputs["native-kicad-erc-report"],
+                    PCBEX_NATIVE_ERC_APPROVED="false",
+                    PCBEX_REQUIRE_APPROVED="true",
+                )
+                self.assertNotEqual(gate.returncode, 0)
+                self.assertIn("absent or not approved", gate.stderr)
+
+    def test_boardless_v2_uses_option_safe_policy_argv_and_outputs_policy_identity(self):
+        root, fake_binary = self._prepare()
+        result = self._run_boardless(
+            root,
+            fake_binary,
+            warning_policy="warning-policy.json",
+            mode="success-v2",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        invocation = self._invocations(
+            root / "arguments", "run-native-kicad-erc"
+        )[0]
+        self.assertNotIn("--warning-policy", invocation)
+        self.assertIn("--warning-policy=warning-policy.json", invocation)
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs["native-kicad-erc-schema-version"], "2")
+        self.assertEqual(outputs["native-kicad-erc-warning-count"], "1")
+        self.assertEqual(outputs["native-kicad-erc-policy-failure-count"], "0")
+        self.assertRegex(
+            outputs["native-kicad-erc-warning-policy-sha256"], r"^[0-9a-f]{64}$"
+        )
+        self.assertEqual(
+            outputs["native-kicad-erc-warning-policy-source-bytes"],
+            str((root / "warning-policy.json").stat().st_size),
+        )
+
+        root, fake_binary = self._prepare()
+        policy_bytes = (
+            b'{"schema_version":1,"id":"option-like-policy",'
+            b'"maximum_total_warnings":1,"warning_limits":[{'
+            b'"finding_type":"warning_type","maximum_count":1}],'
+            b'"allowed_ignored_checks":["ignored"]}\n'
+        )
+        (root / "-policy.json").write_bytes(policy_bytes)
+        result = self._run_boardless(
+            root,
+            fake_binary,
+            warning_policy="-policy.json",
+            mode="success-v2",
+            policy_bytes=policy_bytes,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        invocation = self._invocations(
+            root / "arguments", "run-native-kicad-erc"
+        )[0]
+        self.assertIn("--warning-policy=-policy.json", invocation)
+
+    def test_boardless_invalid_inputs_fail_before_native_invocation(self):
+        for kwargs in (
+            {"schematic": ""},
+            {"kicad_cli": ""},
+            {"require_approved": "maybe"},
+        ):
+            with self.subTest(kwargs=kwargs):
+                root, fake_binary = self._prepare()
+                result = self._run_boardless(root, fake_binary, **kwargs)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "arguments").exists())
+
+        root, fake_binary = self._prepare()
+        result = self._run_boardless(
+            root, fake_binary, schematic=str(root / "design.kicad_sch")
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((root / "arguments").exists())
+
+        root, fake_binary = self._prepare()
+        result = self._run_boardless(
+            root, fake_binary, schematic="../outside.kicad_sch"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((root / "arguments").exists())
+
+        if hasattr(os, "symlink"):
+            root, fake_binary = self._prepare()
+            (root / "design.kicad_sch").write_text("(kicad_sch)\n")
+            try:
+                (root / "linked.kicad_sch").symlink_to(root / "design.kicad_sch")
+            except OSError:
+                pass
+            else:
+                result = self._run_boardless(
+                    root, fake_binary, schematic="linked.kicad_sch"
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "arguments").exists())
+
+    def test_boardless_option_like_and_space_paths_are_single_arguments(self):
+        for schematic in ("-design.kicad_sch", "nested path/design file.kicad_sch"):
+            with self.subTest(schematic=schematic):
+                root, fake_binary = self._prepare()
+                source = root / schematic
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(
+                    "(kicad_sch (version 20231120))\n", encoding="utf-8"
+                )
+                result = self._run_boardless(
+                    root, fake_binary, schematic=schematic
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                invocation = self._invocations(
+                    root / "arguments", "run-native-kicad-erc"
+                )[0]
+                self.assertEqual(invocation[-2:], ["--", schematic])
+
+        root, fake_binary = self._prepare()
+        result = self._run_boardless(
+            root,
+            fake_binary,
+            output_dir="-artifacts",
+            kicad_cli="-fake-kicad-cli",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs["artifact-dir"], "-artifacts")
+        self.assertTrue((root / "-artifacts" / "native-kicad-erc.json").is_file())
+        invocation = self._invocations(
+            root / "arguments", "run-native-kicad-erc"
+        )[0]
+        self.assertIn("--output=-artifacts/native-kicad-erc.json", invocation)
+        self.assertIn("--kicad-cli=-fake-kicad-cli", invocation)
+
+    def test_boardless_output_boundary_refuses_stale_links_and_escapes(self):
+        root, fake_binary = self._prepare()
+        output = root / "artifacts"
+        output.mkdir()
+        sentinel = output / "sentinel"
+        sentinel.write_bytes(b"keep me\n")
+        result = self._run_boardless(root, fake_binary)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(sentinel.read_bytes(), b"keep me\n")
+        self.assertFalse((root / "arguments").exists())
+
+        root, fake_binary = self._prepare()
+        outside = root / "outside"
+        outside.mkdir()
+        (root / "artifacts").symlink_to(outside, target_is_directory=True)
+        result = self._run_boardless(root, fake_binary)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(list(outside.iterdir()), [])
+
+        for output_dir in (
+            "../escape",
+            "/absolute",
+            "bad\nforged=value",
+            "build/*",
+            "build/result?",
+            "build/[result]",
+        ):
+            with self.subTest(output_dir=output_dir):
+                root, fake_binary = self._prepare()
+                result = self._run_boardless(
+                    root, fake_binary, output_dir=output_dir
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse((root / "arguments").exists())
+                self.assertFalse((root / "github-output").exists())
+
+    def test_boardless_malformed_missing_and_fatal_runs_fail_closed(self):
+        for mode in ("malformed", "summary-digest-mismatch", "no-report", "fatal"):
+            with self.subTest(mode=mode):
+                root, fake_binary = self._prepare()
+                result = self._run_boardless(root, fake_binary, mode=mode)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                outputs = self._outputs(root / "github-output")
+                self.assertEqual(outputs.get("status", ""), "error")
+                self.assertEqual(outputs.get("native-kicad-erc-report", ""), "")
+                self.assertEqual(outputs.get("native-kicad-erc-approved", ""), "")
+
+    def test_boardless_final_gate_enforces_every_publication_boundary(self):
+        self.assertEqual(self._run_boardless_gate().returncode, 0)
+        self.assertEqual(
+            self._run_boardless_gate(
+                PCBEX_NATIVE_ERC_APPROVED="false",
+                PCBEX_REQUIRE_APPROVED="false",
+            ).returncode,
+            0,
+        )
+        failures = (
+            {"PCBEX_PREFLIGHT_VALID": "false"},
+            {"PCBEX_NATIVE_ERC_OUTCOME": "failure"},
+            {"PCBEX_NATIVE_ERC_STATUS": "error"},
+            {"PCBEX_ARTIFACT_SAFE": "false"},
+            {
+                "PCBEX_UPLOAD_ARTIFACT": "true",
+                "PCBEX_UPLOAD_OUTCOME": "failure",
+            },
+            {
+                "PCBEX_REQUIRE_APPROVED": "true",
+                "PCBEX_NATIVE_ERC_APPROVED": "false",
+            },
+            {"PCBEX_REQUIRE_APPROVED": "maybe"},
+            {"PCBEX_UPLOAD_ARTIFACT": "maybe"},
+        )
+        for values in failures:
+            with self.subTest(values=values):
+                self.assertNotEqual(
+                    self._run_boardless_gate(**values).returncode, 0
+                )
 
 
 if __name__ == "__main__":

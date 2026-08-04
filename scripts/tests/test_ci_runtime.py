@@ -142,6 +142,74 @@ class CiRuntimeTests(unittest.TestCase):
                             "linked/result", base=workspace
                         )
 
+    def test_literal_relative_output_root_rejects_artifact_globs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary).resolve()
+            self.assertEqual(
+                ci_runtime.validate_relative_output_root(
+                    "build/result name", base=workspace
+                ),
+                workspace / "build/result name",
+            )
+            self.assertEqual(
+                ci_runtime.validate_literal_relative_output_root(
+                    "build/result-name_1.0", base=workspace
+                ),
+                workspace / "build/result-name_1.0",
+            )
+            for value in (
+                "build/*",
+                "build/result?",
+                "build/[result]",
+                "build/{one,two}",
+                "build/result!",
+                "build/result name",
+            ):
+                with self.subTest(value=value):
+                    with self.assertRaises(ci_runtime.ExecutionBoundaryError):
+                        ci_runtime.validate_literal_relative_output_root(
+                            value, base=workspace
+                        )
+
+    def test_relative_input_file_rejects_escape_absolute_links_and_directories(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary).resolve()
+            nested = workspace / "nested path"
+            nested.mkdir()
+            source = nested / "-design.kicad_sch"
+            source.write_text("(kicad_sch)\n", encoding="utf-8")
+            self.assertEqual(
+                ci_runtime.validate_relative_input_file(
+                    "nested path/-design.kicad_sch", base=workspace
+                ),
+                source,
+            )
+            for value in (
+                "",
+                ".",
+                "..",
+                "../escape.kicad_sch",
+                str(source),
+                "a\\b",
+                "C:design.kicad_sch",
+                "nested path",
+            ):
+                with self.subTest(value=value):
+                    with self.assertRaises(ci_runtime.ExecutionBoundaryError):
+                        ci_runtime.validate_relative_input_file(value, base=workspace)
+
+            if hasattr(os, "symlink"):
+                linked = workspace / "linked.kicad_sch"
+                try:
+                    linked.symlink_to(source)
+                except OSError:
+                    pass
+                else:
+                    with self.assertRaises(ci_runtime.ExecutionBoundaryError):
+                        ci_runtime.validate_relative_input_file(
+                            "linked.kicad_sch", base=workspace
+                        )
+
     def test_tree_scan_accepts_exact_limits(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
