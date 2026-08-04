@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.423.0
+    uses: penguin425/pcbex@v1.424.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2120,6 +2120,7 @@ steps:
       policy-public-key: ${{ runner.temp }}/pcbex-policy-root.pub
       policy-trust-state: .pcbex-baseline/hardware/organization-policy-pack.trust.json
       ai-review-request: hardware/review-request.json
+      ai-review-generated-schematic: hardware/controller.kicad_sch
       ai-review-session: hardware/review-session.json
       ai-approval-files: |
         hardware/reviewer-a.approval.json
@@ -2127,6 +2128,7 @@ steps:
       ai-response-files: |
         hardware/reviewer-a.response.json
         hardware/reviewer-b.response.json
+      deterministic-pipeline-plan: hardware/pipeline-plan.json
       fail-on-ai-quorum: "true"
       manufacturing-feedback-declaration: manufacturing/fab-feedback.json
       manufacturing-feedback-artifacts: |
@@ -2155,7 +2157,7 @@ and SHA-256:
 
 ```yaml
 - id: generated-schematic
-  uses: penguin425/pcbex@v1.423.0
+  uses: penguin425/pcbex@v1.424.0
   with:
     board: hardware/controller.kicad_pcb
     circuit-spec: build/circuit-spec-v2.json
@@ -2177,7 +2179,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.423.0` step:
+# Add these fields to a `penguin425/pcbex@v1.424.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -2277,6 +2279,18 @@ retained. Approval, provider, and model thresholds default to two and remain
 independently configurable. Supplying `ai-review-session` additionally requires
 every approval to carry the active session challenge and rejects expired or
 legacy envelopes.
+
+Version 1.424 additionally accepts `ai-review-generated-schematic` together
+with `deterministic-pipeline-plan`. This opts the quorum into request-schema-v2
+artifact binding. The Action runs the plan once before quorum verification,
+forces that fresh report to be approved, and passes the generated schematic,
+raw plan, and fixed retained report to the same CLI live-verification gate;
+the quorum command independently reruns the plan before accepting signatures.
+Only after that gate succeeds, the Action exposes
+`ai-review-artifacts-verified`, generated-schematic byte/SHA outputs, raw plan
+source byte/SHA outputs, normalized `ai-review-pipeline-plan-sha256`, retained
+report byte/SHA outputs, and `ai-review-pipeline-run-sha256`. Omitting the
+generated schematic preserves request-schema-v1 behavior.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -3189,15 +3203,22 @@ plus seven revalidated outputs: `deterministic-pipeline-schema-version`,
 valid rejected report succeeds and remains available; with it enabled, the
 same evidence is published before the Action fails. Empty plans preserve
 analysis-only behavior. Stale, aliased, symlinked, malformed, or digest-
-mismatched reports are rejected before attribution. The Action adds no file
-discovery, design mutation, repair, AI/network/factory call, submission, or
-ordering behavior.
+mismatched reports are rejected before attribution. The v1.419 runner path by
+itself adds no file discovery, design mutation, repair, AI/network/factory
+call, submission, or ordering behavior.
+
+Version 1.424 can cryptographically join that deterministic evidence to an AI
+schematic approval. `prepare-ai-review` request schema v2 records the exact
+generated schematic, raw/normalized plan, retained report, and run identities.
+The signing and verification commands rerun the plan and require the retained
+report to match the fresh compact JSON plus final newline exactly; a stored
+digest or self-consistent report alone is never trusted.
 
 Minimal Action opt-in:
 
 ```yaml
 - id: deterministic-pipeline
-  uses: penguin425/pcbex@v1.423.0
+  uses: penguin425/pcbex@v1.424.0
   with:
     board: hardware/controller.kicad_pcb
     deterministic-pipeline-plan: hardware/pipeline-plan.json
@@ -3514,6 +3535,51 @@ pcbex verify-ai-approval \
   --require-approved
 ```
 
+Version 1.424 adds opt-in request schema v2 for production pipelines. It binds
+the signature to the exact generated schematic bytes, raw and normalized
+deterministic plan identities, and the exact approved runner report and run
+identity. First retain an approved report, then pass the same plan/report while
+preparing the request:
+
+```sh
+pcbex run-deterministic-pipeline pipeline-plan.json \
+  --output deterministic-pipeline-report.json \
+  --require-approved
+
+pcbex prepare-ai-review generated.kicad_sch \
+  --electrical-review electrical-review.json \
+  --policy-pack organization-policy-pack.json \
+  --deterministic-pipeline-plan pipeline-plan.json \
+  --deterministic-pipeline-report deterministic-pipeline-report.json \
+  --output ai-review-request.json
+
+pcbex sign-ai-review ai-review-request.json ai-review-response.json \
+  --generated-schematic generated.kicad_sch \
+  --deterministic-pipeline-plan pipeline-plan.json \
+  --deterministic-pipeline-report deterministic-pipeline-report.json \
+  --private-key .secrets/schematic-approval.key \
+  --signer-id production-ci \
+  --output signed-approval.json --require-approved
+
+pcbex verify-ai-approval \
+  signed-approval.json ai-review-request.json ai-review-response.json \
+  --generated-schematic generated.kicad_sch \
+  --deterministic-pipeline-plan pipeline-plan.json \
+  --deterministic-pipeline-report deterministic-pipeline-report.json \
+  --public-key schematic-approval.pub --require-approved
+```
+
+Prepare, sign, approval verification, and quorum verification each stable-read
+the three artifacts, rerun the closed pipeline, require an approved report,
+and compare the freshly rendered report byte-for-byte. The request's raw
+electrical-review digest and recomputed electrical result must also match the
+plan and circuit handoff. This rejects stale, changed, or independently valid
+but mixed artifacts; a byte-identical copy at another path remains valid.
+Schema-v1 requests remain supported without these flags and reject them when
+supplied. Request schema v2 is distinct from the existing session-bound signed
+approval envelope schema v2. See
+[`docs/AI_REVIEW_ARTIFACT_BINDING.md`](docs/AI_REVIEW_ARTIFACT_BINDING.md).
+
 With an organization policy pack, review requirements and the simulation gate
 are supplied by policy, and approval verification selects the trusted key by
 the signed envelope's `signer_id`. Verification also requires the request's
@@ -3537,6 +3603,9 @@ the same request and organization trust root:
 
 ```sh
 pcbex verify-ai-quorum ai-review-request.json \
+  --generated-schematic generated.kicad_sch \
+  --deterministic-pipeline-plan pipeline-plan.json \
+  --deterministic-pipeline-report deterministic-pipeline-report.json \
   --approval reviewer-a.approval.json \
   --approval reviewer-b.approval.json \
   --response reviewer-a.response.json \
@@ -4447,8 +4516,10 @@ would not establish signer identity. The private key is created with mode
 
 AI integration is provider-neutral. `pcbex_agent.review_schematic_with_llm`
 accepts an injected transport, rejects non-JSON or invented evidence before
-Rust validation, and tells the model to use `unknown`/`needs_human` instead of
-guessing. The MCP server exposes `route_schematic_reviewers`,
+Rust validation, accepts both request schemas v1 and v2, and treats v2
+artifact identities as evidence rather than instructions. It tells the model
+to use `unknown`/`needs_human` instead of guessing, while the response schema
+remains v1. The MCP server exposes `route_schematic_reviewers`,
 `prepare_schematic_review`,
 `sign_schematic_approval`, `verify_schematic_approval`, and
 `verify_schematic_approval_quorum`, plus signed human escalation and approval
@@ -4496,7 +4567,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.423.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.424.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

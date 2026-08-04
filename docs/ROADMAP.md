@@ -134,6 +134,7 @@ auditable release.
 | v1.421.0 | Catalog-to-generation provenance | Bind one retained supplier fetch receipt and normalized snapshot to the recomputed catalog selection, exact circuit-generation bundle bytes, and generated SKiDL in a closed replay-verifiable sidecar without adding network access or changing generation bundle v2 |
 | v1.422.0 | Deterministic KiCad schematic writer | Convert an immutable-ERC-approved circuit-spec v2 into a bounded, deterministic flat/single-unit `.kicad_sch`, then re-import and verify the exact semantic handoff before atomic no-clobber publication |
 | v1.423.0 | KiCad schematic writer MCP/Action parity | Expose deterministic circuit-spec schematic generation through optional MCP Tasks and the root Action while retaining ERC evidence and returning only bounded path/byte/SHA identities instead of embedding schematic bytes |
+| v1.424.0 | Exact AI review artifact binding | Bind request-schema-v2 approvals to one exact generated schematic and approved deterministic plan/report/run, then live-rerun and cross-check the artifacts before CLI, MCP, and Action signing or verification while preserving request-schema-v1 workflows |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -211,7 +212,7 @@ new file. Hierarchy, buses, multi-unit symbols, external library resolution,
 placement/routing, DRC/DFM, and existing-schematic mutation remain later
 boundaries.
 
-The current v1.423.0 milestone exposes that exact writer through two bounded
+The v1.423.0 milestone exposes that exact writer through two bounded
 integration surfaces. MCP supports synchronous calls and optional Tasks,
 preflights an absent destination, revalidates the retained file under the
 writer's 64 MiB ceiling, and returns only its path, byte count, and SHA-256 so
@@ -221,3 +222,13 @@ fixed `${output-dir}/circuit-spec.kicad_sch` artifact only after approval, and
 publishes the same byte and digest identity. Neither surface substitutes the
 generated file for `schematic`, changes the deterministic pipeline, performs
 network access, or authorizes placement, routing, or fabrication.
+
+The current v1.424.0 milestone closes the next approval boundary. An opt-in AI
+review request schema v2 binds the exact generated schematic bytes, raw and
+normalized deterministic plan identities, retained report bytes, and run
+identity. Prepare, sign, single-approval verification, and quorum verification
+all rerun the plan, require its report to be approved and byte-identical, and
+cross-check the request's electrical review with the runner handoff. MCP
+forwards the same complete path groups, the Python adapter treats the new
+identities as evidence, and the root Action generates its fresh report before
+quorum verification. Request schema v1 remains unchanged.

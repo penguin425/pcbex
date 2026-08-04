@@ -134,6 +134,15 @@ write_output schematic-reviewer-routing ""
 write_output schematic-review-all-routed ""
 write_output ai-approval-quorum ""
 write_output ai-approval-quorum-met ""
+write_output ai-review-artifacts-verified ""
+write_output ai-review-generated-schematic-bytes ""
+write_output ai-review-generated-schematic-sha256 ""
+write_output ai-review-pipeline-plan-source-bytes ""
+write_output ai-review-pipeline-plan-source-sha256 ""
+write_output ai-review-pipeline-plan-sha256 ""
+write_output ai-review-pipeline-report-bytes ""
+write_output ai-review-pipeline-report-sha256 ""
+write_output ai-review-pipeline-run-sha256 ""
 write_output human-escalation ""
 write_output human-escalation-approved ""
 write_output schematic-approval-met ""
@@ -173,10 +182,43 @@ deterministic_pipeline_report_bytes=""
 deterministic_pipeline_report_sha256=""
 deterministic_pipeline_rc=0
 deterministic_pipeline_summary_json=""
+ai_review_generated_schematic="${PCBEX_AI_REVIEW_GENERATED_SCHEMATIC:-}"
+ai_review_artifacts_verified=""
+ai_review_generated_schematic_bytes=""
+ai_review_generated_schematic_sha256=""
+ai_review_pipeline_plan_source_bytes=""
+ai_review_pipeline_plan_source_sha256=""
+ai_review_pipeline_plan_sha256=""
+ai_review_pipeline_report_bytes=""
+ai_review_pipeline_report_sha256=""
+ai_review_pipeline_run_sha256=""
 
 if [[ "$deterministic_pipeline_require_approved" != "true" &&
   "$deterministic_pipeline_require_approved" != "false" ]]; then
   echo "PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED must be true or false" >&2
+  exit 2
+fi
+ai_quorum_inputs=0
+if [[ -n "${PCBEX_AI_REVIEW_REQUEST:-}" ]]; then ((ai_quorum_inputs += 1)); fi
+if [[ -n "${PCBEX_AI_APPROVAL_FILES:-}" ]]; then ((ai_quorum_inputs += 1)); fi
+if [[ -n "${PCBEX_AI_RESPONSE_FILES:-}" ]]; then ((ai_quorum_inputs += 1)); fi
+if ((ai_quorum_inputs != 0 && ai_quorum_inputs != 3)); then
+  echo "PCBEX_AI_REVIEW_REQUEST, PCBEX_AI_APPROVAL_FILES, and PCBEX_AI_RESPONSE_FILES must be supplied together" >&2
+  exit 2
+fi
+if [[ -n "${PCBEX_AI_REVIEW_SESSION:-}" ]] && ((ai_quorum_inputs != 3)); then
+  echo "PCBEX_AI_REVIEW_SESSION requires the complete AI quorum input set" >&2
+  exit 2
+fi
+if [[ -n "$ai_review_generated_schematic" && $ai_quorum_inputs -ne 3 ]]; then
+  echo "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC requires the complete AI quorum input set" >&2
+  exit 2
+fi
+if ((ai_quorum_inputs == 3)) &&
+  [[ -z "${PCBEX_POLICY_PACK:-}" &&
+    -z "${PCBEX_SIGNED_POLICY_PACK:-}" &&
+    -z "${PCBEX_POLICY_PACK_URL:-}" ]]; then
+  echo "AI approval quorum verification requires a policy pack or signed policy pack" >&2
   exit 2
 fi
 if [[ -z "$deterministic_pipeline_plan" ]]; then
@@ -187,6 +229,10 @@ if [[ -z "$deterministic_pipeline_plan" ]]; then
 else
   python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
     --validate-plan "$deterministic_pipeline_plan"
+fi
+if [[ -n "$ai_review_generated_schematic" && -z "$deterministic_pipeline_plan" ]]; then
+  echo "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC requires PCBEX_DETERMINISTIC_PIPELINE_PLAN" >&2
+  exit 2
 fi
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
@@ -2033,18 +2079,178 @@ if [[ "$has_schematic" == "true" && "$has_baseline_schematic" == "true" ]]; then
 fi
 
 ai_approval_quorum=""
-ai_approval_quorum_met=""
-ai_quorum_inputs=0
-if [[ -n "${PCBEX_AI_REVIEW_REQUEST:-}" ]]; then ((ai_quorum_inputs += 1)); fi
-if [[ -n "${PCBEX_AI_APPROVAL_FILES:-}" ]]; then ((ai_quorum_inputs += 1)); fi
-if [[ -n "${PCBEX_AI_RESPONSE_FILES:-}" ]]; then ((ai_quorum_inputs += 1)); fi
-if ((ai_quorum_inputs != 0 && ai_quorum_inputs != 3)); then
-  echo "PCBEX_AI_REVIEW_REQUEST, PCBEX_AI_APPROVAL_FILES, and PCBEX_AI_RESPONSE_FILES must be supplied together" >&2
-  exit 2
+if [[ -n "$deterministic_pipeline_plan" ]]; then
+  deterministic_pipeline_report_candidate="$artifact_dir/deterministic-pipeline-report.json"
+  if [[ -e "$deterministic_pipeline_report_candidate" ||
+    -L "$deterministic_pipeline_report_candidate" ]]; then
+    echo "refusing to reuse an existing deterministic pipeline report" >&2
+    deterministic_pipeline_rc=2
+  else
+    deterministic_pipeline_arguments=(
+      run-deterministic-pipeline
+      "$deterministic_pipeline_plan"
+      --output "$deterministic_pipeline_report_candidate"
+      --mcp-echo-report-summary
+    )
+    if [[ "$deterministic_pipeline_require_approved" == "true" || -n "$ai_review_generated_schematic" ]]; then
+      deterministic_pipeline_arguments+=(--require-approved)
+    fi
+    deterministic_pipeline_summary_json=""
+    if deterministic_pipeline_summary_json="$(
+      python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
+        --timeout-seconds 2400 \
+        --max-stdout-bytes 4096 \
+        --max-stderr-bytes 8388608 \
+        --output-root "$PCBEX_OUTPUT_DIR" \
+        -- "$PCBEX_BINARY" "${deterministic_pipeline_arguments[@]}" |
+      python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
+        --verify \
+        --plan "$deterministic_pipeline_plan" \
+        --report "$deterministic_pipeline_report_candidate"
+    )"; then
+      deterministic_pipeline_rc=0
+    else
+      deterministic_pipeline_rc=$?
+    fi
+  fi
+
+  if [[ -f "$deterministic_pipeline_report_candidate" &&
+    ! -L "$deterministic_pipeline_report_candidate" &&
+    -n "$deterministic_pipeline_summary_json" ]]; then
+      deterministic_pipeline_summary_values=""
+      if deterministic_pipeline_summary_values="$(
+        python3 - "$deterministic_pipeline_summary_json" <<'PY'
+import json
+import sys
+
+fields = (
+    "schema_version",
+    "approved",
+    "plan_sha256",
+    "run_sha256",
+    "failure_count",
+    "report_bytes",
+    "report_sha256",
+)
+value = json.loads(sys.argv[1])
+if type(value) is not dict or set(value) != set(fields) or len(value) != len(fields):
+    raise SystemExit(2)
+for field in fields:
+    item = value[field]
+    if type(item) is bool:
+        rendered = str(item).lower()
+    elif type(item) in (int, str):
+        rendered = str(item)
+    else:
+        raise SystemExit(2)
+    print(f"{field}={rendered}")
+PY
+      )"; then
+        while IFS='=' read -r field value; do
+          case "$field" in
+            schema_version) deterministic_pipeline_schema_version="$value" ;;
+            approved) deterministic_pipeline_approved="$value" ;;
+            plan_sha256) deterministic_pipeline_plan_sha256="$value" ;;
+            run_sha256) deterministic_pipeline_run_sha256="$value" ;;
+            failure_count) deterministic_pipeline_failure_count="$value" ;;
+            report_bytes) deterministic_pipeline_report_bytes="$value" ;;
+            report_sha256) deterministic_pipeline_report_sha256="$value" ;;
+            *)
+              deterministic_pipeline_rc=2
+              deterministic_pipeline_schema_version=""
+              deterministic_pipeline_approved=""
+              deterministic_pipeline_plan_sha256=""
+              deterministic_pipeline_run_sha256=""
+              deterministic_pipeline_failure_count=""
+              deterministic_pipeline_report_bytes=""
+              deterministic_pipeline_report_sha256=""
+              break
+              ;;
+          esac
+        done <<< "$deterministic_pipeline_summary_values"
+        if [[ -z "$deterministic_pipeline_schema_version" ||
+          -z "$deterministic_pipeline_approved" ||
+          -z "$deterministic_pipeline_plan_sha256" ||
+          -z "$deterministic_pipeline_run_sha256" ||
+          -z "$deterministic_pipeline_failure_count" ||
+          -z "$deterministic_pipeline_report_bytes" ||
+          -z "$deterministic_pipeline_report_sha256" ]]; then
+          deterministic_pipeline_rc=2
+        else
+          deterministic_pipeline_report="$deterministic_pipeline_report_candidate"
+        fi
+      else
+        deterministic_pipeline_rc=2
+      fi
+  else
+    deterministic_pipeline_rc=2
+  fi
+
+  {
+    printf '\n# pcbex deterministic pipeline\n\n'
+    printf -- '- Approved: `%s`\n' "${deterministic_pipeline_approved:-unavailable}"
+    if [[ -n "$deterministic_pipeline_report" ]]; then
+      printf -- '- Report: `%s`\n' "$deterministic_pipeline_report"
+    else
+      printf -- '- Report: unavailable\n'
+    fi
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
-if [[ -n "${PCBEX_AI_REVIEW_SESSION:-}" ]] && ((ai_quorum_inputs != 3)); then
-  echo "PCBEX_AI_REVIEW_SESSION requires the complete AI quorum input set" >&2
-  exit 2
+
+ai_approval_quorum_met=""
+if [[ -n "$ai_review_generated_schematic" ]]; then
+  if [[ -z "$deterministic_pipeline_report" ||
+    "$deterministic_pipeline_rc" != "0" ||
+    "$deterministic_pipeline_approved" != "true" ]]; then
+    echo "AI review artifact binding requires a fresh approved deterministic pipeline report" >&2
+    exit 2
+  fi
+  ai_review_artifact_identity_values="$(
+    PYTHONPATH="$GITHUB_ACTION_PATH/agent/src" python3 - \
+      "$ai_review_generated_schematic" \
+      "$deterministic_pipeline_plan" \
+      "$deterministic_pipeline_report" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+from pcbex_agent.bounded_io import read_bytes
+
+paths = (
+    (Path(sys.argv[1]), 64 * 1024 * 1024),
+    (Path(sys.argv[2]), 4 * 1024 * 1024),
+    (Path(sys.argv[3]), 128 * 1024 * 1024),
+)
+values = []
+for path, limit in paths:
+    payload = read_bytes(path, max_bytes=limit)
+    confirmation = read_bytes(path, max_bytes=limit)
+    if payload != confirmation:
+        raise SystemExit(f"artifact changed between bounded reads: {path}")
+    values.extend((str(len(payload)), hashlib.sha256(payload).hexdigest()))
+print(" ".join(values))
+PY
+  )" || {
+    echo "unable to read AI review artifact identities" >&2
+    exit 2
+  }
+  read -r \
+    ai_review_generated_schematic_bytes \
+    ai_review_generated_schematic_sha256 \
+    ai_review_pipeline_plan_source_bytes \
+    ai_review_pipeline_plan_source_sha256 \
+    ai_review_pipeline_report_bytes \
+    ai_review_pipeline_report_sha256 \
+    <<< "$ai_review_artifact_identity_values"
+  if [[ ! "$ai_review_generated_schematic_bytes" =~ ^[1-9][0-9]*$ ||
+    ! "$ai_review_generated_schematic_sha256" =~ ^[0-9a-f]{64}$ ||
+    ! "$ai_review_pipeline_plan_source_bytes" =~ ^[1-9][0-9]*$ ||
+    ! "$ai_review_pipeline_plan_source_sha256" =~ ^[0-9a-f]{64}$ ||
+    ! "$ai_review_pipeline_report_bytes" =~ ^[1-9][0-9]*$ ||
+    ! "$ai_review_pipeline_report_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "AI review artifact identities are malformed" >&2
+    exit 2
+  fi
 fi
 if ((ai_quorum_inputs == 3)); then
   if [[ -z "$effective_policy_pack" ]]; then
@@ -2063,6 +2269,12 @@ if ((ai_quorum_inputs == 3)); then
     --summary-output "$ai_approval_quorum_summary")
   if [[ -n "${PCBEX_AI_REVIEW_SESSION:-}" ]]; then
     quorum_arguments+=(--session "$PCBEX_AI_REVIEW_SESSION")
+  fi
+  if [[ -n "$ai_review_generated_schematic" ]]; then
+    quorum_arguments+=(
+      --generated-schematic "$ai_review_generated_schematic"
+      --deterministic-pipeline-plan "$deterministic_pipeline_plan"
+      --deterministic-pipeline-report "$deterministic_pipeline_report")
   fi
   if [[ -n "${PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY:-}" ]]; then
     quorum_arguments+=( \
@@ -2086,6 +2298,11 @@ if ((ai_quorum_inputs == 3)); then
       'import json,sys; data=json.load(open(sys.argv[1], encoding="utf-8")); routed=data.get("routed_quorum", data); quorum=data.get("quorum", data); print(str(routed.get("routed_quorum_met", quorum.get("quorum_met"))).lower())' \
       "$ai_approval_quorum"
   )"
+  if [[ -n "$ai_review_generated_schematic" ]]; then
+    ai_review_artifacts_verified=true
+    ai_review_pipeline_plan_sha256="$deterministic_pipeline_plan_sha256"
+    ai_review_pipeline_run_sha256="$deterministic_pipeline_run_sha256"
+  fi
   {
     printf '\n'
     cat "$ai_approval_quorum_summary"
@@ -3202,124 +3419,6 @@ elif [[ "$pipeline_verify" == "true" ]]; then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
-if [[ -n "$deterministic_pipeline_plan" ]]; then
-  deterministic_pipeline_report_candidate="$artifact_dir/deterministic-pipeline-report.json"
-  if [[ -e "$deterministic_pipeline_report_candidate" ||
-    -L "$deterministic_pipeline_report_candidate" ]]; then
-    echo "refusing to reuse an existing deterministic pipeline report" >&2
-    deterministic_pipeline_rc=2
-  else
-    deterministic_pipeline_arguments=(
-      run-deterministic-pipeline
-      "$deterministic_pipeline_plan"
-      --output "$deterministic_pipeline_report_candidate"
-      --mcp-echo-report-summary
-    )
-    if [[ "$deterministic_pipeline_require_approved" == "true" ]]; then
-      deterministic_pipeline_arguments+=(--require-approved)
-    fi
-    deterministic_pipeline_summary_json=""
-    if deterministic_pipeline_summary_json="$(
-      python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
-        --timeout-seconds 2400 \
-        --max-stdout-bytes 4096 \
-        --max-stderr-bytes 8388608 \
-        --output-root "$PCBEX_OUTPUT_DIR" \
-        -- "$PCBEX_BINARY" "${deterministic_pipeline_arguments[@]}" |
-      python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
-        --verify \
-        --plan "$deterministic_pipeline_plan" \
-        --report "$deterministic_pipeline_report_candidate"
-    )"; then
-      deterministic_pipeline_rc=0
-    else
-      deterministic_pipeline_rc=$?
-    fi
-  fi
-
-  if [[ -f "$deterministic_pipeline_report_candidate" &&
-    ! -L "$deterministic_pipeline_report_candidate" &&
-    -n "$deterministic_pipeline_summary_json" ]]; then
-      deterministic_pipeline_summary_values=""
-      if deterministic_pipeline_summary_values="$(
-        python3 - "$deterministic_pipeline_summary_json" <<'PY'
-import json
-import sys
-
-fields = (
-    "schema_version",
-    "approved",
-    "plan_sha256",
-    "run_sha256",
-    "failure_count",
-    "report_bytes",
-    "report_sha256",
-)
-value = json.loads(sys.argv[1])
-if type(value) is not dict or set(value) != set(fields) or len(value) != len(fields):
-    raise SystemExit(2)
-for field in fields:
-    item = value[field]
-    if type(item) is bool:
-        rendered = str(item).lower()
-    elif type(item) in (int, str):
-        rendered = str(item)
-    else:
-        raise SystemExit(2)
-    print(f"{field}={rendered}")
-PY
-      )"; then
-        while IFS='=' read -r field value; do
-          case "$field" in
-            schema_version) deterministic_pipeline_schema_version="$value" ;;
-            approved) deterministic_pipeline_approved="$value" ;;
-            plan_sha256) deterministic_pipeline_plan_sha256="$value" ;;
-            run_sha256) deterministic_pipeline_run_sha256="$value" ;;
-            failure_count) deterministic_pipeline_failure_count="$value" ;;
-            report_bytes) deterministic_pipeline_report_bytes="$value" ;;
-            report_sha256) deterministic_pipeline_report_sha256="$value" ;;
-            *)
-              deterministic_pipeline_rc=2
-              deterministic_pipeline_schema_version=""
-              deterministic_pipeline_approved=""
-              deterministic_pipeline_plan_sha256=""
-              deterministic_pipeline_run_sha256=""
-              deterministic_pipeline_failure_count=""
-              deterministic_pipeline_report_bytes=""
-              deterministic_pipeline_report_sha256=""
-              break
-              ;;
-          esac
-        done <<< "$deterministic_pipeline_summary_values"
-        if [[ -z "$deterministic_pipeline_schema_version" ||
-          -z "$deterministic_pipeline_approved" ||
-          -z "$deterministic_pipeline_plan_sha256" ||
-          -z "$deterministic_pipeline_run_sha256" ||
-          -z "$deterministic_pipeline_failure_count" ||
-          -z "$deterministic_pipeline_report_bytes" ||
-          -z "$deterministic_pipeline_report_sha256" ]]; then
-          deterministic_pipeline_rc=2
-        else
-          deterministic_pipeline_report="$deterministic_pipeline_report_candidate"
-        fi
-      else
-        deterministic_pipeline_rc=2
-      fi
-  else
-    deterministic_pipeline_rc=2
-  fi
-
-  {
-    printf '\n# pcbex deterministic pipeline\n\n'
-    printf -- '- Approved: `%s`\n' "${deterministic_pipeline_approved:-unavailable}"
-    if [[ -n "$deterministic_pipeline_report" ]]; then
-      printf -- '- Report: `%s`\n' "$deterministic_pipeline_report"
-    else
-      printf -- '- Report: unavailable\n'
-    fi
-  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
-fi
-
 write_output sarif-dir "$sarif_dir"
 write_output current-sarif "$current_dir/report.sarif"
 write_output comparison-sarif "$comparison_sarif"
@@ -3397,6 +3496,15 @@ write_output schematic-reviewer-routing "$schematic_reviewer_routing"
 write_output schematic-review-all-routed "$schematic_review_all_routed"
 write_output ai-approval-quorum "$ai_approval_quorum"
 write_output ai-approval-quorum-met "$ai_approval_quorum_met"
+write_output ai-review-artifacts-verified "$ai_review_artifacts_verified"
+write_output ai-review-generated-schematic-bytes "$ai_review_generated_schematic_bytes"
+write_output ai-review-generated-schematic-sha256 "$ai_review_generated_schematic_sha256"
+write_output ai-review-pipeline-plan-source-bytes "$ai_review_pipeline_plan_source_bytes"
+write_output ai-review-pipeline-plan-source-sha256 "$ai_review_pipeline_plan_source_sha256"
+write_output ai-review-pipeline-plan-sha256 "$ai_review_pipeline_plan_sha256"
+write_output ai-review-pipeline-report-bytes "$ai_review_pipeline_report_bytes"
+write_output ai-review-pipeline-report-sha256 "$ai_review_pipeline_report_sha256"
+write_output ai-review-pipeline-run-sha256 "$ai_review_pipeline_run_sha256"
 write_output human-escalation "$human_escalation"
 write_output human-escalation-approved "$human_escalation_approved"
 write_output schematic-approval-met "$schematic_approval_met"

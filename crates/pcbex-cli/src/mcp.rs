@@ -3015,7 +3015,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "prepare_schematic_review",
             "Prepare AI schematic review",
-            "Recompute and bind schematic, electrical, simulation, and requirement evidence into a review request.",
+            "Recompute and bind schematic, electrical, simulation, and requirement evidence into a review request; an optional deterministic plan/report pair creates a live-verified artifact-bound request.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3036,9 +3036,20 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                         "type": "array", "minItems": 1, "items": {"type": "string"}
                     },
                     "allow_no_simulation": {"type": "boolean", "default": false},
+                    "deterministic_pipeline_plan": {"type": "string"},
+                    "deterministic_pipeline_report": {"type": "string"},
                     "output": {"type": "string"},
                     "session_output": {"type": "string"}
-                }
+                },
+                "allOf": [{
+                    "oneOf": [
+                        {"required": ["deterministic_pipeline_plan", "deterministic_pipeline_report"]},
+                        {"not": {"anyOf": [
+                            {"required": ["deterministic_pipeline_plan"]},
+                            {"required": ["deterministic_pipeline_report"]}
+                        ]}}
+                    ]
+                }]
             }),
             false,
             true,
@@ -3047,7 +3058,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "sign_schematic_approval",
             "Sign AI schematic approval",
-            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Requires an explicit private-key path.",
+            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Request-schema-v2 artifacts are rerun and revalidated before the private key is read.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3060,9 +3071,26 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "private_key": {"type": "string"},
                     "signer_id": {"type": "string"},
                     "session": {"type": "string"},
+                    "generated_schematic": {"type": "string"},
+                    "deterministic_pipeline_plan": {"type": "string"},
+                    "deterministic_pipeline_report": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
-                }
+                },
+                "allOf": [{
+                    "oneOf": [
+                        {"required": [
+                            "generated_schematic",
+                            "deterministic_pipeline_plan",
+                            "deterministic_pipeline_report"
+                        ]},
+                        {"not": {"anyOf": [
+                            {"required": ["generated_schematic"]},
+                            {"required": ["deterministic_pipeline_plan"]},
+                            {"required": ["deterministic_pipeline_report"]}
+                        ]}}
+                    ]
+                }]
             }),
             false,
             true,
@@ -3071,7 +3099,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_schematic_approval",
             "Verify AI schematic approval",
-            "Strictly verify an Ed25519 approval against its exact request and AI response.",
+            "Strictly verify an Ed25519 approval against its exact request, AI response, and any live request-schema-v2 artifacts.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3087,8 +3115,25 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "public_key": {"type": "string"},
                     "policy_pack": {"type": "string"},
                     "session": {"type": "string"},
+                    "generated_schematic": {"type": "string"},
+                    "deterministic_pipeline_plan": {"type": "string"},
+                    "deterministic_pipeline_report": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
-                }
+                },
+                "allOf": [{
+                    "oneOf": [
+                        {"required": [
+                            "generated_schematic",
+                            "deterministic_pipeline_plan",
+                            "deterministic_pipeline_report"
+                        ]},
+                        {"not": {"anyOf": [
+                            {"required": ["generated_schematic"]},
+                            {"required": ["deterministic_pipeline_plan"]},
+                            {"required": ["deterministic_pipeline_report"]}
+                        ]}}
+                    ]
+                }]
             }),
             true,
             false,
@@ -3097,7 +3142,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_schematic_approval_quorum",
             "Verify AI schematic approval quorum",
-            "Verify independent signed reviews against one bound request and enforce approval, provider, and model thresholds.",
+            "Verify independent signed reviews and any live request-schema-v2 artifacts against one bound request, then enforce approval, provider, and model thresholds.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3128,10 +3173,27 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "current_schematic": {"type": "string"},
                     "reviewer_routing_policy": {"type": "string"},
                     "session": {"type": "string"},
+                    "generated_schematic": {"type": "string"},
+                    "deterministic_pipeline_plan": {"type": "string"},
+                    "deterministic_pipeline_report": {"type": "string"},
                     "output": {"type": "string"},
                     "summary_output": {"type": "string"},
                     "require_quorum": {"type": "boolean", "default": false}
-                }
+                },
+                "allOf": [{
+                    "oneOf": [
+                        {"required": [
+                            "generated_schematic",
+                            "deterministic_pipeline_plan",
+                            "deterministic_pipeline_report"
+                        ]},
+                        {"not": {"anyOf": [
+                            {"required": ["generated_schematic"]},
+                            {"required": ["deterministic_pipeline_plan"]},
+                            {"required": ["deterministic_pipeline_report"]}
+                        ]}}
+                    ]
+                }]
             }),
             false,
             true,
@@ -9499,6 +9561,8 @@ fn prepare_schematic_review(
             "simulation_evidence",
             "requirements",
             "allow_no_simulation",
+            "deterministic_pipeline_plan",
+            "deterministic_pipeline_report",
             "output",
             "session_output",
         ],
@@ -9532,6 +9596,21 @@ fn prepare_schematic_review(
         &arguments,
         "allow_no_simulation",
         "--allow-no-simulation",
+        &mut command,
+    )?;
+    append_complete_options(
+        &arguments,
+        &[
+            (
+                "deterministic_pipeline_plan",
+                "--deterministic-pipeline-plan",
+            ),
+            (
+                "deterministic_pipeline_report",
+                "--deterministic-pipeline-report",
+            ),
+        ],
+        "deterministic_pipeline_plan and deterministic_pipeline_report",
         &mut command,
     )?;
     command.extend(["--output".into(), output.clone()]);
@@ -9571,6 +9650,9 @@ fn sign_schematic_approval(
             "private_key",
             "signer_id",
             "session",
+            "generated_schematic",
+            "deterministic_pipeline_plan",
+            "deterministic_pipeline_report",
             "output",
             "require_approved",
         ],
@@ -9592,6 +9674,22 @@ fn sign_schematic_approval(
         output.clone(),
     ];
     optional_option(&arguments, "session", "--session", &mut command)?;
+    append_complete_options(
+        &arguments,
+        &[
+            ("generated_schematic", "--generated-schematic"),
+            (
+                "deterministic_pipeline_plan",
+                "--deterministic-pipeline-plan",
+            ),
+            (
+                "deterministic_pipeline_report",
+                "--deterministic-pipeline-report",
+            ),
+        ],
+        "generated_schematic, deterministic_pipeline_plan, and deterministic_pipeline_report",
+        &mut command,
+    )?;
     optional_flag(
         &arguments,
         "require_approved",
@@ -9619,6 +9717,9 @@ fn verify_schematic_approval(
             "public_key",
             "policy_pack",
             "session",
+            "generated_schematic",
+            "deterministic_pipeline_plan",
+            "deterministic_pipeline_report",
             "require_approved",
         ],
     )?;
@@ -9636,6 +9737,22 @@ fn verify_schematic_approval(
     optional_option(&arguments, "public_key", "--public-key", &mut command)?;
     optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
     optional_option(&arguments, "session", "--session", &mut command)?;
+    append_complete_options(
+        &arguments,
+        &[
+            ("generated_schematic", "--generated-schematic"),
+            (
+                "deterministic_pipeline_plan",
+                "--deterministic-pipeline-plan",
+            ),
+            (
+                "deterministic_pipeline_report",
+                "--deterministic-pipeline-report",
+            ),
+        ],
+        "generated_schematic, deterministic_pipeline_plan, and deterministic_pipeline_report",
+        &mut command,
+    )?;
     optional_flag(
         &arguments,
         "require_approved",
@@ -9665,6 +9782,9 @@ fn verify_schematic_approval_quorum(
             "current_schematic",
             "reviewer_routing_policy",
             "session",
+            "generated_schematic",
+            "deterministic_pipeline_plan",
+            "deterministic_pipeline_report",
             "output",
             "summary_output",
             "require_quorum",
@@ -9736,6 +9856,22 @@ fn verify_schematic_approval_quorum(
         &arguments,
         "reviewer_routing_policy",
         "--reviewer-routing-policy",
+        &mut command,
+    )?;
+    append_complete_options(
+        &arguments,
+        &[
+            ("generated_schematic", "--generated-schematic"),
+            (
+                "deterministic_pipeline_plan",
+                "--deterministic-pipeline-plan",
+            ),
+            (
+                "deterministic_pipeline_report",
+                "--deterministic-pipeline-report",
+            ),
+        ],
+        "generated_schematic, deterministic_pipeline_plan, and deterministic_pipeline_report",
         &mut command,
     )?;
     command.extend(["--output".into(), output.clone()]);
@@ -12588,6 +12724,43 @@ fn optional_option(
     Ok(())
 }
 
+/// Require an optional group of related path arguments to be either entirely
+/// absent or entirely present.  The CLI performs the authoritative artifact
+/// binding and digest validation; MCP rejects partial groups before spawning
+/// a child so a caller cannot accidentally create a request that omits one
+/// side of the binding handoff.
+fn require_complete_option_set(
+    arguments: &Map<String, Value>,
+    names: &[&str],
+    label: &str,
+) -> std::result::Result<(), Value> {
+    let supplied = names
+        .iter()
+        .filter(|name| arguments.contains_key(**name))
+        .count();
+    if supplied == 0 || supplied == names.len() {
+        Ok(())
+    } else {
+        Err(json!({
+            "detail": format!("{label} must be supplied together")
+        }))
+    }
+}
+
+fn append_complete_options(
+    arguments: &Map<String, Value>,
+    options: &[(&str, &str)],
+    label: &str,
+    command: &mut Vec<String>,
+) -> std::result::Result<(), Value> {
+    let names = options.iter().map(|(name, _)| *name).collect::<Vec<_>>();
+    require_complete_option_set(arguments, &names, label)?;
+    for (name, option) in options {
+        optional_option(arguments, name, option, command)?;
+    }
+    Ok(())
+}
+
 fn optional_flag(
     arguments: &Map<String, Value>,
     name: &str,
@@ -12851,6 +13024,185 @@ mod tests {
             std::os::unix::fs::symlink(&valid, &link).unwrap();
             assert_eq!(read_json_if_present(&link), Value::Null);
         }
+    }
+
+    #[test]
+    fn ai_review_artifact_options_forward_exact_cli_flags() {
+        let arguments = json!({
+            "generated_schematic": "generated.kicad_sch",
+            "deterministic_pipeline_plan": "plan.json",
+            "deterministic_pipeline_report": "report.json"
+        });
+        let arguments = arguments.as_object().unwrap();
+        let mut command = vec!["verify-ai-quorum".to_string()];
+        append_complete_options(
+            arguments,
+            &[
+                ("generated_schematic", "--generated-schematic"),
+                (
+                    "deterministic_pipeline_plan",
+                    "--deterministic-pipeline-plan",
+                ),
+                (
+                    "deterministic_pipeline_report",
+                    "--deterministic-pipeline-report",
+                ),
+            ],
+            "generated_schematic, deterministic_pipeline_plan, and deterministic_pipeline_report",
+            &mut command,
+        )
+        .unwrap();
+        assert_eq!(
+            command,
+            vec![
+                "verify-ai-quorum",
+                "--generated-schematic",
+                "generated.kicad_sch",
+                "--deterministic-pipeline-plan",
+                "plan.json",
+                "--deterministic-pipeline-report",
+                "report.json"
+            ]
+        );
+
+        let partial = json!({"generated_schematic": "generated.kicad_sch"});
+        let error = append_complete_options(
+            partial.as_object().unwrap(),
+            &[
+                ("generated_schematic", "--generated-schematic"),
+                (
+                    "deterministic_pipeline_plan",
+                    "--deterministic-pipeline-plan",
+                ),
+                (
+                    "deterministic_pipeline_report",
+                    "--deterministic-pipeline-report",
+                ),
+            ],
+            "generated_schematic, deterministic_pipeline_plan, and deterministic_pipeline_report",
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("must be supplied together")
+        );
+
+        let partial_pair = json!({"deterministic_pipeline_report": "report.json"});
+        let error = append_complete_options(
+            partial_pair.as_object().unwrap(),
+            &[
+                (
+                    "deterministic_pipeline_plan",
+                    "--deterministic-pipeline-plan",
+                ),
+                (
+                    "deterministic_pipeline_report",
+                    "--deterministic-pipeline-report",
+                ),
+            ],
+            "deterministic_pipeline_plan and deterministic_pipeline_report",
+            &mut Vec::new(),
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("must be supplied together")
+        );
+    }
+
+    #[test]
+    fn ai_review_handlers_reject_partial_artifact_binding_before_dispatch() {
+        let prepare = prepare_schematic_review(
+            json!({
+                "input": "generated.kicad_sch",
+                "electrical_review": "electrical.json",
+                "requirements": ["power"],
+                "deterministic_pipeline_plan": "plan.json",
+                "output": "request.json"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            prepare["detail"]
+                .as_str()
+                .unwrap()
+                .contains("must be supplied together")
+        );
+
+        let sign = sign_schematic_approval(
+            json!({
+                "request": "request.json",
+                "response": "response.json",
+                "private_key": "private.key",
+                "signer_id": "reviewer",
+                "generated_schematic": "generated.kicad_sch",
+                "output": "approval.json"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            sign["detail"]
+                .as_str()
+                .unwrap()
+                .contains("must be supplied together")
+        );
+
+        let verify = verify_schematic_approval(
+            json!({
+                "approval": "approval.json",
+                "request": "request.json",
+                "response": "response.json",
+                "public_key": "public.key",
+                "deterministic_pipeline_report": "report.json"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            verify["detail"]
+                .as_str()
+                .unwrap()
+                .contains("must be supplied together")
+        );
+
+        let quorum = verify_schematic_approval_quorum(
+            json!({
+                "request": "request.json",
+                "approvals": ["approval.json"],
+                "responses": ["response.json"],
+                "policy_pack": "policy-pack.json",
+                "output": "quorum.json",
+                "deterministic_pipeline_plan": "plan.json",
+                "deterministic_pipeline_report": "report.json"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            quorum["detail"]
+                .as_str()
+                .unwrap()
+                .contains("must be supplied together")
+        );
     }
 
     fn request(id: i64, method: &str, params: Value) -> Value {
@@ -13513,8 +13865,26 @@ mod tests {
             "string"
         );
         assert_eq!(
+            named("prepare_schematic_review")["inputSchema"]["properties"]["deterministic_pipeline_plan"]
+                ["type"],
+            "string"
+        );
+        assert_eq!(
+            named("prepare_schematic_review")["inputSchema"]["allOf"][0]["oneOf"][0]["required"][1],
+            "deterministic_pipeline_report"
+        );
+        assert_eq!(
             named("sign_schematic_approval")["inputSchema"]["properties"]["session"]["type"],
             "string"
+        );
+        assert_eq!(
+            named("sign_schematic_approval")["inputSchema"]["properties"]["generated_schematic"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("verify_schematic_approval")["inputSchema"]["allOf"][0]["oneOf"][0]["required"]
+                [2],
+            "deterministic_pipeline_report"
         );
         assert_eq!(
             named("verify_schematic_approval")["annotations"]["readOnlyHint"],
@@ -13532,6 +13902,16 @@ mod tests {
         assert_eq!(
             named("verify_schematic_approval_quorum")["inputSchema"]["properties"]["session"]["type"],
             "string"
+        );
+        assert_eq!(
+            named("verify_schematic_approval_quorum")["inputSchema"]["properties"]["deterministic_pipeline_report"]
+                ["type"],
+            "string"
+        );
+        assert_eq!(
+            named("verify_schematic_approval_quorum")["inputSchema"]["allOf"][0]["oneOf"][0]["required"]
+                [0],
+            "generated_schematic"
         );
         assert_eq!(
             named("verify_schematic_approval_quorum")["annotations"]["destructiveHint"],

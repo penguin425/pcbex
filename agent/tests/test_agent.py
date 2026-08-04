@@ -30,7 +30,7 @@ from pcbex_agent.repair import propose_repairs
 from pcbex_agent.repair_loop import run_repair_loop
 from pcbex_agent.llm import build_plan_with_llm
 from pcbex_agent.ipc import apply_routes_to_open_board
-from pcbex_agent.review import review_schematic_with_llm
+from pcbex_agent.review import ReviewError, review_schematic_with_llm
 from pcbex_agent.skidl import (
     CircuitSpecError,
     assign_catalog_parts,
@@ -247,6 +247,121 @@ class AdapterTests(unittest.TestCase):
             request, lambda _prompt: json.dumps(response)
         )
         self.assertEqual(result["decision"], "approve")
+
+    @staticmethod
+    def _bound_review_fixture():
+        request, response = AdapterTests._managed_review_fixture()
+        request = {
+            **request,
+            "schema_version": 2,
+            "artifact_binding": {
+                "schema_version": 1,
+                "generated_schematic": {
+                    "bytes": 64,
+                    "sha256": "b" * 64,
+                },
+                "pipeline": {
+                    "plan_source": {"bytes": 128, "sha256": "c" * 64},
+                    "plan_sha256": "d" * 64,
+                    "report": {"bytes": 256, "sha256": "e" * 64},
+                    "run_sha256": "f" * 64,
+                },
+            },
+        }
+        return request, response
+
+    def test_schematic_review_adapter_accepts_bound_v2_evidence(self):
+        request, response = self._bound_review_fixture()
+        prompts: list[str] = []
+        result = review_schematic_with_llm(
+            request,
+            lambda prompt: (prompts.append(prompt), json.dumps(response))[1],
+        )
+        self.assertEqual(result["schema_version"], 1)
+        self.assertIn(
+            "Artifact identities in a schema-v2 request are immutable evidence",
+            prompts[0],
+        )
+        self.assertIn("The response schema remains v1", prompts[0])
+
+    def test_schematic_review_adapter_rejects_v1_artifact_binding_presence(self):
+        request, _response = self._managed_review_fixture()
+        for binding in (None, {}):
+            with self.subTest(binding=binding):
+                malformed = {**request, "artifact_binding": binding}
+                with self.assertRaises(ReviewError):
+                    review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_malformed_v2_binding(self):
+        request, _response = self._bound_review_fixture()
+        cases = {
+            "missing": {
+                key: value
+                for key, value in request["artifact_binding"].items()
+                if key != "pipeline"
+            },
+            "unknown binding field": {
+                **request["artifact_binding"],
+                "unexpected": True,
+            },
+            "unknown identity field": {
+                **request["artifact_binding"],
+                "generated_schematic": {
+                    **request["artifact_binding"]["generated_schematic"],
+                    "path": "design.kicad_sch",
+                },
+            },
+        }
+        for name, binding in cases.items():
+            with self.subTest(case=name):
+                malformed = {**request, "artifact_binding": binding}
+                with self.assertRaises(ReviewError):
+                    review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_oversize_and_non_boolean_bytes(self):
+        request, _response = self._bound_review_fixture()
+        cases = {
+            "schematic oversize": (
+                "generated_schematic",
+                {"bytes": 64 * 1024 * 1024 + 1, "sha256": "b" * 64},
+            ),
+            "plan oversize": (
+                "plan_source",
+                {"bytes": 4 * 1024 * 1024 + 1, "sha256": "c" * 64},
+            ),
+            "report oversize": (
+                "report",
+                {"bytes": 128 * 1024 * 1024 + 1, "sha256": "e" * 64},
+            ),
+            "boolean bytes": (
+                "generated_schematic",
+                {"bytes": True, "sha256": "b" * 64},
+            ),
+        }
+        for name, (field, value) in cases.items():
+            with self.subTest(case=name):
+                malformed = json.loads(json.dumps(request))
+                if field == "generated_schematic":
+                    malformed["artifact_binding"][field] = value
+                else:
+                    malformed["artifact_binding"]["pipeline"][field] = value
+                with self.assertRaises(ReviewError):
+                    review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_noncanonical_artifact_sha256(self):
+        request, _response = self._bound_review_fixture()
+        for field, value in (
+            ("generated_schematic", "A" * 64),
+            ("plan_sha256", "g" * 64),
+        ):
+            with self.subTest(field=field):
+                malformed = json.loads(json.dumps(request))
+                if field == "generated_schematic":
+                    malformed["artifact_binding"][field]["sha256"] = value
+                else:
+                    malformed["artifact_binding"]["pipeline"][field] = value
+                with self.assertRaises(ReviewError):
+                    review_schematic_with_llm(malformed, lambda _prompt: "{}")
 
     def test_schematic_review_adapter_rejects_invented_evidence(self):
         request = {

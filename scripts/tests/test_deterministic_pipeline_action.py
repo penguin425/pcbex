@@ -32,6 +32,18 @@ DETERMINISTIC_OUTPUTS = (
     "deterministic-pipeline-report-sha256",
 )
 
+AI_ARTIFACT_OUTPUTS = (
+    "ai-review-artifacts-verified",
+    "ai-review-generated-schematic-bytes",
+    "ai-review-generated-schematic-sha256",
+    "ai-review-pipeline-plan-source-bytes",
+    "ai-review-pipeline-plan-source-sha256",
+    "ai-review-pipeline-plan-sha256",
+    "ai-review-pipeline-report-bytes",
+    "ai-review-pipeline-report-sha256",
+    "ai-review-pipeline-run-sha256",
+)
+
 REPORT_KEYS = {
     "schema_version",
     "engine_version",
@@ -82,6 +94,14 @@ class DeterministicPipelineActionTests(unittest.TestCase):
                         (output_dir.parent / "deterministic-pipeline-report.json").write_bytes(
                             b"stale report planted by analyze\n"
                         )
+                    raise SystemExit(0)
+
+                if command == "verify-ai-quorum":
+                    output = Path(sys.argv[sys.argv.index("--output") + 1])
+                    summary = Path(sys.argv[sys.argv.index("--summary-output") + 1])
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    output.write_text('{"quorum_met":true}\n', encoding="utf-8")
+                    summary.write_text("quorum ok\n", encoding="utf-8")
                     raise SystemExit(0)
 
                 if command != "run-deterministic-pipeline":
@@ -362,7 +382,11 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         action = (ROOT / "action.yml").read_text(encoding="utf-8")
         self.assertIn("  deterministic-pipeline-plan:\n", action)
         self.assertIn("  deterministic-pipeline-require-approved:\n", action)
+        self.assertIn("  ai-review-generated-schematic:\n", action)
+        self.assertIn("PCBEX_AI_REVIEW_GENERATED_SCHEMATIC", action)
         for name in DETERMINISTIC_OUTPUTS:
+            self.assertIn(f"  {name}:\n", action)
+        for name in AI_ARTIFACT_OUTPUTS:
             self.assertIn(f"  {name}:\n", action)
         script = ANALYSIS_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("PCBEX_DETERMINISTIC_PIPELINE_PLAN", script)
@@ -376,6 +400,152 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertEqual(self._commands(root), ["analyze-kicad"])
         for name in DETERMINISTIC_OUTPUTS:
             self.assertEqual(outputs.get(name), "", name)
+
+    def test_bound_ai_quorum_runs_after_fresh_runner_and_forwards_exact_artifact_flags(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self._commands(root),
+            ["analyze-kicad", "run-deterministic-pipeline", "verify-ai-quorum"],
+        )
+        arguments = (root / "arguments").read_text(encoding="utf-8").splitlines()
+        self.assertIn("--require-approved", arguments)
+        self.assertIn("--generated-schematic", arguments)
+        self.assertIn("design.kicad_sch", arguments)
+        self.assertIn("--deterministic-pipeline-plan", arguments)
+        self.assertIn("plan.json", arguments)
+        self.assertIn("--deterministic-pipeline-report", arguments)
+        self.assertIn("artifacts/deterministic-pipeline-report.json", arguments)
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs["ai-review-artifacts-verified"], "true")
+        schematic_bytes = (root / "design.kicad_sch").read_bytes()
+        plan_bytes = (root / "plan.json").read_bytes()
+        report_bytes = (
+            root / "artifacts/deterministic-pipeline-report.json"
+        ).read_bytes()
+        self.assertEqual(
+            outputs["ai-review-generated-schematic-bytes"],
+            str(len(schematic_bytes)),
+        )
+        self.assertEqual(
+            outputs["ai-review-generated-schematic-sha256"],
+            self._sha256(schematic_bytes),
+        )
+        self.assertEqual(
+            outputs["ai-review-pipeline-plan-source-bytes"], str(len(plan_bytes))
+        )
+        self.assertEqual(
+            outputs["ai-review-pipeline-plan-source-sha256"],
+            self._sha256(plan_bytes),
+        )
+        self.assertEqual(outputs["ai-review-pipeline-plan-sha256"], "a" * 64)
+        self.assertEqual(
+            outputs["ai-review-pipeline-report-bytes"], str(len(report_bytes))
+        )
+        self.assertEqual(
+            outputs["ai-review-pipeline-report-sha256"],
+            self._sha256(report_bytes),
+        )
+        self.assertEqual(outputs["ai-review-pipeline-run-sha256"], "b" * 64)
+
+    def test_legacy_ai_quorum_keeps_v1_arguments_without_artifact_flags(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = (root / "arguments").read_text(encoding="utf-8").splitlines()
+        self.assertNotIn("--generated-schematic", arguments)
+        self.assertNotIn("--deterministic-pipeline-plan", arguments)
+        self.assertNotIn("--deterministic-pipeline-report", arguments)
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs["ai-review-artifacts-verified"], "")
+
+    def test_generated_schematic_requires_complete_quorum_and_runner_plan(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            extra={"PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+    def test_ai_quorum_preflight_fails_before_analysis_or_runner(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={"PCBEX_AI_REVIEW_REQUEST": "request.json"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+    def test_bound_ai_quorum_rejects_nonapproved_summary_even_on_zero_exit(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            mode="rejected",
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(
+            self._commands(root), ["analyze-kicad", "run-deterministic-pipeline"]
+        )
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs.get("ai-review-artifacts-verified"), "")
 
     def test_approved_run_retains_exact_report_and_all_output_identities(self):
         root, result, outputs = self._valid_run(require_approved="true")
