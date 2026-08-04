@@ -130,6 +130,7 @@ auditable release.
 | v1.417.0 | Bounded-input deterministic pipeline runner | Snapshot one closed relative-path/byte/SHA plan, compose raw circuit/schematic/board binding with the existing pipeline gate in process, cross-bind identities, and retain one deterministic no-side-effect report |
 | v1.418.0 | MCP deterministic pipeline runner parity | Expose the v1.417 closed runner through synchronous MCP and optional Tasks, retain rejected reports, and return a digest-verified bounded summary without embedding a potentially 128 MiB report in the 16 MiB MCP frame |
 | v1.419.0 | Composite-Action deterministic pipeline runner parity | Opt in the root Action with a closed plan, retain a fixed deterministic report and seven revalidated outputs, and publish valid rejection evidence before the optional final approval failure |
+| v1.420.0 | Bounded supplier inventory snapshot ingestion | Fetch one closed HTTPS catalog feed under deadline, byte, secret, and no-clobber bounds, then bind the exact response to a replayable local snapshot and receipt while selection stays offline |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -151,7 +152,7 @@ v1.417.0 release composes the latter with the existing pipeline gate through
 one closed digest-bound plan and report without changing either pipeline
 report schema. The v1.418.0 release exposed that runner through MCP without
 relaxing its closed inputs, no-clobber output, or retained-rejection contract.
-The current v1.419.0 release adds root composite-Action parity: an empty
+The v1.419.0 release adds root composite-Action parity: an empty
 `deterministic-pipeline-plan` keeps analysis-only behavior, while an explicit
 plan uses the fixed `${output-dir}/deterministic-pipeline-report.json` report
 and revalidates the seven schema/decision/digest/count/size outputs before
@@ -175,4 +176,14 @@ contract.  Hierarchy, buses,
 multi-unit/nested handoffs, geometry, routing, DRC, and DFM remain outside it,
 and existing pipeline v1/v2 phases are unchanged.
 
-Qualified live supplier selection remains a later boundary.
+The current v1.420.0 release adds one explicit network pre-step before catalog
+selection. It fetches a closed `catalog-snapshot-v1` document from a caller-
+selected HTTPS endpoint, disables redirects, bounds the complete deadline and
+decoded response, sources an optional bearer token only from a named
+environment variable, reuses the authoritative snapshot/TTL validator, and
+atomically publishes both the normalized snapshot and a secret-free digest-
+bound fetch receipt. Existing catalog selection, circuit generation, and the
+deterministic pipeline remain network-free and consume only retained local
+evidence. Supplier-native search/SDK adapters, autonomous substitution,
+reservation, purchase, datasheet truth, and qualification remain later
+boundaries.

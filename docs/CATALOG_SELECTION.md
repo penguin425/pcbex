@@ -67,6 +67,72 @@ UTF-8 byte counts, duplicate keys, normalized text, HTTPS host/userinfo rules,
 timestamp ordering/TTL, source basename correlation, sorted unique references,
 the aggregate receipt byte limit, and recomputed digests.
 
+## Bounded HTTPS acquisition
+
+v1.420 adds an explicit network pre-step for callers that maintain a catalog
+feed. The endpoint must return the exact closed `catalog-snapshot-v1` object;
+the fetcher does not accept an arbitrary supplier response or infer field
+mappings. The declared `--provider` must equal the snapshot's `supplier`.
+
+```sh
+export PCBEX_CATALOG_TOKEN='deployment-owned-secret'
+PYTHONPATH=agent/src python3 -m pcbex_agent fetch-catalog-snapshot \
+  --endpoint https://inventory.example.test/catalog/v1 \
+  --provider jlcpcb \
+  --output build/catalog-snapshot.json \
+  --receipt build/catalog-fetch-receipt.json \
+  --timeout-seconds 30 \
+  --maximum-response-bytes 4194304 \
+  --bearer-token-environment PCBEX_CATALOG_TOKEN
+
+PYTHONPATH=agent/src python3 -m pcbex_agent catalog-fetch-receipt-schema \
+  --output build/catalog-fetch-receipt-v1.schema.json
+```
+
+Only an absolute HTTPS URL of at most 4 KiB without credentials, whitespace,
+query, or fragment delimiters is accepted. Redirects are not followed. DNS is
+resolved by a secret-free, output-bounded helper process that is terminated at
+the same monotonic deadline; TCP and TLS setup use one capped connection slot
+so a pathological late worker cannot accumulate across repeated calls. The
+caller's network-phase deadline is at most 60 seconds. The declared and
+streamed response are both bounded to at most 4 MiB and must have the
+`application/json` media type. An exact `chunked` transfer is accepted as
+framing, while other transfer encodings and duplicate framing headers are
+rejected, as is `Content-Length` plus `Transfer-Encoding` ambiguity. An
+optional bearer token is read only from a validated environment-variable name
+and is bounded to 8 KiB. It is never passed to the resolver or retained in the
+endpoint identity, request digest, receipt, output, or compact error text. HTTP
+loopback accepts only literal `127.0.0.1` or `::1`, exists only as a
+programmatic test switch, and is not exposed by the CLI.
+
+Before the request, both distinct destinations are checked with the existing
+regular-file, symlink/reparse-point, and no-clobber rules. The exact response
+bytes pass through the authoritative snapshot loader at the fetch timestamp.
+Equivalent part/tag order is then normalized to a stable UTF-8 JSON snapshot,
+published atomically, and bound to a separate `catalog-fetch-receipt-v1` with
+these exact fields:
+
+- adapter/provider and a credential-free endpoint identity;
+- canonical secret-free request SHA-256;
+- exact HTTP status, response byte count, and response SHA-256;
+- fetch and snapshot-expiry timestamps; and
+- exact normalized snapshot byte count/SHA-256 plus the normalized catalog
+  digest.
+
+`validate_catalog_fetch_receipt` stable-reads the retained snapshot and
+recomputes its exact bytes, provider, validity window, and catalog digest.
+Publishing the snapshot and receipt is intentionally two per-file atomic
+operations: if receipt publication loses a race, the already-published valid
+snapshot is retained rather than unlinked and possibly confused with a
+concurrent replacement.
+
+This acquisition step is never called implicitly by catalog selection,
+`generate-circuit`, the deterministic pipeline, MCP, or the root Action. Those
+paths consume a retained local snapshot and remain replayable and network-free.
+Supplier-native API mapping, search, autonomous substitution, reservation,
+purchase, datasheet validation, and supplier qualification remain outside the
+contract.
+
 ## Selection and receipt
 
 `select_catalog_parts` first verifies every prefilled MPN, including exact
@@ -127,9 +193,9 @@ when no positive catalog-text match exists. Fallback is opt-in and is recorded
 in the receipt policy; it is never an implicit guess. These policy options
 require `--catalog-snapshot` and are rejected when no snapshot is supplied.
 
-`catalog-snapshot-schema` and `catalog-selection-receipt-schema` print to
-stdout when `--output` is omitted. All destination writes follow the agent's
-no-clobber and bounded-I/O policy.
+`catalog-snapshot-schema`, `catalog-selection-receipt-schema`, and
+`catalog-fetch-receipt-schema` print to stdout when `--output` is omitted. All
+destination writes follow the agent's no-clobber and bounded-I/O policy.
 
 ## Two Rust review gates
 

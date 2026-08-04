@@ -22,15 +22,23 @@ from .circuit_generation import (
     generate_circuit_with_llm,
 )
 from .review import ReviewError, review_schematic_with_llm
+from .supplier_inventory import (
+    SupplierInventoryError,
+    catalog_fetch_receipt_json_schema,
+    fetch_catalog_snapshot,
+    validate_catalog_fetch_receipt,
+)
 
 __all__ = [
     "PlanningError",
     "ProviderError",
     "ReviewError",
+    "SupplierInventoryError",
     "CircuitGenerationError",
     "CircuitCandidateRejected",
     "CircuitCatalogRejected",
     "build_plan",
+    "catalog_fetch_receipt_json_schema",
     "managed_provider_receipt_json_schema",
     "provider_receipt_json_schema",
     "run_provider_command",
@@ -39,7 +47,9 @@ __all__ = [
     "fetch_circuit_spec_check_schema",
     "generate_circuit_with_command",
     "generate_circuit_with_llm",
+    "fetch_catalog_snapshot",
     "review_schematic_with_managed_provider",
     "review_schematic_with_command",
     "review_schematic_with_llm",
+    "validate_catalog_fetch_receipt",
 ]

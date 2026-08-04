@@ -19,6 +19,11 @@ from .catalog import (
     catalog_snapshot_json_schema,
     load_catalog_snapshot,
 )
+from .supplier_inventory import (
+    SupplierInventoryError,
+    catalog_fetch_receipt_json_schema,
+    fetch_catalog_snapshot,
+)
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -223,6 +228,24 @@ def main() -> None:
         help="write the closed catalog-selection receipt JSON Schema",
     )
     catalog_receipt_schema.add_argument("-o", "--output", type=Path)
+    catalog_fetch = sub.add_parser(
+        "fetch-catalog-snapshot",
+        help="fetch one bounded HTTPS catalog snapshot and retain a receipt",
+    )
+    catalog_fetch.add_argument("--endpoint", required=True)
+    catalog_fetch.add_argument("--provider", required=True)
+    catalog_fetch.add_argument("-o", "--output", type=Path, required=True)
+    catalog_fetch.add_argument("--receipt", type=Path, required=True)
+    catalog_fetch.add_argument("--timeout-seconds", type=int, default=30)
+    catalog_fetch.add_argument(
+        "--maximum-response-bytes", type=int, default=4 * 1024 * 1024
+    )
+    catalog_fetch.add_argument("--bearer-token-environment")
+    catalog_fetch_schema = sub.add_parser(
+        "catalog-fetch-receipt-schema",
+        help="write the closed catalog-fetch receipt JSON Schema",
+    )
+    catalog_fetch_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -441,16 +464,41 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, CircuitGenerationError) as error:
             raise SystemExit(f"circuit generation schema failed: {error}") from error
+    elif args.command == "fetch-catalog-snapshot":
+        try:
+            receipt = fetch_catalog_snapshot(
+                args.endpoint,
+                args.provider,
+                args.output,
+                args.receipt,
+                timeout_seconds=args.timeout_seconds,
+                maximum_response_bytes=args.maximum_response_bytes,
+                bearer_token_environment=args.bearer_token_environment,
+            )
+        except (
+            OSError,
+            BoundedIOError,
+            CatalogError,
+            SupplierInventoryError,
+        ) as error:
+            raise SystemExit(f"catalog snapshot fetch failed: {error}") from error
+        print(
+            "catalog snapshot written with response "
+            f"{receipt['response_sha256']} and snapshot "
+            f"{receipt['snapshot_sha256']}"
+        )
     elif args.command in {
         "catalog-snapshot-schema",
         "catalog-selection-receipt-schema",
+        "catalog-fetch-receipt-schema",
     }:
         try:
-            schema = (
-                catalog_snapshot_json_schema()
-                if args.command == "catalog-snapshot-schema"
-                else catalog_receipt_json_schema()
-            )
+            if args.command == "catalog-snapshot-schema":
+                schema = catalog_snapshot_json_schema()
+            elif args.command == "catalog-selection-receipt-schema":
+                schema = catalog_receipt_json_schema()
+            else:
+                schema = catalog_fetch_receipt_json_schema()
             rendered = json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
             if args.output:
                 validate_no_clobber_path(args.output)
