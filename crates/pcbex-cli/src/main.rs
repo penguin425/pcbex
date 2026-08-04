@@ -82,8 +82,8 @@ use pcbex_kicad::{
     audit_approval_log_gossip_organization_registry_history, build_ai_review_request,
     build_ai_review_session, check_schematic, circuit_kicad_board_binding_report_json_schema,
     circuit_kicad_handoff_report_json_schema, circuit_spec_check_json_schema,
-    circuit_spec_v2_json_schema, compare_electrical_reviews, compare_schematics,
-    create_approval_log_anchor_proof, create_approval_log_consistency_proof,
+    circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch, compare_electrical_reviews,
+    compare_schematics, create_approval_log_anchor_proof, create_approval_log_consistency_proof,
     electrical_explanation_json_schema, electrical_policy_json_schema,
     electrical_review_comparison_json_schema, electrical_review_json_schema,
     electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
@@ -93,7 +93,7 @@ use pcbex_kicad::{
     new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
-    parse_and_check_circuit_spec_v2, parse_electrical_policy,
+    parse_and_check_circuit_spec_v2, parse_circuit_spec_v2, parse_electrical_policy,
     parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
     record_simulation_evidence, render_ai_approval_quorum_summary, render_human_escalation_summary,
     render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
@@ -1027,6 +1027,14 @@ enum Command {
         /// Fail after writing the report when immutable electrical errors remain.
         #[arg(long)]
         require_approved: bool,
+    },
+    /// Write an immutable-ERC-approved circuit-spec v2 as a deterministic flat KiCad schematic.
+    WriteCircuitSpecKicadSchematic {
+        /// Circuit-spec v2 JSON source generated upstream.
+        input: PathBuf,
+        /// New `.kicad_sch` destination; existing, aliased, or symlinked paths are refused.
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Verify that a circuit specification and KiCad schematic are an exact electrical handoff.
     VerifyCircuitKicadHandoff {
@@ -5648,6 +5656,43 @@ fn run_cli() -> Result<()> {
                     check.electrical_review.counts.errors
                 );
             }
+        }
+        Command::WriteCircuitSpecKicadSchematic { input, output } => {
+            reject_output_symlink_components(&output, "KiCad schematic output")?;
+            let normalized_output = normalize_destination(&output)?;
+            let normalized_input = normalize_destination(&input)?;
+            if destinations_alias(&normalized_output, &normalized_input) {
+                bail!(
+                    "KiCad schematic output must not alias circuit-spec input {}",
+                    input.display()
+                );
+            }
+            ensure_new_file_path(&output)?;
+            let prepared_output = prepare_atomic_new_file(&output)?;
+            let source = read_bounded_utf8(
+                &input,
+                "circuit specification",
+                pcbex_kicad::CIRCUIT_SPEC_V2_MAX_BYTES,
+            )?;
+            let spec = parse_circuit_spec_v2(&source).map_err(anyhow::Error::msg)?;
+            let rendered =
+                circuit_spec_v2_to_kicad_sch(&spec).map_err(anyhow::Error::msg)?;
+            persist_atomic_new_file_bytes_with_privacy(
+                prepared_output,
+                &output,
+                rendered.as_bytes(),
+                false,
+            )
+            .with_context(|| {
+                format!(
+                    "writing generated KiCad schematic {}",
+                    output.display()
+                )
+            })?;
+            eprintln!(
+                "generated deterministic KiCad schematic: {}",
+                output.display()
+            );
         }
         Command::VerifyCircuitKicadHandoff {
             circuit_spec,

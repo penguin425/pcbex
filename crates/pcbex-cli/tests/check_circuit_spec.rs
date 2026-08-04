@@ -1,7 +1,8 @@
 use pcbex_kicad::{
     CircuitConnectionV2, CircuitNetV2, CircuitPartV2, CircuitPinV2, CircuitPowerV2, CircuitSpecV2,
-    ElectricalPinType, check_circuit_spec, circuit_spec_check_json_schema,
-    circuit_spec_v2_json_schema, normalize_circuit_spec_v2,
+    ElectricalPinType, ElectricalPolicy, check_circuit_spec, circuit_spec_check_json_schema,
+    circuit_spec_v2_json_schema, import_schematic, normalize_circuit_spec_v2,
+    verify_circuit_kicad_handoff,
 };
 use serde_json::{Value, json};
 use std::{
@@ -601,6 +602,119 @@ fn cli_checks_circuit_spec_and_publishes_schemas() {
     fs::remove_dir_all(directory).unwrap();
 }
 
+#[test]
+fn cli_writes_a_deterministic_approved_kicad_schematic_without_clobbering() {
+    let directory = temp_dir();
+    let input = directory.join("spec.json");
+    let reordered_input = directory.join("reordered.json");
+    let output = directory.join("generated.kicad_sch");
+    let reordered_output = directory.join("reordered.kicad_sch");
+    let original_spec = base_spec();
+    let mut reordered_spec = original_spec.clone();
+    reordered_spec.parts.reverse();
+    reordered_spec.nets.reverse();
+    for part in &mut reordered_spec.parts {
+        part.pins.reverse();
+    }
+    for net in &mut reordered_spec.nets {
+        net.connections.reverse();
+    }
+    fs::write(&input, serde_json::to_vec_pretty(&original_spec).unwrap()).unwrap();
+    fs::write(
+        &reordered_input,
+        serde_json::to_vec_pretty(&reordered_spec).unwrap(),
+    )
+    .unwrap();
+
+    for (source, destination) in [(&input, &output), (&reordered_input, &reordered_output)] {
+        let result = Command::new(binary())
+            .args([
+                "write-circuit-spec-kicad-schematic",
+                path(source),
+                "--output",
+                path(destination),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    let generated = fs::read_to_string(&output).unwrap();
+    assert_eq!(generated, fs::read_to_string(&reordered_output).unwrap());
+    assert!(generated.starts_with("(kicad_sch"));
+    let imported = import_schematic(&generated).unwrap();
+    assert!(imported.coverage.complete);
+    assert_eq!(imported.symbols.len(), original_spec.parts.len());
+    let handoff = verify_circuit_kicad_handoff(
+        &fs::read_to_string(&input).unwrap(),
+        &generated,
+        &ElectricalPolicy::default(),
+    )
+    .unwrap();
+    assert!(handoff.approved, "{:?}", handoff.findings);
+
+    let before = fs::read(&output).unwrap();
+    let collision = Command::new(binary())
+        .args([
+            "write-circuit-spec-kicad-schematic",
+            path(&input),
+            "--output",
+            path(&output),
+        ])
+        .output()
+        .unwrap();
+    assert!(!collision.status.success());
+    assert!(String::from_utf8_lossy(&collision.stderr).contains("refusing to overwrite"));
+    assert_eq!(fs::read(&output).unwrap(), before);
+
+    let input_before = fs::read(&input).unwrap();
+    let aliased = Command::new(binary())
+        .args([
+            "write-circuit-spec-kicad-schematic",
+            path(&input),
+            "--output",
+            path(&input),
+        ])
+        .output()
+        .unwrap();
+    assert!(!aliased.status.success());
+    assert!(String::from_utf8_lossy(&aliased.stderr).contains("must not alias"));
+    assert_eq!(fs::read(&input).unwrap(), input_before);
+
+    let mut rejected_spec = base_spec();
+    rejected_spec
+        .parts
+        .iter_mut()
+        .find(|part| part.reference == "C1")
+        .unwrap()
+        .power
+        .decoupling = false;
+    let rejected_input = directory.join("rejected.json");
+    let rejected_output = directory.join("rejected.kicad_sch");
+    fs::write(
+        &rejected_input,
+        serde_json::to_vec_pretty(&rejected_spec).unwrap(),
+    )
+    .unwrap();
+    let rejected = Command::new(binary())
+        .args([
+            "write-circuit-spec-kicad-schematic",
+            path(&rejected_input),
+            "--output",
+            path(&rejected_output),
+        ])
+        .output()
+        .unwrap();
+    assert!(!rejected.status.success());
+    assert!(!rejected_output.exists());
+
+    fs::remove_dir_all(directory).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn cli_refuses_circuit_spec_outputs_through_symlinks() {
@@ -627,6 +741,19 @@ fn cli_refuses_circuit_spec_outputs_through_symlinks() {
     assert!(String::from_utf8_lossy(&direct.stderr).contains("symlink"));
     assert_eq!(fs::read(&target).unwrap(), b"sentinel");
 
+    let writer_direct = Command::new(binary())
+        .args([
+            "write-circuit-spec-kicad-schematic",
+            path(&input),
+            "--output",
+            path(&linked_output),
+        ])
+        .output()
+        .unwrap();
+    assert!(!writer_direct.status.success());
+    assert!(String::from_utf8_lossy(&writer_direct.stderr).contains("symlink"));
+    assert_eq!(fs::read(&target).unwrap(), b"sentinel");
+
     let real_parent = directory.join("real-parent");
     fs::create_dir(&real_parent).unwrap();
     let linked_parent = directory.join("linked-parent");
@@ -643,6 +770,20 @@ fn cli_refuses_circuit_spec_outputs_through_symlinks() {
     assert!(!parent.status.success());
     assert!(String::from_utf8_lossy(&parent.stderr).contains("symlink"));
     assert!(!real_parent.join("check.json").exists());
+
+    let writer_parent_output = linked_parent.join("generated.kicad_sch");
+    let writer_parent = Command::new(binary())
+        .args([
+            "write-circuit-spec-kicad-schematic",
+            path(&input),
+            "--output",
+            path(&writer_parent_output),
+        ])
+        .output()
+        .unwrap();
+    assert!(!writer_parent.status.success());
+    assert!(String::from_utf8_lossy(&writer_parent.stderr).contains("symlink"));
+    assert!(!real_parent.join("generated.kicad_sch").exists());
 
     fs::remove_dir_all(directory).unwrap();
 }

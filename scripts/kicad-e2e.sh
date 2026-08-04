@@ -19,6 +19,47 @@ fixtures=(
 mkdir -p "$output_directory"
 kicad-cli --version
 
+generated_schematic="$output_directory/circuit-spec-v2.generated.kicad_sch"
+repeated_schematic="$output_directory/circuit-spec-v2.repeated.kicad_sch"
+generated_netlist="$output_directory/circuit-spec-v2.generated.xml"
+generated_handoff="$output_directory/circuit-spec-v2.generated.handoff.json"
+"$pcbex_binary" write-circuit-spec-kicad-schematic \
+  examples/circuit-spec-v2.json --output "$generated_schematic"
+"$pcbex_binary" write-circuit-spec-kicad-schematic \
+  examples/circuit-spec-v2.json --output "$repeated_schematic"
+cmp "$generated_schematic" "$repeated_schematic"
+kicad-cli sch export netlist --format kicadxml "$generated_schematic" \
+  --output "$generated_netlist"
+test -s "$generated_netlist"
+python3 - "$generated_netlist" <<'PY'
+from pathlib import Path
+import sys
+import xml.etree.ElementTree as ET
+
+netlist = Path(sys.argv[1])
+root = ET.parse(netlist).getroot()
+actual = {
+    frozenset((node.attrib["ref"], node.attrib["pin"]) for node in net.findall("node"))
+    for net in root.findall("./nets/net")
+}
+expected = {
+    frozenset({("C1", "2"), ("C2", "2"), ("J1", "2"), ("U1", "2")}),
+    frozenset({("C1", "1"), ("U1", "5")}),
+    frozenset({("C2", "1"), ("J1", "1"), ("U1", "1"), ("U1", "3")}),
+    frozenset({("U1", "4")}),
+}
+if actual != expected:
+    render = lambda groups: sorted(sorted(group) for group in groups)
+    raise SystemExit(
+        f"KiCad native connectivity mismatch: expected {render(expected)}, got {render(actual)}"
+    )
+PY
+"$pcbex_binary" verify-circuit-kicad-handoff \
+  examples/circuit-spec-v2.json "$generated_schematic" \
+  --output "$generated_handoff" --require-approved
+jq -e '.approved == true and .counts.errors == 0' \
+  "$generated_handoff" >/dev/null
+
 for fixture in "${fixtures[@]}"; do
   name=$(basename "$fixture" .kicad_pcb)
   first="$output_directory/$name.routed.kicad_pcb"

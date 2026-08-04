@@ -629,6 +629,11 @@
     {
       "id": "catalog-generation-provenance",
       "release": "v1.421.0",
+      "status": "released"
+    },
+    {
+      "id": "deterministic-kicad-schematic-writer",
+      "release": "v1.422.0",
       "status": "current"
     }
   ]
