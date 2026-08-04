@@ -127,6 +127,7 @@ auditable release.
 | v1.414.0 | MCP/Action hardware pipeline parity | Expose schematic, circuit-spec, and complete pipeline checks through MCP and opt-in composite Action inputs/outputs, retaining rejection reports before the final CI gate |
 | v1.415.0 | Verified circuit-to-KiCad handoff | Verify a closed flat/single-unit circuit-spec v2 against an existing KiCad schematic with source/canonical identities and retained ERC evidence; do not generate or mutate either input |
 | v1.416.0 | Circuit-spec/KiCad schematic-board binding | Recalculate the raw v1.415 handoff and bind exact references, footprint metadata, pin/pad connectivity, no-connect states, and complete net/footprint/pad coverage to the actual `.kicad_pcb`, with source/canonical/binding digests and retained deterministic rejection evidence |
+| v1.417.0 | Bounded-input deterministic pipeline runner | Snapshot one closed relative-path/byte/SHA plan, compose raw circuit/schematic/board binding with the existing pipeline gate in process, cross-bind identities, and retain one deterministic no-side-effect report |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -142,9 +143,11 @@ applies atomically, and cannot relax existing manufacturing rules. Exact-source
 and domain-separated canonical SHA-256 identities are carried by schema-v2
 analysis and manufacturing manifests; pipeline verification reopens the
 authorized profile and rejects source, semantic, or cross-phase substitution.
-No-profile schema-v1 artifacts remain compatible. The v1.415.0 handoff release
-is now retained as a released schematic-only boundary. The current v1.416.0
-release keeps that contract and adds the standalone
+No-profile schema-v1 artifacts remain compatible. The v1.415.0 handoff and
+v1.416.0 board-binding releases are retained as standalone boundaries. The
+current v1.417.0 release composes the latter with the existing pipeline gate
+through one closed digest-bound plan and report without changing either
+pipeline report schema. The v1.416.0 boundary added the standalone
 `verify-circuit-kicad-board-binding` CLI/API boundary plus MCP
 `verify_circuit_kicad_board_binding`. It recalculates the handoff from raw
 circuit and schematic bytes, then compares exact reference/footprint
@@ -161,6 +164,6 @@ contract.  Hierarchy, buses,
 multi-unit/nested handoffs, geometry, routing, DRC, and DFM remain outside it,
 and existing pipeline v1/v2 phases are unchanged.
 
-The next milestone (v1.417.0) is a bound-input deterministic pipeline runner
-that can compose these standalone gates without changing the existing v1/v2
-report contracts. Qualified live supplier selection remains a later boundary.
+The next milestone (v1.418.0) is MCP and composite-Action parity for the
+deterministic runner. Qualified live supplier selection remains a later
+boundary.

@@ -172,6 +172,9 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "factory-feedback-loop-schema",
         "factory-submit",
         "factory-feedback-loop",
+        "deterministic-pipeline-plan-schema",
+        "deterministic-pipeline-report-schema",
+        "run-deterministic-pipeline",
         "pipeline-schema",
         "pipeline-verify",
         "firmware-schema",
@@ -234,6 +237,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
             .any(|contract| contract == "Factory-bound hardware pipeline gate report v2")
     );
     for expected in [
+        "Deterministic pipeline plan v1",
+        "Deterministic pipeline runner report v1",
         "Firmware bundle manifest v2",
         "C11 firmware source bundle",
         "C++17 firmware source bundle",

@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.416.0
+    uses: penguin425/pcbex@v1.417.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2155,7 +2155,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.416.0` step:
+# Add these fields to a `penguin425/pcbex@v1.417.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -2987,7 +2987,34 @@ the bounded atomic contract.  Hierarchy, buses, multi-unit/nested handoffs,
 geometry, routing, DRC, and DFM are rejected or out of scope.  The MCP tool is
 `verify_circuit_kicad_board_binding` with the same raw input and output
 arguments.  This is not a new `pipeline-verify` phase; v1/v2 pipeline reports
-remain unchanged until the deterministic runner planned for v1.417.
+remain unchanged.
+
+## Bounded-input deterministic pipeline runner
+
+Version 1.417 composes the raw circuit/schematic/board binding and the existing
+hardware pipeline gate through one closed, digest-bound plan:
+
+```sh
+pcbex deterministic-pipeline-plan-schema \
+  --output deterministic-pipeline-plan.schema.json
+pcbex deterministic-pipeline-report-schema \
+  --output deterministic-pipeline-report.schema.json
+pcbex run-deterministic-pipeline pipeline-plan.json \
+  --output build/deterministic-pipeline-report.json \
+  --require-approved
+```
+
+Every required or optional input is explicitly a relative-path, byte-count,
+and SHA-256 descriptor (optional roles use an explicit `null`). The runner
+stable-reads and privately stages the authorized bytes, enforces the exact
+firmware-directory contract, preserves identity-sensitive basenames, runs both
+gates in process, and cross-binds their canonical schematic and raw board
+identities. A valid plan retains one deterministic rejected report before a required-approval
+failure. It performs no design mutation, child-process execution, network/AI
+call, factory submission, or order. Existing `pipeline-verify` v1/v2 schemas
+are unchanged; MCP and composite-Action parity are planned for v1.418. See
+[`docs/DETERMINISTIC_PIPELINE_RUNNER.md`](docs/DETERMINISTIC_PIPELINE_RUNNER.md)
+for the complete plan, report, resource, and failure contract.
 
 ## Schematic electrical IR
 
@@ -4281,7 +4308,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.416.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.417.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

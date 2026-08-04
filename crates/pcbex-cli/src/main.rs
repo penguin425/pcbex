@@ -165,6 +165,7 @@ mod anchored_io;
 mod bounded_io;
 mod bounded_process;
 mod canary_completion;
+mod deterministic_pipeline_runner;
 mod factory;
 mod firmware;
 mod manufacturing_feedback;
@@ -207,6 +208,10 @@ use canary_completion::{
     CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
     parse_signed_canary_decision, render_canary_completion_summary, sign_canary_completion,
     signed_canary_decision_json_schema, verify_canary_completion,
+};
+use deterministic_pipeline_runner::{
+    deterministic_pipeline_plan_schema, deterministic_pipeline_report_schema,
+    load_deterministic_pipeline_plan, run_deterministic_pipeline,
 };
 use factory::{
     FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
@@ -790,6 +795,27 @@ enum Command {
     SchematicReviewerRoutingPlanSchema {
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+    /// Print the closed deterministic pipeline runner plan JSON Schema.
+    DeterministicPipelinePlanSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed deterministic pipeline runner report JSON Schema.
+    DeterministicPipelineReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Snapshot and verify one digest-bound hardware pipeline plan without side effects.
+    RunDeterministicPipeline {
+        /// Closed plan whose relative paths, byte counts, and SHA-256 digests authorize every input.
+        plan: PathBuf,
+        /// New retained report path; existing, aliased, or symlinked destinations are refused.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Fail after retaining the report unless every gate and cross-binding is approved.
+        #[arg(long)]
+        require_approved: bool,
     },
     /// Print the deterministic full hardware pipeline gate JSON Schema.
     PipelineSchema {
@@ -4950,6 +4976,8 @@ fn capabilities_report() -> CapabilitiesReport {
             "Factory feedback loop report v1",
             "Hardware pipeline gate report v1",
             "Factory-bound hardware pipeline gate report v2",
+            "Deterministic pipeline plan v1",
+            "Deterministic pipeline runner report v1",
             "Firmware bundle manifest v2",
             "C11 firmware source bundle",
             "C++17 firmware source bundle",
@@ -5063,6 +5091,60 @@ fn run_cli() -> Result<()> {
                 &schematic_reviewer_routing_plan_json_schema(),
                 output.as_ref(),
             )?;
+        }
+        Command::DeterministicPipelinePlanSchema { output } => {
+            write_closed_schema(
+                &deterministic_pipeline_plan_schema(),
+                output.as_deref(),
+                "deterministic pipeline plan schema output",
+            )?;
+        }
+        Command::DeterministicPipelineReportSchema { output } => {
+            write_closed_schema(
+                &deterministic_pipeline_report_schema(),
+                output.as_deref(),
+                "deterministic pipeline report schema output",
+            )?;
+        }
+        Command::RunDeterministicPipeline {
+            plan,
+            output,
+            require_approved,
+        } => {
+            // Reserve the destination and reject a plan/output alias before reading
+            // the plan. Once parsed, repeat the alias check for every explicitly
+            // authorized input and every firmware artifact derived from its manifest.
+            let prepared = prepare_pipeline_output(&output, &[plan.as_path()])?;
+            let plan_document = load_deterministic_pipeline_plan(&plan)?;
+            let firmware_directory = plan_document
+                .firmware_manifest
+                .path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            reject_pipeline_output_directory(
+                &output,
+                firmware_directory,
+                "deterministic pipeline output",
+            )?;
+            let input_paths = plan_document.input_paths();
+            reject_pipeline_output_aliases(
+                &output,
+                &input_paths,
+                "deterministic pipeline output",
+            )?;
+            let report = run_deterministic_pipeline(&plan_document)?;
+            let rendered = format!("{}\n", serde_json::to_string(&report)?);
+            persist_atomic_new_file(prepared, &output, &rendered)?;
+            eprintln!(
+                "deterministic pipeline: {}; {} failure(s); report={}",
+                if report.approved { "approved" } else { "rejected" },
+                report.failures.len(),
+                output.display()
+            );
+            if require_approved && !report.approved {
+                bail!("deterministic hardware pipeline rejected");
+            }
         }
         Command::PipelineSchema { factory, output } => {
             let schema = if factory {
@@ -15746,6 +15828,21 @@ fn write_or_print_json(value: &serde_json::Value, output: Option<&PathBuf>) -> R
     Ok(())
 }
 
+fn write_closed_schema(
+    value: &serde_json::Value,
+    output: Option<&Path>,
+    label: &str,
+) -> Result<()> {
+    let rendered = format!("{}\n", serde_json::to_string_pretty(value)?);
+    if let Some(path) = output {
+        reject_output_symlink_components(path, label)?;
+        write_new_file(path, &rendered, false)?;
+    } else {
+        print!("{rendered}");
+    }
+    Ok(())
+}
+
 fn parse_ai_requirement(value: &str) -> Result<AiRequirement> {
     let (id, text) = value
         .split_once('=')
@@ -15872,18 +15969,36 @@ fn normalize_destination(path: &Path) -> Result<PathBuf> {
 
 fn prepare_pipeline_output(output: &Path, inputs: &[&Path]) -> Result<tempfile::NamedTempFile> {
     reject_output_symlink_components(output, "pipeline output")?;
+    reject_pipeline_output_aliases(output, inputs, "pipeline output")?;
+    prepare_atomic_new_file(output)
+}
+
+fn reject_pipeline_output_aliases(output: &Path, inputs: &[&Path], label: &str) -> Result<()> {
     let normalized_output = normalize_destination(output)?;
     for input in inputs {
         if let Ok(normalized_input) = normalize_destination(input)
             && destinations_alias(&normalized_output, &normalized_input)
         {
-            bail!(
-                "pipeline output must not alias an input: {}",
-                input.display()
-            );
+            bail!("{label} must not alias an input: {}", input.display());
         }
     }
-    prepare_atomic_new_file(output)
+    Ok(())
+}
+
+fn reject_pipeline_output_directory(output: &Path, directory: &Path, label: &str) -> Result<()> {
+    let normalized_output = normalize_destination(output)?;
+    let Some(output_parent) = normalized_output.parent() else {
+        bail!("{label} must have a parent directory");
+    };
+    if let Ok(normalized_directory) = fs::canonicalize(directory)
+        && destinations_alias(output_parent, &normalized_directory)
+    {
+        bail!(
+            "{label} must be outside the exact firmware bundle directory: {}",
+            directory.display()
+        );
+    }
+    Ok(())
 }
 
 fn prepare_handoff_output(output: &Path, inputs: &[&Path]) -> Result<tempfile::NamedTempFile> {

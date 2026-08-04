@@ -110,7 +110,8 @@ intent. The schematic must still pass the complete PCB, manufacturing, and
 approval pipeline before production.
 
 The v1.416 board-binding gate is intentionally not folded into this command,
-the v1/v2 `pipeline-verify` reports, or the existing pipeline phases.  Invoke
-it explicitly when the board must be bound to the already-verified schematic;
-the deterministic bounded-input pipeline runner planned for v1.417 is the
-future integration point.
+the v1/v2 `pipeline-verify` reports, or the existing pipeline phases. Invoke it
+explicitly when the board must be bound to the already-verified schematic, or
+use the v1.417
+[bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md) to
+recompute it beside the unchanged pipeline gate from one authorized snapshot.
