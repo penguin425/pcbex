@@ -95,6 +95,14 @@ ZIP digest, so the profile is transitively fixed for that submission. A
 factory feedback repair may change board/manufacturing artifacts but may not
 add, remove, or substitute the profile binding.
 
+The composite GitHub Action forwards its `physical-profile` input into the
+opt-in `pipeline-verify` invocation as `--analysis-physical-profile`; the
+resulting pipeline report and `pipeline-passed` output retain the same binding
+and final fail gate. MCP's `pipeline_verify` accepts the matching
+`analysis_physical_profile` argument, so CLI, Action, and MCP all authorize the
+same profile bytes and canonical digest rather than allowing a second physical
+policy to enter during forwarding.
+
 The v1 profile does not perform vendor-specific CPL coordinate transforms and
 does not authorize a circuit-generation provider. Those boundaries remain
 vendor-neutral and are handled by the subsequent circuit-to-KiCad handoff and

@@ -164,3 +164,101 @@ fn emits_deterministic_policy_gated_electrical_reviews_and_schemas() {
 
     fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+fn refuses_existing_or_aliased_outputs_without_partial_publication() {
+    let directory = temp_dir();
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/simple.kicad_sch");
+    let output = directory.join("review.json");
+    let explanation = directory.join("explanation.json");
+    fs::write(&output, b"sentinel").unwrap();
+
+    let collision = run(&[
+        "check-schematic",
+        path(&source),
+        "--output",
+        path(&output),
+        "--explain",
+        path(&explanation),
+    ]);
+    assert!(!collision.status.success());
+    assert!(String::from_utf8_lossy(&collision.stderr).contains("refusing to overwrite"));
+    assert_eq!(fs::read(&output).unwrap(), b"sentinel");
+    assert!(!explanation.exists());
+
+    let source_before = fs::read(&source).unwrap();
+    let alias = run(&["check-schematic", path(&source), "--output", path(&source)]);
+    assert!(!alias.status.success());
+    assert_eq!(fs::read(&source).unwrap(), source_before);
+
+    let duplicate = directory.join("duplicate.json");
+    let duplicate_result = run(&[
+        "check-schematic",
+        path(&source),
+        "--output",
+        path(&duplicate),
+        "--sarif-output",
+        path(&duplicate),
+    ]);
+    assert!(!duplicate_result.status.success());
+    assert!(String::from_utf8_lossy(&duplicate_result.stderr).contains("must be distinct"));
+    assert!(!duplicate.exists());
+
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn rejects_oversized_schematic_before_creating_outputs() {
+    let directory = temp_dir();
+    let source = directory.join("oversized.kicad_sch");
+    fs::File::create(&source)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    let output = directory.join("review.json");
+
+    let result = run(&["check-schematic", path(&source), "--output", path(&output)]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("exceeds"));
+    assert!(!output.exists());
+
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn refuses_schematic_outputs_through_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let directory = temp_dir();
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/simple.kicad_sch");
+    let target = directory.join("target.json");
+    fs::write(&target, b"sentinel").unwrap();
+    let direct_link = directory.join("direct-link.json");
+    symlink(&target, &direct_link).unwrap();
+    let direct = run(&[
+        "check-schematic",
+        path(&source),
+        "--output",
+        path(&direct_link),
+    ]);
+    assert!(!direct.status.success());
+    assert!(String::from_utf8_lossy(&direct.stderr).contains("symlink"));
+    assert_eq!(fs::read(&target).unwrap(), b"sentinel");
+
+    let real_parent = directory.join("real-parent");
+    fs::create_dir(&real_parent).unwrap();
+    let linked_parent = directory.join("linked-parent");
+    symlink(&real_parent, &linked_parent).unwrap();
+    let parent_link = run(&[
+        "check-schematic",
+        path(&source),
+        "--output",
+        path(&linked_parent.join("review.json")),
+    ]);
+    assert!(!parent_link.status.success());
+    assert!(String::from_utf8_lossy(&parent_link.stderr).contains("symlink"));
+    assert!(!real_parent.join("review.json").exists());
+
+    fs::remove_dir_all(directory).unwrap();
+}

@@ -26,7 +26,30 @@ comparison_dir="${artifact_dir}/comparison"
 sarif_dir="${artifact_dir}/sarif"
 comment_body="${artifact_dir}/pr-comment.md"
 
-mkdir -p "$current_dir" "$sarif_dir"
+if [[ -L "$artifact_dir" ]]; then
+  echo "refusing to use a linked PCBEX_OUTPUT_DIR" >&2
+  exit 2
+fi
+if [[ -e "$artifact_dir" ]]; then
+  if [[ ! -d "$artifact_dir" ]]; then
+    echo "PCBEX_OUTPUT_DIR must be a directory" >&2
+    exit 2
+  fi
+  if python3 - "$artifact_dir" <<'PY'
+import os
+import sys
+
+with os.scandir(sys.argv[1]) as entries:
+    raise SystemExit(0 if next(entries, None) is not None else 1)
+PY
+  then
+    echo "PCBEX_OUTPUT_DIR must be empty before analysis" >&2
+    exit 2
+  fi
+else
+  mkdir -p "$artifact_dir"
+fi
+mkdir "$current_dir" "$sarif_dir"
 
 write_output() {
   printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"
@@ -117,6 +140,13 @@ write_output approval-log-witness-quorum ""
 write_output approval-log-witness-quorum-met ""
 write_output remote-witness ""
 write_output remote-witness-receipt ""
+write_output pipeline-report ""
+write_output pipeline-passed ""
+
+pipeline_report=""
+pipeline_passed=""
+pipeline_rc=0
+pipeline_verify="${PCBEX_PIPELINE_VERIFY:-false}"
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -1830,8 +1860,12 @@ has_baseline_schematic=false
 if [[ -n "${PCBEX_SCHEMATIC:-}" ]]; then has_schematic=true; fi
 if [[ -n "${PCBEX_BASELINE_SCHEMATIC:-}" ]]; then has_baseline_schematic=true; fi
 if [[ "$has_schematic" != "$has_baseline_schematic" ]]; then
-  echo "PCBEX_SCHEMATIC and PCBEX_BASELINE_SCHEMATIC must be supplied together" >&2
-  exit 2
+  if [[ "$pipeline_verify" == "true" && "$has_schematic" == "true" ]]; then
+    :
+  else
+    echo "PCBEX_SCHEMATIC and PCBEX_BASELINE_SCHEMATIC must be supplied together" >&2
+    exit 2
+  fi
 fi
 schematic_diff=""
 schematic_review_required=""
@@ -1841,7 +1875,7 @@ if [[ -n "${PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY:-}" && "$has_schematic" != "
   echo "PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY requires PCBEX_SCHEMATIC and PCBEX_BASELINE_SCHEMATIC" >&2
   exit 2
 fi
-if [[ "$has_schematic" == "true" ]]; then
+if [[ "$has_schematic" == "true" && "$has_baseline_schematic" == "true" ]]; then
   schematic_diff="${artifact_dir}/schematic-diff.json"
   schematic_summary="${artifact_dir}/schematic-diff.md"
   schematic_sarif="${sarif_dir}/schematic-diff.sarif"
@@ -2919,6 +2953,139 @@ if [[ -n "${PCBEX_BASELINE_BOARD:-}" ]]; then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+pipeline_require_factory="${PCBEX_PIPELINE_REQUIRE_FACTORY:-false}"
+pipeline_input_error=""
+if [[ "$pipeline_verify" != "true" && "$pipeline_verify" != "false" ]]; then
+  pipeline_input_error="PCBEX_PIPELINE_VERIFY must be true or false"
+elif [[ "$pipeline_require_factory" != "true" && "$pipeline_require_factory" != "false" ]]; then
+  pipeline_input_error="PCBEX_PIPELINE_REQUIRE_FACTORY must be true or false"
+elif [[ "$pipeline_verify" == "false" ]]; then
+  if [[ -n "${PCBEX_PIPELINE_ELECTRICAL_POLICY:-}" ||
+    -n "${PCBEX_PIPELINE_ELECTRICAL_REVIEW:-}" ||
+    -n "${PCBEX_PIPELINE_MANUFACTURING_PACKAGE:-}" ||
+    -n "${PCBEX_PIPELINE_FIRMWARE_MANIFEST:-}" ||
+    -n "${PCBEX_PIPELINE_FACTORY_RECEIPT:-}" ||
+    "$pipeline_require_factory" == "true" ]]; then
+    pipeline_input_error="pipeline verification dependent inputs require PCBEX_PIPELINE_VERIFY=true"
+  fi
+elif [[ -z "${PCBEX_SCHEMATIC:-}" ||
+  -z "${PCBEX_PIPELINE_ELECTRICAL_REVIEW:-}" ||
+  -z "${PCBEX_PIPELINE_MANUFACTURING_PACKAGE:-}" ||
+  -z "${PCBEX_PIPELINE_FIRMWARE_MANIFEST:-}" ]]; then
+  pipeline_input_error="pipeline verification requires PCBEX_SCHEMATIC, PCBEX_PIPELINE_ELECTRICAL_REVIEW, PCBEX_PIPELINE_MANUFACTURING_PACKAGE, and PCBEX_PIPELINE_FIRMWARE_MANIFEST"
+fi
+
+if [[ -n "$pipeline_input_error" ]]; then
+  echo "$pipeline_input_error" >&2
+  pipeline_rc=2
+  if [[ "$pipeline_verify" == "true" ]]; then
+    pipeline_passed=false
+  fi
+elif [[ "$pipeline_verify" == "true" ]]; then
+  pipeline_report="$artifact_dir/pipeline-gate.json"
+  if [[ -e "$pipeline_report" || -L "$pipeline_report" ]]; then
+    echo "refusing to reuse an existing pipeline verification report" >&2
+    pipeline_report=""
+    pipeline_passed=false
+    pipeline_rc=2
+  fi
+  if [[ -n "$pipeline_report" ]]; then
+  pipeline_arguments=(pipeline-verify \
+    --schematic "$PCBEX_SCHEMATIC" \
+    --electrical-review "$PCBEX_PIPELINE_ELECTRICAL_REVIEW" \
+    --board "$PCBEX_BOARD" \
+    --analysis-manifest "$current_dir/run.json" \
+    --analysis-checks "$current_dir/checks.json" \
+    --quality "$current_dir/quality.json" \
+    --manufacturing-package "$PCBEX_PIPELINE_MANUFACTURING_PACKAGE" \
+    --firmware-manifest "$PCBEX_PIPELINE_FIRMWARE_MANIFEST" \
+    --output "$pipeline_report")
+  if [[ "$PCBEX_BOARD" == */* ]]; then
+    board_directory="${PCBEX_BOARD%/*}"
+  else
+    board_directory=""
+  fi
+  board_basename="${PCBEX_BOARD##*/}"
+  board_stem_basename="${board_basename%.*}"
+  if [[ "$board_basename" == .* ]]; then
+    board_basename_suffix="${board_basename#*.}"
+    if [[ "$board_basename_suffix" != *.* ]]; then
+      board_stem_basename="$board_basename"
+    fi
+  fi
+  if [[ -n "$board_directory" ]]; then
+    board_stem="$board_directory/$board_stem_basename"
+  elif [[ "$PCBEX_BOARD" == /* ]]; then
+    board_stem="/$board_stem_basename"
+  else
+    board_stem="$board_stem_basename"
+  fi
+  analysis_project_path="${board_stem}.kicad_pro"
+  analysis_rules_path="${board_stem}.kicad_dru"
+  if [[ -e "$analysis_project_path" ]]; then
+    pipeline_arguments+=(--analysis-project "$analysis_project_path")
+  fi
+  if [[ -e "$analysis_rules_path" ]]; then
+    pipeline_arguments+=(--analysis-rules "$analysis_rules_path")
+  fi
+  if [[ -n "${PCBEX_PIPELINE_ELECTRICAL_POLICY:-}" ]]; then
+    pipeline_arguments+=(--electrical-policy "$PCBEX_PIPELINE_ELECTRICAL_POLICY")
+  fi
+  if [[ -n "${PCBEX_FAB_PROFILE:-}" ]]; then
+    pipeline_arguments+=(--analysis-dfm-profile "$PCBEX_FAB_PROFILE")
+  fi
+  if [[ -n "$effective_policy_pack" ]]; then
+    pipeline_arguments+=(--analysis-policy-pack "$effective_policy_pack")
+  fi
+  if [[ -n "${PCBEX_PHYSICAL_PROFILE:-}" ]]; then
+    pipeline_arguments+=(--analysis-physical-profile "$PCBEX_PHYSICAL_PROFILE")
+  fi
+  if [[ -n "${PCBEX_PIPELINE_FACTORY_RECEIPT:-}" ]]; then
+    pipeline_arguments+=(--factory-receipt "$PCBEX_PIPELINE_FACTORY_RECEIPT")
+  fi
+  if [[ "$pipeline_require_factory" == "true" ]]; then
+    pipeline_arguments+=(--require-factory)
+  fi
+
+  pipeline_rc=0
+  if python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
+    --timeout-seconds 2400 \
+    --max-stdout-bytes 8388608 \
+    --max-stderr-bytes 8388608 \
+    --output-root "$PCBEX_OUTPUT_DIR" \
+    -- "$PCBEX_BINARY" "${pipeline_arguments[@]}"; then
+    pipeline_rc=0
+  else
+    pipeline_rc=$?
+  fi
+
+  if [[ -f "$pipeline_report" && ! -L "$pipeline_report" ]]; then
+    if pipeline_passed="$(python3 -c \
+      'import json,sys; value=json.load(open(sys.argv[1], encoding="utf-8")).get("passed"); assert isinstance(value, bool); print(str(value).lower())' \
+      "$pipeline_report" 2>/dev/null)"; then
+      :
+    else
+      pipeline_passed=false
+    fi
+  else
+    pipeline_report=""
+    pipeline_passed=false
+  fi
+  if ((pipeline_rc != 0)); then
+    pipeline_passed=false
+  fi
+  fi
+  {
+    printf '\n# pcbex hardware pipeline gate\n\n'
+    printf -- '- Passed: `%s`\n' "$pipeline_passed"
+    if [[ -n "$pipeline_report" ]]; then
+      printf -- '- Report: `%s`\n' "$pipeline_report"
+    else
+      printf -- '- Report: unavailable\n'
+    fi
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 write_output sarif-dir "$sarif_dir"
 write_output current-sarif "$current_dir/report.sarif"
 write_output comparison-sarif "$comparison_sarif"
@@ -3017,4 +3184,14 @@ write_output approval-log-witness-quorum "$approval_log_witness_quorum"
 write_output approval-log-witness-quorum-met "$approval_log_witness_quorum_met"
 write_output remote-witness "$remote_witness"
 write_output remote-witness-receipt "$remote_witness_receipt"
+write_output pipeline-report "$pipeline_report"
+write_output pipeline-passed "$pipeline_passed"
+if [[ "$pipeline_verify" == "true" && "$pipeline_passed" != "true" ]]; then
+  write_output status error
+  exit 1
+fi
+if ((pipeline_rc != 0)); then
+  write_output status error
+  exit 1
+fi
 write_output status ok

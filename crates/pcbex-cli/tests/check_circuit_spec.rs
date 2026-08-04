@@ -546,6 +546,21 @@ fn cli_checks_circuit_spec_and_publishes_schemas() {
     assert!(String::from_utf8_lossy(&aliased.stderr).contains("must not alias input"));
     assert_eq!(fs::read(&input).unwrap(), input_before);
 
+    let occupied = directory.join("occupied.json");
+    fs::write(&occupied, b"sentinel").unwrap();
+    let collision = Command::new(binary())
+        .args([
+            "check-circuit-spec",
+            path(&input),
+            "--output",
+            path(&occupied),
+        ])
+        .output()
+        .unwrap();
+    assert!(!collision.status.success());
+    assert!(String::from_utf8_lossy(&collision.stderr).contains("refusing to overwrite"));
+    assert_eq!(fs::read(&occupied).unwrap(), b"sentinel");
+
     let checked = Command::new(binary())
         .args([
             "check-circuit-spec",
@@ -583,5 +598,51 @@ fn cli_checks_circuit_spec_and_publishes_schemas() {
         let schema: Value = serde_json::from_slice(&fs::read(destination).unwrap()).unwrap();
         assert_eq!(schema["additionalProperties"], false);
     }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_refuses_circuit_spec_outputs_through_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let directory = temp_dir();
+    let input = directory.join("spec.json");
+    fs::write(&input, serde_json::to_vec_pretty(&base_spec()).unwrap()).unwrap();
+    let target = directory.join("target.json");
+    fs::write(&target, b"sentinel").unwrap();
+    let linked_output = directory.join("linked-output.json");
+    symlink(&target, &linked_output).unwrap();
+
+    let direct = Command::new(binary())
+        .args([
+            "check-circuit-spec",
+            path(&input),
+            "--output",
+            path(&linked_output),
+        ])
+        .output()
+        .unwrap();
+    assert!(!direct.status.success());
+    assert!(String::from_utf8_lossy(&direct.stderr).contains("symlink"));
+    assert_eq!(fs::read(&target).unwrap(), b"sentinel");
+
+    let real_parent = directory.join("real-parent");
+    fs::create_dir(&real_parent).unwrap();
+    let linked_parent = directory.join("linked-parent");
+    symlink(&real_parent, &linked_parent).unwrap();
+    let parent = Command::new(binary())
+        .args([
+            "check-circuit-spec",
+            path(&input),
+            "--output",
+            path(&linked_parent.join("check.json")),
+        ])
+        .output()
+        .unwrap();
+    assert!(!parent.status.success());
+    assert!(String::from_utf8_lossy(&parent.stderr).contains("symlink"));
+    assert!(!real_parent.join("check.json").exists());
+
     fs::remove_dir_all(directory).unwrap();
 }

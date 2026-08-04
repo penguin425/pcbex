@@ -38,6 +38,34 @@ inputs:
     description: Optional strict physical constraint profile JSON path; mutually exclusive with fabrication and policy profiles.
     required: false
     default: ""
+  pipeline-verify:
+    description: Opt in to the deterministic hardware pipeline verification gate using the current board, schematic, and analysis artifacts; dependent pipeline inputs are required when true.
+    required: false
+    default: "false"
+  pipeline-electrical-policy:
+    description: Optional electrical policy JSON path for pipeline verification.
+    required: false
+    default: ""
+  pipeline-electrical-review:
+    description: Electrical review JSON path required when pipeline-verify is true.
+    required: false
+    default: ""
+  pipeline-manufacturing-package:
+    description: Manufacturing package ZIP path required when pipeline-verify is true.
+    required: false
+    default: ""
+  pipeline-firmware-manifest:
+    description: Firmware manifest JSON path required when pipeline-verify is true.
+    required: false
+    default: ""
+  pipeline-factory-receipt:
+    description: Optional factory DFM receipt JSON path for pipeline verification.
+    required: false
+    default: ""
+  pipeline-require-factory:
+    description: Require a verified factory DFM receipt during pipeline verification.
+    required: false
+    default: "false"
   policy-pack:
     description: Optional unsigned organization policy pack; mutually exclusive with physical-policy alternatives.
     required: false
@@ -1039,6 +1067,12 @@ outputs:
   artifact-dir:
     description: Directory containing all generated analysis artifacts.
     value: ${{ steps.analyze.outputs.artifact-dir }}
+  pipeline-report:
+    description: Fixed hardware pipeline verification report path (output-dir/pipeline-gate.json), when enabled.
+    value: ${{ steps.analyze.outputs.pipeline-report }}
+  pipeline-passed:
+    description: Whether hardware pipeline verification passed.
+    value: ${{ steps.analyze.outputs.pipeline-passed }}
   current-sarif:
     description: SARIF report for the current board.
     value: ${{ steps.analyze.outputs.current-sarif }}
@@ -1368,6 +1402,13 @@ runs:
         PCBEX_FAB: ${{ inputs.fab }}
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
         PCBEX_PHYSICAL_PROFILE: ${{ inputs.physical-profile }}
+        PCBEX_PIPELINE_VERIFY: ${{ inputs.pipeline-verify }}
+        PCBEX_PIPELINE_ELECTRICAL_POLICY: ${{ inputs.pipeline-electrical-policy }}
+        PCBEX_PIPELINE_ELECTRICAL_REVIEW: ${{ inputs.pipeline-electrical-review }}
+        PCBEX_PIPELINE_MANUFACTURING_PACKAGE: ${{ inputs.pipeline-manufacturing-package }}
+        PCBEX_PIPELINE_FIRMWARE_MANIFEST: ${{ inputs.pipeline-firmware-manifest }}
+        PCBEX_PIPELINE_FACTORY_RECEIPT: ${{ inputs.pipeline-factory-receipt }}
+        PCBEX_PIPELINE_REQUIRE_FACTORY: ${{ inputs.pipeline-require-factory }}
         PCBEX_POLICY_PACK: ${{ inputs.policy-pack }}
         PCBEX_SIGNED_POLICY_PACK: ${{ inputs.signed-policy-pack }}
         PCBEX_POLICY_PACK_URL: ${{ inputs.policy-pack-url }}
@@ -1635,6 +1676,8 @@ runs:
       shell: bash
       env:
         PCBEX_ANALYSIS_STATUS: ${{ steps.analyze.outputs.status }}
+        PCBEX_PIPELINE_VERIFY: ${{ inputs.pipeline-verify }}
+        PCBEX_PIPELINE_PASSED: ${{ steps.analyze.outputs.pipeline-passed }}
         PCBEX_VIOLATION_COUNT: ${{ steps.analyze.outputs.violation-count }}
         PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
         PCBEX_MANUFACTURING_FEEDBACK_PASSED: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
@@ -1699,6 +1742,10 @@ runs:
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_GOSSIP_QUORUM: ${{ inputs.fail-on-policy-lifecycle-log-gossip-quorum }}
       run: |
         set -euo pipefail
+        if [[ "$PCBEX_PIPELINE_VERIFY" == "true" && "$PCBEX_PIPELINE_PASSED" != "true" ]]; then
+          echo "::error::pcbex pipeline verification is absent or did not pass"
+          exit 1
+        fi
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then
           echo "::error::pcbex analysis did not complete"
           exit 1

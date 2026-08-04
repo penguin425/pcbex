@@ -5345,17 +5345,25 @@ fn run_cli() -> Result<()> {
             policy_pack,
             require_approved,
         } => {
-            let source = fs::read_to_string(&input)
-                .with_context(|| format!("reading {}", input.display()))?;
+            let source = read_bounded_utf8(&input, "KiCad schematic", 64 * 1024 * 1024)?;
             let schematic = import_schematic(&source)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("importing {}", input.display()))?;
             let policy = if let Some(path) = policy_pack {
-                load_policy_pack(&path)?.0.electrical_policy
+                let source = read_bounded_utf8(
+                    &path,
+                    "organization policy pack",
+                    4 * 1024 * 1024,
+                )?;
+                parse_policy_pack(&source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| {
+                        format!("validating organization policy pack {}", path.display())
+                    })?
+                    .electrical_policy
             } else if let Some(path) = policy {
                 parse_electrical_policy(
-                    &fs::read_to_string(&path)
-                        .with_context(|| format!("reading {}", path.display()))?,
+                    &read_bounded_utf8(&path, "electrical policy", 4 * 1024 * 1024)?,
                 )
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("parsing {}", path.display()))?
@@ -5363,26 +5371,50 @@ fn run_cli() -> Result<()> {
                 ElectricalPolicy::default()
             };
             let review = check_schematic(&schematic, &policy).map_err(anyhow::Error::msg)?;
-            fs::write(&output, serde_json::to_string_pretty(&review)?)
-                .with_context(|| format!("writing {}", output.display()))?;
-            if let Some(path) = explain {
-                let explanations =
-                    explain_electrical_review(&review, &policy).map_err(anyhow::Error::msg)?;
-                fs::write(&path, serde_json::to_string_pretty(&explanations)?)
-                    .with_context(|| format!("writing {}", path.display()))?;
-            }
-            if let Some(path) = junit_output {
-                let junit =
-                    electrical_review_to_junit(&review, &policy).map_err(anyhow::Error::msg)?;
-                fs::write(&path, junit).with_context(|| format!("writing {}", path.display()))?;
-            }
-            if let Some(path) = sarif_output {
+            require_distinct_outputs(
+                [
+                    Some(output.as_path()),
+                    explain.as_deref(),
+                    junit_output.as_deref(),
+                    sarif_output.as_deref(),
+                ],
+                "schematic check",
+            )?;
+            let review_document = serde_json::to_string_pretty(&review)?;
+            let explanation_document = explain
+                .as_ref()
+                .map(|_| {
+                    let explanations = explain_electrical_review(&review, &policy)
+                        .map_err(anyhow::Error::msg)?;
+                    serde_json::to_string_pretty(&explanations).map_err(anyhow::Error::from)
+                })
+                .transpose()?;
+            let junit_document = junit_output
+                .as_ref()
+                .map(|_| electrical_review_to_junit(&review, &policy).map_err(anyhow::Error::msg))
+                .transpose()?;
+            let sarif_document = if sarif_output.is_some() {
                 let artifact_uri = input.to_string_lossy();
                 let sarif = electrical_review_to_sarif(&review, &policy, &artifact_uri)
                     .map_err(anyhow::Error::msg)?;
-                fs::write(&path, serde_json::to_string_pretty(&sarif)?)
-                    .with_context(|| format!("writing {}", path.display()))?;
+                Some(serde_json::to_string_pretty(&sarif)?)
+            } else {
+                None
+            };
+            let mut files = vec![(output.as_path(), review_document.as_str())];
+            if let (Some(path), Some(document)) = (explain.as_deref(), explanation_document.as_ref())
+            {
+                files.push((path, document.as_str()));
             }
+            if let (Some(path), Some(document)) = (junit_output.as_deref(), junit_document.as_ref())
+            {
+                files.push((path, document.as_str()));
+            }
+            if let (Some(path), Some(document)) = (sarif_output.as_deref(), sarif_document.as_ref())
+            {
+                files.push((path, document.as_str()));
+            }
+            write_new_file_set(&files)?;
             eprintln!(
                 "electrical review: {}; {} error(s), {} warning(s), {} info finding(s)",
                 if review.approved {
@@ -5425,7 +5457,7 @@ fn run_cli() -> Result<()> {
             let check = parse_and_check_circuit_spec_v2(&source).map_err(anyhow::Error::msg)?;
             let rendered = serde_json::to_string_pretty(&check)?;
             if let Some(path) = output {
-                fs::write(&path, format!("{rendered}\n"))
+                write_new_file(&path, &format!("{rendered}\n"), false)
                     .with_context(|| format!("writing circuit-spec check {}", path.display()))?;
             } else {
                 println!("{rendered}");
