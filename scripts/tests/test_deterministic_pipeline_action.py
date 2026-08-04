@@ -47,6 +47,14 @@ AI_ARTIFACT_OUTPUTS = (
     "ai-review-native-kicad-erc-run-sha256",
 )
 
+NATIVE_WARNING_OUTPUTS = (
+    "ai-review-native-kicad-erc-warning-count",
+    "ai-review-native-kicad-erc-policy-failure-count",
+    "ai-review-native-kicad-erc-warning-policy-sha256",
+    "ai-review-native-kicad-erc-warning-policy-source-bytes",
+    "ai-review-native-kicad-erc-warning-policy-source-sha256",
+)
+
 REPORT_KEYS = {
     "schema_version",
     "engine_version",
@@ -223,6 +231,59 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         return hashlib.sha256(payload).hexdigest()
 
     @classmethod
+    def _native_v1_run_sha256(cls, report: dict[str, object]) -> str:
+        """Mirror the Rust v1 ``RunIdentity`` serialization for fixtures."""
+
+        identity = {
+            "schema_version": report["schema_version"],
+            "engine": report["engine"],
+            "engine_version": report["engine_version"],
+            "kicad_version": report["kicad_version"],
+            "source": {
+                "bytes": report["source"]["bytes"],
+                "sha256": report["source"]["sha256"],
+            },
+            "invocation": {
+                "command": report["invocation"]["command"],
+                "format": report["invocation"]["format"],
+                "units": report["invocation"]["units"],
+                "severity": report["invocation"]["severity"],
+                "exit_code_violations": report["invocation"]["exit_code_violations"],
+            },
+            "ignored_checks": [
+                {"description": item["description"], "key": item["key"]}
+                for item in report["ignored_checks"]
+            ],
+            "findings": [
+                {
+                    "description": finding["description"],
+                    "items": [
+                        {
+                            "description": item["description"],
+                            "pos": {
+                                "x": float(item["pos"]["x"]),
+                                "y": float(item["pos"]["y"]),
+                            },
+                            "uuid": item["uuid"],
+                        }
+                        for item in finding["items"]
+                    ],
+                    "severity": finding["severity"],
+                    "sheet_path": finding["sheet_path"],
+                    "sheet_uuid_path": finding["sheet_uuid_path"],
+                    "type": finding["type"],
+                }
+                for finding in report["findings"]
+            ],
+            "error_count": report["error_count"],
+            "approved": report["approved"],
+        }
+        canonical = json.dumps(
+            identity, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
+        return cls._sha256(b"pcbex/native-kicad-erc/v1\0" + canonical)
+
+    @classmethod
     def _descriptor(cls, root: Path, path: Path) -> dict[str, object]:
         payload = path.read_bytes()
         return {
@@ -358,21 +419,116 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         fake_binary = root / "fake-pcbex"
         self._write_fake_binary(fake_binary)
         self._write_plan(root)
+        schematic_bytes = (root / "design.kicad_sch").read_bytes()
+        report = {
+            "schema_version": 1,
+            "engine": "pcbex",
+            "engine_version": "10.0.5-test",
+            "kicad_version": "8.0.0-test",
+            "source": {
+                "bytes": len(schematic_bytes),
+                "sha256": self._sha256(schematic_bytes),
+            },
+            "invocation": {
+                "command": "sch erc",
+                "format": "json",
+                "units": "mm",
+                "severity": "error",
+                "exit_code_violations": True,
+            },
+            "ignored_checks": [],
+            "findings": [],
+            "error_count": 0,
+            "approved": True,
+        }
+        report["run_sha256"] = self._native_v1_run_sha256(report)
         (root / "native-erc-report.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "engine_version": "10.0.5-test",
-                    "approved": True,
-                    "violations": [],
-                    "run_sha256": "c" * 64,
-                },
-                separators=(",", ":"),
-            )
-            + "\n",
-            encoding="utf-8",
+            json.dumps(report, separators=(",", ":")) + "\n", encoding="utf-8"
         )
         return root, fake_binary
+
+    @classmethod
+    def _write_native_warning_fixture(cls, root: Path) -> Path:
+        policy = {
+            "schema_version": 1,
+            "id": "default-warning-policy",
+            "maximum_total_warnings": 4,
+            "warning_limits": [
+                {"finding_type": "lib_symbol_issues", "maximum_count": 2}
+            ],
+            "allowed_ignored_checks": [],
+        }
+        policy_path = root / "native-warning-policy.json"
+        policy_bytes = (
+            json.dumps(policy, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        policy_path.write_bytes(policy_bytes)
+        schematic_bytes = (root / "design.kicad_sch").read_bytes()
+        report = {
+            "schema_version": 2,
+            "engine": "pcbex",
+            "engine_version": "10.0.5-test",
+            "kicad_version": "8.0.0-test",
+            "source": {
+                "bytes": len(schematic_bytes),
+                "sha256": cls._sha256(schematic_bytes),
+            },
+            "invocation": {
+                "command": "sch erc",
+                "format": "json",
+                "units": "mm",
+                "severities": ["error", "warning"],
+                "exit_code_violations": True,
+            },
+            "ignored_checks": [],
+            "findings": [
+                {
+                    "description": f"warning {index}",
+                    "items": [
+                        {
+                            "description": f"warning item {index}",
+                            "pos": {"x": float(index), "y": float(index)},
+                            "uuid": f"00000000-0000-0000-0000-{index:012d}",
+                        }
+                    ],
+                    "severity": "warning",
+                    "sheet_path": "/",
+                    "sheet_uuid_path": "/root",
+                    "type": "lib_symbol_issues",
+                }
+                for index in range(1, 4)
+            ],
+            "error_count": 0,
+            "warning_count": 3,
+            "warning_counts": [
+                {"finding_type": "lib_symbol_issues", "count": 3}
+            ],
+            "warning_policy": {
+                "source": {
+                    "bytes": len(policy_bytes),
+                    "sha256": cls._sha256(policy_bytes),
+                },
+            "policy_sha256": cls._sha256(
+                    b"pcbex/native-kicad-erc-warning-policy/v1\0"
+                    + json.dumps(policy, separators=(",", ":")).encode("utf-8")
+                ),
+                "policy": policy,
+            },
+            "policy_failures": [
+                {
+                    "code": "type-limit",
+                    "subject": "lib_symbol_issues",
+                    "actual_count": 3,
+                    "maximum_count": 2,
+                }
+            ],
+            "approved": False,
+            "run_sha256": "d" * 64,
+        }
+        (root / "native-erc-report-v2.json").write_text(
+            json.dumps(report, separators=(",", ":")) + "\n", encoding="utf-8"
+        )
+        return policy_path
 
     def _valid_run(
         self,
@@ -401,13 +557,17 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertIn("  deterministic-pipeline-require-approved:\n", action)
         self.assertIn("  ai-review-generated-schematic:\n", action)
         self.assertIn("  ai-review-native-kicad-erc-report:\n", action)
+        self.assertIn("  ai-review-native-kicad-erc-warning-policy:\n", action)
         self.assertIn("  ai-review-kicad-cli:\n", action)
         self.assertIn("PCBEX_AI_REVIEW_GENERATED_SCHEMATIC", action)
         self.assertIn("PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT", action)
+        self.assertIn("PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY", action)
         self.assertIn("PCBEX_AI_REVIEW_KICAD_CLI", action)
         for name in DETERMINISTIC_OUTPUTS:
             self.assertIn(f"  {name}:\n", action)
         for name in AI_ARTIFACT_OUTPUTS:
+            self.assertIn(f"  {name}:\n", action)
+        for name in NATIVE_WARNING_OUTPUTS:
             self.assertIn(f"  {name}:\n", action)
         script = ANALYSIS_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("PCBEX_DETERMINISTIC_PIPELINE_PLAN", script)
@@ -514,7 +674,124 @@ class DeterministicPipelineActionTests(unittest.TestCase):
             outputs["ai-review-native-kicad-erc-report-sha256"],
             self._sha256(report_bytes),
         )
-        self.assertEqual(outputs["ai-review-native-kicad-erc-run-sha256"], "c" * 64)
+        report = json.loads(report_bytes)
+        self.assertEqual(
+            outputs["ai-review-native-kicad-erc-run-sha256"],
+            self._native_v1_run_sha256(report),
+        )
+        for name in NATIVE_WARNING_OUTPUTS:
+            self.assertEqual(outputs[name], "", name)
+
+    def test_native_warning_policy_binding_forwards_policy_as_individual_cli_elements(self):
+        root, fake_binary = self._prepare_fixture()
+        policy_path = self._write_native_warning_fixture(root)
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+                "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT": "native-erc-report-v2.json",
+                "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY": policy_path.name,
+                "PCBEX_AI_REVIEW_KICAD_CLI": "kicad-cli-warning",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = (root / "arguments").read_text(encoding="utf-8").splitlines()
+        policy_index = arguments.index("--native-kicad-erc-warning-policy")
+        self.assertEqual(arguments[policy_index + 1], policy_path.name)
+        self.assertEqual(arguments[policy_index - 2], "--kicad-cli")
+        self.assertEqual(arguments[policy_index - 1], "kicad-cli-warning")
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs["ai-review-native-kicad-erc-warning-count"], "3")
+        self.assertEqual(outputs["ai-review-native-kicad-erc-policy-failure-count"], "1")
+        policy_bytes = policy_path.read_bytes()
+        self.assertEqual(
+            outputs["ai-review-native-kicad-erc-warning-policy-source-bytes"],
+            str(len(policy_bytes)),
+        )
+        self.assertEqual(
+            outputs["ai-review-native-kicad-erc-warning-policy-source-sha256"],
+            self._sha256(policy_bytes),
+        )
+        self.assertEqual(
+            outputs["ai-review-native-kicad-erc-warning-policy-sha256"],
+            self._sha256(
+                b"pcbex/native-kicad-erc-warning-policy/v1\0"
+                + json.dumps(json.loads(policy_bytes), separators=(",", ":")).encode("utf-8")
+            ),
+        )
+
+    def test_native_warning_policy_requires_retained_report_and_full_artifact_group(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={"PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY": "policy.json"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+                "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY": "policy.json",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+    def test_native_warning_policy_parser_rejects_v1_pair_missing_v2_policy_and_mismatch(self):
+        root, fake_binary = self._prepare_fixture()
+        policy_path = self._write_native_warning_fixture(root)
+        common = {
+            "PCBEX_POLICY_PACK": "policy-pack.json",
+            "PCBEX_AI_REVIEW_REQUEST": "request.json",
+            "PCBEX_AI_APPROVAL_FILES": "approval.json",
+            "PCBEX_AI_RESPONSE_FILES": "response.json",
+            "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+            "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT": "native-erc-report.json",
+            "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY": policy_path.name,
+        }
+        result = self._run_script(root, fake_binary, extra=common)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("verify-ai-quorum", self._commands(root))
+
+        root, fake_binary = self._prepare_fixture()
+        policy_path = self._write_native_warning_fixture(root)
+        report = json.loads((root / "native-erc-report-v2.json").read_text())
+        report.pop("warning_policy")
+        (root / "native-erc-report-v2.json").write_text(
+            json.dumps(report, separators=(",", ":")) + "\n", encoding="utf-8"
+        )
+        common["PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT"] = "native-erc-report-v2.json"
+        common["PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY"] = policy_path.name
+        result = self._run_script(root, fake_binary, extra=common)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("verify-ai-quorum", self._commands(root))
+
+        root, fake_binary = self._prepare_fixture()
+        policy_path = self._write_native_warning_fixture(root)
+        policy_path.write_text(
+            policy_path.read_text(encoding="utf-8").replace(
+                "default-warning-policy", "different-policy"
+            ),
+            encoding="utf-8",
+        )
+        common["PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY"] = policy_path.name
+        result = self._run_script(root, fake_binary, extra=common)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("verify-ai-quorum", self._commands(root))
 
     def test_legacy_ai_quorum_keeps_v1_arguments_without_artifact_flags(self):
         root, fake_binary = self._prepare_fixture()
@@ -540,6 +817,8 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertEqual(outputs["ai-review-native-kicad-erc-report-bytes"], "")
         self.assertEqual(outputs["ai-review-native-kicad-erc-report-sha256"], "")
         self.assertEqual(outputs["ai-review-native-kicad-erc-run-sha256"], "")
+        for name in NATIVE_WARNING_OUTPUTS:
+            self.assertEqual(outputs[name], "", name)
 
     def test_generated_schematic_requires_complete_quorum_and_runner_plan(self):
         root, fake_binary = self._prepare_fixture()
@@ -609,6 +888,36 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("verify-ai-quorum", self._commands(root))
+
+    def test_native_v1_preflight_rejects_bool_schema_forged_counts_and_run_hash(self):
+        common = {
+            "PCBEX_POLICY_PACK": "policy-pack.json",
+            "PCBEX_AI_REVIEW_REQUEST": "request.json",
+            "PCBEX_AI_APPROVAL_FILES": "approval.json",
+            "PCBEX_AI_RESPONSE_FILES": "response.json",
+            "PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch",
+            "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT": "native-erc-report.json",
+        }
+        mutations = (
+            ("bool schema_version", lambda report: report.__setitem__("schema_version", True)),
+            (
+                "forged error_count",
+                lambda report: report.update(error_count=1, approved=False),
+            ),
+            ("forged run_sha256", lambda report: report.__setitem__("run_sha256", "c" * 64)),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                root, fake_binary = self._prepare_fixture()
+                report_path = root / "native-erc-report.json"
+                report = json.loads(report_path.read_text(encoding="utf-8"))
+                mutate(report)
+                report_path.write_text(
+                    json.dumps(report, separators=(",", ":")) + "\n", encoding="utf-8"
+                )
+                result = self._run_script(root, fake_binary, extra=common)
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("verify-ai-quorum", self._commands(root))
 
     def test_ai_quorum_preflight_fails_before_analysis_or_runner(self):
         root, fake_binary = self._prepare_fixture()

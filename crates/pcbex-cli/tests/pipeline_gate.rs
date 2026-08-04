@@ -2403,6 +2403,296 @@ printf '%s\n' '{"$schema":"https://schemas.kicad.org/erc.v1.json","coordinate_un
     assert!(String::from_utf8_lossy(&changed.stderr).contains("retained native KiCad ERC report"));
 }
 
+#[cfg(unix)]
+#[test]
+fn ai_review_v4_replays_warning_policy_native_kicad_erc_through_quorum() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(temporary.path());
+    let schematic = temporary.path().join("design.kicad_sch");
+    let electrical_review = temporary.path().join("electrical-review.json");
+    let pipeline_report = temporary.path().join("pipeline-report.json");
+    let warning_policy = temporary.path().join("native-warning-policy.json");
+    let native_report = temporary.path().join("native-erc-warning.json");
+    let fake_kicad = temporary.path().join("fake-kicad-cli-warning");
+    fs::write(
+        &warning_policy,
+        br#"{
+  "schema_version": 1,
+  "id": "warning-policy-test-v1",
+  "maximum_total_warnings": 1,
+  "warning_limits": [{"finding_type": "lib_symbol_issues", "maximum_count": 1}],
+  "allowed_ignored_checks": []
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &fake_kicad,
+        br##"#!/bin/sh
+set -eu
+report=''
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output' ]; then
+    report="$2"
+    shift 2
+  else
+    shift
+  fi
+done
+test -n "$report"
+printf '%s\n' '{"$schema":"https://schemas.kicad.org/erc.v1.json","coordinate_units":"mm","date":"2026-08-05T00:00:00","ignored_checks":[],"included_severities":["error","warning"],"kicad_version":"10.0.5-test","sheets":[{"path":"/","uuid_path":"/root","violations":[{"description":"one allowed warning","items":[{"description":"U1 pin 1","pos":{"x":1.0,"y":2.0},"uuid":"00000000-0000-0000-0000-000000000001"}],"severity":"warning","type":"lib_symbol_issues"}]}],"source":"input.kicad_sch"}' > "$report"
+exit 5
+"##,
+    )
+    .unwrap();
+    fs::set_permissions(&fake_kicad, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let pipeline = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&pipeline_report)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&pipeline, "pipeline for schema-v4 AI review");
+
+    let native = Command::new(binary())
+        .arg("run-native-kicad-erc")
+        .arg(&schematic)
+        .arg("--output")
+        .arg(&native_report)
+        .arg("--warning-policy")
+        .arg(&warning_policy)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&native, "native ERC warning policy for schema-v4 AI review");
+    let native_value = read_json(&native_report);
+    assert_eq!(native_value["schema_version"], 2);
+    assert_eq!(native_value["approved"], true);
+    assert_eq!(native_value["error_count"], 0);
+    assert_eq!(native_value["warning_count"], 1);
+    assert!(
+        native_value["policy_failures"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let private_key = temporary.path().join("approval-v4.key");
+    let public_key = temporary.path().join("approval-v4.pub");
+    let keygen = Command::new(binary())
+        .arg("approval-keygen")
+        .arg("--private-key")
+        .arg(&private_key)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert_success(&keygen, "approval-keygen for schema-v4 AI review");
+
+    let policy_pack = temporary.path().join("ai-policy-pack.json");
+    let mut policy_pack_value = read_json(&example("acme-policy-pack.json"));
+    policy_pack_value["ai_requirements"] = json!([{
+        "id": "power",
+        "text": "Power input treatment is intentional"
+    }]);
+    policy_pack_value["require_simulation_evidence"] = json!(false);
+    policy_pack_value["trusted_approval_keys"][0]["signer_id"] =
+        Value::String("warning-policy-reviewer".into());
+    policy_pack_value["trusted_approval_keys"][0]["public_key"] =
+        Value::String(fs::read_to_string(&public_key).unwrap().trim().into());
+    write_json(&policy_pack, &policy_pack_value);
+
+    let request = temporary.path().join("request-v4.json");
+    let prepared = Command::new(binary())
+        .arg("prepare-ai-review")
+        .arg(&schematic)
+        .arg("--electrical-review")
+        .arg(&electrical_review)
+        .arg("--policy-pack")
+        .arg(&policy_pack)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--native-kicad-erc-warning-policy")
+        .arg(&warning_policy)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--output")
+        .arg(&request)
+        .output()
+        .unwrap();
+    assert_success(&prepared, "prepare schema-v4 AI review");
+    let request_value = read_json(&request);
+    assert_eq!(request_value["schema_version"], 4);
+    let binding = &request_value["artifact_binding"];
+    assert_eq!(binding["schema_version"], 3);
+    assert_eq!(binding["native_kicad_erc"]["schema_version"], 2);
+    let native_bytes = fs::read(&native_report).unwrap();
+    assert_eq!(
+        binding["native_kicad_erc"]["report"]["bytes"],
+        native_bytes.len()
+    );
+    assert_eq!(
+        binding["native_kicad_erc"]["report"]["sha256"],
+        sha256(&native_bytes)
+    );
+    assert_eq!(
+        binding["native_kicad_erc"]["run_sha256"],
+        native_value["run_sha256"]
+    );
+
+    let response = temporary.path().join("response-v4.json");
+    write_json(
+        &response,
+        &json!({
+            "schema_version": 1,
+            "request_sha256": request_value["request_sha256"],
+            "model": {"provider": "test-provider", "model": "warning-policy-reviewer", "version": "1"},
+            "decision": "approve",
+            "summary": "The deterministic and warning-policy native ERC evidence passes.",
+            "requirements": [{
+                "id": "power",
+                "status": "pass",
+                "rationale": "The fresh warning-policy ERC evidence is within budget.",
+                "evidence_refs": ["electrical-review"]
+            }],
+            "risks": []
+        }),
+    );
+
+    let approval = temporary.path().join("approval-v4.json");
+    let signed = Command::new(binary())
+        .arg("sign-ai-review")
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--native-kicad-erc-warning-policy")
+        .arg(&warning_policy)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--private-key")
+        .arg(&private_key)
+        .arg("--signer-id")
+        .arg("warning-policy-reviewer")
+        .arg("--output")
+        .arg(&approval)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&signed, "sign schema-v4 AI review");
+
+    let verified = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--native-kicad-erc-warning-policy")
+        .arg(&warning_policy)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--public-key")
+        .arg(&public_key)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&verified, "verify schema-v4 AI approval");
+
+    let quorum = temporary.path().join("quorum-v4.json");
+    let quorum_result = Command::new(binary())
+        .arg("verify-ai-quorum")
+        .arg(&request)
+        .arg("--generated-schematic")
+        .arg(&schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--native-kicad-erc-warning-policy")
+        .arg(&warning_policy)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--approval")
+        .arg(&approval)
+        .arg("--response")
+        .arg(&response)
+        .arg("--policy-pack")
+        .arg(&policy_pack)
+        .arg("--minimum-approvals")
+        .arg("1")
+        .arg("--minimum-distinct-providers")
+        .arg("1")
+        .arg("--minimum-distinct-models")
+        .arg("1")
+        .arg("--output")
+        .arg(&quorum)
+        .arg("--require-quorum")
+        .output()
+        .unwrap();
+    assert_success(&quorum_result, "verify schema-v4 AI quorum");
+    assert_eq!(read_json(&quorum)["quorum_met"], true);
+
+    // A policy mutation must invalidate the retained report's policy identity
+    // during the fresh v2 verifier replay.
+    let policy_bytes = fs::read(&warning_policy).unwrap();
+    let mut tampered_policy = read_json(&warning_policy);
+    tampered_policy["maximum_total_warnings"] = json!(2);
+    write_json(&warning_policy, &tampered_policy);
+    let tampered = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&pipeline_report)
+        .arg("--native-kicad-erc-report")
+        .arg(&native_report)
+        .arg("--native-kicad-erc-warning-policy")
+        .arg(&warning_policy)
+        .arg("--kicad-cli")
+        .arg(&fake_kicad)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert!(!tampered.status.success());
+    assert!(
+        String::from_utf8_lossy(&tampered.stderr).contains("warning policy")
+            || String::from_utf8_lossy(&tampered.stderr).contains("warning report")
+    );
+    fs::write(&warning_policy, policy_bytes).unwrap();
+}
+
 #[test]
 fn deterministic_pipeline_runner_retains_digest_rejection_and_preflights_output() {
     let temporary = tempfile::tempdir().unwrap();

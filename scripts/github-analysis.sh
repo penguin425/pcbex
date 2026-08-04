@@ -146,6 +146,11 @@ write_output ai-review-pipeline-run-sha256 ""
 write_output ai-review-native-kicad-erc-report-bytes ""
 write_output ai-review-native-kicad-erc-report-sha256 ""
 write_output ai-review-native-kicad-erc-run-sha256 ""
+write_output ai-review-native-kicad-erc-warning-count ""
+write_output ai-review-native-kicad-erc-policy-failure-count ""
+write_output ai-review-native-kicad-erc-warning-policy-sha256 ""
+write_output ai-review-native-kicad-erc-warning-policy-source-bytes ""
+write_output ai-review-native-kicad-erc-warning-policy-source-sha256 ""
 write_output human-escalation ""
 write_output human-escalation-approved ""
 write_output schematic-approval-met ""
@@ -196,10 +201,16 @@ ai_review_pipeline_report_bytes=""
 ai_review_pipeline_report_sha256=""
 ai_review_pipeline_run_sha256=""
 ai_review_native_kicad_erc_report="${PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT:-}"
+ai_review_native_kicad_erc_warning_policy="${PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY:-}"
 ai_review_kicad_cli="${PCBEX_AI_REVIEW_KICAD_CLI:-kicad-cli}"
 ai_review_native_kicad_erc_report_bytes=""
 ai_review_native_kicad_erc_report_sha256=""
 ai_review_native_kicad_erc_run_sha256=""
+ai_review_native_kicad_erc_warning_count=""
+ai_review_native_kicad_erc_policy_failure_count=""
+ai_review_native_kicad_erc_warning_policy_sha256=""
+ai_review_native_kicad_erc_warning_policy_source_bytes=""
+ai_review_native_kicad_erc_warning_policy_source_sha256=""
 
 if [[ "$deterministic_pipeline_require_approved" != "true" &&
   "$deterministic_pipeline_require_approved" != "false" ]]; then
@@ -230,6 +241,18 @@ if [[ -n "$ai_review_native_kicad_erc_report" && -z "$ai_review_generated_schema
   echo "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT requires PCBEX_AI_REVIEW_GENERATED_SCHEMATIC" >&2
   exit 2
 fi
+if [[ -n "$ai_review_native_kicad_erc_warning_policy" && $ai_quorum_inputs -ne 3 ]]; then
+  echo "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY requires the complete AI quorum input set" >&2
+  exit 2
+fi
+if [[ -n "$ai_review_native_kicad_erc_warning_policy" && -z "$ai_review_native_kicad_erc_report" ]]; then
+  echo "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY requires PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT" >&2
+  exit 2
+fi
+if [[ -n "$ai_review_native_kicad_erc_warning_policy" && -z "$ai_review_generated_schematic" ]]; then
+  echo "PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY requires PCBEX_AI_REVIEW_GENERATED_SCHEMATIC" >&2
+  exit 2
+fi
 if ((ai_quorum_inputs == 3)) &&
   [[ -z "${PCBEX_POLICY_PACK:-}" &&
     -z "${PCBEX_SIGNED_POLICY_PACK:-}" &&
@@ -256,6 +279,10 @@ if [[ -n "$ai_review_native_kicad_erc_report" && -z "$deterministic_pipeline_pla
 fi
 if [[ -n "$ai_review_native_kicad_erc_report" && -z "$ai_review_kicad_cli" ]]; then
   echo "PCBEX_AI_REVIEW_KICAD_CLI must not be empty when a native KiCad ERC report is supplied" >&2
+  exit 2
+fi
+if [[ -n "$ai_review_native_kicad_erc_warning_policy" && -z "$ai_review_kicad_cli" ]]; then
+  echo "PCBEX_AI_REVIEW_KICAD_CLI must not be empty when native KiCad ERC warning policy is supplied" >&2
   exit 2
 fi
 
@@ -2277,19 +2304,26 @@ PY
   fi
 fi
 if [[ -n "$ai_review_native_kicad_erc_report" ]]; then
+  native_identity_arguments=("$ai_review_native_kicad_erc_report")
+  if [[ -n "$ai_review_native_kicad_erc_warning_policy" ]]; then
+    native_identity_arguments+=("$ai_review_native_kicad_erc_warning_policy")
+  fi
   ai_review_native_kicad_erc_identity_values="$(
     PYTHONPATH="$GITHUB_ACTION_PATH/agent/src" python3 - \
-      "$ai_review_native_kicad_erc_report" <<'PY'
+      "${native_identity_arguments[@]}" <<'PY'
 import hashlib
 import json
+import math
 import re
 import sys
-from pathlib import Path
 
 from pcbex_agent.bounded_io import read_bytes
 
-MAX_BYTES = 32 * 1024 * 1024
+MAX_REPORT_BYTES = 32 * 1024 * 1024
+MAX_POLICY_BYTES = 1 * 1024 * 1024
+MAX_SOURCE_BYTES = 64 * 1024 * 1024
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+WARNING_POLICY_DOMAIN = b"pcbex/native-kicad-erc-warning-policy/v1\0"
 
 
 def reject_duplicate_keys(pairs):
@@ -2301,27 +2335,442 @@ def reject_duplicate_keys(pairs):
     return result
 
 
-path = Path(sys.argv[1])
-payload = read_bytes(path, max_bytes=MAX_BYTES)
-confirmation = read_bytes(path, max_bytes=MAX_BYTES)
-if payload != confirmation:
-    raise ValueError(f"native KiCad ERC report changed between bounded reads: {path}")
-try:
-    value = json.loads(
-        payload.decode("utf-8"),
-        object_pairs_hook=reject_duplicate_keys,
-        parse_constant=lambda constant: (_ for _ in ()).throw(
-            ValueError(f"non-standard JSON number: {constant}")
-        ),
+def stable_read(path, *, max_bytes):
+    payload = read_bytes(path, max_bytes=max_bytes)
+    confirmation = read_bytes(path, max_bytes=max_bytes)
+    if payload != confirmation:
+        raise ValueError(f"file changed between bounded reads: {path}")
+    return payload
+
+
+def parse_json(payload, label):
+    try:
+        return json.loads(
+            payload.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=lambda constant: (_ for _ in ()).throw(
+                ValueError(f"non-standard JSON number: {constant}")
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as error:
+        raise ValueError(f"{label} is not valid JSON: {error}") from error
+
+
+def exact_object(value, keys, label):
+    if type(value) is not dict or set(value) != set(keys) or len(value) != len(keys):
+        raise ValueError(f"{label} must have exactly the closed key set {sorted(keys)!r}")
+    return value
+
+
+def text(value, label, *, max_bytes=4096):
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value.encode("utf-8")) > max_bytes
+        or "\x00" in value
+    ):
+        raise ValueError(f"{label} is not bounded text")
+    return value
+
+
+def bounded_integer(value, label, *, maximum=None, positive=False):
+    if type(value) is not int or value < (1 if positive else 0):
+        raise ValueError(f"{label} is not a bounded integer")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{label} exceeds its bound")
+    return value
+
+
+def sha256(value, label):
+    if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+        raise ValueError(f"{label} is not a lowercase SHA-256")
+    return value
+
+
+def source_identity(value, label, *, maximum=MAX_SOURCE_BYTES):
+    exact_object(value, ("bytes", "sha256"), label)
+    bounded_integer(value["bytes"], f"{label}.bytes", maximum=maximum, positive=True)
+    sha256(value["sha256"], f"{label}.sha256")
+
+
+def validate_ignored_checks(value):
+    if type(value) is not list or len(value) > 1024:
+        raise ValueError("ignored_checks is not a bounded array")
+    for index, item in enumerate(value):
+        exact_object(item, ("description", "key"), f"ignored_checks[{index}]")
+        text(item["description"], f"ignored_checks[{index}].description")
+        text(item["key"], f"ignored_checks[{index}].key")
+
+
+def validate_findings(value):
+    if type(value) is not list or len(value) > 100000:
+        raise ValueError("findings is not a bounded array")
+    for finding_index, finding in enumerate(value):
+        label = f"findings[{finding_index}]"
+        exact_object(
+            finding,
+            ("description", "items", "severity", "sheet_path", "sheet_uuid_path", "type"),
+            label,
+        )
+        for field in ("description", "severity", "sheet_path", "type"):
+            text(finding[field], f"{label}.{field}")
+        text(finding["sheet_uuid_path"], f"{label}.sheet_uuid_path", max_bytes=128)
+        if finding["severity"] not in ("error", "warning"):
+            raise ValueError(f"{label}.severity is unsupported")
+        if type(finding["items"]) is not list or len(finding["items"]) > 1024:
+            raise ValueError(f"{label}.items is not a bounded array")
+        for item_index, item in enumerate(finding["items"]):
+            item_label = f"{label}.items[{item_index}]"
+            exact_object(item, ("description", "pos", "uuid"), item_label)
+            text(item["description"], f"{item_label}.description")
+            text(item["uuid"], f"{item_label}.uuid", max_bytes=128)
+            exact_object(item["pos"], ("x", "y"), f"{item_label}.pos")
+            for coordinate in ("x", "y"):
+                coordinate_value = item["pos"][coordinate]
+                if isinstance(coordinate_value, bool) or not isinstance(coordinate_value, (int, float)):
+                    raise ValueError(f"{item_label}.pos.{coordinate} is not numeric")
+                if not math.isfinite(coordinate_value) or abs(coordinate_value) > 1_000_000_000:
+                    raise ValueError(f"{item_label}.pos.{coordinate} is not bounded")
+
+
+def validate_invocation(value, version):
+    keys = (
+        ("command", "format", "units", "severity", "exit_code_violations")
+        if version == 1
+        else ("command", "format", "units", "severities", "exit_code_violations")
     )
-except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError) as error:
-    raise ValueError(f"native KiCad ERC report is not valid JSON: {error}") from error
+    exact_object(value, keys, "invocation")
+    for field in ("command", "format", "units"):
+        text(value[field], f"invocation.{field}")
+    if version == 1:
+        text(value["severity"], "invocation.severity")
+        if value["command"] != "sch erc" or value["format"] != "json" or value["units"] != "mm" or value["severity"] != "error":
+            raise ValueError("v1 invocation is not the fixed native KiCad ERC invocation")
+    else:
+        if value["command"] != "sch erc" or value["format"] != "json" or value["units"] != "mm":
+            raise ValueError("v2 invocation is not the fixed native KiCad ERC invocation")
+        if value["severities"] != ["error", "warning"]:
+            raise ValueError("v2 invocation severities are not fixed")
+        if type(value["severities"]) is not list or not value["severities"]:
+            raise ValueError("invocation.severities is not a bounded array")
+        for index, severity in enumerate(value["severities"]):
+            text(severity, f"invocation.severities[{index}]")
+    if type(value["exit_code_violations"]) is not bool:
+        raise ValueError("invocation.exit_code_violations is not boolean")
+    if not value["exit_code_violations"]:
+        raise ValueError("invocation.exit_code_violations must be true")
+
+
+POLICY_KEYS = (
+    "schema_version",
+    "id",
+    "maximum_total_warnings",
+    "warning_limits",
+    "allowed_ignored_checks",
+)
+
+
+def canonical_policy(value):
+    exact_object(value, POLICY_KEYS, "warning_policy.policy")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise ValueError("warning policy schema_version must be 1")
+    text(value["id"], "warning_policy.policy.id")
+    bounded_integer(
+        value["maximum_total_warnings"],
+        "warning_policy.policy.maximum_total_warnings",
+        maximum=100000,
+    )
+    limits = value["warning_limits"]
+    if type(limits) is not list or len(limits) > 100000:
+        raise ValueError("warning_policy.policy.warning_limits is not bounded")
+    previous_type = None
+    for index, limit in enumerate(limits):
+        label = f"warning_policy.policy.warning_limits[{index}]"
+        exact_object(limit, ("finding_type", "maximum_count"), label)
+        text(limit["finding_type"], f"{label}.finding_type")
+        if previous_type is not None and limit["finding_type"] <= previous_type:
+            raise ValueError("warning_policy.policy.warning_limits are not sorted and unique")
+        previous_type = limit["finding_type"]
+        bounded_integer(limit["maximum_count"], f"{label}.maximum_count", maximum=100000)
+    ignored = value["allowed_ignored_checks"]
+    if type(ignored) is not list or len(ignored) > 1024:
+        raise ValueError("warning_policy.policy.allowed_ignored_checks is not bounded")
+    previous_ignored = None
+    for index, item in enumerate(ignored):
+        text(item, f"warning_policy.policy.allowed_ignored_checks[{index}]")
+        if previous_ignored is not None and item <= previous_ignored:
+            raise ValueError("warning_policy.policy.allowed_ignored_checks are not sorted and unique")
+        previous_ignored = item
+    ordered = {
+        "schema_version": value["schema_version"],
+        "id": value["id"],
+        "maximum_total_warnings": value["maximum_total_warnings"],
+        "warning_limits": [
+            {"finding_type": item["finding_type"], "maximum_count": item["maximum_count"]}
+            for item in limits
+        ],
+        "allowed_ignored_checks": list(ignored),
+    }
+    return json.dumps(ordered, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def validate_warning_counts(value):
+    if type(value) is not list or len(value) > 100000:
+        raise ValueError("warning_counts is not a bounded array")
+    previous_type = None
+    for index, item in enumerate(value):
+        label = f"warning_counts[{index}]"
+        exact_object(item, ("finding_type", "count"), label)
+        text(item["finding_type"], f"{label}.finding_type")
+        if previous_type is not None and item["finding_type"] <= previous_type:
+            raise ValueError("warning_counts are not sorted and unique")
+        previous_type = item["finding_type"]
+        bounded_integer(item["count"], f"{label}.count", maximum=100000, positive=True)
+
+
+def validate_policy_failures(value):
+    if type(value) is not list or len(value) > 101025:
+        raise ValueError("policy_failures is not a bounded array")
+    for index, item in enumerate(value):
+        label = f"policy_failures[{index}]"
+        exact_object(item, ("code", "subject", "actual_count", "maximum_count"), label)
+        text(item["code"], f"{label}.code")
+        if item["code"] not in ("total", "type-not-allowed", "type-limit", "ignored-not-allowed"):
+            raise ValueError(f"{label}.code is unsupported")
+        text(item["subject"], f"{label}.subject")
+        bounded_integer(item["actual_count"], f"{label}.actual_count", maximum=100000, positive=True)
+        bounded_integer(item["maximum_count"], f"{label}.maximum_count", maximum=100000)
+
+
+def native_v1_run_identity(value):
+    """Build the exact serde_json v1 run-identity object.
+
+    The Rust report hash intentionally excludes ``run_sha256`` itself and
+    serializes the closed ``RunIdentity`` struct in declaration order.  Build
+    every nested object explicitly so an input JSON key order cannot influence
+    the digest.  Coordinates are normalized to f64 because the Rust report
+    model stores them as f64 even when the source JSON used an integer token.
+    """
+    return {
+        "schema_version": value["schema_version"],
+        "engine": value["engine"],
+        "engine_version": value["engine_version"],
+        "kicad_version": value["kicad_version"],
+        "source": {
+            "bytes": value["source"]["bytes"],
+            "sha256": value["source"]["sha256"],
+        },
+        "invocation": {
+            "command": value["invocation"]["command"],
+            "format": value["invocation"]["format"],
+            "units": value["invocation"]["units"],
+            "severity": value["invocation"]["severity"],
+            "exit_code_violations": value["invocation"]["exit_code_violations"],
+        },
+        "ignored_checks": [
+            {"description": item["description"], "key": item["key"]}
+            for item in value["ignored_checks"]
+        ],
+        "findings": [
+            {
+                "description": finding["description"],
+                "items": [
+                    {
+                        "description": item["description"],
+                        "pos": {
+                            "x": float(item["pos"]["x"]),
+                            "y": float(item["pos"]["y"]),
+                        },
+                        "uuid": item["uuid"],
+                    }
+                    for item in finding["items"]
+                ],
+                "severity": finding["severity"],
+                "sheet_path": finding["sheet_path"],
+                "sheet_uuid_path": finding["sheet_uuid_path"],
+                "type": finding["type"],
+            }
+            for finding in value["findings"]
+        ],
+        "error_count": value["error_count"],
+        "approved": value["approved"],
+    }
+
+
+def canonical_float(value):
+    """Render finite f64 values in the serde_json/ryu JSON spelling."""
+    if not math.isfinite(value):
+        raise ValueError("native KiCad ERC run identity contains a non-finite coordinate")
+    rendered = repr(value)
+    if "e" not in rendered and "E" not in rendered:
+        return rendered
+    mantissa, exponent_text = rendered.lower().split("e", 1)
+    exponent = int(exponent_text)
+    # serde_json uses fixed notation for decimal exponents -5..-1, while
+    # CPython's repr switches to scientific notation at -5.
+    if -6 < exponent < 0:
+        sign = ""
+        if mantissa.startswith("-"):
+            sign, mantissa = "-", mantissa[1:]
+        digits = mantissa.replace(".", "")
+        decimal_position = mantissa.find(".")
+        if decimal_position < 0:
+            decimal_position = len(mantissa)
+        decimal_position += exponent
+        if decimal_position <= 0:
+            return f"{sign}0.{('0' * -decimal_position)}{digits}"
+        if decimal_position >= len(digits):
+            return f"{sign}{digits}{('0' * (decimal_position - len(digits)))}.0"
+        return f"{sign}{digits[:decimal_position]}.{digits[decimal_position:]}"
+    return f"{mantissa}e{exponent:+d}" if exponent >= 0 else f"{mantissa}e{exponent}"
+
+
+def canonical_json(value):
+    """Serialize the v1 identity with serde_json-compatible number output."""
+    if value is None:
+        return "null"
+    if type(value) is bool:
+        return "true" if value else "false"
+    if type(value) is int:
+        return str(value)
+    if type(value) is float:
+        return canonical_float(value)
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if type(value) is list:
+        return "[" + ",".join(canonical_json(item) for item in value) + "]"
+    if type(value) is dict:
+        return "{" + ",".join(
+            json.dumps(key, ensure_ascii=False, separators=(",", ":"))
+            + ":"
+            + canonical_json(item)
+            for key, item in value.items()
+        ) + "}"
+    raise ValueError("native KiCad ERC run identity contains an unsupported JSON value")
+
+
+def native_v1_run_sha256(value):
+    canonical = canonical_json(native_v1_run_identity(value)).encode("utf-8")
+    return hashlib.sha256(b"pcbex/native-kicad-erc/v1\0" + canonical).hexdigest()
+
+
+report_path = sys.argv[1]
+policy_path = sys.argv[2] if len(sys.argv) == 3 else None
+if len(sys.argv) > 3:
+    raise ValueError("unexpected native KiCad ERC identity arguments")
+payload = stable_read(report_path, max_bytes=MAX_REPORT_BYTES)
+value = parse_json(payload, "native KiCad ERC report")
 if type(value) is not dict:
     raise ValueError("native KiCad ERC report must be a JSON object")
-run_sha256 = value.get("run_sha256")
-if not isinstance(run_sha256, str) or SHA256_RE.fullmatch(run_sha256) is None:
-    raise ValueError("native KiCad ERC report run_sha256 is malformed")
-print(len(payload), hashlib.sha256(payload).hexdigest(), run_sha256)
+schema_version = value.get("schema_version")
+if type(schema_version) is not int or schema_version not in (1, 2):
+    raise ValueError("native KiCad ERC report schema_version must be 1 or 2")
+base_keys = {
+    "schema_version", "engine", "engine_version", "kicad_version", "source",
+    "invocation", "ignored_checks", "findings", "error_count", "approved", "run_sha256",
+}
+if schema_version == 1:
+    exact_object(value, base_keys, "native KiCad ERC report")
+else:
+    exact_object(
+        value,
+        base_keys | {"warning_count", "warning_counts", "warning_policy", "policy_failures"},
+        "native KiCad ERC warning report",
+    )
+for field in ("engine", "engine_version", "kicad_version"):
+    text(value[field], f"native KiCad ERC report.{field}")
+if value["engine"] != "pcbex":
+    raise ValueError("native KiCad ERC report engine must be pcbex")
+for field in ("engine_version", "kicad_version"):
+    if len(value[field].encode("utf-8")) > 256:
+        raise ValueError(f"native KiCad ERC report.{field} exceeds its bound")
+source_identity(value["source"], "source")
+validate_invocation(value["invocation"], schema_version)
+validate_ignored_checks(value["ignored_checks"])
+validate_findings(value["findings"])
+if schema_version == 1 and any(item["severity"] != "error" for item in value["findings"]):
+    raise ValueError("v1 native KiCad ERC findings must be errors")
+bounded_integer(value["error_count"], "error_count", maximum=100000)
+if type(value["approved"]) is not bool:
+    raise ValueError("approved is not boolean")
+run_sha256 = sha256(value["run_sha256"], "run_sha256")
+
+warning_count = ""
+policy_failure_count = ""
+policy_sha256 = ""
+policy_source_bytes = ""
+policy_source_sha256 = ""
+if schema_version == 1:
+    expected_error_count = sum(item["severity"] == "error" for item in value["findings"])
+    if value["error_count"] != expected_error_count:
+        raise ValueError("v1 error_count does not match findings")
+    if value["approved"] != (value["error_count"] == 0):
+        raise ValueError("v1 approval does not match error_count")
+    expected_run_sha256 = native_v1_run_sha256(value)
+    if run_sha256 != expected_run_sha256:
+        raise ValueError("v1 run SHA-256 does not match its contents")
+    if policy_path is not None:
+        raise ValueError("schema-v1 native ERC reports cannot be used with a warning policy")
+else:
+    warning_count_value = bounded_integer(value["warning_count"], "warning_count", maximum=100000)
+    validate_warning_counts(value["warning_counts"])
+    validate_policy_failures(value["policy_failures"])
+    expected_error_count = sum(item["severity"] == "error" for item in value["findings"])
+    expected_warning_count = sum(item["severity"] == "warning" for item in value["findings"])
+    if value["error_count"] != expected_error_count or warning_count_value != expected_warning_count:
+        raise ValueError("v2 finding counts do not match findings")
+    expected_warning_counts = {}
+    for item in value["findings"]:
+        if item["severity"] == "warning":
+            expected_warning_counts[item["type"]] = expected_warning_counts.get(item["type"], 0) + 1
+    observed_warning_counts = {
+        item["finding_type"]: item["count"] for item in value["warning_counts"]
+    }
+    if observed_warning_counts != expected_warning_counts:
+        raise ValueError("v2 warning_counts do not match findings")
+    warning_policy = exact_object(
+        value["warning_policy"], ("source", "policy_sha256", "policy"), "warning_policy"
+    )
+    source_identity(warning_policy["source"], "warning_policy.source", maximum=MAX_POLICY_BYTES)
+    policy_sha256_value = sha256(warning_policy["policy_sha256"], "warning_policy.policy_sha256")
+    policy_bytes = canonical_policy(warning_policy["policy"])
+    policy_hasher = hashlib.sha256()
+    policy_hasher.update(WARNING_POLICY_DOMAIN)
+    policy_hasher.update(policy_bytes)
+    if policy_hasher.hexdigest() != policy_sha256_value:
+        raise ValueError("warning_policy.policy_sha256 does not match the normalized policy")
+    if policy_path is None:
+        raise ValueError("schema-v2 native ERC reports require a trusted warning policy")
+    trusted_payload = stable_read(policy_path, max_bytes=MAX_POLICY_BYTES)
+    trusted_policy = parse_json(trusted_payload, "trusted native KiCad ERC warning policy")
+    trusted_policy_bytes = canonical_policy(trusted_policy)
+    trusted_source_sha256 = hashlib.sha256(trusted_payload).hexdigest()
+    if (
+        warning_policy["source"]["bytes"] != len(trusted_payload)
+        or warning_policy["source"]["sha256"] != trusted_source_sha256
+        or warning_policy["policy"] != trusted_policy
+        or policy_sha256_value
+        != hashlib.sha256(WARNING_POLICY_DOMAIN + trusted_policy_bytes).hexdigest()
+    ):
+        raise ValueError("native KiCad ERC warning policy does not match its trusted source")
+    warning_count = str(warning_count_value)
+    policy_failure_count = str(len(value["policy_failures"]))
+    if value["approved"] != (value["error_count"] == 0 and not value["policy_failures"]):
+        raise ValueError("v2 approval does not match findings and policy failures")
+    policy_sha256 = policy_sha256_value
+    policy_source_bytes = str(len(trusted_payload))
+    policy_source_sha256 = trusted_source_sha256
+
+print(
+    len(payload),
+    hashlib.sha256(payload).hexdigest(),
+    run_sha256,
+    warning_count,
+    policy_failure_count,
+    policy_sha256,
+    policy_source_bytes,
+    policy_source_sha256,
+)
 PY
   )" || {
     echo "unable to read native KiCad ERC report identity" >&2
@@ -2331,12 +2780,34 @@ PY
     ai_review_native_kicad_erc_report_bytes \
     ai_review_native_kicad_erc_report_sha256 \
     ai_review_native_kicad_erc_run_sha256 \
+    ai_review_native_kicad_erc_warning_count \
+    ai_review_native_kicad_erc_policy_failure_count \
+    ai_review_native_kicad_erc_warning_policy_sha256 \
+    ai_review_native_kicad_erc_warning_policy_source_bytes \
+    ai_review_native_kicad_erc_warning_policy_source_sha256 \
     <<< "$ai_review_native_kicad_erc_identity_values"
   if [[ ! "$ai_review_native_kicad_erc_report_bytes" =~ ^[1-9][0-9]*$ ||
     "$ai_review_native_kicad_erc_report_bytes" -gt $((32 * 1024 * 1024)) ||
     ! "$ai_review_native_kicad_erc_report_sha256" =~ ^[0-9a-f]{64}$ ||
     ! "$ai_review_native_kicad_erc_run_sha256" =~ ^[0-9a-f]{64}$ ]]; then
     echo "native KiCad ERC report identities are malformed" >&2
+    exit 2
+  fi
+  if [[ -n "$ai_review_native_kicad_erc_warning_policy" ]]; then
+    if [[ ! "$ai_review_native_kicad_erc_warning_count" =~ ^[0-9]+$ ||
+      ! "$ai_review_native_kicad_erc_policy_failure_count" =~ ^[0-9]+$ ||
+      ! "$ai_review_native_kicad_erc_warning_policy_sha256" =~ ^[0-9a-f]{64}$ ||
+      ! "$ai_review_native_kicad_erc_warning_policy_source_bytes" =~ ^[1-9][0-9]*$ ||
+      ! "$ai_review_native_kicad_erc_warning_policy_source_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "native KiCad ERC warning-policy identities are malformed" >&2
+      exit 2
+    fi
+  elif [[ -n "$ai_review_native_kicad_erc_warning_count" ||
+    -n "$ai_review_native_kicad_erc_policy_failure_count" ||
+    -n "$ai_review_native_kicad_erc_warning_policy_sha256" ||
+    -n "$ai_review_native_kicad_erc_warning_policy_source_bytes" ||
+    -n "$ai_review_native_kicad_erc_warning_policy_source_sha256" ]]; then
+    echo "schema-v1 native KiCad ERC warning outputs must be empty" >&2
     exit 2
   fi
 fi
@@ -2367,6 +2838,11 @@ if ((ai_quorum_inputs == 3)); then
       quorum_arguments+=(
         --native-kicad-erc-report "$ai_review_native_kicad_erc_report"
         --kicad-cli "$ai_review_kicad_cli")
+      if [[ -n "$ai_review_native_kicad_erc_warning_policy" ]]; then
+        quorum_arguments+=(
+          --native-kicad-erc-warning-policy
+          "$ai_review_native_kicad_erc_warning_policy")
+      fi
     fi
   fi
   if [[ -n "${PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY:-}" ]]; then
@@ -3601,6 +4077,11 @@ write_output ai-review-pipeline-run-sha256 "$ai_review_pipeline_run_sha256"
 write_output ai-review-native-kicad-erc-report-bytes "$ai_review_native_kicad_erc_report_bytes"
 write_output ai-review-native-kicad-erc-report-sha256 "$ai_review_native_kicad_erc_report_sha256"
 write_output ai-review-native-kicad-erc-run-sha256 "$ai_review_native_kicad_erc_run_sha256"
+write_output ai-review-native-kicad-erc-warning-count "$ai_review_native_kicad_erc_warning_count"
+write_output ai-review-native-kicad-erc-policy-failure-count "$ai_review_native_kicad_erc_policy_failure_count"
+write_output ai-review-native-kicad-erc-warning-policy-sha256 "$ai_review_native_kicad_erc_warning_policy_sha256"
+write_output ai-review-native-kicad-erc-warning-policy-source-bytes "$ai_review_native_kicad_erc_warning_policy_source_bytes"
+write_output ai-review-native-kicad-erc-warning-policy-source-sha256 "$ai_review_native_kicad_erc_warning_policy_source_sha256"
 write_output human-escalation "$human_escalation"
 write_output human-escalation-approved "$human_escalation_approved"
 write_output schematic-approval-met "$schematic_approval_met"

@@ -156,22 +156,28 @@ internal rule checking both apply the class; unspecified nets use board defaults
 
 ## Native KiCad schematic ERC
 
-Run KiCad's deterministic, error-only schematic ERC and retain a normalized
-report for CI or AI approval:
+Run KiCad's deterministic schematic ERC and retain a normalized report for CI
+or AI approval. Omitting a warning policy preserves the error-only report v1:
 
 ```sh
 pcbex run-native-kicad-erc hardware/generated.kicad_sch \
   --output build/native-kicad-erc.json --require-approved
 pcbex native-kicad-erc-report-schema \
   --output build/native-kicad-erc.schema.json
+
+pcbex run-native-kicad-erc hardware/generated.kicad_sch \
+  --warning-policy examples/native-kicad-warning-policy.json \
+  --output build/native-kicad-erc-warning.json --require-approved
 ```
 
 The runner uses a private staged input with no `.kicad_pro` sidecar, bounds
 KiCad and report I/O, refuses output overwrite/symlinks, and retains a
-rejected report before `--require-approved` fails. Warnings are outside this
-v1 gate; only native ERC errors determine `approved`. Native evidence can be
-added to AI request schema v3 (artifact binding v2) with
-`--native-kicad-erc-report`; schema v1/v2 flows remain compatible. See
+rejected report before `--require-approved` fails. Report v1 gates errors only.
+The opt-in report v2 retains errors and warnings, denies unlisted warning types
+and ignored checks, and applies closed global/per-type budgets; errors remain
+unwaivable. Error-only evidence maps to AI request/binding/native identity
+v3/v2/v1, while warning-policy evidence maps to v4/v3/v2. Older flows remain
+compatible. See
 [`docs/NATIVE_KICAD_ERC.md`](docs/NATIVE_KICAD_ERC.md).
 
 ## KiCad boards
@@ -2304,7 +2310,10 @@ Version 1.424 additionally accepts `ai-review-generated-schematic` together
 with `deterministic-pipeline-plan`. This opts the quorum into request-schema-v2
 artifact binding. Version 1.425 additionally accepts
 `ai-review-native-kicad-erc-report` (and `ai-review-kicad-cli`) to opt into
-request-schema-v3 native KiCad ERC evidence. The Action runs the plan and,
+request-schema-v3 native KiCad ERC evidence. Version 1.426 adds
+`ai-review-native-kicad-erc-warning-policy`, which opts a report-v2 flow into
+request schema v4 and publishes its warning budget result and policy identity.
+The Action runs the plan and,
 when enabled, reads the retained native report before quorum verification;
 the CLI live-verification gate independently reruns the fixed error-only
 native ERC check and the deterministic plan before accepting signatures. See
@@ -3235,7 +3244,9 @@ Version 1.424 can cryptographically join that deterministic evidence to an AI
 schematic approval. `prepare-ai-review` request schema v2 records the exact
 generated schematic, raw/normalized plan, retained report, and run identities.
 Version 1.425 can additionally bind the normalized native KiCad ERC report as
-request schema v3/artifact binding v2. The signing and verification commands
+request schema v3/artifact binding v2. Version 1.426 can instead bind the
+warning-policy native ERC report as request schema v4/artifact binding
+v3/native identity v2. The signing and verification commands
 rerun every enabled gate and require retained reports to match fresh compact
 JSON plus final newline exactly; a stored digest or self-consistent report
 alone is never trusted. See
@@ -3566,8 +3577,10 @@ Version 1.424 adds opt-in request schema v2 for production pipelines. It binds
 the signature to the exact generated schematic bytes, raw and normalized
 deterministic plan identities, and the exact approved runner report and run
 identity. Version 1.425 adds optional native KiCad ERC evidence as request
-schema v3/artifact binding v2. First retain the approved reports, then pass
-the same plan/report paths (and `--native-kicad-erc-report` for v3) while
+schema v3/artifact binding v2. Version 1.426 adds the mutually exclusive
+warning-policy path as request schema v4/artifact binding v3/native identity
+v2. First retain the approved reports, then pass
+the same plan/report paths (and `--native-kicad-erc-report` for v3 or v4) while
 preparing the request:
 
 ```sh
@@ -3577,6 +3590,9 @@ pcbex run-deterministic-pipeline pipeline-plan.json \
 
 pcbex run-native-kicad-erc generated.kicad_sch \
   --output native-kicad-erc.json --require-approved
+
+# To bind warnings too, add:
+#   --warning-policy examples/native-kicad-warning-policy.json
 
 pcbex prepare-ai-review generated.kicad_sch \
   --electrical-review electrical-review.json \
@@ -3603,6 +3619,13 @@ pcbex verify-ai-approval \
   --native-kicad-erc-report native-kicad-erc.json \
   --public-key schematic-approval.pub --require-approved
 ```
+
+For request schema v4, generate the native report with
+`--warning-policy examples/native-kicad-warning-policy.json` and append
+`--native-kicad-erc-warning-policy examples/native-kicad-warning-policy.json`
+to prepare, sign, approval verification, and quorum verification. The trusted
+policy is stable-read and the native warning report is freshly reproduced at
+each boundary; schema v3 rejects this option and schema v4 requires it.
 
 Prepare, sign, approval verification, and quorum verification each stable-read
 the four artifacts, rerun the closed pipeline and native KiCad ERC, require
@@ -4552,8 +4575,10 @@ would not establish signer identity. The private key is created with mode
 
 AI integration is provider-neutral. `pcbex_agent.review_schematic_with_llm`
 accepts an injected transport, rejects non-JSON or invented evidence before
-Rust validation, accepts both request schemas v1 and v2, and treats v2
-artifact identities as evidence rather than instructions. It tells the model
+Rust validation, accepts request schemas v1 through v4, and treats every
+artifact identity as evidence rather than instructions. Schema v3 is confined
+to error-only native ERC identity v1, while schema v4 requires warning-policy
+native ERC identity v2. It tells the model
 to use `unknown`/`needs_human` instead of guessing, while the response schema
 remains v1. The MCP server exposes `route_schematic_reviewers`,
 `prepare_schematic_review`,

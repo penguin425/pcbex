@@ -279,7 +279,7 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertEqual(result["schema_version"], 1)
         self.assertIn(
-            "Artifact identities in a schema-v2 request are immutable evidence",
+            "Artifact identities in a schema-v2-or-newer request are immutable evidence",
             prompts[0],
         )
         self.assertIn("The response schema remains v1", prompts[0])
@@ -312,6 +312,117 @@ class AdapterTests(unittest.TestCase):
             "The response schema remains v1 even when the request is schema v2 or schema v3",
             prompts[0],
         )
+
+    @staticmethod
+    def _bound_review_v4_fixture():
+        request, response = AdapterTests._bound_review_v3_fixture()
+        request["schema_version"] = 4
+        request["artifact_binding"]["schema_version"] = 3
+        request["artifact_binding"]["native_kicad_erc"]["schema_version"] = 2
+        return request, response
+
+    def test_schematic_review_adapter_accepts_bound_v4_warning_policy_evidence(self):
+        request, response = self._bound_review_v4_fixture()
+        prompts: list[str] = []
+        result = review_schematic_with_llm(
+            request,
+            lambda prompt: (prompts.append(prompt), json.dumps(response))[1],
+        )
+        self.assertEqual(result["schema_version"], 1)
+        self.assertIn(
+            "In a schema-v4 request, the native KiCad ERC report identity and run digest",
+            prompts[0],
+        )
+        self.assertIn("external trusted warning policy", prompts[0])
+        self.assertIn("freshly verified before binding", prompts[0])
+        self.assertIn("this adapter does not execute KiCad or evaluate the policy", prompts[0])
+        self.assertIn(
+            "The response schema remains v1 even when the request is schema v2 or schema v3",
+            prompts[0],
+        )
+        self.assertIn(
+            "It also remains v1 for schema v4",
+            prompts[0],
+        )
+
+    def test_schematic_review_adapter_rejects_mixed_v4_binding_versions(self):
+        request, _response = self._bound_review_v4_fixture()
+        cases = {
+            "v4 request with v2 binding": {
+                **request,
+                "artifact_binding": {
+                    **request["artifact_binding"],
+                    "schema_version": 2,
+                },
+            },
+            "v4 request with native identity v1": {
+                **request,
+                "artifact_binding": {
+                    **request["artifact_binding"],
+                    "native_kicad_erc": {
+                        **request["artifact_binding"]["native_kicad_erc"],
+                        "schema_version": 1,
+                    },
+                },
+            },
+            "v3 request with v3 binding": {
+                **request,
+                "schema_version": 3,
+            },
+        }
+        for name, malformed in cases.items():
+            with self.subTest(case=name), self.assertRaises(ReviewError):
+                review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_missing_v4_binding_or_native_identity(self):
+        request, _response = self._bound_review_v4_fixture()
+        cases = {
+            "missing artifact binding": {key: value for key, value in request.items()
+                                         if key != "artifact_binding"},
+            "missing native identity": {
+                **request,
+                "artifact_binding": {
+                    key: value
+                    for key, value in request["artifact_binding"].items()
+                    if key != "native_kicad_erc"
+                },
+            },
+        }
+        for name, malformed in cases.items():
+            with self.subTest(case=name), self.assertRaises(ReviewError):
+                review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_unknown_v4_native_fields(self):
+        request, _response = self._bound_review_v4_fixture()
+        malformed = json.loads(json.dumps(request))
+        malformed["artifact_binding"]["native_kicad_erc"]["policy_sha256"] = "3" * 64
+        with self.assertRaises(ReviewError):
+            review_schematic_with_llm(malformed, lambda _prompt: "{}")
+
+    def test_schematic_review_adapter_rejects_v4_native_hash_and_size_violations(self):
+        request, _response = self._bound_review_v4_fixture()
+        cases = {
+            "noncanonical report hash": {
+                "report": {"bytes": 512, "sha256": "A" * 64},
+            },
+            "oversize report": {
+                "report": {
+                    "bytes": 32 * 1024 * 1024 + 1,
+                    "sha256": "1" * 64,
+                },
+            },
+            "boolean report bytes": {
+                "report": {"bytes": False, "sha256": "1" * 64},
+            },
+            "noncanonical run hash": {"run_sha256": "B" * 64},
+        }
+        for name, updates in cases.items():
+            with self.subTest(case=name):
+                malformed = json.loads(json.dumps(request))
+                native = malformed["artifact_binding"]["native_kicad_erc"]
+                native.update(updates)
+                with self.assertRaises(ReviewError):
+                    review_schematic_with_llm(malformed, lambda _prompt: "{}")
 
     def test_schematic_review_adapter_rejects_v1_artifact_binding_presence(self):
         request, _response = self._managed_review_fixture()
