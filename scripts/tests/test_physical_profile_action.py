@@ -79,7 +79,7 @@ class PhysicalProfileActionTests(unittest.TestCase):
                     "GITHUB_STEP_SUMMARY": str(output_dir / "summary"),
                     "PCBEX_BINARY": str(fake_binary),
                     "PCBEX_BOARD": "board.kicad_pcb",
-                    "PCBEX_OUTPUT_DIR": str(output_dir / "artifacts"),
+                    "PCBEX_OUTPUT_DIR": f"{output_dir.name}/artifacts",
                     "PCBEX_PHYSICAL_PROFILE": "physical-profile.json",
                     "PCBEX_TEST_ARGUMENTS": str(output_dir / "arguments"),
                 }
@@ -90,6 +90,7 @@ class PhysicalProfileActionTests(unittest.TestCase):
             forwarded_environment = environment()
             forwarded = subprocess.run(
                 ["bash", str(ANALYSIS_SCRIPT)],
+                cwd=directory,
                 env=forwarded_environment,
                 check=False,
                 capture_output=True,
@@ -104,6 +105,7 @@ class PhysicalProfileActionTests(unittest.TestCase):
 
             conflict = subprocess.run(
                 ["bash", str(ANALYSIS_SCRIPT)],
+                cwd=directory,
                 env=environment(fab="jlcpcb-2layer"),
                 check=False,
                 capture_output=True,
