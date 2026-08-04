@@ -131,6 +131,7 @@ auditable release.
 | v1.418.0 | MCP deterministic pipeline runner parity | Expose the v1.417 closed runner through synchronous MCP and optional Tasks, retain rejected reports, and return a digest-verified bounded summary without embedding a potentially 128 MiB report in the 16 MiB MCP frame |
 | v1.419.0 | Composite-Action deterministic pipeline runner parity | Opt in the root Action with a closed plan, retain a fixed deterministic report and seven revalidated outputs, and publish valid rejection evidence before the optional final approval failure |
 | v1.420.0 | Bounded supplier inventory snapshot ingestion | Fetch one closed HTTPS catalog feed under deadline, byte, secret, and no-clobber bounds, then bind the exact response to a replayable local snapshot and receipt while selection stays offline |
+| v1.421.0 | Catalog-to-generation provenance | Bind one retained supplier fetch receipt and normalized snapshot to the recomputed catalog selection, exact circuit-generation bundle bytes, and generated SKiDL in a closed replay-verifiable sidecar without adding network access or changing generation bundle v2 |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -176,7 +177,7 @@ contract.  Hierarchy, buses,
 multi-unit/nested handoffs, geometry, routing, DRC, and DFM remain outside it,
 and existing pipeline v1/v2 phases are unchanged.
 
-The current v1.420.0 release adds one explicit network pre-step before catalog
+The v1.420.0 release added one explicit network pre-step before catalog
 selection. It fetches a closed `catalog-snapshot-v1` document from a caller-
 selected HTTPS endpoint, disables redirects, bounds the complete deadline and
 decoded response, sources an optional bearer token only from a named
@@ -187,3 +188,12 @@ deterministic pipeline remain network-free and consume only retained local
 evidence. Supplier-native search/SDK adapters, autonomous substitution,
 reservation, purchase, datasheet truth, and qualification remain later
 boundaries.
+
+The current v1.421.0 milestone closes the evidence gap between that explicit
+fetch and offline circuit generation. An opt-in, closed provenance sidecar
+revalidates the retained fetch receipt and normalized snapshot, reconstructs
+and recomputes the catalog selection receipt embedded in generation bundle v2,
+and binds the exact published bundle and SKiDL bytes. Existing generation
+invocations and bundle bytes remain compatible when the provenance inputs are
+not supplied. The bridge performs no fetch, supplier-native translation,
+substitution, reservation, purchase, datasheet validation, or fabrication.

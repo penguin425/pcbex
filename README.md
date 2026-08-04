@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.420.0
+    uses: penguin425/pcbex@v1.421.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2155,7 +2155,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.420.0` step:
+# Add these fields to a `penguin425/pcbex@v1.421.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -2938,10 +2938,11 @@ snapshot and receipt contracts can be emitted independently:
 PYTHONPATH=agent/src python3 -m pcbex_agent catalog-snapshot-schema
 PYTHONPATH=agent/src python3 -m pcbex_agent catalog-selection-receipt-schema
 PYTHONPATH=agent/src python3 -m pcbex_agent catalog-fetch-receipt-schema
+PYTHONPATH=agent/src python3 -m pcbex_agent catalog-generation-provenance-schema
 ```
 
-Version 1.420 can acquire that same closed snapshot through one explicit,
-bounded HTTPS pre-step:
+Version 1.420 added acquisition of that same closed snapshot through one
+explicit, bounded HTTPS pre-step:
 
 ```sh
 PYTHONPATH=agent/src python3 -m pcbex_agent fetch-catalog-snapshot \
@@ -2964,6 +2965,29 @@ bounded resolver process.
 Selection and circuit generation never fetch implicitly and remain offline and
 replayable. Supplier search, substitution, reservation, purchasing, datasheet
 truth, and qualification are not performed.
+
+Version 1.421 can bind that retained fetch evidence to the exact offline
+selection and generation artifacts without changing generation bundle v2:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
+  examples/circuit-requirements.txt \
+  --pcbex target/release/pcbex \
+  --catalog-snapshot build/catalog-snapshot.json \
+  --catalog-fetch-receipt build/catalog-fetch-receipt.json \
+  --catalog-provenance-output build/catalog-generation-provenance.json \
+  --output build/circuit-generation.json \
+  --skidl-output build/circuit.py \
+  --provider-command ./structured-circuit-provider
+```
+
+The receipt/provenance flags are an all-or-nothing pair. Before the provider
+starts, pcbex revalidates the normalized snapshot against the fetch receipt and
+fixes catalog evaluation to its fetch timestamp. The closed sidecar then
+recomputes the embedded selection receipt and binds the exact bundle and SKiDL
+bytes. It contains no token or local path, performs no network request, and is
+published last after all distinct no-clobber destinations are preflighted.
+One-byte changes in any retained input fail replay validation.
 
 `--allow-out-of-stock`, `--require-basic`, and
 `--allow-footprint-fallback` are explicit snapshot policies; footprint-only
@@ -3091,7 +3115,7 @@ Minimal Action opt-in:
 
 ```yaml
 - id: deterministic-pipeline
-  uses: penguin425/pcbex@v1.420.0
+  uses: penguin425/pcbex@v1.421.0
   with:
     board: hardware/controller.kicad_pcb
     deterministic-pipeline-plan: hardware/pipeline-plan.json
@@ -4390,7 +4414,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.420.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.421.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

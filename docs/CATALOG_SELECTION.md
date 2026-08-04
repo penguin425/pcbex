@@ -133,6 +133,60 @@ Supplier-native API mapping, search, autonomous substitution, reservation,
 purchase, datasheet validation, and supplier qualification remain outside the
 contract.
 
+## Fetch-to-generation provenance
+
+v1.421 adds an opt-in bridge from the retained v1.420 fetch evidence to the
+existing offline selection and circuit-generation artifacts. It does not fetch
+or refresh anything. Supply the exact normalized snapshot and its fetch receipt
+when generating the circuit, and request a distinct provenance destination:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  catalog-generation-provenance-schema \
+  --output build/catalog-generation-provenance-v1.schema.json
+
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
+  requirements.txt \
+  --pcbex target/release/pcbex \
+  --catalog-snapshot build/catalog-snapshot.json \
+  --catalog-fetch-receipt build/catalog-fetch-receipt.json \
+  --catalog-provenance-output build/catalog-generation-provenance.json \
+  --output build/circuit-generation.json \
+  --skidl-output build/circuit.py \
+  --provider-command ./structured-circuit-provider
+```
+
+`--catalog-fetch-receipt` and `--catalog-provenance-output` form one required
+pair and also require `--catalog-snapshot`. Before the provider or native
+checker starts, the CLI stable-reads the receipt and normalized snapshot,
+rejects duplicate/non-finite JSON, recomputes the fetch binding, and fixes
+selection evaluation to the receipt's fetch timestamp. Existing invocations
+without this flag pair keep the same generation-v2 contract and behavior.
+
+The closed `catalog-generation-provenance-v1` sidecar contains only the schema
+and adapter IDs, provider, credential-free endpoint identity, evaluation time,
+and SHA-256 values for:
+
+- the exact retained fetch-receipt bytes and normalized-snapshot bytes;
+- the normalized catalog and embedded catalog-selection receipt;
+- the reconstructed pre-selection and final resolved circuit specs; and
+- the exact published generation-bundle and generated-SKiDL bytes.
+
+The builder and `validate_catalog_generation_provenance` parse all JSON with
+closed fields and fixed byte limits, revalidate the fetch receipt and snapshot,
+reconstruct `assigned` MPN fields as null in the pre-selection spec, recompute
+the complete selection under its recorded policy, recheck the final bundle,
+approval history, native check, and SKiDL digest, then compare every sidecar
+field. A one-byte change in any retained artifact fails closed. Paths, bearer
+tokens, provider output, and untrusted error text are not copied into the
+sidecar.
+
+All three output paths are preflighted as distinct, bounded, link-safe,
+no-clobber destinations before provider execution. Each file is published
+atomically; the provenance sidecar is published last. A late race on a later
+destination does not delete an already-published valid bundle or SKiDL file.
+This is per-file atomic publication, not a filesystem transaction.
+
 ## Selection and receipt
 
 `select_catalog_parts` first verifies every prefilled MPN, including exact
@@ -193,9 +247,11 @@ when no positive catalog-text match exists. Fallback is opt-in and is recorded
 in the receipt policy; it is never an implicit guess. These policy options
 require `--catalog-snapshot` and are rejected when no snapshot is supplied.
 
-`catalog-snapshot-schema`, `catalog-selection-receipt-schema`, and
-`catalog-fetch-receipt-schema` print to stdout when `--output` is omitted. All
-destination writes follow the agent's no-clobber and bounded-I/O policy.
+`catalog-snapshot-schema`, `catalog-selection-receipt-schema`,
+`catalog-fetch-receipt-schema`, and
+`catalog-generation-provenance-schema` print to stdout when `--output` is
+omitted. All destination writes follow the agent's no-clobber and bounded-I/O
+policy.
 
 ## Two Rust review gates
 
