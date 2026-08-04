@@ -664,6 +664,11 @@
     {
       "id": "standalone-native-kicad-erc-action-gate",
       "release": "v1.427.0",
+      "status": "released"
+    },
+    {
+      "id": "boardless-native-kicad-erc-action",
+      "release": "v1.428.0",
       "status": "current"
     }
   ]

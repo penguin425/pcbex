@@ -47,7 +47,7 @@ class NativeKicadErcSummaryTests(unittest.TestCase):
         report: dict[str, object] = {
             "schema_version": 1,
             "engine": "pcbex",
-            "engine_version": "1.427.0-test",
+            "engine_version": "1.428.0-test",
             "kicad_version": "10.0.0-test",
             "source": {"bytes": schematic.stat().st_size, "sha256": cls._sha(schematic.read_bytes())},
             "invocation": {
@@ -86,7 +86,7 @@ class NativeKicadErcSummaryTests(unittest.TestCase):
         report: dict[str, object] = {
             "schema_version": 2,
             "engine": "pcbex",
-            "engine_version": "1.427.0-test",
+            "engine_version": "1.428.0-test",
             "kicad_version": "10.0.0-test",
             "source": {"bytes": len(schematic.read_bytes()), "sha256": cls._sha(schematic.read_bytes())},
             "invocation": {

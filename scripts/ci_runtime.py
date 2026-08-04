@@ -15,6 +15,7 @@ import errno
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 import time
@@ -48,6 +49,7 @@ DEFAULT_FILE_BYTES = 128 * MIB
 DEFAULT_TREE_BYTES = 512 * MIB
 DEFAULT_STDOUT_BYTES = 16 * MIB
 DEFAULT_STDERR_BYTES = 4 * MIB
+PORTABLE_OUTPUT_COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 class ExecutionBoundaryError(RuntimeError):
@@ -343,6 +345,52 @@ def validate_relative_output_root(
     return workspace / relative
 
 
+def validate_literal_relative_output_root(
+    value: str | os.PathLike[str], *, base: Path | None = None
+) -> Path:
+    """Validate a glob-safe literal output root for artifact publication."""
+
+    path = validate_relative_output_root(value, base=base)
+    raw_components = os.fspath(value).split("/")
+    if any(PORTABLE_OUTPUT_COMPONENT.fullmatch(part) is None for part in raw_components):
+        raise ExecutionBoundaryError(
+            "literal output root components may contain only ASCII letters, digits, dot, underscore, and hyphen"
+        )
+    return path
+
+
+def validate_relative_input_file(
+    value: str | os.PathLike[str], *, base: Path | None = None
+) -> Path:
+    """Validate one caller-workspace-relative regular input without links."""
+
+    raw = os.fspath(value)
+    if not raw or "\x00" in raw:
+        raise ExecutionBoundaryError("input path must not be empty or contain NUL")
+    if any(ord(character) < 32 or ord(character) == 127 for character in raw):
+        raise ExecutionBoundaryError("input path must not contain control characters")
+    if "\\" in raw or ":" in raw:
+        raise ExecutionBoundaryError("input path must use portable relative path syntax")
+    raw_components = raw.split("/")
+    if any(part in ("", ".", "..") for part in raw_components):
+        raise ExecutionBoundaryError("input path must not contain dot traversal")
+    relative = Path(raw)
+    if relative.is_absolute() or relative in (Path("."), Path("..")):
+        raise ExecutionBoundaryError("input path must be relative to the workspace")
+    if any(part in ("", ".", "..") for part in relative.parts):
+        raise ExecutionBoundaryError("input path must not contain dot traversal")
+
+    workspace = Path.cwd() if base is None else Path(base)
+    workspace_metadata = _inspect_path_without_links(workspace)
+    if not stat.S_ISDIR(workspace_metadata.st_mode):
+        raise ExecutionBoundaryError(f"input path base is not a directory: {workspace}")
+    path = workspace / relative
+    metadata = _inspect_path_without_links(path)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ExecutionBoundaryError(f"input path is not a regular file: {path}")
+    return path
+
+
 def scan_tree(
     root: str | os.PathLike[str],
     *,
@@ -454,6 +502,16 @@ def _parser() -> argparse.ArgumentParser:
     scan.add_argument("--max-depth", type=_positive_int, default=DEFAULT_TREE_DEPTH)
     scan.add_argument("--max-file-bytes", type=_positive_int, default=DEFAULT_FILE_BYTES)
     scan.add_argument("--max-total-bytes", type=_positive_int, default=DEFAULT_TREE_BYTES)
+
+    validate_input = subparsers.add_parser(
+        "validate-input", help="validate one workspace-relative regular input"
+    )
+    validate_input.add_argument("--path", required=True)
+
+    validate_output = subparsers.add_parser(
+        "validate-output", help="validate one literal workspace-relative output root"
+    )
+    validate_output.add_argument("--output-root", required=True)
     return parser
 
 
@@ -471,6 +529,14 @@ def _scan_cli(args: argparse.Namespace) -> TreeUsage:
 def main() -> int:
     args = _parser().parse_args()
     try:
+        if args.operation == "validate-input":
+            validate_relative_input_file(args.path)
+            print("workspace-relative input passed")
+            return 0
+        if args.operation == "validate-output":
+            validate_literal_relative_output_root(args.output_root)
+            print("literal workspace-relative output root passed")
+            return 0
         if args.operation == "scan":
             usage = _scan_cli(args)
             print(
