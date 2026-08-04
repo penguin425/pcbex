@@ -639,6 +639,11 @@
     {
       "id": "kicad-schematic-writer-mcp-action-parity",
       "release": "v1.423.0",
+      "status": "released"
+    },
+    {
+      "id": "exact-ai-review-artifact-binding",
+      "release": "v1.424.0",
       "status": "current"
     }
   ]

@@ -17,9 +17,10 @@ use crate::physical_profile::MAX_PHYSICAL_PROFILE_BYTES;
 use crate::pipeline::{PipelineGateReport, PipelineInputs, verify_pipeline};
 use anyhow::{Context, Result, anyhow, bail};
 use pcbex_kicad::{
-    CIRCUIT_KICAD_BOARD_BINDING_MAX_BOARD_BYTES, CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES,
-    CircuitKicadBoardBindingReport, ElectricalPolicy,
-    circuit_kicad_board_binding_report_json_schema, parse_electrical_policy,
+    AiReviewArtifactBinding, AiReviewRequest, CIRCUIT_KICAD_BOARD_BINDING_MAX_BOARD_BYTES,
+    CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES, CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES,
+    CircuitKicadBoardBindingReport, DeterministicPipelineIdentity, ElectricalPolicy,
+    ExactArtifactIdentity, circuit_kicad_board_binding_report_json_schema, parse_electrical_policy,
     verify_circuit_kicad_board_binding,
 };
 use serde::{
@@ -1051,6 +1052,158 @@ pub(crate) fn run_deterministic_pipeline(
         bail!("deterministic pipeline report exceeds its byte limit");
     }
     Ok(report)
+}
+
+/// Re-run a deterministic pipeline and bind an AI review request to the exact
+/// generated schematic, plan source, and retained report bytes.
+///
+/// The retained report is not trusted merely because it contains internally
+/// consistent digests: the plan is parsed and executed again, the freshly
+/// rendered report must match byte-for-byte, and both raw schematic evidence
+/// paths inside that report must identify the separately supplied generated
+/// schematic. This prevents mixing independently valid artifacts from
+/// different runs.
+pub(crate) fn verify_ai_review_artifact_binding(
+    request: &AiReviewRequest,
+    generated_schematic: &Path,
+    plan_path: &Path,
+    report_path: &Path,
+) -> Result<AiReviewArtifactBinding> {
+    let schematic_bytes = fs::read_with_limit(
+        generated_schematic,
+        CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES as u64,
+    )
+    .with_context(|| {
+        format!(
+            "reading generated schematic for AI review binding {}",
+            generated_schematic.display()
+        )
+    })?;
+    if schematic_bytes.is_empty() {
+        bail!("generated schematic for AI review binding must not be empty");
+    }
+    let schematic_source = std::str::from_utf8(&schematic_bytes)
+        .context("decoding generated schematic for AI review binding as UTF-8")?;
+    let generated_document = pcbex_kicad::import_schematic(schematic_source)
+        .map_err(|error| anyhow!(error))
+        .context("importing generated schematic for AI review binding")?;
+    if generated_document != request.schematic {
+        bail!("generated schematic does not match the AI review request schematic");
+    }
+    let generated_schematic_identity = ExactArtifactIdentity {
+        bytes: schematic_bytes.len() as u64,
+        sha256: digest_hex(&schematic_bytes),
+    };
+
+    let plan = load_deterministic_pipeline_plan(plan_path)?;
+    if plan.schematic.bytes != generated_schematic_identity.bytes
+        || plan.schematic.sha256 != generated_schematic_identity.sha256
+    {
+        bail!("generated schematic identity does not match the deterministic pipeline plan");
+    }
+
+    let report = run_deterministic_pipeline(&plan)?;
+    if !report.approved {
+        bail!("deterministic pipeline report is not approved");
+    }
+    let rendered = format!("{}\n", serde_json::to_string(&report)?);
+    let retained_report =
+        fs::read_with_limit(report_path, fs::MAX_FILE_BYTES).with_context(|| {
+            format!(
+                "reading deterministic pipeline report for AI review binding {}",
+                report_path.display()
+            )
+        })?;
+    if retained_report != rendered.as_bytes() {
+        bail!("retained deterministic pipeline report does not match a fresh run of its plan");
+    }
+
+    let mut schematic_evidence = report
+        .input_evidence
+        .iter()
+        .filter(|evidence| evidence.role == "schematic");
+    let evidence = schematic_evidence
+        .next()
+        .ok_or_else(|| anyhow!("deterministic pipeline report has no schematic evidence"))?;
+    if schematic_evidence.next().is_some() {
+        bail!("deterministic pipeline report has duplicate schematic evidence");
+    }
+    if evidence.bytes != generated_schematic_identity.bytes
+        || evidence.sha256 != generated_schematic_identity.sha256
+    {
+        bail!("deterministic pipeline schematic evidence does not match the generated schematic");
+    }
+
+    let handoff = &report
+        .binding
+        .as_ref()
+        .ok_or_else(|| anyhow!("approved deterministic pipeline report has no binding report"))?
+        .circuit_kicad_handoff;
+    if handoff.schematic_source_bytes != generated_schematic_identity.bytes
+        || handoff.schematic_source_sha256 != generated_schematic_identity.sha256
+    {
+        bail!("deterministic handoff evidence does not match the generated schematic");
+    }
+    if plan.electrical_review.sha256 != request.electrical_review_sha256 {
+        bail!(
+            "AI review electrical-review identity does not match the deterministic pipeline plan"
+        );
+    }
+    if handoff.schematic_review != request.electrical_review {
+        bail!("AI review electrical result does not match the deterministic pipeline handoff");
+    }
+
+    let confirmed_schematic = fs::read_with_limit(
+        generated_schematic,
+        CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES as u64,
+    )
+    .with_context(|| {
+        format!(
+            "re-reading generated schematic for AI review binding {}",
+            generated_schematic.display()
+        )
+    })?;
+    if confirmed_schematic != schematic_bytes {
+        bail!("generated schematic changed during AI review artifact validation");
+    }
+    let confirmed_plan = fs::read_with_limit(plan_path, MAX_PLAN_BYTES).with_context(|| {
+        format!(
+            "re-reading deterministic pipeline plan for AI review binding {}",
+            plan_path.display()
+        )
+    })?;
+    if confirmed_plan.len() as u64 != report.plan_source_bytes
+        || digest_hex(&confirmed_plan) != report.plan_source_sha256
+    {
+        bail!("deterministic pipeline plan changed during AI review artifact validation");
+    }
+    let confirmed_report =
+        fs::read_with_limit(report_path, fs::MAX_FILE_BYTES).with_context(|| {
+            format!(
+                "re-reading deterministic pipeline report for AI review binding {}",
+                report_path.display()
+            )
+        })?;
+    if confirmed_report != retained_report {
+        bail!("deterministic pipeline report changed during AI review artifact validation");
+    }
+
+    Ok(AiReviewArtifactBinding {
+        schema_version: 1,
+        generated_schematic: generated_schematic_identity,
+        pipeline: DeterministicPipelineIdentity {
+            plan_source: ExactArtifactIdentity {
+                bytes: report.plan_source_bytes,
+                sha256: report.plan_source_sha256,
+            },
+            plan_sha256: report.plan_sha256,
+            report: ExactArtifactIdentity {
+                bytes: retained_report.len() as u64,
+                sha256: digest_hex(&retained_report),
+            },
+            run_sha256: report.run_sha256,
+        },
+    })
 }
 
 fn stage_target(root: &Path, role: &'static str, original: &Path) -> Result<PathBuf> {

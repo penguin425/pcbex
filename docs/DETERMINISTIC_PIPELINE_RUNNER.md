@@ -96,11 +96,33 @@ decision have been revalidated. A rejected valid report is therefore retained
 and exposed before a required-approval failure; stale, aliased, symlinked,
 malformed, or digest-mismatched output is never attributed to the Action.
 
-This Action integration adds no implicit file discovery, design mutation,
-repair, AI/network/factory call, package submission, or ordering behavior. The
+The v1.419 runner integration by itself adds no implicit file discovery,
+design mutation, repair, AI/network/factory call, package submission, or
+ordering behavior. The
 plan's closed relative-path descriptors, firmware eight-file contract, staged
 basenames, per-input limits, aggregate limits, cross-binding checks, and
 no-clobber output rules remain authoritative.
+
+## AI approval binding
+
+Version 1.424 lets AI review request schema v2 cover one exact approved runner
+execution. The binding records the raw plan byte/SHA identity, normalized
+`plan_sha256`, retained report byte/SHA identity, `run_sha256`, and the exact
+generated schematic bytes. It does not record filesystem paths.
+
+Preparation, signing, single-approval verification, and quorum verification
+all parse and execute the plan again. The retained report must equal the fresh
+compact serialization plus its final newline byte-for-byte, and both the
+runner's schematic input evidence and nested circuit handoff must equal the
+separately supplied generated schematic. The schematic is also imported and
+must equal the request's reviewed semantic document. Final bounded rereads of
+the schematic, raw plan, and retained report detect changes during validation.
+The AI request's raw electrical review digest and recomputed review must also
+match the plan and handoff. This rejects a fabricated report and any cross-run
+mixture of otherwise valid artifacts.
+
+The complete request/CLI/Action/MCP contract is documented in
+[AI review artifact binding](AI_REVIEW_ARTIFACT_BINDING.md).
 
 ## Closed input plan
 

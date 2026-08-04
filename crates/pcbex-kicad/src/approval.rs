@@ -1,17 +1,26 @@
 use super::{
-    ElectricalPolicy, ElectricalReview, SchematicDocument, SimulationEvidence, check_schematic,
-    electrical_policy_json_schema, electrical_review_json_schema, schematic_json_schema,
-    simulation_evidence_json_schema, validate_simulation_evidence,
+    CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES, ElectricalPolicy, ElectricalReview,
+    SchematicDocument, SimulationEvidence, check_schematic, electrical_policy_json_schema,
+    electrical_review_json_schema, schematic_json_schema, simulation_evidence_json_schema,
+    validate_simulation_evidence,
 };
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use serde::de::{Error as _, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::borrow::Borrow;
 use std::collections::BTreeSet;
+use std::fmt;
 
 const MAX_REQUIREMENTS: usize = 1_000;
 const MAX_RISKS: usize = 1_000;
 const MAX_EVIDENCE_REFS: usize = 10_000;
+const AI_REVIEW_PLAN_SOURCE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+// The deterministic runner reserves one byte while serializing its report,
+// then publishes one final newline; the retained report is therefore bounded
+// by the full shared 128 MiB limit.
+const AI_REVIEW_REPORT_MAX_BYTES: u64 = 128 * 1024 * 1024;
 const SIGNATURE_DOMAIN: &str = "pcbex-ai-schematic-approval-v1";
 const SESSION_SIGNATURE_DOMAIN: &str = "pcbex-ai-schematic-approval-session-v2";
 
@@ -28,7 +37,38 @@ pub struct AiApprovalPolicy {
     pub require_simulation_evidence: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Exact bytes and the digest of one retained artifact.
+///
+/// Paths are intentionally not part of this identity.  A path is an
+/// operational location, while the bytes and digest are what the approval
+/// must cryptographically bind.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExactArtifactIdentity {
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+/// The deterministic pipeline inputs and retained report bound to a review.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeterministicPipelineIdentity {
+    pub plan_source: ExactArtifactIdentity,
+    pub plan_sha256: String,
+    pub report: ExactArtifactIdentity,
+    pub run_sha256: String,
+}
+
+/// Artifact identities covered by an AI schematic review request.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AiReviewArtifactBinding {
+    pub schema_version: u32,
+    pub generated_schematic: ExactArtifactIdentity,
+    pub pipeline: DeterministicPipelineIdentity,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AiReviewRequest {
     pub schema_version: u32,
@@ -41,6 +81,105 @@ pub struct AiReviewRequest {
     pub requirements: Vec<AiRequirement>,
     pub evidence_ids: Vec<String>,
     pub approval_policy: AiApprovalPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_binding: Option<AiReviewArtifactBinding>,
+}
+
+#[derive(Default)]
+enum ArtifactBindingField {
+    #[default]
+    Missing,
+    Null,
+    Binding(AiReviewArtifactBinding),
+}
+
+impl<'de> Deserialize<'de> for ArtifactBindingField {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ArtifactBindingFieldVisitor;
+
+        impl<'de> Visitor<'de> for ArtifactBindingFieldVisitor {
+            type Value = ArtifactBindingField;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an AI review artifact binding object")
+            }
+
+            fn visit_none<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(ArtifactBindingField::Null)
+            }
+
+            fn visit_unit<E>(self) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(ArtifactBindingField::Null)
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                AiReviewArtifactBinding::deserialize(deserializer)
+                    .map(ArtifactBindingField::Binding)
+            }
+        }
+
+        deserializer.deserialize_option(ArtifactBindingFieldVisitor)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AiReviewRequestWire {
+    schema_version: u32,
+    request_sha256: String,
+    schematic: SchematicDocument,
+    electrical_policy: ElectricalPolicy,
+    electrical_review: ElectricalReview,
+    electrical_review_sha256: String,
+    simulation_evidence: Vec<SimulationEvidence>,
+    requirements: Vec<AiRequirement>,
+    evidence_ids: Vec<String>,
+    approval_policy: AiApprovalPolicy,
+    #[serde(default)]
+    artifact_binding: ArtifactBindingField,
+}
+
+impl<'de> Deserialize<'de> for AiReviewRequest {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = AiReviewRequestWire::deserialize(deserializer)?;
+        let artifact_binding = match wire.artifact_binding {
+            ArtifactBindingField::Missing => None,
+            ArtifactBindingField::Binding(binding) => Some(binding),
+            ArtifactBindingField::Null => {
+                return Err(D::Error::custom(
+                    "AI review request artifact_binding must be an object when present",
+                ));
+            }
+        };
+        Ok(Self {
+            schema_version: wire.schema_version,
+            request_sha256: wire.request_sha256,
+            schematic: wire.schematic,
+            electrical_policy: wire.electrical_policy,
+            electrical_review: wire.electrical_review,
+            electrical_review_sha256: wire.electrical_review_sha256,
+            simulation_evidence: wire.simulation_evidence,
+            requirements: wire.requirements,
+            evidence_ids: wire.evidence_ids,
+            approval_policy: wire.approval_policy,
+            artifact_binding,
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -204,9 +343,37 @@ pub fn build_ai_review_request(
         approval_policy: AiApprovalPolicy {
             require_simulation_evidence,
         },
+        artifact_binding: None,
     };
     request.request_sha256 = request_body_sha256(&request)?;
     Ok(request)
+}
+
+/// Add an exact generated-schematic and deterministic-pipeline binding to a
+/// valid v1 request, producing a v2 request with a fresh body digest.
+///
+/// The generic `Borrow` parameter accepts either an owned binding or a shared
+/// reference while always cloning it into the returned request.
+pub fn bind_ai_review_request<B>(
+    request: &AiReviewRequest,
+    binding: B,
+) -> Result<AiReviewRequest, String>
+where
+    B: Borrow<AiReviewArtifactBinding>,
+{
+    if request.schema_version != 1 || request.artifact_binding.is_some() {
+        return Err("only an unbound AI review request schema version 1 can be bound".into());
+    }
+    ai_review_request_sha256(request)?;
+    let binding = binding.borrow();
+    validate_artifact_binding(binding)?;
+
+    let mut bound = request.clone();
+    bound.schema_version = 2;
+    bound.artifact_binding = Some(binding.clone());
+    bound.request_sha256.clear();
+    bound.request_sha256 = request_body_sha256(&bound)?;
+    Ok(bound)
 }
 
 pub fn parse_ai_review_response(source: &str) -> Result<AiReviewResponse, String> {
@@ -223,11 +390,24 @@ pub fn parse_ai_review_response(source: &str) -> Result<AiReviewResponse, String
 }
 
 pub fn ai_review_request_sha256(request: &AiReviewRequest) -> Result<String, String> {
-    if request.schema_version != 1 {
-        return Err(format!(
-            "unsupported AI review request schema version {}",
-            request.schema_version
-        ));
+    match request.schema_version {
+        1 if request.artifact_binding.is_some() => {
+            return Err(
+                "AI review request schema version 1 must not contain an artifact binding".into(),
+            );
+        }
+        1 => {}
+        2 if request.artifact_binding.is_none() => {
+            return Err("AI review request schema version 2 requires an artifact binding".into());
+        }
+        2 => {
+            validate_artifact_binding(request.artifact_binding.as_ref().unwrap())?;
+        }
+        version => {
+            return Err(format!(
+                "unsupported AI review request schema version {version}"
+            ));
+        }
     }
     validate_request_contents(request)?;
     let expected = request_body_sha256(request)?;
@@ -235,6 +415,49 @@ pub fn ai_review_request_sha256(request: &AiReviewRequest) -> Result<String, Str
         return Err("AI review request SHA-256 does not match its normalized content".into());
     }
     Ok(expected)
+}
+
+fn validate_artifact_identity(
+    identity: &ExactArtifactIdentity,
+    description: &str,
+    maximum_bytes: u64,
+) -> Result<(), String> {
+    if identity.bytes == 0 {
+        return Err(format!("{description} byte count must be positive"));
+    }
+    if identity.bytes > maximum_bytes {
+        return Err(format!(
+            "{description} byte count exceeds the {maximum_bytes}-byte limit"
+        ));
+    }
+    validate_sha256(&identity.sha256, &format!("{description} SHA-256"))
+}
+
+fn validate_artifact_binding(binding: &AiReviewArtifactBinding) -> Result<(), String> {
+    if binding.schema_version != 1 {
+        return Err(format!(
+            "unsupported AI review artifact binding schema version {}",
+            binding.schema_version
+        ));
+    }
+    validate_artifact_identity(
+        &binding.generated_schematic,
+        "generated schematic artifact",
+        CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES as u64,
+    )?;
+    validate_artifact_identity(
+        &binding.pipeline.plan_source,
+        "pipeline plan source",
+        AI_REVIEW_PLAN_SOURCE_MAX_BYTES,
+    )?;
+    validate_sha256(&binding.pipeline.plan_sha256, "pipeline plan SHA-256")?;
+    validate_artifact_identity(
+        &binding.pipeline.report,
+        "pipeline report",
+        AI_REVIEW_REPORT_MAX_BYTES,
+    )?;
+    validate_sha256(&binding.pipeline.run_sha256, "pipeline run SHA-256")?;
+    Ok(())
 }
 
 fn validate_request_contents(request: &AiReviewRequest) -> Result<(), String> {
@@ -770,7 +993,7 @@ fn string_schema() -> Value {
 pub fn ai_review_request_json_schema() -> Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://github.com/penguin425/pcbex/schemas/ai-review-request-v1.json",
+        "$id": "https://github.com/penguin425/pcbex/schemas/ai-review-request-v2.json",
         "title": "pcbex AI schematic review request",
         "type": "object",
         "additionalProperties": false,
@@ -781,7 +1004,7 @@ pub fn ai_review_request_json_schema() -> Value {
             "evidence_ids", "approval_policy"
         ],
         "properties": {
-            "schema_version": {"const": 1},
+            "schema_version": {"enum": [1, 2]},
             "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
             "schematic": schematic_json_schema(),
             "electrical_policy": electrical_policy_json_schema(),
@@ -803,8 +1026,19 @@ pub fn ai_review_request_json_schema() -> Value {
                 "items": string_schema(),
                 "uniqueItems": true
             },
-            "approval_policy": {"$ref": "#/$defs/policy"}
+            "approval_policy": {"$ref": "#/$defs/policy"},
+            "artifact_binding": {"$ref": "#/$defs/artifact_binding"}
         },
+        "allOf": [
+            {
+                "if": {"properties": {"schema_version": {"const": 1}}},
+                "then": {"not": {"required": ["artifact_binding"]}}
+            },
+            {
+                "if": {"properties": {"schema_version": {"const": 2}}},
+                "then": {"required": ["artifact_binding"]}
+            }
+        ],
         "$defs": {
             "requirement": {
                 "type": "object",
@@ -817,6 +1051,57 @@ pub fn ai_review_request_json_schema() -> Value {
                 "additionalProperties": false,
                 "required": ["require_simulation_evidence"],
                 "properties": {"require_simulation_evidence": {"type": "boolean"}}
+            },
+            "exact_artifact_identity": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["bytes", "sha256"],
+                "properties": {
+                    "bytes": {"type": "integer", "minimum": 1},
+                    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }
+            },
+            "pipeline": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["plan_source", "plan_sha256", "report", "run_sha256"],
+                "properties": {
+                    "plan_source": {
+                        "allOf": [
+                            {"$ref": "#/$defs/exact_artifact_identity"},
+                            {"properties": {"bytes": {
+                                "maximum": AI_REVIEW_PLAN_SOURCE_MAX_BYTES
+                            }}}
+                        ]
+                    },
+                    "plan_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "report": {
+                        "allOf": [
+                            {"$ref": "#/$defs/exact_artifact_identity"},
+                            {"properties": {"bytes": {
+                                "maximum": AI_REVIEW_REPORT_MAX_BYTES
+                            }}}
+                        ]
+                    },
+                    "run_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }
+            },
+            "artifact_binding": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["schema_version", "generated_schematic", "pipeline"],
+                "properties": {
+                    "schema_version": {"const": 1},
+                    "generated_schematic": {
+                        "allOf": [
+                            {"$ref": "#/$defs/exact_artifact_identity"},
+                            {"properties": {"bytes": {
+                                "maximum": CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES
+                            }}}
+                        ]
+                    },
+                    "pipeline": {"$ref": "#/$defs/pipeline"}
+                }
             }
         }
     })
@@ -979,6 +1264,244 @@ mod tests {
             }],
             risks: Vec::new(),
         }
+    }
+
+    fn artifact_binding() -> AiReviewArtifactBinding {
+        AiReviewArtifactBinding {
+            schema_version: 1,
+            generated_schematic: ExactArtifactIdentity {
+                bytes: 101,
+                sha256: "b".repeat(64),
+            },
+            pipeline: DeterministicPipelineIdentity {
+                plan_source: ExactArtifactIdentity {
+                    bytes: 202,
+                    sha256: "c".repeat(64),
+                },
+                plan_sha256: "d".repeat(64),
+                report: ExactArtifactIdentity {
+                    bytes: 303,
+                    sha256: "e".repeat(64),
+                },
+                run_sha256: "f".repeat(64),
+            },
+        }
+    }
+
+    #[test]
+    fn v1_request_serialization_and_hash_are_unchanged_without_binding() {
+        let request = approved_request();
+        let encoded = serde_json::to_vec(&request).unwrap();
+        assert!(
+            !String::from_utf8(encoded.clone())
+                .unwrap()
+                .contains("artifact_binding")
+        );
+        assert_eq!(
+            ai_review_request_sha256(&request).unwrap(),
+            request.request_sha256
+        );
+        let reparsed: AiReviewRequest = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(reparsed, request);
+        assert_eq!(
+            ai_review_request_sha256(&reparsed).unwrap(),
+            request.request_sha256
+        );
+        assert_eq!(
+            request.request_sha256,
+            "520d9fe0e09ace52d8b6d873746195d1bff464babf12732025b182cdeb835f79"
+        );
+    }
+
+    #[test]
+    fn binds_v1_request_to_deterministic_artifact_identities() {
+        let request = approved_request();
+        let binding = artifact_binding();
+        let bound = bind_ai_review_request(&request, &binding).unwrap();
+        assert_eq!(bound.schema_version, 2);
+        assert_eq!(bound.artifact_binding, Some(binding.clone()));
+        assert_ne!(bound.request_sha256, request.request_sha256);
+        assert_eq!(
+            bound.request_sha256,
+            ai_review_request_sha256(&bound).unwrap()
+        );
+        assert!(
+            serde_json::to_string(&bound)
+                .unwrap()
+                .contains("artifact_binding")
+        );
+        assert_eq!(
+            bound,
+            bind_ai_review_request(&request, binding.clone()).unwrap()
+        );
+    }
+
+    #[test]
+    fn request_binding_presence_is_conditional_on_request_schema() {
+        let request = approved_request();
+        let binding = artifact_binding();
+
+        let mut unexpected = request.clone();
+        unexpected.artifact_binding = Some(binding.clone());
+        assert!(ai_review_request_sha256(&unexpected).is_err());
+
+        let mut missing = bind_ai_review_request(&request, &binding).unwrap();
+        missing.artifact_binding = None;
+        missing.request_sha256 = request_body_sha256(&missing).unwrap();
+        assert!(ai_review_request_sha256(&missing).is_err());
+
+        let mut unsupported = request;
+        unsupported.schema_version = 3;
+        assert!(ai_review_request_sha256(&unsupported).is_err());
+    }
+
+    #[test]
+    fn malformed_artifact_binding_and_unknown_fields_fail_closed() {
+        let request = approved_request();
+        let binding = artifact_binding();
+
+        let mut zero_bytes = binding.clone();
+        zero_bytes.generated_schematic.bytes = 0;
+        assert!(bind_ai_review_request(&request, zero_bytes).is_err());
+
+        let mut uppercase_hash = binding.clone();
+        uppercase_hash.pipeline.plan_sha256 = "A".repeat(64);
+        assert!(bind_ai_review_request(&request, uppercase_hash).is_err());
+
+        let mut bad_binding_schema = binding.clone();
+        bad_binding_schema.schema_version = 2;
+        assert!(bind_ai_review_request(&request, bad_binding_schema).is_err());
+
+        let mut unknown = serde_json::to_value(binding).unwrap();
+        unknown["pipeline"]["unknown"] = json!(true);
+        assert!(serde_json::from_value::<AiReviewArtifactBinding>(unknown).is_err());
+
+        let mut request_unknown = serde_json::to_value(request).unwrap();
+        request_unknown["artifact_binding"] = json!({
+            "schema_version": 1,
+            "generated_schematic": {
+                "bytes": 1,
+                "sha256": "a".repeat(64),
+                "unknown": true
+            },
+            "pipeline": {
+                "plan_source": {"bytes": 1, "sha256": "b".repeat(64)},
+                "plan_sha256": "c".repeat(64),
+                "report": {"bytes": 1, "sha256": "d".repeat(64)},
+                "run_sha256": "e".repeat(64)
+            }
+        });
+        request_unknown["schema_version"] = json!(2);
+        assert!(serde_json::from_value::<AiReviewRequest>(request_unknown).is_err());
+    }
+
+    #[test]
+    fn artifact_binding_size_limits_are_fail_closed_at_the_boundary() {
+        let request = approved_request();
+        let mut at_limit = artifact_binding();
+        at_limit.generated_schematic.bytes = CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES as u64;
+        at_limit.pipeline.plan_source.bytes = AI_REVIEW_PLAN_SOURCE_MAX_BYTES;
+        at_limit.pipeline.report.bytes = AI_REVIEW_REPORT_MAX_BYTES;
+        assert!(bind_ai_review_request(&request, &at_limit).is_ok());
+
+        let mut too_large = at_limit.clone();
+        too_large.generated_schematic.bytes += 1;
+        assert!(bind_ai_review_request(&request, &too_large).is_err());
+
+        let mut too_large = at_limit.clone();
+        too_large.pipeline.plan_source.bytes += 1;
+        assert!(bind_ai_review_request(&request, &too_large).is_err());
+
+        let mut too_large = at_limit;
+        too_large.pipeline.report.bytes += 1;
+        assert!(bind_ai_review_request(&request, &too_large).is_err());
+
+        let schema = ai_review_request_json_schema();
+        assert_eq!(
+            schema["$defs"]["artifact_binding"]["properties"]["generated_schematic"]["allOf"][1]["properties"]
+                ["bytes"]["maximum"],
+            json!(CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES)
+        );
+        assert_eq!(
+            schema["$defs"]["pipeline"]["properties"]["plan_source"]["allOf"][1]["properties"]["bytes"]
+                ["maximum"],
+            json!(AI_REVIEW_PLAN_SOURCE_MAX_BYTES)
+        );
+        assert_eq!(
+            schema["$defs"]["pipeline"]["properties"]["report"]["allOf"][1]["properties"]["bytes"]
+                ["maximum"],
+            json!(AI_REVIEW_REPORT_MAX_BYTES)
+        );
+    }
+
+    #[test]
+    fn explicit_null_and_duplicate_artifact_bindings_are_rejected_on_deserialization() {
+        let mut v1 = serde_json::to_value(approved_request()).unwrap();
+        v1["artifact_binding"] = Value::Null;
+        assert!(serde_json::from_value::<AiReviewRequest>(v1).is_err());
+
+        let bound = bind_ai_review_request(&approved_request(), artifact_binding()).unwrap();
+        let mut v2 = serde_json::to_value(&bound).unwrap();
+        v2["artifact_binding"] = Value::Null;
+        assert!(serde_json::from_value::<AiReviewRequest>(v2).is_err());
+
+        let source = serde_json::to_string(&bound).unwrap();
+        let duplicate = format!(
+            "{},\"artifact_binding\":{}}}",
+            source.trim_end_matches('}'),
+            serde_json::to_string(bound.artifact_binding.as_ref().unwrap()).unwrap()
+        );
+        assert!(serde_json::from_str::<AiReviewRequest>(&duplicate).is_err());
+
+        let nested_duplicate = source.replacen("\"bytes\":101", "\"bytes\":101,\"bytes\":102", 1);
+        assert!(serde_json::from_str::<AiReviewRequest>(&nested_duplicate).is_err());
+    }
+
+    #[test]
+    fn signed_approval_envelopes_cover_bound_requests_without_schema_changes() {
+        let request = bind_ai_review_request(&approved_request(), artifact_binding()).unwrap();
+        let response = response(&request);
+        let public_key = SigningKey::from_bytes(&[17; 32]).verifying_key().to_bytes();
+
+        let approval = sign_ai_review(&request, &response, "ci", &[17; 32]).unwrap();
+        assert_eq!(approval.schema_version, 1);
+        verify_signed_ai_approval(&approval, &request, &response, &public_key).unwrap();
+
+        let session = "1".repeat(64);
+        let session_approval =
+            sign_ai_review_for_session(&request, &response, &session, "ci", &[17; 32]).unwrap();
+        assert_eq!(session_approval.schema_version, 2);
+        verify_session_signed_ai_approval(
+            &session_approval,
+            &request,
+            &response,
+            &public_key,
+            &session,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn tampering_bound_artifact_identity_invalidates_request_and_signature() {
+        let request = bind_ai_review_request(&approved_request(), artifact_binding()).unwrap();
+        let response = response(&request);
+        let approval = sign_ai_review(&request, &response, "ci", &[18; 32]).unwrap();
+        let public_key = SigningKey::from_bytes(&[18; 32]).verifying_key().to_bytes();
+
+        let mut tampered = request.clone();
+        tampered
+            .artifact_binding
+            .as_mut()
+            .unwrap()
+            .generated_schematic
+            .sha256 = "0".repeat(64);
+        tampered.request_sha256 = request_body_sha256(&tampered).unwrap();
+        assert!(ai_review_request_sha256(&tampered).is_ok());
+        assert!(verify_signed_ai_approval(&approval, &tampered, &response, &public_key).is_err());
+
+        let mut forged_digest = request;
+        forged_digest.request_sha256.replace_range(0..1, "0");
+        assert!(ai_review_request_sha256(&forged_digest).is_err());
     }
 
     #[test]

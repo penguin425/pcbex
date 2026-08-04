@@ -726,6 +726,10 @@ inputs:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
     default: ""
+  ai-review-generated-schematic:
+    description: Optional generated .kicad_sch whose exact bytes are bound by a schema-v2 AI review request; requires the complete AI quorum set and deterministic-pipeline-plan.
+    required: false
+    default: ""
   ai-review-session:
     description: Optional time-bound challenge requiring session-bound v2 AI approvals.
     required: false
@@ -1337,6 +1341,33 @@ outputs:
   ai-approval-quorum-met:
     description: Whether every configured AI approval-quorum threshold passed.
     value: ${{ steps.analyze.outputs.ai-approval-quorum-met }}
+  ai-review-artifacts-verified:
+    description: Whether the AI quorum was verified against the exact generated schematic and a fresh deterministic pipeline report.
+    value: ${{ steps.analyze.outputs.ai-review-artifacts-verified }}
+  ai-review-generated-schematic-bytes:
+    description: Exact byte count of the generated schematic bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-generated-schematic-bytes }}
+  ai-review-generated-schematic-sha256:
+    description: Exact SHA-256 of the generated schematic bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-generated-schematic-sha256 }}
+  ai-review-pipeline-plan-source-bytes:
+    description: Exact byte count of the raw deterministic pipeline plan source bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-pipeline-plan-source-bytes }}
+  ai-review-pipeline-plan-source-sha256:
+    description: Exact SHA-256 of the raw deterministic pipeline plan source bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-pipeline-plan-source-sha256 }}
+  ai-review-pipeline-plan-sha256:
+    description: Normalized deterministic pipeline plan identity bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-pipeline-plan-sha256 }}
+  ai-review-pipeline-report-bytes:
+    description: Exact byte count of the fresh deterministic pipeline report bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-pipeline-report-bytes }}
+  ai-review-pipeline-report-sha256:
+    description: Exact SHA-256 of the fresh deterministic pipeline report bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-pipeline-report-sha256 }}
+  ai-review-pipeline-run-sha256:
+    description: Deterministic pipeline run identity bound by the AI review request.
+    value: ${{ steps.analyze.outputs.ai-review-pipeline-run-sha256 }}
   human-escalation:
     description: Verified dual-control human-escalation JSON path, when supplied.
     value: ${{ steps.analyze.outputs.human-escalation }}
@@ -1607,6 +1638,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_BEARER_TOKEN: ${{ inputs.policy-lifecycle-log-remote-gossip-bearer-token }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS: ${{ inputs.policy-lifecycle-log-remote-gossip-timeout-seconds }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
+        PCBEX_AI_REVIEW_GENERATED_SCHEMATIC: ${{ inputs.ai-review-generated-schematic }}
         PCBEX_AI_REVIEW_SESSION: ${{ inputs.ai-review-session }}
         PCBEX_AI_APPROVAL_FILES: ${{ inputs.ai-approval-files }}
         PCBEX_AI_RESPONSE_FILES: ${{ inputs.ai-response-files }}

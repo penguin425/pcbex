@@ -12,6 +12,11 @@ are limited to 33,554,432 bytes (32 MiB). AI review requests use the same
 32 MiB limit. The repair loop permits KiCad board candidates up to 134,217,728
 bytes (128 MiB) and DRC reports up to 32 MiB. The final allowed byte is valid;
 the next byte is rejected before its contents reach a parser or output path.
+Request schema v2 artifact descriptors are also closed and bounded before the
+request enters an LLM prompt: generated schematic identities allow at most
+64 MiB, plan-source identities 4 MiB, and retained-report identities 128 MiB.
+These are descriptor checks; the adapter never loads those artifacts itself,
+and Rust remains the authority that live-reruns and verifies them.
 
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent

@@ -1889,6 +1889,316 @@ fn deterministic_pipeline_runner_approves_and_reproduces_the_complete_chain() {
 }
 
 #[test]
+fn ai_review_artifact_binding_revalidates_the_exact_pipeline_and_schematic() {
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(temporary.path());
+    let schematic = temporary.path().join("design.kicad_sch");
+    let policy = temporary.path().join("electrical-policy.json");
+    let review = temporary.path().join("electrical-review.json");
+    let report = temporary.path().join("deterministic-pipeline-report.json");
+
+    let runner = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&report)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&runner, "run-deterministic-pipeline for AI review binding");
+    let report_value = read_json(&report);
+    assert_eq!(report_value["approved"], true);
+
+    // The structured review may parse identically after harmless whitespace,
+    // but its raw artifact must still be the exact review named by the plan.
+    let alternate_review = temporary.path().join("alternate-electrical-review.json");
+    let mut alternate_review_bytes = fs::read(&review).unwrap();
+    alternate_review_bytes.push(b'\n');
+    fs::write(&alternate_review, alternate_review_bytes).unwrap();
+    let mismatched_review_request = temporary.path().join("mismatched-review-request.json");
+    let mismatched_review = Command::new(binary())
+        .arg("prepare-ai-review")
+        .arg(&schematic)
+        .arg("--electrical-review")
+        .arg(&alternate_review)
+        .arg("--policy")
+        .arg(&policy)
+        .arg("--requirement")
+        .arg("power=Power input treatment is intentional")
+        .arg("--allow-no-simulation")
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&report)
+        .arg("--output")
+        .arg(&mismatched_review_request)
+        .output()
+        .unwrap();
+    assert!(!mismatched_review.status.success());
+    assert!(
+        String::from_utf8_lossy(&mismatched_review.stderr).contains("electrical-review identity")
+    );
+    assert!(!mismatched_review_request.exists());
+
+    let request = temporary.path().join("bound-request.json");
+    let prepared = Command::new(binary())
+        .arg("prepare-ai-review")
+        .arg(&schematic)
+        .arg("--electrical-review")
+        .arg(&review)
+        .arg("--policy")
+        .arg(&policy)
+        .arg("--requirement")
+        .arg("power=Power input treatment is intentional")
+        .arg("--allow-no-simulation")
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&report)
+        .arg("--output")
+        .arg(&request)
+        .output()
+        .unwrap();
+    assert_success(&prepared, "prepare-ai-review with deterministic artifacts");
+
+    let request_value = read_json(&request);
+    assert_eq!(request_value["schema_version"], 2);
+    assert_eq!(request_value["request_sha256"].as_str().unwrap().len(), 64);
+    let binding = &request_value["artifact_binding"];
+    assert_eq!(binding["schema_version"], 1);
+    let schematic_bytes = fs::read(&schematic).unwrap();
+    assert_eq!(
+        binding["generated_schematic"]["bytes"],
+        schematic_bytes.len()
+    );
+    assert_eq!(
+        binding["generated_schematic"]["sha256"],
+        sha256(&schematic_bytes)
+    );
+    let plan_bytes = fs::read(&plan).unwrap();
+    let report_bytes = fs::read(&report).unwrap();
+    let pipeline_binding = &binding["pipeline"];
+    assert_eq!(pipeline_binding["plan_source"]["bytes"], plan_bytes.len());
+    assert_eq!(
+        pipeline_binding["plan_source"]["sha256"],
+        sha256(&plan_bytes)
+    );
+    assert_eq!(pipeline_binding["plan_sha256"], report_value["plan_sha256"]);
+    assert_eq!(pipeline_binding["report"]["bytes"], report_bytes.len());
+    assert_eq!(pipeline_binding["report"]["sha256"], sha256(&report_bytes));
+    assert_eq!(pipeline_binding["run_sha256"], report_value["run_sha256"]);
+
+    let response = temporary.path().join("bound-response.json");
+    write_json(
+        &response,
+        &json!({
+            "schema_version": 1,
+            "request_sha256": request_value["request_sha256"],
+            "model": {"provider": "test-provider", "model": "schematic-reviewer", "version": "1"},
+            "decision": "approve",
+            "summary": "The deterministic review supports the supplied requirement.",
+            "requirements": [{
+                "id": "power",
+                "status": "pass",
+                "rationale": "The bound electrical review is approved.",
+                "evidence_refs": ["electrical-review"]
+            }],
+            "risks": []
+        }),
+    );
+    let private_key = temporary.path().join("approval.key");
+    let public_key = temporary.path().join("approval.pub");
+    let keygen = Command::new(binary())
+        .arg("approval-keygen")
+        .arg("--private-key")
+        .arg(&private_key)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert_success(&keygen, "approval-keygen for AI review binding");
+
+    // The path itself is deliberately not signed: an identical copy at a
+    // different path must still satisfy the byte/digest binding.
+    let copied_schematic = temporary.path().join("copied-design.kicad_sch");
+    fs::copy(&schematic, &copied_schematic).unwrap();
+    let approval = temporary.path().join("bound-approval.json");
+    let signed = Command::new(binary())
+        .arg("sign-ai-review")
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&copied_schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&report)
+        .arg("--private-key")
+        .arg(&private_key)
+        .arg("--signer-id")
+        .arg("binding-test")
+        .arg("--output")
+        .arg(&approval)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&signed, "sign-ai-review with copied generated schematic");
+
+    let verified = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&copied_schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&report)
+        .arg("--public-key")
+        .arg(&public_key)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(
+        &verified,
+        "verify-ai-approval with copied generated schematic",
+    );
+
+    let missing_live_artifacts = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert!(!missing_live_artifacts.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_live_artifacts.stderr)
+            .contains("schema version 2 requires --generated-schematic")
+    );
+
+    // A one-byte change to the generated schematic is rejected before any
+    // signature can be accepted.
+    let original_schematic = fs::read(&copied_schematic).unwrap();
+    let mut mutated_schematic = original_schematic.clone();
+    let last = mutated_schematic.len() - 1;
+    mutated_schematic[last] ^= 1;
+    fs::write(&copied_schematic, &mutated_schematic).unwrap();
+    let rejected_schematic = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&copied_schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&report)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert!(!rejected_schematic.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_schematic.stderr)
+            .contains("generated schematic identity")
+    );
+    fs::write(&copied_schematic, &original_schematic).unwrap();
+
+    // Retaining a report with one changed byte cannot bypass the fresh-run
+    // comparison, even though the signed request and approval are intact.
+    let original_report = fs::read(&report).unwrap();
+    let mut mutated_report = original_report.clone();
+    mutated_report[0] = if mutated_report[0] == b'{' {
+        b'['
+    } else {
+        b'{'
+    };
+    fs::write(&report, &mutated_report).unwrap();
+    let rejected_report = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&copied_schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&report)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert!(!rejected_report.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_report.stderr)
+            .contains("retained deterministic pipeline report")
+    );
+    fs::write(&report, &original_report).unwrap();
+
+    // Clap must reject an incomplete artifact tuple before trying to read any
+    // of the approval files.
+    let partial = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&copied_schematic)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert!(!partial.status.success());
+    assert!(String::from_utf8_lossy(&partial.stderr).contains("deterministic-pipeline-plan"));
+
+    // A separately valid plan/report pair with a different source-byte
+    // identity must not be mixed into this request's signed binding.
+    let alternate_plan = temporary.path().join("alternate-plan.json");
+    let mut alternate_plan_bytes = fs::read(&plan).unwrap();
+    alternate_plan_bytes.push(b'\n');
+    fs::write(&alternate_plan, &alternate_plan_bytes).unwrap();
+    let alternate_report = temporary.path().join("alternate-report.json");
+    let alternate_runner = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&alternate_plan)
+        .arg("--output")
+        .arg(&alternate_report)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(
+        &alternate_runner,
+        "independently valid alternate deterministic pipeline run",
+    );
+    let mixed = Command::new(binary())
+        .arg("verify-ai-approval")
+        .arg(&approval)
+        .arg(&request)
+        .arg(&response)
+        .arg("--generated-schematic")
+        .arg(&copied_schematic)
+        .arg("--deterministic-pipeline-plan")
+        .arg(&alternate_plan)
+        .arg("--deterministic-pipeline-report")
+        .arg(&alternate_report)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert!(!mixed.status.success());
+    assert!(
+        String::from_utf8_lossy(&mixed.stderr)
+            .contains("do not match the AI review request binding")
+    );
+}
+
+#[test]
 fn deterministic_pipeline_runner_retains_digest_rejection_and_preflights_output() {
     let temporary = tempfile::tempdir().unwrap();
     let plan = passing_runner_plan(temporary.path());

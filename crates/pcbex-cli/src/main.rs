@@ -47,7 +47,7 @@ use pcbex_kicad::{
     SignedApprovalLogWitness, SignedApprovalLogWitnessKeyRotation, SignedHumanEscalation,
     SimulationArtifact, SimulationEvidence,
     accept_approval_log_gossip_organization_registry_history_checkpoint,
-    ai_approval_quorum_report_json_schema, ai_review_request_json_schema,
+    ai_approval_quorum_report_json_schema, ai_review_request_json_schema, ai_review_request_sha256,
     ai_review_response_json_schema, append_approval_transparency_event,
     apply_approval_log_gossip_observer_key_rotation,
     apply_approval_log_gossip_organization_registry_authority_key_rotation,
@@ -79,18 +79,18 @@ use pcbex_kicad::{
     approval_log_verification_report_json_schema, approval_log_witness_quorum_report_json_schema,
     approval_log_witness_trust_state_json_schema, approval_log_witness_trusted_public_key,
     approval_public_key, approval_transparency_log_json_schema, approval_transparency_log_sha256,
-    audit_approval_log_gossip_organization_registry_history, build_ai_review_request,
-    build_ai_review_session, check_schematic, circuit_kicad_board_binding_report_json_schema,
-    circuit_kicad_handoff_report_json_schema, circuit_spec_check_json_schema,
-    circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch, compare_electrical_reviews,
-    compare_schematics, create_approval_log_anchor_proof, create_approval_log_consistency_proof,
-    electrical_explanation_json_schema, electrical_policy_json_schema,
-    electrical_review_comparison_json_schema, electrical_review_json_schema,
-    electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
-    electrical_waiver_set_json_schema, explain_electrical_review,
-    human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    manufacturing_gerber_layers, manufacturing_parts, new_approval_log_gossip_observer_trust_state,
-    new_approval_log_gossip_organization_registry,
+    audit_approval_log_gossip_organization_registry_history, bind_ai_review_request,
+    build_ai_review_request, build_ai_review_session, check_schematic,
+    circuit_kicad_board_binding_report_json_schema, circuit_kicad_handoff_report_json_schema,
+    circuit_spec_check_json_schema, circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch,
+    compare_electrical_reviews, compare_schematics, create_approval_log_anchor_proof,
+    create_approval_log_consistency_proof, electrical_explanation_json_schema,
+    electrical_policy_json_schema, electrical_review_comparison_json_schema,
+    electrical_review_json_schema, electrical_review_to_junit, electrical_review_to_sarif,
+    electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
+    explain_electrical_review, human_escalation_report_json_schema, import as import_kicad,
+    import_schematic, manufacturing_gerber_layers, manufacturing_parts,
+    new_approval_log_gossip_observer_trust_state, new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
     parse_and_check_circuit_spec_v2, parse_circuit_spec_v2, parse_electrical_policy,
@@ -212,6 +212,7 @@ use canary_completion::{
 use deterministic_pipeline_runner::{
     deterministic_pipeline_plan_schema, deterministic_pipeline_report_schema,
     load_deterministic_pipeline_plan, run_deterministic_pipeline,
+    verify_ai_review_artifact_binding,
 };
 use factory::{
     FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
@@ -3265,6 +3266,12 @@ enum Command {
         input: PathBuf,
         #[arg(long)]
         electrical_review: PathBuf,
+        /// Bind the request to this deterministic pipeline plan and its fresh run.
+        #[arg(long, value_name = "PATH", requires = "deterministic_pipeline_report")]
+        deterministic_pipeline_plan: Option<PathBuf>,
+        /// Exact retained runner report; requires the matching plan.
+        #[arg(long, value_name = "PATH", requires = "deterministic_pipeline_plan")]
+        deterministic_pipeline_report: Option<PathBuf>,
         #[arg(long, conflicts_with = "policy_pack")]
         policy: Option<PathBuf>,
         #[arg(long = "simulation-evidence")]
@@ -3295,6 +3302,27 @@ enum Command {
     SignAiReview {
         request: PathBuf,
         response: PathBuf,
+        /// Generated schematic whose exact bytes are bound by a v2 request.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["deterministic_pipeline_plan", "deterministic_pipeline_report"]
+        )]
+        generated_schematic: Option<PathBuf>,
+        /// Deterministic pipeline plan whose source and normalized identities are bound.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["generated_schematic", "deterministic_pipeline_report"]
+        )]
+        deterministic_pipeline_plan: Option<PathBuf>,
+        /// Retained report that must equal a fresh deterministic pipeline run byte-for-byte.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["generated_schematic", "deterministic_pipeline_plan"]
+        )]
+        deterministic_pipeline_report: Option<PathBuf>,
         #[arg(long)]
         private_key: PathBuf,
         #[arg(long)]
@@ -3313,6 +3341,27 @@ enum Command {
         approval: PathBuf,
         request: PathBuf,
         response: PathBuf,
+        /// Generated schematic whose exact bytes are bound by a v2 request.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["deterministic_pipeline_plan", "deterministic_pipeline_report"]
+        )]
+        generated_schematic: Option<PathBuf>,
+        /// Deterministic pipeline plan whose source and normalized identities are bound.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["generated_schematic", "deterministic_pipeline_report"]
+        )]
+        deterministic_pipeline_plan: Option<PathBuf>,
+        /// Retained report that must equal a fresh deterministic pipeline run byte-for-byte.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["generated_schematic", "deterministic_pipeline_plan"]
+        )]
+        deterministic_pipeline_report: Option<PathBuf>,
         #[arg(
             long,
             conflicts_with = "policy_pack",
@@ -3332,6 +3381,27 @@ enum Command {
     /// Verify independent signed AI reviews and enforce a multi-reviewer quorum.
     VerifyAiQuorum {
         request: PathBuf,
+        /// Generated schematic whose exact bytes are bound by a v2 request.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["deterministic_pipeline_plan", "deterministic_pipeline_report"]
+        )]
+        generated_schematic: Option<PathBuf>,
+        /// Deterministic pipeline plan whose source and normalized identities are bound.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["generated_schematic", "deterministic_pipeline_report"]
+        )]
+        deterministic_pipeline_plan: Option<PathBuf>,
+        /// Retained report that must equal a fresh deterministic pipeline run byte-for-byte.
+        #[arg(
+            long,
+            value_name = "PATH",
+            requires_all = ["generated_schematic", "deterministic_pipeline_plan"]
+        )]
+        deterministic_pipeline_report: Option<PathBuf>,
         /// Signed approval envelope; repeat once per reviewer.
         #[arg(long = "approval", required = true)]
         approvals: Vec<PathBuf>,
@@ -11036,6 +11106,8 @@ fn run_cli() -> Result<()> {
         Command::PrepareAiReview {
             input,
             electrical_review,
+            deterministic_pipeline_plan,
+            deterministic_pipeline_report,
             policy,
             simulation_evidence,
             requirements,
@@ -11096,6 +11168,31 @@ fn run_cli() -> Result<()> {
                     .unwrap_or(!allow_no_simulation),
             )
             .map_err(anyhow::Error::msg)?;
+            let request = match (
+                deterministic_pipeline_plan.as_deref(),
+                deterministic_pipeline_report.as_deref(),
+            ) {
+                (None, None) => request,
+                (Some(plan), Some(report)) => {
+                    let binding =
+                        verify_ai_review_artifact_binding(&request, &input, plan, report)?;
+                    let source_identity_matches = binding.generated_schematic.bytes
+                        == schematic_source.len() as u64
+                        && binding.generated_schematic.sha256
+                            == hex::encode(Sha256::digest(schematic_source.as_bytes()));
+                    if !source_identity_matches {
+                        bail!(
+                            "generated schematic changed while preparing its AI review binding"
+                        );
+                    }
+                    bind_ai_review_request(&request, &binding).map_err(anyhow::Error::msg)?
+                }
+                _ => {
+                    bail!(
+                        "--deterministic-pipeline-plan and --deterministic-pipeline-report must be supplied together"
+                    )
+                }
+            };
             let prepared_session = if let Some(session_output) = session_output.as_ref() {
                 if session_output.0.as_ref() == output.as_path() {
                     bail!("AI review request and session output paths must differ");
@@ -11157,6 +11254,9 @@ fn run_cli() -> Result<()> {
         Command::SignAiReview {
             request,
             response,
+            generated_schematic,
+            deterministic_pipeline_plan,
+            deterministic_pipeline_report,
             private_key,
             signer_id,
             session,
@@ -11164,6 +11264,12 @@ fn run_cli() -> Result<()> {
             require_approved,
         } => {
             let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            verify_bound_ai_review_artifacts(
+                &request,
+                generated_schematic.as_deref(),
+                deterministic_pipeline_plan.as_deref(),
+                deterministic_pipeline_report.as_deref(),
+            )?;
             let response_source = fs::read_to_string(&response)
                 .with_context(|| format!("reading {}", response.display()))?;
             let response = parse_ai_review_response(&response_source)
@@ -11199,6 +11305,9 @@ fn run_cli() -> Result<()> {
             approval,
             request,
             response,
+            generated_schematic,
+            deterministic_pipeline_plan,
+            deterministic_pipeline_report,
             public_key,
             policy_pack,
             session,
@@ -11206,6 +11315,12 @@ fn run_cli() -> Result<()> {
         } => {
             let (approval, _) = read_described_json::<SignedAiApproval>(&approval)?;
             let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            verify_bound_ai_review_artifacts(
+                &request,
+                generated_schematic.as_deref(),
+                deterministic_pipeline_plan.as_deref(),
+                deterministic_pipeline_report.as_deref(),
+            )?;
             let (response, _) = read_described_json::<AiReviewResponse>(&response)?;
             let public_key = if let Some(path) = policy_pack {
                 let pack = load_policy_pack(&path)?.0;
@@ -11263,6 +11378,9 @@ fn run_cli() -> Result<()> {
         }
         Command::VerifyAiQuorum {
             request,
+            generated_schematic,
+            deterministic_pipeline_plan,
+            deterministic_pipeline_report,
             approvals,
             responses,
             policy_pack,
@@ -11288,6 +11406,12 @@ fn run_cli() -> Result<()> {
                 bail!("quorum JSON and Markdown output paths must differ");
             }
             let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            verify_bound_ai_review_artifacts(
+                &request,
+                generated_schematic.as_deref(),
+                deterministic_pipeline_plan.as_deref(),
+                deterministic_pipeline_report.as_deref(),
+            )?;
             let pack = load_policy_pack(&policy_pack)?.0;
             validate_ai_request_against_policy_pack(&request, &pack)?;
 
@@ -15904,6 +16028,40 @@ fn write_closed_schema(
         print!("{rendered}");
     }
     Ok(())
+}
+
+fn verify_bound_ai_review_artifacts(
+    request: &AiReviewRequest,
+    generated_schematic: Option<&Path>,
+    deterministic_pipeline_plan: Option<&Path>,
+    deterministic_pipeline_report: Option<&Path>,
+) -> Result<()> {
+    ai_review_request_sha256(request).map_err(anyhow::Error::msg)?;
+    match (
+        request.artifact_binding.as_ref(),
+        generated_schematic,
+        deterministic_pipeline_plan,
+        deterministic_pipeline_report,
+    ) {
+        (None, None, None, None) if request.schema_version == 1 => Ok(()),
+        (None, _, _, _) => {
+            bail!("AI review request schema version 1 does not accept live artifact binding paths")
+        }
+        (Some(expected), Some(schematic), Some(plan), Some(report))
+            if request.schema_version == 2 =>
+        {
+            let observed = verify_ai_review_artifact_binding(request, schematic, plan, report)?;
+            if &observed != expected {
+                bail!(
+                    "live generated schematic and deterministic pipeline artifacts do not match the AI review request binding"
+                );
+            }
+            Ok(())
+        }
+        (Some(_), _, _, _) => bail!(
+            "AI review request schema version 2 requires --generated-schematic, --deterministic-pipeline-plan, and --deterministic-pipeline-report"
+        ),
+    }
 }
 
 fn parse_ai_requirement(value: &str) -> Result<AiRequirement> {
