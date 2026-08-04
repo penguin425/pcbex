@@ -61,6 +61,17 @@ links or special files and stay within 4,096 entries, depth 16, 128 MiB per
 file, and 512 MiB total. The three loopback fixture servers used by repository
 CI have recorded PIDs and an unconditional cleanup step.
 
+The deterministic pipeline runner is an explicit root-Action opt-in through
+`deterministic-pipeline-plan`; an empty value leaves analysis-only behavior.
+When enabled, the same supervised command retains exactly
+`output-dir/deterministic-pipeline-report.json` and publishes its seven
+authenticated metadata outputs only after rechecking the retained report's
+size, digest, identities, counts, schema version, and decision. A valid
+rejected report is published before `deterministic-pipeline-require-approved`
+causes the final Action step to fail. No implicit input discovery or alternate
+report destination is allowed, and stale, linked, malformed, or substituted
+reports fail closed.
+
 A composite action cannot set `timeout-minutes` on its caller's job. Its three
 supervised commands remain individually finite (10, 30, and 40 minutes), but
 artifact and SARIF service actions are governed by the calling job. Public

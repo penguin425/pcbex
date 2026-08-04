@@ -615,6 +615,64 @@ jobs:
           printf 'remote-witness-endpoint=%s\n' \
             "$(tr -d '\n' < build/action-quorum/remote-witness.endpoint)" \
             >> "$GITHUB_OUTPUT"
+      - name: Prepare deterministic pipeline plan fixture
+        run: |
+          smoke_dir=build/deterministic-pipeline
+          mkdir -p "$smoke_dir/firmware"
+
+          # Keep every input deliberately small and invalid.  The root Action
+          # must retain a rejected report while exercising the real runner.
+          printf '%s\n' '{}' > "$smoke_dir/circuit.json"
+          printf '%s\n' 'not a KiCad schematic' > "$smoke_dir/design.kicad_sch"
+          printf '%s\n' '{}' > "$smoke_dir/review.json"
+          printf '%s\n' '(kicad_pcb' > "$smoke_dir/design.kicad_pcb"
+          printf '%s\n' '{}' > "$smoke_dir/analysis-manifest.json"
+          printf '%s\n' '{}' > "$smoke_dir/analysis-checks.json"
+          printf '%s\n' '{}' > "$smoke_dir/quality.json"
+          printf '%s\n' 'not a manufacturing package' > "$smoke_dir/package.bin"
+          printf '%s\n' '{}' > "$smoke_dir/firmware/manifest.json"
+          for artifact in pinout.h firmware.h firmware.c firmware_smoke_test.c firmware.cpp firmware_cpp_smoke_test.cpp host.py; do
+            printf '%s\n' 'invalid fixture' > "$smoke_dir/firmware/$artifact"
+          done
+
+          descriptor() {
+            local path="$1"
+            local bytes sha
+            bytes="$(wc -c < "$smoke_dir/$path" | tr -d ' ')"
+            sha="$(sha256sum "$smoke_dir/$path" | cut -d' ' -f1)"
+            jq -n --arg path "$path" --argjson bytes "$bytes" --arg sha256 "$sha" \
+              '{path: $path, bytes: $bytes, sha256: $sha256}'
+          }
+          jq -n \
+            --argjson circuit_spec "$(descriptor circuit.json)" \
+            --argjson schematic "$(descriptor design.kicad_sch)" \
+            --argjson electrical_review "$(descriptor review.json)" \
+            --argjson board "$(descriptor design.kicad_pcb)" \
+            --argjson analysis_manifest "$(descriptor analysis-manifest.json)" \
+            --argjson analysis_checks "$(descriptor analysis-checks.json)" \
+            --argjson quality "$(descriptor quality.json)" \
+            --argjson manufacturing_package "$(descriptor package.bin)" \
+            --argjson firmware_manifest "$(descriptor firmware/manifest.json)" \
+            '{
+              schema_version: 1,
+              circuit_spec: $circuit_spec,
+              schematic: $schematic,
+              electrical_policy: null,
+              electrical_review: $electrical_review,
+              board: $board,
+              analysis_manifest: $analysis_manifest,
+              analysis_checks: $analysis_checks,
+              quality: $quality,
+              analysis_project: null,
+              analysis_rules: null,
+              analysis_dfm_profile: null,
+              analysis_policy_pack: null,
+              analysis_physical_profile: null,
+              manufacturing_package: $manufacturing_package,
+              firmware_manifest: $firmware_manifest,
+              factory_receipt: null,
+              require_factory: false
+            }' > "$smoke_dir/plan.json"
       - name: Exercise the public composite action
         id: pcbex
         uses: ./
@@ -718,6 +776,8 @@ jobs:
           policy-deployment-verification-observed-analysis: build/action-rollout/deployed
           policy-deployment-verification-verified-at-unix: "6"
           fail-on-policy-deployment-verification: "true"
+          deterministic-pipeline-plan: build/deterministic-pipeline/plan.json
+          deterministic-pipeline-require-approved: "false"
           output-dir: build/action-analysis
           fail-on-violations: "false"
           fail-on-regressions: "true"
@@ -727,6 +787,14 @@ jobs:
       - name: Verify action outputs
         env:
           ARTIFACT_DIR: ${{ steps.pcbex.outputs.artifact-dir }}
+          DETERMINISTIC_PIPELINE_REPORT: ${{ steps.pcbex.outputs.deterministic-pipeline-report }}
+          DETERMINISTIC_PIPELINE_SCHEMA_VERSION: ${{ steps.pcbex.outputs.deterministic-pipeline-schema-version }}
+          DETERMINISTIC_PIPELINE_APPROVED: ${{ steps.pcbex.outputs.deterministic-pipeline-approved }}
+          DETERMINISTIC_PIPELINE_PLAN_SHA256: ${{ steps.pcbex.outputs.deterministic-pipeline-plan-sha256 }}
+          DETERMINISTIC_PIPELINE_RUN_SHA256: ${{ steps.pcbex.outputs.deterministic-pipeline-run-sha256 }}
+          DETERMINISTIC_PIPELINE_FAILURE_COUNT: ${{ steps.pcbex.outputs.deterministic-pipeline-failure-count }}
+          DETERMINISTIC_PIPELINE_REPORT_BYTES: ${{ steps.pcbex.outputs.deterministic-pipeline-report-bytes }}
+          DETERMINISTIC_PIPELINE_REPORT_SHA256: ${{ steps.pcbex.outputs.deterministic-pipeline-report-sha256 }}
           COMMENT_URL: ${{ steps.pcbex.outputs.comment-url }}
           VIOLATION_COUNT: ${{ steps.pcbex.outputs.violation-count }}
           REGRESSION: ${{ steps.pcbex.outputs.regression }}
@@ -779,6 +847,31 @@ jobs:
           APPROVAL_LOG_WITNESS_QUORUM: ${{ steps.pcbex.outputs.approval-log-witness-quorum }}
           APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-witness-quorum-met }}
         run: |
+          test "$DETERMINISTIC_PIPELINE_REPORT" = "build/action-analysis/deterministic-pipeline-report.json"
+          test -s "$DETERMINISTIC_PIPELINE_REPORT"
+          test "$DETERMINISTIC_PIPELINE_SCHEMA_VERSION" = "1"
+          test "$DETERMINISTIC_PIPELINE_APPROVED" = "false"
+          [[ "$DETERMINISTIC_PIPELINE_PLAN_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$DETERMINISTIC_PIPELINE_RUN_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$DETERMINISTIC_PIPELINE_REPORT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$DETERMINISTIC_PIPELINE_FAILURE_COUNT" -gt 0
+          deterministic_report_bytes="$(wc -c < "$DETERMINISTIC_PIPELINE_REPORT" | tr -d ' ')"
+          deterministic_report_sha256="$(sha256sum "$DETERMINISTIC_PIPELINE_REPORT" | cut -d' ' -f1)"
+          test "$DETERMINISTIC_PIPELINE_REPORT_BYTES" = "$deterministic_report_bytes"
+          test "$DETERMINISTIC_PIPELINE_REPORT_SHA256" = "$deterministic_report_sha256"
+          jq -e \
+            --arg plan_sha256 "$DETERMINISTIC_PIPELINE_PLAN_SHA256" \
+            --arg run_sha256 "$DETERMINISTIC_PIPELINE_RUN_SHA256" \
+            --argjson failure_count "$DETERMINISTIC_PIPELINE_FAILURE_COUNT" \
+            --argjson schema_version "$DETERMINISTIC_PIPELINE_SCHEMA_VERSION" \
+            --argjson approved "$DETERMINISTIC_PIPELINE_APPROVED" \
+            'type == "object"
+             and .schema_version == $schema_version
+             and .approved == $approved
+             and .plan_sha256 == $plan_sha256
+             and .run_sha256 == $run_sha256
+             and (.failures | length) == $failure_count' \
+            "$DETERMINISTIC_PIPELINE_REPORT" >/dev/null
           test -s "$ARTIFACT_DIR/pr-comment.md"
           grep -F '# pcbex hardware analysis' "$ARTIFACT_DIR/pr-comment.md"
           grep -F '# pcbex baseline comparison' "$ARTIFACT_DIR/pr-comment.md"

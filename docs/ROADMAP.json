@@ -614,6 +614,11 @@
     {
       "id": "mcp-deterministic-pipeline-runner-parity",
       "release": "v1.418.0",
+      "status": "released"
+    },
+    {
+      "id": "composite-action-deterministic-pipeline-runner-parity",
+      "release": "v1.419.0",
       "status": "current"
     }
   ]

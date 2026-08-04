@@ -129,6 +129,7 @@ auditable release.
 | v1.416.0 | Circuit-spec/KiCad schematic-board binding | Recalculate the raw v1.415 handoff and bind exact references, footprint metadata, pin/pad connectivity, no-connect states, and complete net/footprint/pad coverage to the actual `.kicad_pcb`, with source/canonical/binding digests and retained deterministic rejection evidence |
 | v1.417.0 | Bounded-input deterministic pipeline runner | Snapshot one closed relative-path/byte/SHA plan, compose raw circuit/schematic/board binding with the existing pipeline gate in process, cross-bind identities, and retain one deterministic no-side-effect report |
 | v1.418.0 | MCP deterministic pipeline runner parity | Expose the v1.417 closed runner through synchronous MCP and optional Tasks, retain rejected reports, and return a digest-verified bounded summary without embedding a potentially 128 MiB report in the 16 MiB MCP frame |
+| v1.419.0 | Composite-Action deterministic pipeline runner parity | Opt in the root Action with a closed plan, retain a fixed deterministic report and seven revalidated outputs, and publish valid rejection evidence before the optional final approval failure |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -148,9 +149,16 @@ No-profile schema-v1 artifacts remain compatible. The v1.415.0 handoff and
 v1.416.0 board-binding releases are retained as standalone boundaries. The
 v1.417.0 release composes the latter with the existing pipeline gate through
 one closed digest-bound plan and report without changing either pipeline
-report schema. The current v1.418.0 release exposes that runner through MCP
-without relaxing its closed inputs, no-clobber output, or retained-rejection
-contract. The v1.416.0 boundary added the standalone
+report schema. The v1.418.0 release exposed that runner through MCP without
+relaxing its closed inputs, no-clobber output, or retained-rejection contract.
+The current v1.419.0 release adds root composite-Action parity: an empty
+`deterministic-pipeline-plan` keeps analysis-only behavior, while an explicit
+plan uses the fixed `${output-dir}/deterministic-pipeline-report.json` report
+and revalidates the seven schema/decision/digest/count/size outputs before
+publishing them. `deterministic-pipeline-require-approved` makes the final
+Action step fail only after a valid rejected report is retained and published.
+The integration adds no discovery, mutation, repair, AI/network/factory call,
+submission, or ordering behavior. The v1.416.0 boundary added the standalone
 `verify-circuit-kicad-board-binding` CLI/API boundary plus MCP
 `verify_circuit_kicad_board_binding`. It recalculates the handoff from raw
 circuit and schematic bytes, then compares exact reference/footprint
@@ -167,5 +175,4 @@ contract.  Hierarchy, buses,
 multi-unit/nested handoffs, geometry, routing, DRC, and DFM remain outside it,
 and existing pipeline v1/v2 phases are unchanged.
 
-The next milestone (v1.419.0) is composite-Action parity for the deterministic
-runner. Qualified live supplier selection remains a later boundary.
+Qualified live supplier selection remains a later boundary.

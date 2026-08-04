@@ -142,11 +142,47 @@ write_output remote-witness ""
 write_output remote-witness-receipt ""
 write_output pipeline-report ""
 write_output pipeline-passed ""
+write_output deterministic-pipeline-report ""
+write_output deterministic-pipeline-schema-version ""
+write_output deterministic-pipeline-approved ""
+write_output deterministic-pipeline-plan-sha256 ""
+write_output deterministic-pipeline-run-sha256 ""
+write_output deterministic-pipeline-failure-count ""
+write_output deterministic-pipeline-report-bytes ""
+write_output deterministic-pipeline-report-sha256 ""
 
 pipeline_report=""
 pipeline_passed=""
 pipeline_rc=0
 pipeline_verify="${PCBEX_PIPELINE_VERIFY:-false}"
+
+deterministic_pipeline_plan="${PCBEX_DETERMINISTIC_PIPELINE_PLAN:-}"
+deterministic_pipeline_require_approved="${PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED:-false}"
+deterministic_pipeline_report=""
+deterministic_pipeline_schema_version=""
+deterministic_pipeline_approved=""
+deterministic_pipeline_plan_sha256=""
+deterministic_pipeline_run_sha256=""
+deterministic_pipeline_failure_count=""
+deterministic_pipeline_report_bytes=""
+deterministic_pipeline_report_sha256=""
+deterministic_pipeline_rc=0
+deterministic_pipeline_summary_json=""
+
+if [[ "$deterministic_pipeline_require_approved" != "true" &&
+  "$deterministic_pipeline_require_approved" != "false" ]]; then
+  echo "PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED must be true or false" >&2
+  exit 2
+fi
+if [[ -z "$deterministic_pipeline_plan" ]]; then
+  if [[ "$deterministic_pipeline_require_approved" == "true" ]]; then
+    echo "PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED requires PCBEX_DETERMINISTIC_PIPELINE_PLAN" >&2
+    exit 2
+  fi
+else
+  python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
+    --validate-plan "$deterministic_pipeline_plan"
+fi
 
 analysis_arguments=(analyze-kicad "$PCBEX_BOARD" --output-dir "$current_dir")
 profile_selections=0
@@ -3086,6 +3122,124 @@ elif [[ "$pipeline_verify" == "true" ]]; then
   } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
 fi
 
+if [[ -n "$deterministic_pipeline_plan" ]]; then
+  deterministic_pipeline_report_candidate="$artifact_dir/deterministic-pipeline-report.json"
+  if [[ -e "$deterministic_pipeline_report_candidate" ||
+    -L "$deterministic_pipeline_report_candidate" ]]; then
+    echo "refusing to reuse an existing deterministic pipeline report" >&2
+    deterministic_pipeline_rc=2
+  else
+    deterministic_pipeline_arguments=(
+      run-deterministic-pipeline
+      "$deterministic_pipeline_plan"
+      --output "$deterministic_pipeline_report_candidate"
+      --mcp-echo-report-summary
+    )
+    if [[ "$deterministic_pipeline_require_approved" == "true" ]]; then
+      deterministic_pipeline_arguments+=(--require-approved)
+    fi
+    deterministic_pipeline_summary_json=""
+    if deterministic_pipeline_summary_json="$(
+      python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
+        --timeout-seconds 2400 \
+        --max-stdout-bytes 4096 \
+        --max-stderr-bytes 8388608 \
+        --output-root "$PCBEX_OUTPUT_DIR" \
+        -- "$PCBEX_BINARY" "${deterministic_pipeline_arguments[@]}" |
+      python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
+        --verify \
+        --plan "$deterministic_pipeline_plan" \
+        --report "$deterministic_pipeline_report_candidate"
+    )"; then
+      deterministic_pipeline_rc=0
+    else
+      deterministic_pipeline_rc=$?
+    fi
+  fi
+
+  if [[ -f "$deterministic_pipeline_report_candidate" &&
+    ! -L "$deterministic_pipeline_report_candidate" &&
+    -n "$deterministic_pipeline_summary_json" ]]; then
+      deterministic_pipeline_summary_values=""
+      if deterministic_pipeline_summary_values="$(
+        python3 - "$deterministic_pipeline_summary_json" <<'PY'
+import json
+import sys
+
+fields = (
+    "schema_version",
+    "approved",
+    "plan_sha256",
+    "run_sha256",
+    "failure_count",
+    "report_bytes",
+    "report_sha256",
+)
+value = json.loads(sys.argv[1])
+if type(value) is not dict or set(value) != set(fields) or len(value) != len(fields):
+    raise SystemExit(2)
+for field in fields:
+    item = value[field]
+    if type(item) is bool:
+        rendered = str(item).lower()
+    elif type(item) in (int, str):
+        rendered = str(item)
+    else:
+        raise SystemExit(2)
+    print(f"{field}={rendered}")
+PY
+      )"; then
+        while IFS='=' read -r field value; do
+          case "$field" in
+            schema_version) deterministic_pipeline_schema_version="$value" ;;
+            approved) deterministic_pipeline_approved="$value" ;;
+            plan_sha256) deterministic_pipeline_plan_sha256="$value" ;;
+            run_sha256) deterministic_pipeline_run_sha256="$value" ;;
+            failure_count) deterministic_pipeline_failure_count="$value" ;;
+            report_bytes) deterministic_pipeline_report_bytes="$value" ;;
+            report_sha256) deterministic_pipeline_report_sha256="$value" ;;
+            *)
+              deterministic_pipeline_rc=2
+              deterministic_pipeline_schema_version=""
+              deterministic_pipeline_approved=""
+              deterministic_pipeline_plan_sha256=""
+              deterministic_pipeline_run_sha256=""
+              deterministic_pipeline_failure_count=""
+              deterministic_pipeline_report_bytes=""
+              deterministic_pipeline_report_sha256=""
+              break
+              ;;
+          esac
+        done <<< "$deterministic_pipeline_summary_values"
+        if [[ -z "$deterministic_pipeline_schema_version" ||
+          -z "$deterministic_pipeline_approved" ||
+          -z "$deterministic_pipeline_plan_sha256" ||
+          -z "$deterministic_pipeline_run_sha256" ||
+          -z "$deterministic_pipeline_failure_count" ||
+          -z "$deterministic_pipeline_report_bytes" ||
+          -z "$deterministic_pipeline_report_sha256" ]]; then
+          deterministic_pipeline_rc=2
+        else
+          deterministic_pipeline_report="$deterministic_pipeline_report_candidate"
+        fi
+      else
+        deterministic_pipeline_rc=2
+      fi
+  else
+    deterministic_pipeline_rc=2
+  fi
+
+  {
+    printf '\n# pcbex deterministic pipeline\n\n'
+    printf -- '- Approved: `%s`\n' "${deterministic_pipeline_approved:-unavailable}"
+    if [[ -n "$deterministic_pipeline_report" ]]; then
+      printf -- '- Report: `%s`\n' "$deterministic_pipeline_report"
+    else
+      printf -- '- Report: unavailable\n'
+    fi
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
+
 write_output sarif-dir "$sarif_dir"
 write_output current-sarif "$current_dir/report.sarif"
 write_output comparison-sarif "$comparison_sarif"
@@ -3186,11 +3340,29 @@ write_output remote-witness "$remote_witness"
 write_output remote-witness-receipt "$remote_witness_receipt"
 write_output pipeline-report "$pipeline_report"
 write_output pipeline-passed "$pipeline_passed"
+write_output deterministic-pipeline-report "$deterministic_pipeline_report"
+write_output deterministic-pipeline-schema-version "$deterministic_pipeline_schema_version"
+write_output deterministic-pipeline-approved "$deterministic_pipeline_approved"
+write_output deterministic-pipeline-plan-sha256 "$deterministic_pipeline_plan_sha256"
+write_output deterministic-pipeline-run-sha256 "$deterministic_pipeline_run_sha256"
+write_output deterministic-pipeline-failure-count "$deterministic_pipeline_failure_count"
+write_output deterministic-pipeline-report-bytes "$deterministic_pipeline_report_bytes"
+write_output deterministic-pipeline-report-sha256 "$deterministic_pipeline_report_sha256"
 if [[ "$pipeline_verify" == "true" && "$pipeline_passed" != "true" ]]; then
   write_output status error
   exit 1
 fi
 if ((pipeline_rc != 0)); then
+  write_output status error
+  exit 1
+fi
+if [[ -n "$deterministic_pipeline_plan" && "$deterministic_pipeline_rc" != "0" ]]; then
+  write_output status error
+  exit 1
+fi
+if [[ -n "$deterministic_pipeline_plan" &&
+  "$deterministic_pipeline_require_approved" == "true" &&
+  "$deterministic_pipeline_approved" != "true" ]]; then
   write_output status error
   exit 1
 fi

@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.418.0
+    uses: penguin425/pcbex@v1.419.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2155,7 +2155,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.418.0` step:
+# Add these fields to a `penguin425/pcbex@v1.419.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -3040,9 +3040,37 @@ gates in process, and cross-binds their canonical schematic and raw board
 identities. A valid plan retains one deterministic rejected report before a required-approval
 failure. It performs no design mutation, child-process execution, network/AI
 call, factory submission, or order. Existing `pipeline-verify` v1/v2 schemas
-are unchanged; composite-Action parity is planned for v1.419. See
+are unchanged. See
 [`docs/DETERMINISTIC_PIPELINE_RUNNER.md`](docs/DETERMINISTIC_PIPELINE_RUNNER.md)
 for the complete plan, report, resource, and failure contract.
+
+Version 1.419 adds root composite-Action parity. Set
+`deterministic-pipeline-plan` to opt in and optionally set
+`deterministic-pipeline-require-approved: "true"` for a final fail gate. The
+Action retains the complete report at the fixed path
+`${output-dir}/deterministic-pipeline-report.json` and exposes the report path
+plus seven revalidated outputs: `deterministic-pipeline-schema-version`,
+`deterministic-pipeline-approved`, `deterministic-pipeline-plan-sha256`,
+`deterministic-pipeline-run-sha256`, `deterministic-pipeline-failure-count`,
+`deterministic-pipeline-report-bytes`, and
+`deterministic-pipeline-report-sha256`. With approval enforcement disabled, a
+valid rejected report succeeds and remains available; with it enabled, the
+same evidence is published before the Action fails. Empty plans preserve
+analysis-only behavior. Stale, aliased, symlinked, malformed, or digest-
+mismatched reports are rejected before attribution. The Action adds no file
+discovery, design mutation, repair, AI/network/factory call, submission, or
+ordering behavior.
+
+Minimal Action opt-in:
+
+```yaml
+- id: deterministic-pipeline
+  uses: penguin425/pcbex@v1.419.0
+  with:
+    board: hardware/controller.kicad_pcb
+    deterministic-pipeline-plan: hardware/pipeline-plan.json
+    deterministic-pipeline-require-approved: "true"
+```
 
 ## Schematic electrical IR
 
@@ -4336,7 +4364,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.418.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.419.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

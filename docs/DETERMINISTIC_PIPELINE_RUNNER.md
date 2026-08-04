@@ -9,7 +9,9 @@ aggregate report.
 It does not generate or repair a design, start external tools, call an AI or a
 network service, submit a package, or place an order.
 Version 1.418 exposes the same boundary through synchronous MCP calls and
-optional MCP Tasks without changing the plan or report schemas.
+optional MCP Tasks without changing the plan or report schemas. Version 1.419
+adds the same contract to the root composite GitHub Action as an explicit
+opt-in; the CLI, MCP, and Action all retain the same report bytes and decision.
 
 ## Commands
 
@@ -64,6 +66,41 @@ The MCP wrapper adds no discovery, mutation, network, AI, factory submission,
 or ordering behavior. Existing output paths are rejected before execution,
 and the runner's stronger alias, symlink, firmware-directory, and no-clobber
 checks remain authoritative.
+
+## Composite Action parity
+
+The root composite Action keeps the runner disabled unless
+`deterministic-pipeline-plan` names a plan file. An empty input preserves the
+ordinary analysis-only Action behavior. Set
+`deterministic-pipeline-require-approved: "true"` to make the final Action
+step fail when the retained runner report is not approved; the default
+`"false"` publishes a valid rejected report and completes the Action so a
+caller can inspect it.
+
+When enabled, the Action always reserves the fixed no-clobber destination
+`${output-dir}/deterministic-pipeline-report.json`. It invokes the same
+bounded runner with the caller's plan and publishes that complete report and
+the following seven verified outputs:
+
+- `deterministic-pipeline-schema-version`;
+- `deterministic-pipeline-approved`;
+- `deterministic-pipeline-plan-sha256`;
+- `deterministic-pipeline-run-sha256`;
+- `deterministic-pipeline-failure-count`;
+- `deterministic-pipeline-report-bytes`; and
+- `deterministic-pipeline-report-sha256`.
+
+The outputs are derived from the retained report only after its byte count,
+SHA-256, plan/run identities, failure count, schema version, and approval
+decision have been revalidated. A rejected valid report is therefore retained
+and exposed before a required-approval failure; stale, aliased, symlinked,
+malformed, or digest-mismatched output is never attributed to the Action.
+
+This Action integration adds no implicit file discovery, design mutation,
+repair, AI/network/factory call, package submission, or ordering behavior. The
+plan's closed relative-path descriptors, firmware eight-file contract, staged
+basenames, per-input limits, aggregate limits, cross-binding checks, and
+no-clobber output rules remain authoritative.
 
 ## Closed input plan
 
@@ -128,5 +165,6 @@ not erase evidence from the other.
 
 The runner does not add a phase to `pipeline-verify` and does not change its
 schema-v1 or factory-bound schema-v2 reports. Those reports remain independently
-usable and auditable. Version 1.418 adds MCP parity; composite-Action parity is
-planned for v1.419.
+usable and auditable. Version 1.418 adds MCP parity, and version 1.419 adds
+root composite-Action parity without changing the runner plan or report
+schemas.
