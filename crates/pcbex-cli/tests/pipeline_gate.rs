@@ -3,9 +3,9 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs,
-    io::{Cursor, Write},
+    io::{BufRead, BufReader, Cursor, Read, Write},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::{ChildStdin, ChildStdout, Command, Output, Stdio},
 };
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
@@ -68,6 +68,41 @@ const RUNNER_BOARD: &str = r#"(kicad_pcb
 
 fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_pcbex"))
+}
+
+fn send_mcp(stdin: &mut ChildStdin, message: Value) {
+    serde_json::to_writer(&mut *stdin, &message).unwrap();
+    stdin.write_all(b"\n").unwrap();
+    stdin.flush().unwrap();
+}
+
+fn receive_mcp(stdout: &mut BufReader<ChildStdout>) -> Value {
+    let mut line = String::new();
+    stdout.read_line(&mut line).unwrap();
+    assert!(!line.is_empty(), "MCP server closed stdout unexpectedly");
+    serde_json::from_str(&line).unwrap()
+}
+
+fn initialize_mcp(stdin: &mut ChildStdin, stdout: &mut BufReader<ChildStdout>) {
+    send_mcp(
+        stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "initialize",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "pipeline-gate-test", "version": "1"}
+            }
+        }),
+    );
+    let initialized = receive_mcp(stdout);
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+    send_mcp(
+        stdin,
+        json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+    );
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -1868,10 +1903,23 @@ fn deterministic_pipeline_runner_retains_digest_rejection_and_preflights_output(
         .arg("--output")
         .arg(&report_path)
         .arg("--require-approved")
+        .arg("--mcp-echo-report-summary")
         .output()
         .unwrap();
     assert!(!rejected.status.success());
     let report = read_json(&report_path);
+    let summary = serde_json::from_slice::<Value>(&rejected.stdout).unwrap();
+    let retained = fs::read(&report_path).unwrap();
+    assert_eq!(summary["schema_version"], report["schema_version"]);
+    assert_eq!(summary["approved"], report["approved"]);
+    assert_eq!(summary["plan_sha256"], report["plan_sha256"]);
+    assert_eq!(summary["run_sha256"], report["run_sha256"]);
+    assert_eq!(
+        summary["failure_count"],
+        report["failures"].as_array().unwrap().len()
+    );
+    assert_eq!(summary["report_bytes"], retained.len());
+    assert_eq!(summary["report_sha256"], sha256(&retained));
     assert_eq!(report["approved"], false);
     assert!(!report["failures"].as_array().unwrap().is_empty());
     assert_eq!(report["binding"], Value::Null);
@@ -2062,6 +2110,141 @@ fn deterministic_pipeline_runner_keeps_output_outside_the_exact_firmware_bundle(
         .collect::<Vec<_>>();
     expected.sort();
     assert_eq!(names, expected);
+}
+
+#[test]
+fn deterministic_pipeline_runner_mcp_retains_rejected_sync_and_task_reports() {
+    let temporary = tempfile::tempdir().unwrap();
+    let plan = passing_runner_plan(temporary.path());
+    let mut plan_value = read_json(&plan);
+    plan_value["board"]["sha256"] = Value::String("0".repeat(64));
+    write_json(&plan, &plan_value);
+
+    let mut child = Command::new(binary())
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize_mcp(&mut stdin, &mut stdout);
+
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "tools",
+            "method": "tools/list"
+        }),
+    );
+    let tools = receive_mcp(&mut stdout);
+    let tool = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "run_deterministic_pipeline")
+        .expect("deterministic pipeline MCP tool");
+    assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+    assert_eq!(tool["inputSchema"]["required"], json!(["plan", "output"]));
+    assert_eq!(
+        tool["inputSchema"]["properties"]["require_approved"]["default"],
+        false
+    );
+    assert_eq!(tool["execution"]["taskSupport"], "optional");
+
+    let sync_output = temporary.path().join("mcp-sync-report.json");
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "sync",
+            "method": "tools/call",
+            "params": {
+                "name": "run_deterministic_pipeline",
+                "arguments": {
+                    "plan": plan,
+                    "output": sync_output,
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let sync = receive_mcp(&mut stdout);
+    assert_eq!(sync["result"]["isError"], true);
+    let sync_report = read_json(&sync_output);
+    let sync_summary = &sync["result"]["structuredContent"]["report_summary"];
+    assert_eq!(sync_summary["approved"], false);
+    assert_eq!(sync_summary["plan_sha256"], sync_report["plan_sha256"]);
+    assert_eq!(sync_summary["run_sha256"], sync_report["run_sha256"]);
+    assert_eq!(
+        sync_summary["report_bytes"],
+        fs::metadata(&sync_output).unwrap().len()
+    );
+    assert_eq!(sync_summary["report_sha256"], sha256_file(&sync_output));
+
+    let task_output = temporary.path().join("mcp-task-report.json");
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "create-task",
+            "method": "tools/call",
+            "params": {
+                "name": "run_deterministic_pipeline",
+                "arguments": {
+                    "plan": plan,
+                    "output": task_output,
+                    "require_approved": true
+                },
+                "task": {"ttl": 60_000}
+            }
+        }),
+    );
+    let created = receive_mcp(&mut stdout);
+    assert_eq!(created["result"]["task"]["status"], "working");
+    let task_id = created["result"]["task"]["taskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "task-result",
+            "method": "tasks/result",
+            "params": {"taskId": task_id}
+        }),
+    );
+    let task = receive_mcp(&mut stdout);
+    assert_eq!(task["result"]["isError"], true);
+    let task_report = read_json(&task_output);
+    let task_summary = &task["result"]["structuredContent"]["report_summary"];
+    assert_eq!(task_summary["approved"], false);
+    assert_eq!(task_summary["plan_sha256"], task_report["plan_sha256"]);
+    assert_eq!(task_summary["run_sha256"], task_report["run_sha256"]);
+    assert_eq!(
+        task_summary["report_bytes"],
+        fs::metadata(&task_output).unwrap().len()
+    );
+    assert_eq!(task_summary["report_sha256"], sha256_file(&task_output));
+    assert_eq!(
+        task["result"]["_meta"]["io.modelcontextprotocol/related-task"]["taskId"],
+        task_id
+    );
+
+    drop(stdin);
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
 }
 
 #[test]

@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.417.0
+    uses: penguin425/pcbex@v1.418.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2155,7 +2155,7 @@ analysis manifests, any automatically discovered sibling `.kicad_pro` and
 to `pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
 
 ```yaml
-# Add these fields to a `penguin425/pcbex@v1.417.0` step:
+# Add these fields to a `penguin425/pcbex@v1.418.0` step:
 with:
   board: hardware/controller.kicad_pcb
   schematic: hardware/controller.kicad_sch
@@ -2392,8 +2392,35 @@ remain outside this strict closed subset.  Emit its schema with
 `circuit-kicad-board-binding-schema` and see
 [`docs/CIRCUIT_KICAD_BOARD_BINDING.md`](docs/CIRCUIT_KICAD_BOARD_BINDING.md)
 for the CLI, MCP, and retained-report contract.  This operation is not a new
-`pipeline-verify` phase; deterministic pipeline integration is planned for
-v1.417.
+`pipeline-verify` phase; v1.417 composes it into the deterministic runner.
+
+Version 1.418.0 adds the task-compatible `run_deterministic_pipeline` tool.
+It accepts only `plan`, `output`, and optional `require_approved` arguments:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 8,
+  "method": "tools/call",
+  "params": {
+    "name": "run_deterministic_pipeline",
+    "arguments": {
+      "plan": "pipeline-plan.json",
+      "output": "build/deterministic-pipeline-report.json",
+      "require_approved": true
+    },
+    "task": {"ttl": 600000}
+  }
+}
+```
+
+The complete report remains at `output`. Because that report may approach
+128 MiB while an MCP frame is limited to 16 MiB, structured content returns a
+compact `report_summary` instead of duplicating the report. The bridge verifies
+the retained file's exact byte count and SHA-256 plus its approval, failure
+count, and plan/run identities before trusting the summary. A required-approval
+rejection therefore returns `isError: true` with verified retained evidence;
+it never truncates a valid report to fit the protocol frame.
 
 Analysis and routing tools require explicit output paths and may overwrite
 files there. MCP hosts should retain their normal user-approval prompt for
@@ -2992,7 +3019,8 @@ remain unchanged.
 ## Bounded-input deterministic pipeline runner
 
 Version 1.417 composes the raw circuit/schematic/board binding and the existing
-hardware pipeline gate through one closed, digest-bound plan:
+hardware pipeline gate through one closed, digest-bound plan. Version 1.418
+exposes the same runner through MCP:
 
 ```sh
 pcbex deterministic-pipeline-plan-schema \
@@ -3012,7 +3040,7 @@ gates in process, and cross-binds their canonical schematic and raw board
 identities. A valid plan retains one deterministic rejected report before a required-approval
 failure. It performs no design mutation, child-process execution, network/AI
 call, factory submission, or order. Existing `pipeline-verify` v1/v2 schemas
-are unchanged; MCP and composite-Action parity are planned for v1.418. See
+are unchanged; composite-Action parity is planned for v1.419. See
 [`docs/DETERMINISTIC_PIPELINE_RUNNER.md`](docs/DETERMINISTIC_PIPELINE_RUNNER.md)
 for the complete plan, report, resource, and failure contract.
 
@@ -4308,7 +4336,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.417.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.418.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

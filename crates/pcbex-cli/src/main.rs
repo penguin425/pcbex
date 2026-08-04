@@ -816,6 +816,9 @@ enum Command {
         /// Fail after retaining the report unless every gate and cross-binding is approved.
         #[arg(long)]
         require_approved: bool,
+        /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
+        #[arg(long, hide = true)]
+        mcp_echo_report_summary: bool,
     },
     /// Print the deterministic full hardware pipeline gate JSON Schema.
     PipelineSchema {
@@ -5110,6 +5113,7 @@ fn run_cli() -> Result<()> {
             plan,
             output,
             require_approved,
+            mcp_echo_report_summary,
         } => {
             // Reserve the destination and reject a plan/output alias before reading
             // the plan. Once parsed, repeat the alias check for every explicitly
@@ -5136,6 +5140,20 @@ fn run_cli() -> Result<()> {
             let report = run_deterministic_pipeline(&plan_document)?;
             let rendered = format!("{}\n", serde_json::to_string(&report)?);
             persist_atomic_new_file(prepared, &output, &rendered)?;
+            if mcp_echo_report_summary {
+                let summary = serde_json::json!({
+                    "schema_version": report.schema_version,
+                    "approved": report.approved,
+                    "plan_sha256": report.plan_sha256,
+                    "run_sha256": report.run_sha256,
+                    "failure_count": report.failures.len(),
+                    "report_bytes": rendered.len(),
+                    "report_sha256": hex::encode(Sha256::digest(rendered.as_bytes())),
+                });
+                serde_json::to_writer(&mut io::stdout(), &summary)?;
+                io::stdout().write_all(b"\n")?;
+                io::stdout().flush()?;
+            }
             eprintln!(
                 "deterministic pipeline: {}; {} failure(s); report={}",
                 if report.approved { "approved" } else { "rejected" },

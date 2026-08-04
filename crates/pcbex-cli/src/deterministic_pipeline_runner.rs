@@ -42,7 +42,7 @@ const MAX_FAILURES: usize = 128;
 const MAX_FAILURE_CHARS: usize = 4096;
 // The CLI appends one newline before publishing through the shared 128 MiB
 // output boundary, so reserve that final byte here.
-const MAX_REPORT_BYTES: usize = 128 * 1024 * 1024 - 1;
+pub(crate) const MAX_REPORT_BYTES: usize = 128 * 1024 * 1024 - 1;
 const MAX_TOTAL_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 const PLAN_HASH_DOMAIN: &[u8] = b"pcbex:deterministic-pipeline-plan:v1\0";
 const RUN_HASH_DOMAIN: &[u8] = b"pcbex:deterministic-pipeline-runner:v1\0";
