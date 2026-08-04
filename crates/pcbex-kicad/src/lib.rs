@@ -256,6 +256,11 @@ pub use schematic::{
     SchematicMarker, SchematicNet, SchematicPin, SchematicPinRef, SchematicSymbol,
     SchematicUnsupportedFeature, SchematicWire, import_schematic, schematic_json_schema,
 };
+mod schematic_writer;
+pub use schematic_writer::{
+    CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES, CIRCUIT_KICAD_SCHEMATIC_VERSION,
+    circuit_spec_v2_to_kicad_sch,
+};
 mod schematic_diff;
 pub use schematic_diff::{
     SchematicDiffCounts, SchematicDiffIdentity, SchematicNetChange, SchematicNetSummary,

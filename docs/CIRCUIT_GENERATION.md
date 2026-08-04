@@ -176,14 +176,17 @@ standalone v1.420 `fetch-catalog-snapshot` pre-step may acquire a caller-owned
 closed feed before generation, but generation itself consumes only that
 retained local snapshot. The v1.421 provenance option verifies and binds the
 retained fetch evidence but does not repeat the request. It does not map
-arbitrary supplier-native responses,
-verify datasheet ratings, generate a `.kicad_sch`, place or route a board, or
-authorize fabrication. When a schematic is authored separately, the native
-`verify-circuit-kicad-handoff` gate can verify its closed flat/single-unit
-semantic subset against the exact circuit-spec v2 intent; it is a verifier,
-not a converter. See [Circuit-spec v2 to KiCad schematic handoff
-verification](CIRCUIT_KICAD_HANDOFF.md) for the comparison boundary and
-retained rejection evidence.  v1.416 additionally provides the standalone
+arbitrary supplier-native responses or verify datasheet ratings. Generation
+bundle v2 itself still stops at the checked circuit specification and SKiDL.
+As an explicit downstream v1.422 step,
+`write-circuit-spec-kicad-schematic` can convert that approved specification
+to the closed flat/single-unit `.kicad_sch` subset, re-import it, and require
+the existing semantic handoff to pass before publication. It does not place or
+route a board or authorize fabrication. See [Deterministic circuit-spec v2 to
+KiCad schematic writer](CIRCUIT_KICAD_SCHEMATIC_WRITER.md) and
+[Circuit-spec v2 to KiCad schematic handoff
+verification](CIRCUIT_KICAD_HANDOFF.md) for the generation and comparison
+boundaries. v1.416 additionally provides the standalone
 `verify-circuit-kicad-board-binding` gate, which recalculates that handoff from
 the raw inputs and binds it to an actual `.kicad_pcb`.  It does not generate or
 modify a board or run geometry/routing/DRC/DFM checks; see [Circuit-spec v2 to

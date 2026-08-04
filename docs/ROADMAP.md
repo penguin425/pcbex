@@ -132,6 +132,7 @@ auditable release.
 | v1.419.0 | Composite-Action deterministic pipeline runner parity | Opt in the root Action with a closed plan, retain a fixed deterministic report and seven revalidated outputs, and publish valid rejection evidence before the optional final approval failure |
 | v1.420.0 | Bounded supplier inventory snapshot ingestion | Fetch one closed HTTPS catalog feed under deadline, byte, secret, and no-clobber bounds, then bind the exact response to a replayable local snapshot and receipt while selection stays offline |
 | v1.421.0 | Catalog-to-generation provenance | Bind one retained supplier fetch receipt and normalized snapshot to the recomputed catalog selection, exact circuit-generation bundle bytes, and generated SKiDL in a closed replay-verifiable sidecar without adding network access or changing generation bundle v2 |
+| v1.422.0 | Deterministic KiCad schematic writer | Convert an immutable-ERC-approved circuit-spec v2 into a bounded, deterministic flat/single-unit `.kicad_sch`, then re-import and verify the exact semantic handoff before atomic no-clobber publication |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -189,7 +190,7 @@ evidence. Supplier-native search/SDK adapters, autonomous substitution,
 reservation, purchase, datasheet truth, and qualification remain later
 boundaries.
 
-The current v1.421.0 milestone closes the evidence gap between that explicit
+The v1.421.0 milestone closes the evidence gap between that explicit
 fetch and offline circuit generation. An opt-in, closed provenance sidecar
 revalidates the retained fetch receipt and normalized snapshot, reconstructs
 and recomputes the catalog selection receipt embedded in generation bundle v2,
@@ -197,3 +198,14 @@ and binds the exact published bundle and SKiDL bytes. Existing generation
 invocations and bundle bytes remain compatible when the provenance inputs are
 not supplied. The bridge performs no fetch, supplier-native translation,
 substitution, reservation, purchase, datasheet validation, or fabrication.
+
+The current v1.422.0 milestone closes the next downstream gap with a
+deterministic `.kicad_sch` writer for the same closed circuit-spec v2 subset.
+Only immutable-ERC-approved flat, single-unit designs are emitted. Synthetic
+embedded symbol definitions, fixed grid placement, stable domain-separated
+UUIDs, net labels, no-connect markers, and circuit metadata make the result
+self-contained and replayable. The writer re-imports its own bytes and runs
+the existing semantic handoff verifier before the CLI atomically publishes a
+new file. Hierarchy, buses, multi-unit symbols, external library resolution,
+placement/routing, DRC/DFM, and existing-schematic mutation remain later
+boundaries.
