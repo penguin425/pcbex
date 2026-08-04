@@ -28,8 +28,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
-    fs::{self, File},
-    io::Read,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -1288,35 +1287,20 @@ fn read_snapshot(path: &Path, role: &str, maximum: u64) -> Result<Snapshot, Stri
     if path_metadata.len() == 0 || path_metadata.len() > maximum {
         return Err(format!("{role}: input must contain 1 to {maximum} bytes"));
     }
-    let mut file =
-        File::open(path).map_err(|error| format!("{role}: cannot open input: {error}"))?;
-    let opened_metadata = file
-        .metadata()
-        .map_err(|error| format!("{role}: cannot inspect opened input: {error}"))?;
-    if !opened_metadata.is_file() {
-        return Err(format!("{role}: opened input is not a regular file"));
-    }
-    verify_same_file(&path_metadata, &opened_metadata, role)?;
-    if opened_metadata.len() == 0 || opened_metadata.len() > maximum {
-        return Err(format!(
-            "{role}: opened input must contain 1 to {maximum} bytes"
-        ));
-    }
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take(maximum.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("{role}: cannot read input: {error}"))?;
+    let bytes = crate::bounded_io::read_with_limit(path, maximum).map_err(|error| {
+        let detail = error.to_string();
+        if detail.contains("symlink") {
+            format!("{role}: input path contains a symlink component")
+        } else if detail.contains("changed") || detail.contains("disappeared") {
+            format!("{role}: input changed while it was being read")
+        } else if detail.contains("exceeds") {
+            format!("{role}: input must contain 1 to {maximum} bytes")
+        } else {
+            format!("{role}: cannot read stable input ({})", error.kind())
+        }
+    })?;
     if bytes.is_empty() || bytes.len() as u64 > maximum {
         return Err(format!("{role}: input must contain 1 to {maximum} bytes"));
-    }
-    let final_metadata = file
-        .metadata()
-        .map_err(|error| format!("{role}: cannot re-inspect input: {error}"))?;
-    verify_same_file(&opened_metadata, &final_metadata, role)?;
-    if final_metadata.len() != opened_metadata.len() || bytes.len() as u64 != opened_metadata.len()
-    {
-        return Err(format!("{role}: input changed while it was being read"));
     }
     let evidence = PipelineEvidence {
         role: role.to_string(),
@@ -1350,25 +1334,6 @@ fn reject_symlink_components(path: &Path, role: &str) -> Result<(), String> {
             }
         }
     }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn verify_same_file(before: &fs::Metadata, after: &fs::Metadata, role: &str) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
-    if before.dev() != after.dev() || before.ino() != after.ino() {
-        Err(format!("{role}: input changed while it was being opened"))
-    } else {
-        Ok(())
-    }
-}
-
-#[cfg(not(unix))]
-fn verify_same_file(
-    _before: &fs::Metadata,
-    _after: &fs::Metadata,
-    _role: &str,
-) -> Result<(), String> {
     Ok(())
 }
 
@@ -1813,6 +1778,7 @@ fn bound_text(value: &str, maximum: usize) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
 

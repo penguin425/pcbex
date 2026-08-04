@@ -43,6 +43,45 @@ loose manufacturing manifest. Use
 `pcbex pipeline-schema --factory` for the closed v2 schema. Schema output also
 follows the no-clobber rules described below.
 
+## Composite Action parity
+
+The repository composite Action keeps pipeline verification opt-in. Set
+`pipeline-verify: "true"` together with the Action's existing `board` and
+`schematic` inputs and these dependent inputs:
+
+| Input | Required when enabled | Purpose |
+| --- | --- | --- |
+| `pipeline-verify` | No (defaults to `false`) | Enable the complete pipeline gate and its final Action fail check |
+| `pipeline-electrical-policy` | No | Optional electrical policy passed to the gate |
+| `pipeline-electrical-review` | Yes | Closed electrical review to verify |
+| `pipeline-manufacturing-package` | Yes | Final manufacturing ZIP selected for fabrication |
+| `pipeline-firmware-manifest` | Yes | Canonical-schematic-bound firmware manifest |
+| `pipeline-factory-receipt` | No | Previously produced normalized factory receipt |
+| `pipeline-require-factory` | No (defaults to `false`) | Require the receipt-bound v2 factory phase |
+
+The Action supplies its generated `run.json`, `checks.json`, and `quality.json`
+alongside these paths, and forwards the effective DFM/policy-pack and physical
+profile selected for analysis. `pipeline-verify: "false"` is the default;
+dependent pipeline inputs are rejected when the opt-in is disabled. The Action
+exposes `pipeline-report` (the retained
+`output-dir/pipeline-gate.json`) and `pipeline-passed` (`true` or `false`).
+Normal phase rejections are read back as structured evidence, added to the Job
+Summary/PR comment and retained artifact bundle, and only then does the final
+enforcement step fail the job. Thus a rejected pipeline remains inspectable;
+the final CI failure is not allowed to discard its report. Preflight misuse
+(for example, a missing required dependent input or an output collision) can
+fail before a report is possible.
+
+At Action startup, `output-dir` must either be absent or be an empty real
+directory. A symlink or any existing directory entry is rejected before the
+Action creates its owned analysis tree. This prevents stale or
+attacker-controlled files from being attributed to the current run.
+
+The Action's factory inputs have the same semantics as the CLI: supplying a
+receipt validates it, while `pipeline-require-factory: "true"` additionally
+requires a passing factory phase. All Action paths remain subject to the
+regular-file, bounded-I/O, and no-overwrite rules described below.
+
 ## What is verified
 
 The v1 report contains these five phases in order. The v2 report retains them
@@ -125,7 +164,7 @@ the values actually produced; the commands below show POSIX output):
 {
   "schema_version": 2,
   "engine": "pcbex",
-  "engine_version": "1.413.0",
+  "engine_version": "1.414.0",
   "schematic_sha256": "<canonical IR SHA-256>",
   "artifacts": [
     {"path": "pinout.h", "bytes": 123, "sha256": "<sha256>"},
@@ -286,6 +325,35 @@ Those checks narrow the filesystem interface; they are not a general process
 sandbox or a claim of complete TOCTOU immunity. Use job-private directories and
 trusted upstream producers when hostile concurrent filesystem mutation is in
 scope.
+
+## MCP tool parity
+
+The stdio MCP server exposes the same bounded checks without inventing a second
+verification contract:
+
+* `check_schematic` requires `input` and `output`. It accepts optional
+  `explain`, `junit_output`, `sarif_output`, and either `policy` or
+  `policy_pack` (never both), plus `require_approved`. The closed review and
+  any requested explanation/SARIF artifact are retained and returned in
+  structured content.
+* `check_circuit_spec` requires `input` and `output` and accepts
+  `require_approved`; it normalizes circuit-spec v2 and runs the immutable
+  electrical ERC floor before retaining the check report.
+* `pipeline_verify` requires `schematic`, `electrical_review`, `board`,
+  `analysis_manifest`, `analysis_checks`, `quality`,
+  `manufacturing_package`, `firmware_manifest`, and `output`. It accepts the
+  optional policy, analysis-source, physical-profile, factory-receipt, and
+  `require_factory` arguments described by the CLI contract.
+
+When the negotiated protocol advertises MCP Tasks, all three tools declare
+`execution.taskSupport: "optional"`; callers may provide a task TTL and use
+`tasks/get`, `tasks/result`, `tasks/list`, or `tasks/cancel`. Without Tasks they
+run synchronously. A task does not change validation or filesystem semantics:
+the bounded child is cancelled at expiry, and the result includes the retained
+JSON report even when the tool's deterministic gate rejects an input. Expected
+check/gate rejection is represented as an error result with structured report
+content so an MCP host can inspect failures rather than mistaking a missing
+artifact for a clean run.
 
 ## Factory and repository boundaries
 

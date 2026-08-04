@@ -124,6 +124,7 @@ auditable release.
 | v1.412.0 | Digest-bound catalog selection | Resolve MPNs from a bounded local catalog snapshot, retain a closed selection receipt, and run a second Rust ERC gate on the resolved circuit |
 | v1.412.1 | Hardened manufacturing filesystem boundaries | Pin manufacturing publication directories, double-read bounded sources, stream BOM/CPL output, cap extracted parts, and reserve complete-workspace quotas before package creation |
 | v1.413.0 | Digest-bound physical-profile injection | Apply one bounded geometry/DFM authority across placement, routing, analysis, and fabrication while binding its exact and canonical digests through manufacturing and pipeline verification |
+| v1.414.0 | MCP/Action hardware pipeline parity | Expose schematic, circuit-spec, and complete pipeline checks through MCP and opt-in composite Action inputs/outputs, retaining rejection reports before the final CI gate |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -132,15 +133,19 @@ and archive checksum mismatches. An optional repository audit also verifies
 that `main` has strict required checks, linear history, conversation
 resolution, and force-push/deletion protection.
 
-The current release adds a closed physical constraint profile for board
+The v1.413.0 release added a closed physical constraint profile for board
 dimensions/outlines, fixed components, keepouts, and manufacturing minima.
 Profile loading is size- and topology-bounded, rejects duplicate JSON keys,
 applies atomically, and cannot relax existing manufacturing rules. Exact-source
 and domain-separated canonical SHA-256 identities are carried by schema-v2
 analysis and manufacturing manifests; pipeline verification reopens the
 authorized profile and rejects source, semantic, or cross-phase substitution.
-No-profile schema-v1 artifacts remain compatible.
+No-profile schema-v1 artifacts remain compatible. The current v1.414.0 release
+keeps that profile binding intact while forwarding the complete hardware
+pipeline through the composite GitHub Action and MCP: `check_schematic`,
+`check_circuit_spec`, and `pipeline_verify` retain closed reports, support
+optional MCP Tasks, and expose Action outputs and opt-in final fail gates.
 
-The next roadmap work is a verified circuit-to-KiCad handoff, followed by a
-headless schematic-to-manufacturing orchestrator and qualified live supplier
-selection.
+With the MCP and Action paths now aligned, the next roadmap work is a verified
+circuit-to-KiCad handoff, followed by a headless schematic-to-manufacturing
+orchestrator and qualified live supplier selection.

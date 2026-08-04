@@ -2108,7 +2108,7 @@ steps:
       printf '%s\n' "$PCBEX_POLICY_PUBLIC_KEY" \
         > "$RUNNER_TEMP/pcbex-policy-root.pub"
   - id: hardware
-    uses: penguin425/pcbex@v1.413.0
+    uses: penguin425/pcbex@v1.414.0
     with:
       board: hardware/controller.kicad_pcb
       baseline-board: .pcbex-baseline/hardware/controller.kicad_pcb
@@ -2144,6 +2144,35 @@ The action outputs the artifact directory, current and comparison SARIF paths,
 violation count, regression result, and optional PR comment URL.
 `upload-sarif` is opt-in because the calling job must grant
 `security-events: write`; artifact upload defaults to on.
+
+Version 1.414.0 adds opt-in hardware-pipeline parity. Set
+`pipeline-verify: "true"` and provide the existing `board`/`schematic` plus
+the closed electrical review, final manufacturing ZIP, and firmware manifest;
+`pipeline-electrical-policy`, `pipeline-factory-receipt`, and
+`pipeline-require-factory` are optional. The Action forwards the generated
+analysis manifests, the effective physical profile/policy, and these inputs to
+`pipeline-verify`, then exposes `pipeline-report` and `pipeline-passed`:
+
+```yaml
+# Add these fields to a `penguin425/pcbex@v1.414.0` step:
+with:
+  board: hardware/controller.kicad_pcb
+  schematic: hardware/controller.kicad_sch
+  pipeline-verify: "true"
+  pipeline-electrical-review: build/electrical-review.json
+  pipeline-manufacturing-package: build/manufacturing/manufacturing.zip
+  pipeline-firmware-manifest: build/firmware/manifest.json
+```
+
+The gate writes its JSON report, Job Summary, comment content, and retained
+artifact evidence even when a phase rejects an input. The final Action
+enforcement step fails afterward when `pipeline-passed` is not `true`, so a
+failed check remains available for diagnosis. Keep the opt-in disabled for
+analysis-only workflows. The Action requires `output-dir` to be absent or an
+empty real directory when the step starts; a symlink or any pre-existing entry
+is rejected before analysis so stale or attacker-controlled files cannot be
+published as evidence.
+
 Toolchain installation, compilation, and hardware analysis run through a
 process-tree supervisor with fixed deadlines and output ceilings. Artifact,
 SARIF, and trusted direct-comment publication additionally require a
@@ -2297,6 +2326,40 @@ four concurrently. A task watchdog actively cancels bounded child work at TTL
 expiry. Older negotiated protocol versions continue to execute calls
 synchronously and ignore task augmentation as required by their capability
 model.
+
+Version 1.414.0 carries the complete hardware pipeline boundary into MCP. The
+server adds `check_schematic` (with optional explanation, JUnit, SARIF, and
+policy inputs), `check_circuit_spec` (circuit-spec v2 plus the immutable ERC
+floor), and `pipeline_verify` (the same required evidence and optional factory
+arguments as the CLI). When Tasks are negotiated, each tool advertises
+`execution.taskSupport: "optional"`; otherwise the call is synchronous. A
+rejected check still returns its retained JSON report in structured content
+with an error result, rather than dropping evidence.
+
+Minimal schematic-check call:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 7,
+  "method": "tools/call",
+  "params": {
+    "name": "check_schematic",
+    "arguments": {
+      "input": "hardware/controller.kicad_sch",
+      "output": "build/electrical-review.json"
+    }
+  }
+}
+```
+
+For the complete gate, call `pipeline_verify` with `schematic`,
+`electrical_review`, `board`, `analysis_manifest`, `analysis_checks`, `quality`,
+`manufacturing_package`, `firmware_manifest`, and `output`; add
+`analysis_physical_profile`, `factory_receipt`, or `require_factory` when those
+bindings are selected. A caller that supports Tasks may add
+`"task": {"ttl": 600000}` to the request and retrieve the retained result with
+`tasks/get` and `tasks/result`.
 
 Analysis and routing tools require explicit output paths and may overwrite
 files there. MCP hosts should retain their normal user-approval prompt for
@@ -4117,7 +4180,7 @@ secret-free receipt. Pass the key from GitHub Secrets:
 
 ```yaml
 - id: ai-review
-  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.413.0
+  uses: penguin425/pcbex/.github/actions/managed-ai-review@v1.414.0
   with:
     request: hardware/ai-review-request.json
     provider: openai

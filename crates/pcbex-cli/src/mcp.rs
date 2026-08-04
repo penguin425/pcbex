@@ -447,6 +447,9 @@ impl McpServer {
                     | "compare_schematics"
                     | "route_schematic_reviewers"
                     | "route_kicad"
+                    | "check_schematic"
+                    | "check_circuit_spec"
+                    | "pipeline_verify"
             )
         ) {
             return error_response(
@@ -870,6 +873,84 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "policy_pack": {"type": "string"},
                     "physical_profile": {"type": "string"},
                     "fail_on_violations": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "check_schematic",
+            "Check KiCad schematic",
+            "Run deterministic electrical checks on a KiCad schematic and retain the closed review and optional explanation, JUnit, and SARIF artifacts.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "output"],
+                "properties": {
+                    "input": {"type": "string"},
+                    "output": {"type": "string"},
+                    "explain": {"type": "string"},
+                    "junit_output": {"type": "string"},
+                    "sarif_output": {"type": "string"},
+                    "policy": {"type": "string"},
+                    "policy_pack": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                },
+                "not": {"required": ["policy", "policy_pack"]}
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "check_circuit_spec",
+            "Check circuit specification",
+            "Normalize a circuit-spec v2 JSON document, run its immutable electrical ERC floor, and retain the closed check report.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "output"],
+                "properties": {
+                    "input": {"type": "string"},
+                    "output": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "pipeline_verify",
+            "Verify hardware pipeline",
+            "Verify the complete deterministic hardware pipeline and retain its closed multi-phase gate report, including rejected reports.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "schematic", "electrical_review", "board", "analysis_manifest",
+                    "analysis_checks", "quality", "manufacturing_package",
+                    "firmware_manifest", "output"
+                ],
+                "properties": {
+                    "schematic": {"type": "string"},
+                    "electrical_policy": {"type": "string"},
+                    "electrical_review": {"type": "string"},
+                    "board": {"type": "string"},
+                    "analysis_manifest": {"type": "string"},
+                    "analysis_checks": {"type": "string"},
+                    "quality": {"type": "string"},
+                    "analysis_project": {"type": "string"},
+                    "analysis_rules": {"type": "string"},
+                    "analysis_dfm_profile": {"type": "string"},
+                    "analysis_policy_pack": {"type": "string"},
+                    "analysis_physical_profile": {"type": "string"},
+                    "manufacturing_package": {"type": "string"},
+                    "firmware_manifest": {"type": "string"},
+                    "factory_receipt": {"type": "string"},
+                    "require_factory": {"type": "boolean", "default": false},
+                    "output": {"type": "string"}
                 }
             }),
             false,
@@ -4413,6 +4494,9 @@ fn call_tool(
         "verify_policy_pack" => verify_policy_pack(arguments, cancellation)?,
         "fetch_policy_pack" => fetch_policy_pack(arguments, cancellation)?,
         "analyze_kicad" => analyze_kicad(arguments, cancellation)?,
+        "check_schematic" => check_schematic(arguments, cancellation)?,
+        "check_circuit_spec" => check_circuit_spec(arguments, cancellation)?,
+        "pipeline_verify" => pipeline_verify(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
         "compare_manufacturing_feedback" => {
@@ -5120,6 +5204,192 @@ fn analyze_kicad(
     Ok(execution_result(
         execution,
         json!({"artifact_dir": output_dir, "manifest": manifest}),
+    ))
+}
+
+fn check_schematic(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "input",
+            "output",
+            "explain",
+            "junit_output",
+            "sarif_output",
+            "policy",
+            "policy_pack",
+            "require_approved",
+        ],
+    )?;
+    let input = required_string(&arguments, "input")?;
+    let output = required_string(&arguments, "output")?;
+    if arguments.contains_key("policy") && arguments.contains_key("policy_pack") {
+        return Err(json!({
+            "detail": "policy and policy_pack cannot be used together"
+        }));
+    }
+    let explain = optional_string(&arguments, "explain")?;
+    let junit_output = optional_string(&arguments, "junit_output")?;
+    let sarif_output = optional_string(&arguments, "sarif_output")?;
+    require_absent_outputs([
+        Some(output.as_str()),
+        explain.as_deref(),
+        junit_output.as_deref(),
+        sarif_output.as_deref(),
+    ])?;
+    let mut command = vec![
+        "check-schematic".into(),
+        input,
+        "--output".into(),
+        output.clone(),
+    ];
+    optional_option(&arguments, "explain", "--explain", &mut command)?;
+    optional_option(&arguments, "junit_output", "--junit-output", &mut command)?;
+    optional_option(&arguments, "sarif_output", "--sarif-output", &mut command)?;
+    optional_option(&arguments, "policy", "--policy", &mut command)?;
+    optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let review = read_json_if_present(Path::new(&output));
+    let execution = require_retained_json(execution, &review, "check-schematic output");
+    let explanation = explain
+        .as_deref()
+        .map(|path| read_json_if_present(Path::new(path)));
+    let execution = if let Some(explanation) = explanation.as_ref() {
+        require_retained_json(execution, explanation, "check-schematic explanation")
+    } else {
+        execution
+    };
+    let execution = if let Some(path) = junit_output.as_deref() {
+        require_retained_file(execution, Path::new(path), "check-schematic JUnit output")
+    } else {
+        execution
+    };
+    let sarif = sarif_output
+        .as_deref()
+        .map(|path| read_json_if_present(Path::new(path)));
+    let execution = if let Some(sarif) = sarif.as_ref() {
+        require_retained_json(execution, sarif, "check-schematic SARIF output")
+    } else {
+        execution
+    };
+    Ok(execution_result(
+        execution,
+        json!({
+            "output": output,
+            "review": review,
+            "explain": explain,
+            "explanation": explanation,
+            "junit_output": junit_output,
+            "sarif_output": sarif_output,
+            "sarif": sarif
+        }),
+    ))
+}
+
+fn check_circuit_spec(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["input", "output", "require_approved"])?;
+    let input = required_string(&arguments, "input")?;
+    let output = required_string(&arguments, "output")?;
+    require_absent_outputs([Some(output.as_str())])?;
+    let command = vec![
+        "check-circuit-spec".into(),
+        input,
+        "--output".into(),
+        output.clone(),
+    ];
+    let mut command = command;
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    let execution = execute(&command, cancellation)?;
+    let check = read_json_if_present(Path::new(&output));
+    let execution = require_retained_json(execution, &check, "check-circuit-spec output");
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "check": check}),
+    ))
+}
+
+fn pipeline_verify(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "schematic",
+            "electrical_policy",
+            "electrical_review",
+            "board",
+            "analysis_manifest",
+            "analysis_checks",
+            "quality",
+            "analysis_project",
+            "analysis_rules",
+            "analysis_dfm_profile",
+            "analysis_policy_pack",
+            "analysis_physical_profile",
+            "manufacturing_package",
+            "firmware_manifest",
+            "factory_receipt",
+            "require_factory",
+            "output",
+        ],
+    )?;
+    let output = required_string(&arguments, "output")?;
+    require_absent_outputs([Some(output.as_str())])?;
+    let mut command = vec!["pipeline-verify".into()];
+    for (name, option) in [
+        ("schematic", "--schematic"),
+        ("electrical_review", "--electrical-review"),
+        ("board", "--board"),
+        ("analysis_manifest", "--analysis-manifest"),
+        ("analysis_checks", "--analysis-checks"),
+        ("quality", "--quality"),
+        ("manufacturing_package", "--manufacturing-package"),
+        ("firmware_manifest", "--firmware-manifest"),
+    ] {
+        command.extend([option.into(), required_string(&arguments, name)?]);
+    }
+    for (name, option) in [
+        ("electrical_policy", "--electrical-policy"),
+        ("analysis_project", "--analysis-project"),
+        ("analysis_rules", "--analysis-rules"),
+        ("analysis_dfm_profile", "--analysis-dfm-profile"),
+        ("analysis_policy_pack", "--analysis-policy-pack"),
+        ("analysis_physical_profile", "--analysis-physical-profile"),
+        ("factory_receipt", "--factory-receipt"),
+    ] {
+        optional_option(&arguments, name, option, &mut command)?;
+    }
+    optional_flag(
+        &arguments,
+        "require_factory",
+        "--require-factory",
+        &mut command,
+    )?;
+    command.extend(["--output".into(), output.clone()]);
+    let execution = execute(&command, cancellation)?;
+    let report = read_json_if_present(Path::new(&output));
+    let execution = require_retained_json(execution, &report, "pipeline-verify output");
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report": report}),
     ))
 }
 
@@ -11728,6 +11998,52 @@ fn execution_result(execution: Execution, fields: Value) -> Value {
     Value::Object(result)
 }
 
+fn require_retained_json(mut execution: Execution, value: &Value, label: &str) -> Execution {
+    if execution.success && !value.is_object() {
+        execution.success = false;
+        if execution.stderr.is_empty() {
+            execution.stderr = format!("{label} was not retained as valid JSON");
+        }
+    }
+    execution
+}
+
+fn require_retained_file(mut execution: Execution, path: &Path, label: &str) -> Execution {
+    if execution.success
+        && !matches!(
+            crate::bounded_io::read_with_limit(path, MAX_MCP_RESPONSE_BYTES as u64),
+            Ok(bytes) if !bytes.is_empty()
+        )
+    {
+        execution.success = false;
+        if execution.stderr.is_empty() {
+            execution.stderr = format!("{label} was not retained as a non-empty regular file");
+        }
+    }
+    execution
+}
+
+fn require_absent_outputs<'a>(
+    paths: impl IntoIterator<Item = Option<&'a str>>,
+) -> std::result::Result<(), Value> {
+    for path in paths.into_iter().flatten() {
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => {
+                return Err(json!({
+                    "detail": "output path already exists; refusing stale MCP evidence"
+                }));
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => {
+                return Err(json!({
+                    "detail": "output path could not be safely inspected"
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn read_json_if_present(path: &Path) -> Value {
     crate::bounded_io::read_with_limit(path, MAX_MCP_RESPONSE_BYTES as u64)
         .ok()
@@ -12086,7 +12402,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 140);
+        assert_eq!(tools.len(), 143);
         let named = |name: &str| {
             tools
                 .iter()
@@ -12146,6 +12462,42 @@ mod tests {
         assert_eq!(
             named("analyze_kicad")["inputSchema"]["properties"]["physical_profile"]["type"],
             "string"
+        );
+        assert_eq!(
+            named("check_schematic")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("check_schematic")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("check_schematic")["inputSchema"]["properties"]["junit_output"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("check_schematic")["inputSchema"]["not"]["required"],
+            json!(["policy", "policy_pack"])
+        );
+        assert_eq!(
+            named("check_circuit_spec")["inputSchema"]["required"],
+            json!(["input", "output"])
+        );
+        assert_eq!(
+            named("check_circuit_spec")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("pipeline_verify")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("pipeline_verify")["inputSchema"]["properties"]["factory_receipt"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("pipeline_verify")["execution"]["taskSupport"],
+            "optional"
         );
         assert_eq!(
             named("route_kicad")["inputSchema"]["properties"]["physical_profile"]["type"],
@@ -12834,6 +13186,132 @@ mod tests {
     }
 
     #[test]
+    fn new_pipeline_tools_reject_unknown_empty_and_wrong_typed_arguments() {
+        let mut server = ready_server();
+        for (id, name, arguments) in [
+            (
+                10,
+                "check_schematic",
+                json!({"input": "input.kicad_sch", "output": "review.json", "extra": true}),
+            ),
+            (
+                11,
+                "check_circuit_spec",
+                json!({"input": "", "output": "check.json"}),
+            ),
+            (
+                13,
+                "check_schematic",
+                json!({
+                    "input": "input.kicad_sch",
+                    "output": "review.json",
+                    "policy": "policy.json",
+                    "policy_pack": "policy-pack.json"
+                }),
+            ),
+            (
+                12,
+                "pipeline_verify",
+                json!({
+                    "schematic": "schematic.kicad_sch",
+                    "electrical_review": "review.json",
+                    "board": "board.kicad_pcb",
+                    "analysis_manifest": "run.json",
+                    "analysis_checks": "checks.json",
+                    "quality": "quality.json",
+                    "manufacturing_package": "manufacturing.zip",
+                    "firmware_manifest": "firmware.json",
+                    "output": "pipeline.json",
+                    "require_factory": "yes"
+                }),
+            ),
+        ] {
+            let response = server
+                .handle_message(request(
+                    id,
+                    "tools/call",
+                    json!({"name": name, "arguments": arguments}),
+                ))
+                .unwrap();
+            assert_eq!(response["error"]["code"], -32602, "{name}: {response}");
+        }
+    }
+
+    #[test]
+    fn successful_tool_process_requires_a_retained_json_artifact() {
+        let execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stderr: String::new(),
+        };
+        let failed = require_retained_json(execution, &Value::Null, "review");
+        assert!(!failed.success);
+        assert_eq!(failed.exit_code, Some(0));
+        assert!(failed.stderr.contains("review"));
+
+        let execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stderr: String::new(),
+        };
+        let retained = require_retained_json(execution, &json!({"approved": true}), "review");
+        assert!(retained.success);
+        assert!(retained.stderr.is_empty());
+
+        let directory = tempfile::tempdir().unwrap();
+        let empty = directory.path().join("empty.xml");
+        std::fs::write(&empty, []).unwrap();
+        let execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stderr: String::new(),
+        };
+        let failed = require_retained_file(execution, &empty, "JUnit");
+        assert!(!failed.success);
+        assert!(failed.stderr.contains("JUnit"));
+
+        let present = directory.path().join("present.xml");
+        std::fs::write(&present, b"<testsuite/>").unwrap();
+        let execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stderr: String::new(),
+        };
+        let retained = require_retained_file(execution, &present, "JUnit");
+        assert!(retained.success);
+        assert!(retained.stderr.is_empty());
+    }
+
+    #[test]
+    fn new_pipeline_tools_reject_preexisting_outputs_as_stale_evidence() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("old-check.json");
+        std::fs::write(&output, br#"{"approved":true}"#).unwrap();
+        let mut server = ready_server();
+        let response = server
+            .handle_message(request(
+                30,
+                "tools/call",
+                json!({
+                    "name": "check_circuit_spec",
+                    "arguments": {
+                        "input": "missing-spec.json",
+                        "output": output
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["data"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(std::fs::read(&output).unwrap(), br#"{"approved":true}"#);
+    }
+
+    #[test]
     fn rejects_batches_and_never_responds_to_notifications() {
         let mut server = ready_server();
         assert_eq!(
@@ -12918,6 +13396,40 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn new_pipeline_tools_accept_task_augmented_calls() {
+        for (index, name) in ["check_schematic", "check_circuit_spec", "pipeline_verify"]
+            .into_iter()
+            .enumerate()
+        {
+            let mut server = ready_server();
+            let created = server
+                .handle_message(request(
+                    10 + index as i64,
+                    "tools/call",
+                    json!({
+                        "name": name,
+                        "arguments": {},
+                        "task": {"ttl": 60_000}
+                    }),
+                ))
+                .unwrap();
+            let task_id = created["result"]["task"]["taskId"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert_eq!(created["result"]["task"]["status"], "working", "{name}");
+            let result = server
+                .handle_message(request(
+                    20 + index as i64,
+                    "tasks/result",
+                    json!({"taskId": task_id}),
+                ))
+                .unwrap();
+            assert_eq!(result["error"]["code"], -32602, "{name}: {result}");
+        }
     }
 
     #[test]
