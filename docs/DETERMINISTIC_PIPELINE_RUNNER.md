@@ -111,8 +111,57 @@ process path; they do not publish or authenticate an incomplete plan.
 
 The MCP tool adds no LLM, network, path discovery, gate, approval, design
 mutation, or manufacturing action. `run_deterministic_pipeline` remains a
-separate final-authority operation. Composite-Action compiler parity remains
-deferred.
+separate final-authority operation. Composite-Action compiler parity was
+deferred through v1.434.0 and is added in v1.435.0 below.
+
+## Composite-Action intent compiler parity (v1.435.0)
+
+The root composite Action accepts `deterministic-pipeline-intent` and
+`deterministic-pipeline-plan-output` as an explicit pair. Both values are
+workspace-relative paths. The pair is mutually exclusive with the legacy
+`deterministic-pipeline-plan` input, and a partially specified pair is invalid;
+these argument errors are reported before analysis starts. If both new values
+are empty, the Action remains analysis-only. If only the legacy plan is set,
+the existing v1.419 runner path is used unchanged.
+
+When the new pair is selected, the Action runs the same bounded shell-free
+intent compiler before analysis. The output destination must be a new regular
+file under the workspace: an existing file, alias, symlink, special file,
+intent/output alias, or unsafe parent is rejected and never overwritten. The
+compiler output is canonical plan-schema-v1 JSON with exactly one trailing
+newline. Its role paths use portable forward slashes and are resolved from the
+canonical parent of the plan-output path, never from the intent's parent. The
+intent may live elsewhere, but every required source must be a descendant of
+that plan parent; optional roles are explicit paths or `null`, while absolute
+paths, `..` rebasing, links, non-regular files, duplicate role paths, and
+source changes during compilation fail closed.
+
+After publication, the Action stable-reads both inputs and authenticates the
+compiler's exact five-field identity summary: schema version, intent source
+bytes, intent source SHA-256, plan source bytes, and plan source SHA-256. The
+plan-source identity covers the compact JSON and its final newline. The
+effective plan is then passed to the unchanged `run-deterministic-pipeline`
+runner. After runner EOF, the Action stable-reads the intent and effective plan
+again, requires their identities to remain equal to the compiler metadata, and
+requires the retained report's raw plan-source identity to match that same
+compiled plan. A post-compilation substitution therefore fails closed before
+attribution. The runner remains final authority for revalidation, snapshots,
+board binding, pipeline gates, report retention, and optional approval
+failure. The Action publishes only metadata, never plan or role-source bodies:
+
+- `deterministic-pipeline-effective-plan`;
+- `deterministic-pipeline-intent-source-bytes`;
+- `deterministic-pipeline-intent-source-sha256`;
+- `deterministic-pipeline-plan-source-bytes`; and
+- `deterministic-pipeline-plan-source-sha256`.
+
+The four source-identity outputs are empty outside compiler mode;
+`deterministic-pipeline-effective-plan` is the legacy plan path in legacy plan
+mode and is empty only in analysis-only mode. The existing runner outputs,
+including semantic `deterministic-pipeline-plan-sha256`, keep their previous
+meaning. This parity adds no LLM, network, path discovery,
+design mutation, gate, approval, or manufacturing behavior; stale, malformed,
+changed, or substituted evidence is rejected before attribution.
 
 ## MCP parity
 
@@ -141,9 +190,11 @@ checks remain authoritative.
 
 ## Composite Action parity
 
-The root composite Action keeps the runner disabled unless
-`deterministic-pipeline-plan` names a plan file. An empty input preserves the
-ordinary analysis-only Action behavior. Set
+The root composite Action keeps the runner disabled unless either
+`deterministic-pipeline-plan` names a legacy plan file or the paired
+`deterministic-pipeline-intent` and `deterministic-pipeline-plan-output`
+inputs compile an effective plan through the v1.435 boundary above. Leaving
+all three inputs empty preserves the ordinary analysis-only Action behavior. Set
 `deterministic-pipeline-require-approved: "true"` to make the final Action
 step fail when the retained runner report is not approved; the default
 `"false"` publishes a valid rejected report and completes the Action so a
@@ -151,7 +202,7 @@ caller can inspect it.
 
 When enabled, the Action always reserves the fixed no-clobber destination
 `${output-dir}/deterministic-pipeline-report.json`. It invokes the same
-bounded runner with the caller's plan and publishes that complete report and
+bounded runner with the selected effective plan and publishes that complete report and
 the following seven verified outputs:
 
 - `deterministic-pipeline-schema-version`;

@@ -91,6 +91,83 @@ class DeterministicPipelineActionTests(unittest.TestCase):
                     stream.write("\n".join(sys.argv[1:]) + "\n")
 
                 command = sys.argv[1] if len(sys.argv) > 1 else ""
+                if command == "compile-deterministic-pipeline-plan":
+                    intent = Path(sys.argv[sys.argv.index("compile-deterministic-pipeline-plan") + 1])
+                    output = Path(sys.argv[sys.argv.index("--output") + 1])
+                    mode = os.environ.get("PCBEX_DETERMINISTIC_PIPELINE_TEST_MODE", "approved")
+                    if mode == "compile-no-output":
+                        raise SystemExit(0)
+                    if mode == "compile-nonzero":
+                        raise SystemExit(7)
+                    plan_source = Path("plan.json").read_bytes()
+                    intent_source = intent.read_bytes()
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    output.write_bytes(plan_source)
+                    summary = {
+                        "schema_version": 1,
+                        "intent_source_bytes": len(intent_source),
+                        "intent_source_sha256": hashlib.sha256(intent_source).hexdigest(),
+                        "plan_source_bytes": len(plan_source),
+                        "plan_source_sha256": hashlib.sha256(plan_source).hexdigest(),
+                    }
+                    if mode == "compile-changed-intent":
+                        intent.write_bytes(b"changed intent\n")
+                    elif mode == "compile-changed-plan":
+                        output.write_bytes(b"changed plan\n")
+                    elif mode == "compile-invalid-plan":
+                        invalid = json.loads(plan_source)
+                        invalid["unexpected"] = True
+                        output.write_bytes((json.dumps(invalid, separators=(",", ":")) + "\n").encode())
+                    elif mode == "compile-wrong-schema":
+                        invalid = json.loads(plan_source)
+                        invalid["schema_version"] = 2
+                        output.write_bytes((json.dumps(invalid, separators=(",", ":")) + "\n").encode())
+                    elif mode == "compile-double-newline":
+                        output.write_bytes(plan_source + b"\n")
+                    elif mode == "compile-summary-extra":
+                        summary["extra"] = True
+                    elif mode == "compile-summary-missing":
+                        summary.pop("plan_source_sha256")
+                    elif mode == "compile-summary-schema-type":
+                        summary["schema_version"] = True
+                    elif mode == "compile-summary-bytes-type":
+                        summary["plan_source_bytes"] = "1"
+                    elif mode == "compile-summary-uppercase-sha":
+                        summary["plan_source_sha256"] = summary["plan_source_sha256"].upper()
+                    elif mode == "compile-summary-duplicate":
+                        rendered = (
+                            '{"schema_version":1,"intent_source_bytes":'
+                            + str(summary["intent_source_bytes"])
+                            + ',"intent_source_sha256":"'
+                            + summary["intent_source_sha256"]
+                            + '","plan_source_bytes":'
+                            + str(summary["plan_source_bytes"])
+                            + ',"plan_source_sha256":"'
+                            + summary["plan_source_sha256"]
+                            + '","plan_source_sha256":"'
+                            + summary["plan_source_sha256"]
+                            + '"}\n'
+                        )
+                        print(rendered, end="")
+                        raise SystemExit(0)
+                    elif mode == "compile-summary-malformed":
+                        print("{not-json")
+                        raise SystemExit(0)
+                    elif mode == "compile-summary-trailing":
+                        print(json.dumps(summary, separators=(",", ":")) + "\ntrailing")
+                        raise SystemExit(0)
+                    if mode in {
+                        "compile-invalid-plan",
+                        "compile-wrong-schema",
+                        "compile-double-newline",
+                    }:
+                        plan_source = output.read_bytes()
+                        summary["plan_source_bytes"] = len(plan_source)
+                        summary["plan_source_sha256"] = hashlib.sha256(plan_source).hexdigest()
+                    if "--mcp-echo-plan-summary" in sys.argv:
+                        print(json.dumps(summary, separators=(",", ":")))
+                    raise SystemExit(0)
+
                 if command == "analyze-kicad":
                     output_dir = Path(sys.argv[sys.argv.index("--output-dir") + 1])
                     output_dir.mkdir(parents=True, exist_ok=True)
@@ -101,6 +178,25 @@ class DeterministicPipelineActionTests(unittest.TestCase):
                     (output_dir / "quality.json").write_text("{}\n", encoding="utf-8")
                     (output_dir / "report.sarif").write_text("{}\n", encoding="utf-8")
                     (output_dir / "summary.md").write_text("ok\n", encoding="utf-8")
+                    mode = os.environ.get("PCBEX_DETERMINISTIC_PIPELINE_TEST_MODE", "approved")
+                    if mode in {
+                        "replace-compiled-plan-after-compile",
+                        "replace-compiled-intent-after-compile",
+                    }:
+                        if mode == "replace-compiled-plan-after-compile":
+                            compiled_plan = Path(
+                                os.environ["PCBEX_DETERMINISTIC_PIPELINE_PLAN_OUTPUT"]
+                            )
+                            replacement = json.loads(Path("plan.json").read_text(encoding="utf-8"))
+                            replacement["require_factory"] = True
+                            compiled_plan.write_text(
+                                json.dumps(replacement, separators=(",", ":")) + "\n",
+                                encoding="utf-8",
+                            )
+                        else:
+                            Path(
+                                os.environ["PCBEX_DETERMINISTIC_PIPELINE_INTENT"]
+                            ).write_bytes(b"changed intent after compiler verification\n")
                     if os.environ.get("PCBEX_DETERMINISTIC_PIPELINE_TEST_MODE") == "plant-stale":
                         (output_dir.parent / "deterministic-pipeline-report.json").write_bytes(
                             b"stale report planted by analyze\n"
@@ -123,13 +219,15 @@ class DeterministicPipelineActionTests(unittest.TestCase):
                 if mode == "no-report":
                     raise SystemExit(int(os.environ.get("PCBEX_DETERMINISTIC_PIPELINE_TEST_EXIT", "0")))
 
+                plan_source = Path(sys.argv[2]).read_bytes()
+
                 failures = [] if mode == "approved" else ["synthetic deterministic failure"]
                 approved = not failures
                 report = {
                     "schema_version": 1,
                     "engine_version": "1.419.0-test",
-                    "plan_source_bytes": 128,
-                    "plan_source_sha256": "1" * 64,
+                    "plan_source_bytes": len(plan_source),
+                    "plan_source_sha256": hashlib.sha256(plan_source).hexdigest(),
                     "plan_sha256": "a" * 64,
                     "input_evidence": [],
                     "binding": None,
@@ -218,6 +316,8 @@ class DeterministicPipelineActionTests(unittest.TestCase):
                         sys.stdout.buffer.write(b"x" * (4 * 1024 + 1))
                     else:
                         print(rendered)
+                if mode == "rejected" and "--require-approved" in sys.argv:
+                    raise SystemExit(7)
                 raise SystemExit(int(os.environ.get("PCBEX_DETERMINISTIC_PIPELINE_TEST_EXIT", "0")))
                 """
             ).strip()
@@ -358,6 +458,32 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         path.write_text(json.dumps(plan, separators=(",", ":")) + "\n", encoding="utf-8")
         return path
 
+    @staticmethod
+    def _write_intent(root: Path) -> Path:
+        intent = {
+            "schema_version": 1,
+            "circuit_spec": "circuit.json",
+            "schematic": "design.kicad_sch",
+            "electrical_policy": None,
+            "electrical_review": "electrical-review.json",
+            "board": "board.kicad_pcb",
+            "analysis_manifest": "analysis-manifest.json",
+            "analysis_checks": "analysis-checks.json",
+            "quality": "quality.json",
+            "analysis_project": None,
+            "analysis_rules": None,
+            "analysis_dfm_profile": None,
+            "analysis_policy_pack": None,
+            "analysis_physical_profile": None,
+            "manufacturing_package": "manufacturing.zip",
+            "firmware_manifest": "firmware/manifest.json",
+            "factory_receipt": None,
+            "require_factory": False,
+        }
+        path = root / "intent.json"
+        path.write_text(json.dumps(intent, separators=(",", ":")) + "\n", encoding="utf-8")
+        return path
+
     @classmethod
     def _run_script(
         cls,
@@ -365,6 +491,8 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         fake_binary: Path,
         *,
         plan: str = "plan.json",
+        intent: str = "",
+        plan_output: str = "",
         require_approved: str = "false",
         mode: str = "approved",
         pipeline_verify: str = "false",
@@ -380,6 +508,8 @@ class DeterministicPipelineActionTests(unittest.TestCase):
             "PCBEX_OUTPUT_DIR": "artifacts",
             "PCBEX_PIPELINE_VERIFY": pipeline_verify,
             "PCBEX_DETERMINISTIC_PIPELINE_PLAN": plan,
+            "PCBEX_DETERMINISTIC_PIPELINE_INTENT": intent,
+            "PCBEX_DETERMINISTIC_PIPELINE_PLAN_OUTPUT": plan_output,
             "PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED": require_approved,
             "PCBEX_DETERMINISTIC_PIPELINE_TEST_MODE": mode,
             "PCBEX_TEST_ARGUMENTS": str(root / "arguments"),
@@ -419,6 +549,7 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         fake_binary = root / "fake-pcbex"
         self._write_fake_binary(fake_binary)
         self._write_plan(root)
+        self._write_intent(root)
         schematic_bytes = (root / "design.kicad_sch").read_bytes()
         report = {
             "schema_version": 1,
@@ -554,6 +685,8 @@ class DeterministicPipelineActionTests(unittest.TestCase):
     def test_action_declares_deterministic_inputs_outputs_and_summary_bridge(self):
         action = (ROOT / "action.yml").read_text(encoding="utf-8")
         self.assertIn("  deterministic-pipeline-plan:\n", action)
+        self.assertIn("  deterministic-pipeline-intent:\n", action)
+        self.assertIn("  deterministic-pipeline-plan-output:\n", action)
         self.assertIn("  deterministic-pipeline-require-approved:\n", action)
         self.assertIn("  ai-review-generated-schematic:\n", action)
         self.assertIn("  ai-review-native-kicad-erc-report:\n", action)
@@ -565,12 +698,28 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertIn("PCBEX_AI_REVIEW_KICAD_CLI", action)
         for name in DETERMINISTIC_OUTPUTS:
             self.assertIn(f"  {name}:\n", action)
+        for name in (
+            "deterministic-pipeline-effective-plan",
+            "deterministic-pipeline-intent-source-bytes",
+            "deterministic-pipeline-intent-source-sha256",
+            "deterministic-pipeline-plan-source-bytes",
+            "deterministic-pipeline-plan-source-sha256",
+        ):
+            self.assertIn(f"  {name}:\n", action)
         for name in AI_ARTIFACT_OUTPUTS:
             self.assertIn(f"  {name}:\n", action)
         for name in NATIVE_WARNING_OUTPUTS:
             self.assertIn(f"  {name}:\n", action)
         script = ANALYSIS_SCRIPT.read_text(encoding="utf-8")
         self.assertIn("PCBEX_DETERMINISTIC_PIPELINE_PLAN", script)
+        self.assertIn("PCBEX_DETERMINISTIC_PIPELINE_INTENT", script)
+        self.assertIn("PCBEX_DETERMINISTIC_PIPELINE_PLAN_OUTPUT", script)
+        self.assertIn("compile-deterministic-pipeline-plan", script)
+        self.assertIn("--verify-compile", script)
+        self.assertIn("--expected-intent-source-bytes", script)
+        self.assertIn("--expected-intent-source-sha256", script)
+        self.assertIn("--expected-plan-source-bytes", script)
+        self.assertIn("--expected-plan-source-sha256", script)
         self.assertIn("run-deterministic-pipeline", script)
         self.assertIn("--mcp-echo-report-summary", script)
         self.assertIn("deterministic_pipeline_summary.py", script)
@@ -581,6 +730,265 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertEqual(self._commands(root), ["analyze-kicad"])
         for name in DETERMINISTIC_OUTPUTS:
             self.assertEqual(outputs.get(name), "", name)
+        for name in (
+            "deterministic-pipeline-effective-plan",
+            "deterministic-pipeline-intent-source-bytes",
+            "deterministic-pipeline-intent-source-sha256",
+            "deterministic-pipeline-plan-source-bytes",
+            "deterministic-pipeline-plan-source-sha256",
+        ):
+            self.assertEqual(outputs.get(name), "", name)
+
+    def test_compiler_mode_authenticates_metadata_and_runs_before_analysis(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            intent="intent.json",
+            plan_output="compiled-plan.json",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self._commands(root),
+            [
+                "compile-deterministic-pipeline-plan",
+                "analyze-kicad",
+                "run-deterministic-pipeline",
+            ],
+        )
+        outputs = self._outputs(root / "github-output")
+        intent_bytes = (root / "intent.json").read_bytes()
+        plan_bytes = (root / "compiled-plan.json").read_bytes()
+        self.assertEqual(outputs["deterministic-pipeline-effective-plan"], "compiled-plan.json")
+        self.assertEqual(outputs["deterministic-pipeline-intent-source-bytes"], str(len(intent_bytes)))
+        self.assertEqual(
+            outputs["deterministic-pipeline-intent-source-sha256"], self._sha256(intent_bytes)
+        )
+        self.assertEqual(outputs["deterministic-pipeline-plan-source-bytes"], str(len(plan_bytes)))
+        self.assertEqual(
+            outputs["deterministic-pipeline-plan-source-sha256"], self._sha256(plan_bytes)
+        )
+        self.assertEqual(json.loads(plan_bytes)["schema_version"], 1)
+
+    def test_compiler_output_is_retained_when_runner_rejects(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            intent="intent.json",
+            plan_output="compiled-plan.json",
+            mode="rejected",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((root / "compiled-plan.json").is_file())
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs["deterministic-pipeline-effective-plan"], "compiled-plan.json")
+        self.assertEqual(outputs["deterministic-pipeline-approved"], "false")
+
+    def test_compiler_source_replacement_after_verification_fails_closed(self):
+        for mode in (
+            "replace-compiled-plan-after-compile",
+            "replace-compiled-intent-after-compile",
+        ):
+            with self.subTest(mode=mode):
+                root, fake_binary = self._prepare_fixture()
+                original_intent = (root / "intent.json").read_bytes()
+                result = self._run_script(
+                    root,
+                    fake_binary,
+                    plan="",
+                    intent="intent.json",
+                    plan_output="compiled-plan.json",
+                    mode=mode,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(
+                    self._commands(root),
+                    [
+                        "compile-deterministic-pipeline-plan",
+                        "analyze-kicad",
+                        "run-deterministic-pipeline",
+                    ],
+                )
+                outputs = self._outputs(root / "github-output")
+                self.assertEqual(outputs["deterministic-pipeline-effective-plan"], "compiled-plan.json")
+                self.assertEqual(
+                    outputs["deterministic-pipeline-intent-source-bytes"],
+                    str(len(original_intent)),
+                )
+                self.assertEqual(
+                    outputs["deterministic-pipeline-intent-source-sha256"],
+                    self._sha256(original_intent),
+                )
+                self.assertEqual(outputs["deterministic-pipeline-approved"], "")
+                self.assertEqual(outputs["deterministic-pipeline-report"], "")
+                self.assertTrue((root / "artifacts" / "deterministic-pipeline-report.json").is_file())
+                if mode == "replace-compiled-plan-after-compile":
+                    self.assertNotEqual(
+                        outputs["deterministic-pipeline-plan-source-sha256"],
+                        self._sha256((root / "compiled-plan.json").read_bytes()),
+                    )
+                else:
+                    self.assertNotEqual(
+                        outputs["deterministic-pipeline-intent-source-sha256"],
+                        self._sha256((root / "intent.json").read_bytes()),
+                    )
+
+    def test_compiler_rejected_require_approved_retains_report_and_metadata(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            intent="intent.json",
+            plan_output="compiled-plan.json",
+            require_approved="true",
+            mode="rejected",
+        )
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self._commands(root),
+            [
+                "compile-deterministic-pipeline-plan",
+                "analyze-kicad",
+                "run-deterministic-pipeline",
+            ],
+        )
+        outputs = self._outputs(root / "github-output")
+        compiled_plan = (root / "compiled-plan.json").read_bytes()
+        intent = (root / "intent.json").read_bytes()
+        report = root / "artifacts" / "deterministic-pipeline-report.json"
+        self.assertTrue(compiled_plan)
+        self.assertTrue(report.is_file())
+        self.assertEqual(outputs["deterministic-pipeline-effective-plan"], "compiled-plan.json")
+        self.assertEqual(outputs["deterministic-pipeline-intent-source-bytes"], str(len(intent)))
+        self.assertEqual(outputs["deterministic-pipeline-intent-source-sha256"], self._sha256(intent))
+        self.assertEqual(outputs["deterministic-pipeline-plan-source-bytes"], str(len(compiled_plan)))
+        self.assertEqual(outputs["deterministic-pipeline-plan-source-sha256"], self._sha256(compiled_plan))
+        self.assertEqual(outputs["deterministic-pipeline-report"], "artifacts/deterministic-pipeline-report.json")
+        self.assertEqual(outputs["deterministic-pipeline-approved"], "false")
+        self.assertEqual(outputs["status"], "error")
+
+    def test_compiler_input_dependency_and_conflicts_fail_before_child(self):
+        cases = (
+            {"intent": "intent.json", "plan_output": ""},
+            {"intent": "", "plan_output": "compiled-plan.json"},
+            {"intent": "intent.json", "plan_output": "compiled-plan.json", "plan": "plan.json"},
+        )
+        for case in cases:
+            with self.subTest(case=case):
+                root, fake_binary = self._prepare_fixture()
+                result = self._run_script(
+                    root,
+                    fake_binary,
+                    plan=case.get("plan", ""),
+                    intent=case["intent"],
+                    plan_output=case["plan_output"],
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self._commands(root), [])
+
+    def test_compiler_stale_output_is_preserved_without_child_invocation(self):
+        root, fake_binary = self._prepare_fixture()
+        sentinel = b"old compiled plan\n"
+        (root / "compiled-plan.json").write_bytes(sentinel)
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            intent="intent.json",
+            plan_output="compiled-plan.json",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+        self.assertEqual((root / "compiled-plan.json").read_bytes(), sentinel)
+
+    def test_compiler_summary_and_evidence_mutations_fail_closed(self):
+        modes = (
+            "compile-summary-extra",
+            "compile-summary-missing",
+            "compile-summary-schema-type",
+            "compile-summary-bytes-type",
+            "compile-summary-uppercase-sha",
+            "compile-summary-duplicate",
+            "compile-summary-malformed",
+            "compile-summary-trailing",
+            "compile-changed-intent",
+            "compile-changed-plan",
+            "compile-invalid-plan",
+            "compile-wrong-schema",
+            "compile-double-newline",
+        )
+        for mode in modes:
+            with self.subTest(mode=mode):
+                root, fake_binary = self._prepare_fixture()
+                result = self._run_script(
+                    root,
+                    fake_binary,
+                    plan="",
+                    intent="intent.json",
+                    plan_output="compiled-plan.json",
+                    mode=mode,
+                )
+                self.assertNotEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self._commands(root), ["compile-deterministic-pipeline-plan"])
+
+    def test_compiler_nonzero_or_missing_output_fails_before_analysis(self):
+        for mode in ("compile-nonzero", "compile-no-output"):
+            with self.subTest(mode=mode):
+                root, fake_binary = self._prepare_fixture()
+                result = self._run_script(
+                    root,
+                    fake_binary,
+                    plan="",
+                    intent="intent.json",
+                    plan_output="compiled-plan.json",
+                    mode=mode,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self._commands(root), ["compile-deterministic-pipeline-plan"])
+                self.assertFalse((root / "compiled-plan.json").exists())
+
+    def test_compiler_intent_and_output_paths_reject_links_and_oversize(self):
+        root, fake_binary = self._prepare_fixture()
+        intent_link = root / "intent-link.json"
+        intent_link.symlink_to(root / "intent.json")
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            intent=intent_link.name,
+            plan_output="compiled-plan.json",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+        root, fake_binary = self._prepare_fixture()
+        output_link = root / "compiled-plan-link.json"
+        output_link.symlink_to(root / "missing-plan.json")
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            intent="intent.json",
+            plan_output=output_link.name,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+        root, fake_binary = self._prepare_fixture()
+        (root / "oversized-intent.json").write_bytes(b"x" * (4 * 1024 * 1024 + 1))
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            intent="oversized-intent.json",
+            plan_output="compiled-plan.json",
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
 
     def test_bound_ai_quorum_runs_after_fresh_runner_and_forwards_exact_artifact_flags(self):
         root, fake_binary = self._prepare_fixture()
@@ -985,6 +1393,14 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertEqual(
             outputs["deterministic-pipeline-report-sha256"], self._sha256(report_bytes)
         )
+        self.assertEqual(outputs["deterministic-pipeline-effective-plan"], "plan.json")
+        for name in (
+            "deterministic-pipeline-intent-source-bytes",
+            "deterministic-pipeline-intent-source-sha256",
+            "deterministic-pipeline-plan-source-bytes",
+            "deterministic-pipeline-plan-source-sha256",
+        ):
+            self.assertEqual(outputs[name], "", name)
 
     def test_rejected_without_enforcement_succeeds_and_retains_report(self):
         root, result, outputs = self._valid_run(mode="rejected")

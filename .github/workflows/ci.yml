@@ -673,6 +673,30 @@ jobs:
               factory_receipt: null,
               require_factory: false
             }' > "$smoke_dir/plan.json"
+          # Retain the descriptor plan as a schema fixture; the Action below
+          # exercises only the closed intent compiler and does not exercise
+          # the legacy plan-only composite path.
+          jq -n \
+            '{
+              schema_version: 1,
+              circuit_spec: "circuit.json",
+              schematic: "design.kicad_sch",
+              electrical_policy: null,
+              electrical_review: "review.json",
+              board: "design.kicad_pcb",
+              analysis_manifest: "analysis-manifest.json",
+              analysis_checks: "analysis-checks.json",
+              quality: "quality.json",
+              analysis_project: null,
+              analysis_rules: null,
+              analysis_dfm_profile: null,
+              analysis_policy_pack: null,
+              analysis_physical_profile: null,
+              manufacturing_package: "package.bin",
+              firmware_manifest: "firmware/manifest.json",
+              factory_receipt: null,
+              require_factory: false
+            }' > "$smoke_dir/intent.json"
       - name: Exercise the public composite action
         id: pcbex
         uses: ./
@@ -776,7 +800,8 @@ jobs:
           policy-deployment-verification-observed-analysis: build/action-rollout/deployed
           policy-deployment-verification-verified-at-unix: "6"
           fail-on-policy-deployment-verification: "true"
-          deterministic-pipeline-plan: build/deterministic-pipeline/plan.json
+          deterministic-pipeline-intent: build/deterministic-pipeline/intent.json
+          deterministic-pipeline-plan-output: build/deterministic-pipeline/compiled-plan.json
           deterministic-pipeline-require-approved: "false"
           output-dir: build/action-analysis
           fail-on-violations: "false"
@@ -795,6 +820,11 @@ jobs:
           DETERMINISTIC_PIPELINE_FAILURE_COUNT: ${{ steps.pcbex.outputs.deterministic-pipeline-failure-count }}
           DETERMINISTIC_PIPELINE_REPORT_BYTES: ${{ steps.pcbex.outputs.deterministic-pipeline-report-bytes }}
           DETERMINISTIC_PIPELINE_REPORT_SHA256: ${{ steps.pcbex.outputs.deterministic-pipeline-report-sha256 }}
+          DETERMINISTIC_PIPELINE_EFFECTIVE_PLAN: ${{ steps.pcbex.outputs.deterministic-pipeline-effective-plan }}
+          DETERMINISTIC_PIPELINE_INTENT_BYTES: ${{ steps.pcbex.outputs.deterministic-pipeline-intent-source-bytes }}
+          DETERMINISTIC_PIPELINE_INTENT_SHA256: ${{ steps.pcbex.outputs.deterministic-pipeline-intent-source-sha256 }}
+          DETERMINISTIC_PIPELINE_PLAN_SOURCE_BYTES: ${{ steps.pcbex.outputs.deterministic-pipeline-plan-source-bytes }}
+          DETERMINISTIC_PIPELINE_PLAN_SOURCE_SHA256: ${{ steps.pcbex.outputs.deterministic-pipeline-plan-source-sha256 }}
           COMMENT_URL: ${{ steps.pcbex.outputs.comment-url }}
           VIOLATION_COUNT: ${{ steps.pcbex.outputs.violation-count }}
           REGRESSION: ${{ steps.pcbex.outputs.regression }}
@@ -848,6 +878,14 @@ jobs:
           APPROVAL_LOG_WITNESS_QUORUM_MET: ${{ steps.pcbex.outputs.approval-log-witness-quorum-met }}
         run: |
           test "$DETERMINISTIC_PIPELINE_REPORT" = "build/action-analysis/deterministic-pipeline-report.json"
+          test "$DETERMINISTIC_PIPELINE_EFFECTIVE_PLAN" = "build/deterministic-pipeline/compiled-plan.json"
+          test -s "$DETERMINISTIC_PIPELINE_EFFECTIVE_PLAN"
+          test -s build/deterministic-pipeline/plan.json
+          test "$(jq -r '.schema_version' build/deterministic-pipeline/plan.json)" = "1"
+          test "$DETERMINISTIC_PIPELINE_INTENT_BYTES" = "$(wc -c < build/deterministic-pipeline/intent.json | tr -d ' ')"
+          test "$DETERMINISTIC_PIPELINE_INTENT_SHA256" = "$(sha256sum build/deterministic-pipeline/intent.json | cut -d' ' -f1)"
+          test "$DETERMINISTIC_PIPELINE_PLAN_SOURCE_BYTES" = "$(wc -c < build/deterministic-pipeline/compiled-plan.json | tr -d ' ')"
+          test "$DETERMINISTIC_PIPELINE_PLAN_SOURCE_SHA256" = "$(sha256sum build/deterministic-pipeline/compiled-plan.json | cut -d' ' -f1)"
           test -s "$DETERMINISTIC_PIPELINE_REPORT"
           test "$DETERMINISTIC_PIPELINE_SCHEMA_VERSION" = "1"
           test "$DETERMINISTIC_PIPELINE_APPROVED" = "false"

@@ -146,6 +146,7 @@ auditable release.
 | v1.432.0 | Standalone native KiCad ERC fresh replay | Expose read-only fresh replay for standalone native KiCad schematic ERC v1/v2 through CLI, MCP, and focused Action; retain rejected evidence before optional approval gates, propagate Task cancellation, stable-read the original schematic, and preserve AI/run contracts |
 | v1.433.0 | Closed deterministic pipeline intent compiler | Compile a closed intent with explicit output-plan-parent-relative role paths into a canonical digest-bound deterministic pipeline plan, computing bytes/SHA identities without LLM, network, or path discovery; keep the existing runner as final authority and defer MCP/Action compiler parity |
 | v1.434.0 | MCP deterministic pipeline intent compiler parity | Expose the closed intent compiler synchronously and through optional MCP Tasks, authenticate retained plan and intent identities through a strict bounded child summary, and keep the runner and composite Action contracts unchanged |
+| v1.435.0 | Composite-Action deterministic pipeline intent compiler parity | Accept an explicit intent/output pair, compile before analysis, authenticate exact intent/plan bytes and SHA identities, reuse the effective plan with the unchanged runner, and publish bounded metadata while preserving legacy plan and analysis-only behavior |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -400,4 +401,37 @@ metadata-only structured content. Plan and role-source bodies never enter the
 MCP response. The compiler still performs no LLM, network, path discovery,
 gate, approval, design mutation, or manufacturing action, and the existing
 runner remains final authority. Composite-Action compiler parity remains
-deferred.
+deferred in v1.434.0.
+
+The v1.435.0 milestone adds composite-Action parity for the same closed intent
+compiler. The root Action accepts the paired workspace-relative inputs
+`deterministic-pipeline-intent` and `deterministic-pipeline-plan-output`; they
+are mutually exclusive with the legacy `deterministic-pipeline-plan`, and a
+partial or mixed selection fails before analysis. The compiler runs before
+analysis through the bounded shell-free process path and publishes only to a
+new no-clobber output. Explicit role paths are portable forward-slash values
+resolved from the canonical parent of the plan-output path, not the intent's
+parent; every source must be a descendant of that parent, while absolute,
+traversal, link, special-file, duplicate, stale, or concurrently changed
+evidence is rejected fail-closed.
+
+The Action authenticates the exact five-field compiler summary—schema version,
+intent source bytes, intent source SHA-256, plan source bytes, and plan source
+SHA-256—where plan bytes include compact canonical JSON and its one trailing
+newline. It passes the resulting effective plan to the unchanged
+`run-deterministic-pipeline` runner. After runner EOF, the Action stable-reads
+the intent and effective plan again, matches them against the compiler
+metadata, and requires the report's raw plan-source identity to match that
+compiled plan, closing post-compilation substitution races before attribution.
+The runner remains authoritative for snapshots, board binding, gates, report
+retention, and optional approval failure. The Action publishes only
+`deterministic-pipeline-effective-plan`,
+`deterministic-pipeline-intent-source-bytes`,
+`deterministic-pipeline-intent-source-sha256`,
+`deterministic-pipeline-plan-source-bytes`, and
+`deterministic-pipeline-plan-source-sha256`; the four source-identity outputs
+are empty outside compiler mode. `deterministic-pipeline-effective-plan` is
+the legacy plan path in legacy plan mode and is empty only in analysis-only
+mode. This milestone adds no LLM, network, discovery, gate, approval, design
+mutation, or manufacturing behavior. Empty new inputs preserve analysis-only
+behavior, and legacy plan-only callers retain the existing runner contract.

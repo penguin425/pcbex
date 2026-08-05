@@ -215,6 +215,11 @@ write_output deterministic-pipeline-run-sha256 ""
 write_output deterministic-pipeline-failure-count ""
 write_output deterministic-pipeline-report-bytes ""
 write_output deterministic-pipeline-report-sha256 ""
+write_output deterministic-pipeline-effective-plan ""
+write_output deterministic-pipeline-intent-source-bytes ""
+write_output deterministic-pipeline-intent-source-sha256 ""
+write_output deterministic-pipeline-plan-source-bytes ""
+write_output deterministic-pipeline-plan-source-sha256 ""
 
 pipeline_report=""
 pipeline_passed=""
@@ -222,7 +227,15 @@ pipeline_rc=0
 pipeline_verify="${PCBEX_PIPELINE_VERIFY:-false}"
 
 deterministic_pipeline_plan="${PCBEX_DETERMINISTIC_PIPELINE_PLAN:-}"
+deterministic_pipeline_intent="${PCBEX_DETERMINISTIC_PIPELINE_INTENT:-}"
+deterministic_pipeline_plan_output="${PCBEX_DETERMINISTIC_PIPELINE_PLAN_OUTPUT:-}"
 deterministic_pipeline_require_approved="${PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED:-false}"
+deterministic_pipeline_effective_plan=""
+deterministic_pipeline_compile_schema_version=""
+deterministic_pipeline_intent_source_bytes=""
+deterministic_pipeline_intent_source_sha256=""
+deterministic_pipeline_plan_source_bytes=""
+deterministic_pipeline_plan_source_sha256=""
 deterministic_pipeline_report=""
 deterministic_pipeline_schema_version=""
 deterministic_pipeline_approved=""
@@ -300,6 +313,16 @@ if [[ "$deterministic_pipeline_require_approved" != "true" &&
   "$deterministic_pipeline_require_approved" != "false" ]]; then
   echo "PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED must be true or false" >&2
   exit 2
+fi
+if [[ -n "$deterministic_pipeline_intent" || -n "$deterministic_pipeline_plan_output" ]]; then
+  if [[ -z "$deterministic_pipeline_intent" || -z "$deterministic_pipeline_plan_output" ]]; then
+    echo "PCBEX_DETERMINISTIC_PIPELINE_INTENT and PCBEX_DETERMINISTIC_PIPELINE_PLAN_OUTPUT must be supplied together" >&2
+    exit 2
+  fi
+  if [[ -n "$deterministic_pipeline_plan" ]]; then
+    echo "PCBEX_DETERMINISTIC_PIPELINE_INTENT/PCBEX_DETERMINISTIC_PIPELINE_PLAN_OUTPUT are mutually exclusive with PCBEX_DETERMINISTIC_PIPELINE_PLAN" >&2
+    exit 2
+  fi
 fi
 if [[ "$native_kicad_erc_require_approved" != "true" &&
   "$native_kicad_erc_require_approved" != "false" ]]; then
@@ -381,6 +404,78 @@ if ((ai_quorum_inputs == 3)) &&
   echo "AI approval quorum verification requires a policy pack or signed policy pack" >&2
   exit 2
 fi
+if [[ -n "$deterministic_pipeline_intent" ]]; then
+  python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
+    --validate-intent "$deterministic_pipeline_intent"
+  python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
+    --validate-compile-output "$deterministic_pipeline_plan_output"
+  deterministic_pipeline_compile_summary_json=""
+  if deterministic_pipeline_compile_summary_json="$(
+    python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
+      --timeout-seconds 2400 \
+      --max-stdout-bytes 4096 \
+      --max-stderr-bytes 8388608 \
+      --output-root "$PCBEX_OUTPUT_DIR" \
+      -- "$PCBEX_BINARY" \
+      compile-deterministic-pipeline-plan "$deterministic_pipeline_intent" \
+      --output "$deterministic_pipeline_plan_output" \
+      --mcp-echo-plan-summary |
+    python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
+      --verify-compile \
+      --intent "$deterministic_pipeline_intent" \
+      --plan "$deterministic_pipeline_plan_output"
+  )"; then
+    :
+  else
+    echo "deterministic pipeline intent compilation failed" >&2
+    exit 2
+  fi
+  deterministic_pipeline_compile_summary_values="$(
+    python3 - "$deterministic_pipeline_compile_summary_json" <<'PY'
+import json
+import sys
+
+fields = (
+    "schema_version",
+    "intent_source_bytes",
+    "intent_source_sha256",
+    "plan_source_bytes",
+    "plan_source_sha256",
+)
+value = json.loads(sys.argv[1])
+if type(value) is not dict or set(value) != set(fields) or len(value) != len(fields):
+    raise SystemExit(2)
+for field in fields:
+    item = value[field]
+    if type(item) not in (int, str) or (type(item) is int and item <= 0):
+        raise SystemExit(2)
+    print(f"{field}={item}")
+PY
+  )"
+  while IFS='=' read -r field value; do
+    case "$field" in
+      schema_version) deterministic_pipeline_compile_schema_version="$value" ;;
+      intent_source_bytes) deterministic_pipeline_intent_source_bytes="$value" ;;
+      intent_source_sha256) deterministic_pipeline_intent_source_sha256="$value" ;;
+      plan_source_bytes) deterministic_pipeline_plan_source_bytes="$value" ;;
+      plan_source_sha256) deterministic_pipeline_plan_source_sha256="$value" ;;
+      *)
+        echo "deterministic pipeline compiler summary contained an unknown field" >&2
+        exit 2
+        ;;
+    esac
+  done <<< "$deterministic_pipeline_compile_summary_values"
+  if [[ "$deterministic_pipeline_compile_schema_version" != "1" ||
+    -z "$deterministic_pipeline_intent_source_bytes" ||
+    -z "$deterministic_pipeline_intent_source_sha256" ||
+    -z "$deterministic_pipeline_plan_source_bytes" ||
+    -z "$deterministic_pipeline_plan_source_sha256" ]]; then
+    echo "deterministic pipeline compiler summary metadata is incomplete" >&2
+    exit 2
+  fi
+  deterministic_pipeline_plan="$deterministic_pipeline_plan_output"
+fi
+deterministic_pipeline_effective_plan="$deterministic_pipeline_plan"
 if [[ -z "$deterministic_pipeline_plan" ]]; then
   if [[ "$deterministic_pipeline_require_approved" == "true" ]]; then
     echo "PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED requires PCBEX_DETERMINISTIC_PIPELINE_PLAN" >&2
@@ -2734,6 +2829,20 @@ if [[ -n "$deterministic_pipeline_plan" ]]; then
     if [[ "$deterministic_pipeline_require_approved" == "true" || -n "$ai_review_generated_schematic" ]]; then
       deterministic_pipeline_arguments+=(--require-approved)
     fi
+    deterministic_pipeline_summary_arguments=(
+      --verify
+      --plan "$deterministic_pipeline_plan"
+      --report "$deterministic_pipeline_report_candidate"
+    )
+    if [[ -n "$deterministic_pipeline_intent" ]]; then
+      deterministic_pipeline_summary_arguments+=(
+        --intent "$deterministic_pipeline_intent"
+        --expected-intent-source-bytes "$deterministic_pipeline_intent_source_bytes"
+        --expected-intent-source-sha256 "$deterministic_pipeline_intent_source_sha256"
+        --expected-plan-source-bytes "$deterministic_pipeline_plan_source_bytes"
+        --expected-plan-source-sha256 "$deterministic_pipeline_plan_source_sha256"
+      )
+    fi
     deterministic_pipeline_summary_json=""
     if deterministic_pipeline_summary_json="$(
       python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
@@ -2743,9 +2852,7 @@ if [[ -n "$deterministic_pipeline_plan" ]]; then
         --output-root "$PCBEX_OUTPUT_DIR" \
         -- "$PCBEX_BINARY" "${deterministic_pipeline_arguments[@]}" |
       python3 "$GITHUB_ACTION_PATH/scripts/deterministic_pipeline_summary.py" \
-        --verify \
-        --plan "$deterministic_pipeline_plan" \
-        --report "$deterministic_pipeline_report_candidate"
+        "${deterministic_pipeline_summary_arguments[@]}"
     )"; then
       deterministic_pipeline_rc=0
     else
@@ -4736,6 +4843,11 @@ write_output deterministic-pipeline-run-sha256 "$deterministic_pipeline_run_sha2
 write_output deterministic-pipeline-failure-count "$deterministic_pipeline_failure_count"
 write_output deterministic-pipeline-report-bytes "$deterministic_pipeline_report_bytes"
 write_output deterministic-pipeline-report-sha256 "$deterministic_pipeline_report_sha256"
+write_output deterministic-pipeline-effective-plan "$deterministic_pipeline_effective_plan"
+write_output deterministic-pipeline-intent-source-bytes "$deterministic_pipeline_intent_source_bytes"
+write_output deterministic-pipeline-intent-source-sha256 "$deterministic_pipeline_intent_source_sha256"
+write_output deterministic-pipeline-plan-source-bytes "$deterministic_pipeline_plan_source_bytes"
+write_output deterministic-pipeline-plan-source-sha256 "$deterministic_pipeline_plan_source_sha256"
 if [[ -n "$native_kicad_erc_schematic" && "$native_kicad_erc_rc" != "0" ]]; then
   write_output status error
   exit 1

@@ -13566,7 +13566,9 @@ fn trusted_deterministic_pipeline_plan_summary(
     let schema_version = object
         .get("schema_version")
         .and_then(Value::as_u64)
-        .filter(|value| *value == 1);
+        .filter(|value| {
+            *value == u64::from(crate::deterministic_pipeline_runner::PLAN_SCHEMA_VERSION)
+        });
     let intent_source_bytes = object
         .get("intent_source_bytes")
         .and_then(Value::as_u64)

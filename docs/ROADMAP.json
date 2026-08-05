@@ -699,6 +699,11 @@
     {
       "id": "mcp-deterministic-pipeline-intent-compiler-parity",
       "release": "v1.434.0",
+      "status": "released"
+    },
+    {
+      "id": "composite-action-deterministic-pipeline-intent-compiler-parity",
+      "release": "v1.435.0",
       "status": "current"
     }
   ]
