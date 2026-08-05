@@ -2184,12 +2184,63 @@ fn stdio_server_compiles_deterministic_pipeline_intent_sync_and_as_task() {
         ("analysis/checks.json", b"checks".as_slice()),
         ("analysis/quality.json", b"quality".as_slice()),
         ("manufacturing.zip", b"package".as_slice()),
-        ("firmware/manifest.json", b"firmware".as_slice()),
     ] {
         let path = output.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, bytes).unwrap();
     }
+    const FIRMWARE_ARTIFACTS: [&str; 7] = [
+        "pinout.h",
+        "firmware.h",
+        "firmware.c",
+        "firmware_smoke_test.c",
+        "firmware.cpp",
+        "firmware_cpp_smoke_test.cpp",
+        "host.py",
+    ];
+    let firmware = output.join("firmware");
+    fs::create_dir_all(&firmware).unwrap();
+    let artifacts = FIRMWARE_ARTIFACTS
+        .iter()
+        .map(|name| {
+            let bytes = name.as_bytes();
+            fs::write(firmware.join(name), bytes).unwrap();
+            json!({
+                "path": name,
+                "bytes": bytes.len(),
+                "sha256": hex::encode(Sha256::digest(bytes))
+            })
+        })
+        .collect::<Vec<_>>();
+    let skipped_build = |command: &str| {
+        json!({
+            "attempted": false,
+            "passed": false,
+            "command": [command],
+            "exit_code": null,
+            "smoke": {
+                "attempted": false,
+                "passed": false,
+                "command": ["smoke"],
+                "exit_code": null
+            }
+        })
+    };
+    fs::write(
+        firmware.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "schema_version": 2,
+            "engine": "pcbex",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "schematic_sha256": "a".repeat(64),
+            "artifacts": artifacts,
+            "c_build": skipped_build("cc"),
+            "cpp_build": skipped_build("c++"),
+            "python_check": skipped_build("python3")
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     let intent = output.join("intent/pipeline-intent.json");
     fs::write(
         &intent,

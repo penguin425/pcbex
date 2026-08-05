@@ -163,6 +163,36 @@ meaning. This parity adds no LLM, network, path discovery,
 design mutation, gate, approval, or manufacturing behavior; stale, malformed,
 changed, or substituted evidence is rejected before attribution.
 
+## Firmware-bundle compiler preflight (v1.436.0)
+
+The intent compiler now performs a bounded structural preflight whenever the
+explicit `firmware_manifest` role is present. The plan schema remains v1 and
+continues to carry only that one manifest descriptor; the compiler does not
+add the seven source artifacts or their hashes to the plan. The descriptor
+must name `manifest.json`, and its parent directory must contain exactly the
+manifest plus the seven fixed v2 source names. Every entry must be a regular
+file with no symlink or special-file component, and no extra, missing, or
+unsafe entry is accepted.
+
+The compiler stable-reads the manifest and each fixed source under the
+published per-file limits, rejects duplicate/unknown manifest fields and
+malformed artifact descriptors, and compares every bounded byte count and
+lowercase SHA-256 to the bytes it read. It rescans the directory after those
+reads, then compares a second complete bundle snapshot after confirming every
+explicit role. Any observed replacement, removal, link, addition, or content
+change fails closed. The no-clobber plan publication occurs only after this
+exact-eight identity check succeeds.
+
+This check is deliberately narrower than final approval. The compiler does
+not run C/C++/Python builds or smoke tests, approve build evidence, bind the
+canonical schematic, or perform a pipeline gate; it also makes no LLM,
+network, open-ended path-discovery, mutation, or manufacturing call. The deterministic runner
+and `pipeline-verify` reopen the original bundle, repeat their own exact-eight
+and artifact checks, and remain final authorities for staging, schematic
+binding, build evidence, reports, gates, and approval. The historical firmware
+generator contract still describes seven source artifacts; “exact eight” here
+means that manifest plus those seven sources as one input directory.
+
 ## MCP parity
 
 The MCP server exposes `run_deterministic_pipeline` with the same explicit

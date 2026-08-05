@@ -1592,7 +1592,12 @@ fn validate_quality(quality: &RoutingQuality) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_firmware_manifest(manifest: &FirmwareManifest) -> Result<(), String> {
+/// Validate the closed, non-approval shape of a v2 firmware manifest.
+///
+/// Build success and canonical schematic binding remain separate pipeline
+/// gate decisions; callers may safely reuse this function for admission
+/// checks without granting approval.
+pub(crate) fn validate_firmware_manifest(manifest: &FirmwareManifest) -> Result<(), String> {
     if manifest.schema_version != FIRMWARE_SCHEMA_VERSION {
         return Err(format!(
             "firmware manifest schema_version must be {FIRMWARE_SCHEMA_VERSION}"
@@ -2048,6 +2053,23 @@ mod tests {
                 }
             }
         });
+        let duplicate = serde_json::to_string(&manifest).unwrap().replacen(
+            &format!("\"schema_version\":{FIRMWARE_SCHEMA_VERSION}"),
+            &format!(
+                "\"schema_version\":{FIRMWARE_SCHEMA_VERSION},\"schema_version\":{FIRMWARE_SCHEMA_VERSION}"
+            ),
+            1,
+        );
+        fs::write(&manifest_path, duplicate).unwrap();
+        let phase = firmware_phase(&inputs, Some(&"a".repeat(64)));
+        assert!(!phase.passed);
+        assert!(
+            phase
+                .failures
+                .iter()
+                .any(|failure| failure.contains("duplicate field"))
+        );
+
         manifest["artifacts"][0]["sha256"] = Value::String("b".repeat(64));
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let phase = firmware_phase(&inputs, Some(&"a".repeat(64)));

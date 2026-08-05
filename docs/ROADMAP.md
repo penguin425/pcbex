@@ -147,6 +147,7 @@ auditable release.
 | v1.433.0 | Closed deterministic pipeline intent compiler | Compile a closed intent with explicit output-plan-parent-relative role paths into a canonical digest-bound deterministic pipeline plan, computing bytes/SHA identities without LLM, network, or path discovery; keep the existing runner as final authority and defer MCP/Action compiler parity |
 | v1.434.0 | MCP deterministic pipeline intent compiler parity | Expose the closed intent compiler synchronously and through optional MCP Tasks, authenticate retained plan and intent identities through a strict bounded child summary, and keep the runner and composite Action contracts unchanged |
 | v1.435.0 | Composite-Action deterministic pipeline intent compiler parity | Accept an explicit intent/output pair, compile before analysis, authenticate exact intent/plan bytes and SHA identities, reuse the effective plan with the unchanged runner, and publish bounded metadata while preserving legacy plan and analysis-only behavior |
+| v1.436.0 | Deterministic firmware-bundle compiler preflight | Stable-preflight an exact eight-entry firmware bundle (manifest plus seven fixed source artifacts) before publishing a plan, validating strict manifest/artifact bytes, hashes, and link/extra rejection while keeping the v1 plan, runner, and pipeline authorities unchanged |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -435,3 +436,22 @@ the legacy plan path in legacy plan mode and is empty only in analysis-only
 mode. This milestone adds no LLM, network, discovery, gate, approval, design
 mutation, or manufacturing behavior. Empty new inputs preserve analysis-only
 behavior, and legacy plan-only callers retain the existing runner contract.
+
+The v1.436.0 milestone adds a deterministic firmware-bundle preflight to the
+closed intent compiler. The plan schema remains v1 and still carries only the
+single `firmware_manifest` descriptor; the compiler does not publish the
+seven source descriptors or their hashes into the plan. Before atomically
+publishing that plan, it stable-reads `manifest.json`, requires its parent to
+contain exactly the manifest plus the seven fixed v2 source artifacts, rejects
+symbolic links, special files, unsafe names, and extras, and verifies every manifest
+entry's bounded bytes and lowercase SHA-256 against the corresponding sibling.
+Each snapshot rescans the directory after its reads, and a final complete
+snapshot comparison makes any observed content or entry change fail closed.
+
+This is a structural and identity preflight only. The compiler does not run
+firmware builds or smoke tests, approve build evidence, bind the canonical
+schematic, call an LLM or network service, or change the plan schema. The
+deterministic runner and `pipeline-verify` reopen the original bundle, repeat
+their own exact-eight checks and artifact verification, and remain the final
+authorities for staging, schematic binding, build evidence, gates, reports,
+and approval.

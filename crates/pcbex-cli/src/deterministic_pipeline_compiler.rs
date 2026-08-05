@@ -3,18 +3,23 @@
 //! The runner consumes an explicit plan containing byte/SHA-256 descriptors,
 //! while callers usually have only the source paths.  This module is the
 //! narrow, side-effect-free bridge between those contracts: it reads a closed
-//! intent, computes every descriptor from bounded stable bytes, renders the
-//! existing plan-v1 wire shape, and reparses the rendered bytes through the
-//! runner's authoritative validator.  It never discovers files, invokes a
-//! child, calls a network service, or writes the destination.
+//! intent, computes every descriptor from bounded stable bytes, enforces the
+//! runner's fixed eight-file firmware bundle boundary, renders the existing
+//! plan-v1 wire shape, and reparses the rendered bytes through the runner's
+//! authoritative validator. It performs no open-ended discovery, invokes no
+//! child or network service, and never writes the destination.
 
 use crate::bounded_io as fs;
 use crate::deterministic_pipeline_runner::{
-    MAX_PLAN_BYTES, MAX_PLAN_PATH_CHARS, MAX_TOTAL_INPUT_BYTES, PLAN_SCHEMA_VERSION,
-    PORTABLE_PLAN_PATH_PATTERN, ROLE_ORDER, descriptor_limit, load_deterministic_pipeline_plan,
-    reject_duplicate_json_keys, reject_symlink_components, validate_relative_path,
+    DeterministicFirmwareBundleSnapshot, DeterministicPipelinePlan, MAX_PLAN_BYTES,
+    MAX_PLAN_PATH_CHARS, MAX_TOTAL_INPUT_BYTES, PLAN_SCHEMA_VERSION, PORTABLE_PLAN_PATH_PATTERN,
+    ROLE_ORDER, descriptor_limit, load_deterministic_pipeline_plan,
+    preflight_deterministic_firmware_bundle, reject_duplicate_json_keys, reject_symlink_components,
+    validate_relative_path,
 };
+use crate::firmware::{FIRMWARE_ARTIFACTS, FirmwareManifest};
 use crate::manufacturing_limits::portable_manufacturing_name_key;
+use crate::pipeline::validate_firmware_manifest;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -351,7 +356,23 @@ pub(crate) fn compile_deterministic_pipeline_plan(
     if plan_bytes.len() as u64 > MAX_PLAN_BYTES {
         bail!("compiled deterministic pipeline plan exceeds its byte limit")
     }
-    validate_rendered_plan(&plan_bytes, &output_parent)?;
+    let rendered_plan = validate_rendered_plan(&plan_bytes, &output_parent)?;
+    let firmware_bundle = validate_compiler_firmware_bundle(&rendered_plan)?;
+    let firmware_artifact_bytes = firmware_bundle
+        .entries
+        .iter()
+        .filter(|(name, _)| name.as_str() != "manifest.json")
+        .try_fold(0_u64, |total, (_, identity)| {
+            total
+                .checked_add(identity.bytes)
+                .ok_or_else(|| anyhow!("deterministic firmware artifact byte count overflow"))
+        })?;
+    aggregate_bytes = aggregate_bytes
+        .checked_add(firmware_artifact_bytes)
+        .ok_or_else(|| anyhow!("deterministic pipeline input byte count overflow"))?;
+    if aggregate_bytes > MAX_TOTAL_INPUT_BYTES {
+        bail!("deterministic pipeline inputs exceed the aggregate byte limit")
+    }
     confirm_wire_sources(&wire, &output_parent)?;
     confirm_intent_unchanged(
         intent_path,
@@ -359,6 +380,12 @@ pub(crate) fn compile_deterministic_pipeline_plan(
         &intent_bytes,
         &intent_source_sha256,
     )?;
+    // Keep the exact-eight resnapshot as the final source read before
+    // returning canonical plan bytes. The CLI still owns no-clobber
+    // publication, and the runner independently reopens the bundle later.
+    if validate_compiler_firmware_bundle(&rendered_plan)? != firmware_bundle {
+        bail!("firmware bundle changed during deterministic pipeline compilation")
+    }
 
     Ok(CompiledDeterministicPipelinePlan {
         plan_bytes,
@@ -442,6 +469,37 @@ fn confirm_intent_unchanged(
         bail!("deterministic pipeline intent changed during compilation")
     }
     Ok(())
+}
+
+fn validate_compiler_firmware_bundle(
+    plan: &DeterministicPipelinePlan,
+) -> Result<DeterministicFirmwareBundleSnapshot> {
+    let snapshot = preflight_deterministic_firmware_bundle(plan)?;
+    reject_duplicate_json_keys(&snapshot.manifest_bytes)
+        .context("parsing deterministic firmware bundle manifest")?;
+    let manifest: FirmwareManifest = serde_json::from_slice(&snapshot.manifest_bytes)
+        .context("parsing deterministic firmware bundle manifest")?;
+    validate_firmware_manifest(&manifest)
+        .map_err(anyhow::Error::msg)
+        .context("validating deterministic firmware bundle manifest")?;
+    for descriptor in &manifest.artifacts {
+        let observed = snapshot.entries.get(&descriptor.path).ok_or_else(|| {
+            anyhow!(
+                "deterministic firmware bundle preflight did not capture {}",
+                descriptor.path
+            )
+        })?;
+        if observed.bytes != descriptor.bytes || observed.sha256 != descriptor.sha256 {
+            bail!(
+                "firmware artifact {} does not match its manifest bytes/SHA-256 descriptor",
+                descriptor.path
+            )
+        }
+    }
+    if snapshot.entries.len() != FIRMWARE_ARTIFACTS.len() + 1 {
+        bail!("deterministic firmware bundle preflight did not capture exactly eight files")
+    }
+    Ok(snapshot)
 }
 
 fn compile_optional_descriptor(
@@ -571,7 +629,10 @@ fn resolve_existing_file(path: &Path, role: &str) -> Result<PathBuf> {
     Ok(canonical)
 }
 
-fn validate_rendered_plan(plan_bytes: &[u8], output_parent: &Path) -> Result<()> {
+fn validate_rendered_plan(
+    plan_bytes: &[u8],
+    output_parent: &Path,
+) -> Result<DeterministicPipelinePlan> {
     let mut temporary = tempfile::Builder::new()
         .prefix(".pcbex-compiled-plan-")
         .tempfile_in(output_parent)
@@ -583,7 +644,6 @@ fn validate_rendered_plan(plan_bytes: &[u8], output_parent: &Path) -> Result<()>
         .flush()
         .context("flushing temporary deterministic pipeline plan validation file")?;
     load_deterministic_pipeline_plan(temporary.path())
-        .map(|_| ())
         .context("revalidating compiled deterministic pipeline plan")
 }
 
@@ -633,12 +693,59 @@ mod tests {
             ("analysis/checks.json", b"checks".as_slice()),
             ("analysis/quality.json", b"quality".as_slice()),
             ("manufacturing.zip", b"package".as_slice()),
-            ("firmware/manifest.json", b"firmware".as_slice()),
         ] {
             let path = root.join(path);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, bytes).unwrap();
         }
+        write_firmware_bundle(root);
+    }
+
+    fn skipped_build(command: &str) -> Value {
+        json!({
+            "attempted": false,
+            "passed": false,
+            "command": [command],
+            "exit_code": null,
+            "smoke": {
+                "attempted": false,
+                "passed": false,
+                "command": ["smoke"],
+                "exit_code": null
+            }
+        })
+    }
+
+    fn write_firmware_bundle(root: &Path) {
+        let firmware = root.join("firmware");
+        fs::create_dir_all(&firmware).unwrap();
+        let artifacts = FIRMWARE_ARTIFACTS
+            .iter()
+            .map(|name| {
+                let bytes = name.as_bytes();
+                fs::write(firmware.join(name), bytes).unwrap();
+                json!({
+                    "path": name,
+                    "bytes": bytes.len(),
+                    "sha256": digest_hex(bytes)
+                })
+            })
+            .collect::<Vec<_>>();
+        let manifest = json!({
+            "schema_version": 2,
+            "engine": "pcbex",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "schematic_sha256": "a".repeat(64),
+            "artifacts": artifacts,
+            "c_build": skipped_build("cc"),
+            "cpp_build": skipped_build("c++"),
+            "python_check": skipped_build("python3")
+        });
+        fs::write(
+            firmware.join("manifest.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
