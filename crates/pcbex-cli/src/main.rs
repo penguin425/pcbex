@@ -3521,6 +3521,20 @@ enum Command {
         approval: PathBuf,
         request: PathBuf,
         response: PathBuf,
+        /// Live KiCad schematic semantically bound to a schema-v1 request.
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with_all = [
+                "generated_schematic",
+                "deterministic_pipeline_plan",
+                "deterministic_pipeline_report",
+                "native_kicad_erc_report",
+                "native_kicad_erc_warning_policy",
+                "kicad_cli"
+            ]
+        )]
+        schematic: Option<PathBuf>,
         /// Generated schematic whose exact bytes are bound by a v2 request.
         #[arg(
             long,
@@ -3583,7 +3597,18 @@ enum Command {
     VerifyAiQuorum {
         request: PathBuf,
         /// Live KiCad schematic semantically bound to a schema-v1 request.
-        #[arg(long, value_name = "PATH")]
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with_all = [
+                "generated_schematic",
+                "deterministic_pipeline_plan",
+                "deterministic_pipeline_report",
+                "native_kicad_erc_report",
+                "native_kicad_erc_warning_policy",
+                "kicad_cli"
+            ]
+        )]
         schematic: Option<PathBuf>,
         /// Generated schematic whose exact bytes are bound by a v2 request.
         #[arg(
@@ -11878,6 +11903,7 @@ fn run_cli() -> Result<()> {
             approval,
             request,
             response,
+            schematic,
             generated_schematic,
             deterministic_pipeline_plan,
             deterministic_pipeline_report,
@@ -11891,6 +11917,7 @@ fn run_cli() -> Result<()> {
         } => {
             let (approval, _) = read_described_json::<SignedAiApproval>(&approval)?;
             let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            verify_live_ai_review_schematic(&request, schematic.as_deref())?;
             verify_bound_ai_review_artifacts(
                 &request,
                 generated_schematic.as_deref(),
@@ -11989,23 +12016,7 @@ fn run_cli() -> Result<()> {
                 bail!("quorum JSON and Markdown output paths must differ");
             }
             let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
-            if let Some(path) = schematic.as_deref() {
-                if request.schema_version != 1 {
-                    bail!(
-                        "--schematic live binding requires an AI review request schema version 1"
-                    );
-                }
-                let source = read_bounded_utf8(
-                    path,
-                    "AI review schematic",
-                    pcbex_kicad::CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES,
-                )?;
-                let live_schematic = import_schematic(&source)
-                    .map_err(anyhow::Error::msg)
-                    .with_context(|| format!("importing {}", path.display()))?;
-                verify_ai_review_schematic_binding(&request, &live_schematic)
-                    .map_err(anyhow::Error::msg)?;
-            }
+            verify_live_ai_review_schematic(&request, schematic.as_deref())?;
             verify_bound_ai_review_artifacts(
                 &request,
                 generated_schematic.as_deref(),
@@ -16631,6 +16642,27 @@ fn write_closed_schema(
         print!("{rendered}");
     }
     Ok(())
+}
+
+fn verify_live_ai_review_schematic(
+    request: &AiReviewRequest,
+    schematic: Option<&Path>,
+) -> Result<()> {
+    let Some(path) = schematic else {
+        return Ok(());
+    };
+    if request.schema_version != 1 {
+        bail!("--schematic live binding requires an AI review request schema version 1");
+    }
+    let source = read_bounded_utf8(
+        path,
+        "AI review schematic",
+        pcbex_kicad::CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES,
+    )?;
+    let live_schematic = import_schematic(&source)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("importing {}", path.display()))?;
+    verify_ai_review_schematic_binding(request, &live_schematic).map_err(anyhow::Error::msg)
 }
 
 fn verify_bound_ai_review_artifacts(

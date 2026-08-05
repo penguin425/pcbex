@@ -3535,7 +3535,7 @@ deterministic-pipeline verification. Manifest, receipt, plan, and report
 schema versions are unchanged, and Gerber validation remains structural with
 no new semantic parser.
 
-Version 1.440.0 adds a focused, boardless AI schematic approval Action. It
+The released Version 1.440.0 adds a focused, boardless AI schematic approval Action. It
 does not call an AI provider or accept API/signing secrets. Instead, it binds a
 live `.kicad_sch` to an existing schema-v1 review request through the imported
 semantic IR, freshly recomputes the request's electrical review, and then
@@ -3574,9 +3574,27 @@ upload cannot be one atomic filesystem transaction in a composite Action.
 It is limited to schema-v1 requests; schema-v2 through v4 artifact-bound
 workflows remain available through the root Action and CLI. See
 [`docs/AI_SCHEMATIC_APPROVAL_ACTION.md`](docs/AI_SCHEMATIC_APPROVAL_ACTION.md).
-The focused Action (or `verify-ai-quorum --schematic`) is required for live
-schema-v1 source binding in this release; the legacy root-Action quorum route
-and MCP quorum tool do not add that live schematic automatically.
+
+Version 1.441.0 extends schema-v1 live schematic binding to single approval
+verification and MCP. Pass `--schematic` to `verify-ai-approval` alongside the
+request, response, and signed approval; the command imports the bounded KiCad
+schematic and freshly recomputes the electrical review before accepting the
+signature. The MCP `verify_schematic_approval` and
+`verify_schematic_approval_quorum` tools expose the same literal schematic
+path, with generated/native artifact modes remaining mutually exclusive.
+Formatting-equivalent source changes are accepted through the semantic IR,
+while semantic substitution or a fresh electrical-review mismatch fails closed
+before single-signature or quorum acceptance. Schema-v2 through v4 artifact
+bindings remain on their existing paths.
+
+```sh
+pcbex verify-ai-approval \
+  build/reviewer.approval.json \
+  build/ai-review-request.json \
+  build/reviewer.response.json \
+  --schematic hardware/controller.kicad_sch \
+  --public-key build/reviewer.pub
+```
 
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set

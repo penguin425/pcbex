@@ -1,3 +1,7 @@
+use pcbex_kicad::{
+    AiReviewArtifactBinding, AiReviewRequest, DeterministicPipelineIdentity, ExactArtifactIdentity,
+    bind_ai_review_request,
+};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -171,6 +175,117 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
         ])
         .status
         .success()
+    );
+    let equivalent_schematic = directory.join("equivalent-live.kicad_sch");
+    fs::write(
+        &equivalent_schematic,
+        format!("{}\n\n", fs::read_to_string(&schematic).unwrap()),
+    )
+    .unwrap();
+    assert!(
+        run(&[
+            "verify-ai-approval",
+            path(&approval),
+            path(&request),
+            path(&response),
+            "--schematic",
+            path(&equivalent_schematic),
+            "--public-key",
+            path(&public_key),
+            "--require-approved",
+        ])
+        .status
+        .success()
+    );
+
+    let mutated_schematic = directory.join("mutated-live.kicad_sch");
+    let schematic_source = fs::read_to_string(&schematic).unwrap();
+    let mutated_source = schematic_source.replace(
+        "00000000-0000-0000-0000-000000000100",
+        "00000000-0000-0000-0000-000000000101",
+    );
+    assert_ne!(mutated_source, schematic_source);
+    fs::write(&mutated_schematic, mutated_source).unwrap();
+    let mutated_verification = run(&[
+        "verify-ai-approval",
+        path(&approval),
+        path(&request),
+        path(&response),
+        "--schematic",
+        path(&mutated_schematic),
+        "--public-key",
+        path(&public_key),
+    ]);
+    assert!(!mutated_verification.status.success());
+    assert!(
+        String::from_utf8_lossy(&mutated_verification.stderr)
+            .contains("live schematic semantic document does not match")
+    );
+
+    let request_model: AiReviewRequest =
+        serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    let schema_v2_request = bind_ai_review_request(
+        &request_model,
+        &AiReviewArtifactBinding {
+            schema_version: 1,
+            generated_schematic: ExactArtifactIdentity {
+                bytes: 1,
+                sha256: "a".repeat(64),
+            },
+            pipeline: DeterministicPipelineIdentity {
+                plan_source: ExactArtifactIdentity {
+                    bytes: 1,
+                    sha256: "b".repeat(64),
+                },
+                plan_sha256: "c".repeat(64),
+                report: ExactArtifactIdentity {
+                    bytes: 1,
+                    sha256: "d".repeat(64),
+                },
+                run_sha256: "e".repeat(64),
+            },
+            native_kicad_erc: None,
+        },
+    )
+    .unwrap();
+    let schema_v2_request_path = directory.join("schema-v2-request.json");
+    fs::write(
+        &schema_v2_request_path,
+        serde_json::to_vec_pretty(&schema_v2_request).unwrap(),
+    )
+    .unwrap();
+    let schema_v2_verification = run(&[
+        "verify-ai-approval",
+        path(&approval),
+        path(&schema_v2_request_path),
+        path(&response),
+        "--schematic",
+        path(&schematic),
+        "--public-key",
+        path(&public_key),
+    ]);
+    assert!(!schema_v2_verification.status.success());
+    assert!(String::from_utf8_lossy(&schema_v2_verification.stderr).contains("schema version 1"));
+
+    let conflicting_live_artifacts = run(&[
+        "verify-ai-approval",
+        path(&approval),
+        path(&request),
+        path(&response),
+        "--schematic",
+        path(&schematic),
+        "--generated-schematic",
+        path(&schematic),
+        "--deterministic-pipeline-plan",
+        "missing-plan.json",
+        "--deterministic-pipeline-report",
+        "missing-report.json",
+        "--public-key",
+        path(&public_key),
+    ]);
+    assert!(!conflicting_live_artifacts.status.success());
+    assert!(
+        String::from_utf8_lossy(&conflicting_live_artifacts.stderr).contains("cannot be used with")
     );
 
     let session = directory.join("review-session.json");
