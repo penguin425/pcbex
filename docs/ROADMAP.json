@@ -679,6 +679,11 @@
     {
       "id": "native-kicad-pcb-drc-fresh-replay",
       "release": "v1.430.0",
+      "status": "released"
+    },
+    {
+      "id": "mcp-native-kicad-task-cancellation-propagation",
+      "release": "v1.431.0",
       "status": "current"
     }
   ]

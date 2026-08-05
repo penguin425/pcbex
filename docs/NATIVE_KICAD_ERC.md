@@ -3,6 +3,9 @@
 `pcbex run-native-kicad-erc` runs KiCad's own schematic electrical-rule
 checker and retains a normalized, digest-bound report. It is independent of
 pcbex's semantic electrical review and board DRC.
+Release v1.431.0 also hardens the Unix MCP Task path: cancellation reaches
+the KiCad process group and descendants, and no incomplete report is
+published. The synchronous CLI and composite-Action contracts are unchanged.
 
 ```sh
 pcbex run-native-kicad-erc hardware/generated.kicad_sch \
@@ -194,6 +197,20 @@ normalized `warning_policy` evidence, and sorted `policy_failures`. Its
 domain-separated run digest covers all of those fields. The policy and
 schematic are stable-read around execution; fresh verification also
 stable-reads the retained report and requires a byte-for-byte replay match.
+
+## MCP Task cancellation
+
+The MCP server exposes the native runner as `run_native_kicad_erc`, with the
+same `input`, `output`, optional `warning_policy`, `kicad_cli`, and
+`require_approved` controls as the CLI. Every MCP invocation calls the Rust
+`run_native_kicad_erc` runner directly in the MCP worker (or its warning-policy
+variant); Task calls additionally pass cancellation to the bounded process
+supervisor. On Unix, cancelling the Task terminates the KiCad process-group
+leader and every descendant, rather than leaving native work running. Output
+is staged privately and published atomically only after a complete normalized
+report has been validated, so cancellation cannot expose an incomplete report.
+The MCP response contract, synchronous CLI behavior, and focused/root Action
+contracts remain unchanged.
 
 ## AI approval binding
 

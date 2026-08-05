@@ -242,7 +242,7 @@ flow:
 
 ```yaml
 - id: native-drc
-  uses: penguin425/pcbex/actions/native-kicad-drc@v1.430.0
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.431.0
   with:
     board: hardware/controller.kicad_pcb
     # project: hardware/controller.kicad_pro
@@ -256,7 +256,7 @@ authenticated no-clobber copy under the new output directory:
 
 ```yaml
 - id: replay-native-drc
-  uses: penguin425/pcbex/actions/native-kicad-drc@v1.430.0
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.431.0
   with:
     mode: verify
     board: hardware/controller.kicad_pcb
@@ -273,6 +273,16 @@ boundary does not automatically connect `drc.rpt`, the existing internal DRC,
 native ERC, AI approval, or manufacturing/pipeline phases.
 The root Action remains run-only; retained-report replay is exposed by the
 focused Action and MCP tool.
+
+Release v1.431.0 hardens cancellation for native KiCad MCP Tasks.
+`run_native_kicad_drc` and `run_native_kicad_erc` now execute their Rust
+runners directly in the MCP worker for synchronous and Task calls. Task calls
+also pass cancellation to the bounded supervisor. On Unix, cancelling a Task
+terminates the KiCad process-group leader and all descendants together;
+publication stays atomic and waits for complete, validated report bytes, so an
+interrupted run never exposes an incomplete report. The MCP response contract,
+CLI commands, and composite Actions retain their existing external contracts;
+this release changes the MCP implementation path.
 
 ## KiCad boards
 

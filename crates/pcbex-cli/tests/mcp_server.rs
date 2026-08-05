@@ -5,7 +5,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{ChildStdin, ChildStdout, Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
@@ -77,8 +77,58 @@ fn fake_native_kicad_drc_cli(directory: &Path, name: &str, with_finding: bool) -
 }
 
 #[cfg(unix)]
-fn fake_sleeping_native_kicad_drc_cli(directory: &Path) -> PathBuf {
-    let path = directory.join("fake-drc-sleeping");
+fn fake_malformed_native_kicad_drc_cli(directory: &Path, name: &str) -> PathBuf {
+    let path = directory.join(name);
+    fs::write(
+        &path,
+        "#!/bin/sh\nout=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then out=$2; shift 2; else shift; fi\ndone\nprintf '%s' 'not-json' > \"$out\"\nexit 0\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn fake_native_kicad_erc_cli(directory: &Path, name: &str, with_error: bool) -> PathBuf {
+    let path = directory.join(name);
+    let status = if with_error { 5 } else { 0 };
+    let violations = if with_error {
+        r#"[{"description":"Pin not connected","items":[{"description":"Symbol U1 Pin 1","pos":{"x":1.0,"y":2.0},"uuid":"00000000-0000-0000-0000-000000000001"}],"severity":"error","type":"pin_not_connected"}]"#
+    } else {
+        "[]"
+    };
+    let report = format!(
+        r#"{{"$schema":"https://schemas.kicad.org/erc.v1.json","coordinate_units":"mm","date":"now","ignored_checks":[{{"description":"ignored","key":"ignored"}}],"included_severities":["error"],"kicad_version":"10.0.5","sheets":[{{"path":"/","uuid_path":"/root","violations":{violations}}}],"source":"input.kicad_sch"}}"#
+    );
+    let script = format!(
+        "#!/bin/sh\nout=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then out=$2; shift 2; else shift; fi\ndone\nprintf '%s' '{report}' > \"$out\"\nexit {status}\n"
+    );
+    fs::write(&path, script).unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn fake_native_kicad_erc_warning_cli(directory: &Path, name: &str) -> PathBuf {
+    let path = directory.join(name);
+    let report = r#"{"$schema":"https://schemas.kicad.org/erc.v1.json","coordinate_units":"mm","date":"now","ignored_checks":[{"description":"ignored","key":"ignored"}],"included_severities":["error","warning"],"kicad_version":"10.0.5","sheets":[{"path":"/","uuid_path":"/root","violations":[{"description":"Warning","items":[{"description":"Symbol U1 Pin 2","pos":{"x":3.0,"y":4.0},"uuid":"00000000-0000-0000-0000-000000000002"}],"severity":"warning","type":"warning_type"}]}],"source":"input.kicad_sch"}"#;
+    let script = format!(
+        "#!/bin/sh\nout=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then out=$2; shift 2; else shift; fi\ndone\nprintf '%s' '{report}' > \"$out\"\nexit 5\n"
+    );
+    fs::write(&path, script).unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn fake_sleeping_native_kicad_cli(directory: &Path, name: &str) -> PathBuf {
+    let path = directory.join(name);
     fs::write(
         &path,
         "#!/bin/sh\nsleep 600 &\nsleep_pid=$!\nprintf '%s %s\\n' \"$$\" \"$sleep_pid\" > \"$PCBEX_TEST_KICAD_PID_FILE\"\nwait \"$sleep_pid\"\n",
@@ -91,20 +141,149 @@ fn fake_sleeping_native_kicad_drc_cli(directory: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
+fn unix_process_group(pid: i32) -> Option<i32> {
+    unsafe extern "C" {
+        fn getpgid(pid: i32) -> i32;
+    }
+    if pid <= 0 {
+        return None;
+    }
+    let group = unsafe { getpgid(pid) };
+    (group > 0).then_some(group)
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn unix_process_exists(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    let stat_path = format!("/proc/{pid}/stat");
+    match fs::read_to_string(stat_path) {
+        Ok(stat) => stat
+            .rfind(") ")
+            .and_then(|close| stat.as_bytes().get(close + 2).copied())
+            .is_some_and(|state| state != b'Z'),
+        Err(_) => false,
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 fn unix_process_exists(pid: i32) -> bool {
     unsafe extern "C" {
         fn kill(pid: i32, signal: i32) -> i32;
     }
-    unsafe { kill(pid, 0) == 0 }
+    pid > 0 && unsafe { kill(pid, 0) == 0 }
 }
 
 #[cfg(unix)]
-fn kill_unix_process_group(pid: i32) {
+fn kill_unix_process_group(pgid: i32) {
     unsafe extern "C" {
         fn kill(pid: i32, signal: i32) -> i32;
     }
     const SIGKILL: i32 = 9;
-    let _ = unsafe { kill(-pid, SIGKILL) };
+    if pgid > 0 {
+        let _ = unsafe { kill(-pgid, SIGKILL) };
+    }
+}
+
+#[cfg(unix)]
+fn read_recorded_kicad_pids(pid_file: &Path) -> Vec<i32> {
+    fs::read_to_string(pid_file)
+        .ok()
+        .map(|source| {
+            source
+                .split_whitespace()
+                .filter_map(|value| value.parse::<i32>().ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(unix)]
+struct KicadProcessCleanup {
+    pid_file: PathBuf,
+    pids: Vec<i32>,
+    process_group: Option<i32>,
+}
+
+#[cfg(unix)]
+impl KicadProcessCleanup {
+    fn new(pid_file: &Path) -> Self {
+        Self {
+            pid_file: pid_file.to_path_buf(),
+            pids: Vec::new(),
+            process_group: None,
+        }
+    }
+
+    fn validated_process_group(pids: &[i32]) -> Option<i32> {
+        let (&shell, &sleep) = (pids.first()?, pids.get(1)?);
+        let shell_group = unix_process_group(shell)?;
+        let sleep_group = unix_process_group(sleep)?;
+        (shell_group == shell && sleep_group == shell_group).then_some(shell_group)
+    }
+
+    fn wait_for_start(&mut self) -> Vec<i32> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            let pids = read_recorded_kicad_pids(&self.pid_file);
+            if pids.len() == 2 {
+                self.pids = pids.clone();
+                if let Some(process_group) = Self::validated_process_group(&pids) {
+                    self.process_group = Some(process_group);
+                    return pids;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.pids = read_recorded_kicad_pids(&self.pid_file);
+        self.process_group = Self::validated_process_group(&self.pids);
+        if self.process_group.is_some() {
+            self.pids.clone()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn wait_for_exit(&self) -> Vec<i32> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.pids.iter().any(|pid| unix_process_exists(*pid)) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        self.pids
+            .iter()
+            .copied()
+            .filter(|pid| unix_process_exists(*pid))
+            .collect()
+    }
+}
+
+#[cfg(unix)]
+impl Drop for KicadProcessCleanup {
+    fn drop(&mut self) {
+        if self.pids.is_empty() {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            while self.process_group.is_none() && Instant::now() < deadline {
+                let pids = read_recorded_kicad_pids(&self.pid_file);
+                if !pids.is_empty() {
+                    self.pids = pids;
+                    self.process_group = Self::validated_process_group(&self.pids);
+                }
+                if self.process_group.is_none() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+        }
+        let Some(process_group) = self.process_group else {
+            return;
+        };
+        let descendant_is_running_in_group = self.pids.get(1).is_some_and(|pid| {
+            unix_process_exists(*pid) && unix_process_group(*pid) == Some(process_group)
+        });
+        if descendant_is_running_in_group {
+            kill_unix_process_group(process_group);
+        }
+    }
 }
 
 const HANDOFF_CIRCUIT_SPEC: &str = r#"{
@@ -601,14 +780,349 @@ fn stdio_server_verifies_native_drc_replay_and_preserves_rejected_summary() {
 
 #[cfg(unix)]
 #[test]
+fn stdio_server_direct_native_drc_bridge_retains_rejected_report_and_structured_failures() {
+    const SUMMARY_FIELDS: [&str; 17] = [
+        "schema_version",
+        "approved",
+        "violation_count",
+        "unconnected_item_count",
+        "schematic_parity_count",
+        "error_count",
+        "warning_count",
+        "ignored_check_count",
+        "board_bytes",
+        "board_sha256",
+        "project_bytes",
+        "project_sha256",
+        "rules_file_bytes",
+        "rules_file_sha256",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+    ];
+    let output = temporary_directory("mcp-native-drc-direct-bridge");
+    fs::create_dir_all(&output).unwrap();
+    let rejected_cli = fake_native_kicad_drc_cli(&output, "fake-drc-direct-rejected", true);
+    let malformed_cli = fake_malformed_native_kicad_drc_cli(&output, "fake-drc-direct-malformed");
+    let board = output.join("board.kicad_pcb");
+    let report = output.join("rejected.json");
+    let malformed_report = output.join("malformed.json");
+    fs::write(&board, b"board").unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .current_dir(&output)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize(
+        &mut stdin,
+        &mut stdout,
+        json!("initialize-native-drc-direct-bridge"),
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "direct-rejected",
+            "method": "tools/call",
+            "params": {
+                "name": "run_native_kicad_drc",
+                "arguments": {
+                    "input": "board.kicad_pcb",
+                    "output": "rejected.json",
+                    "kicad_cli": "./fake-drc-direct-rejected",
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let rejected = receive(&mut stdout);
+    assert_eq!(rejected["jsonrpc"], "2.0");
+    assert_eq!(rejected["id"], "direct-rejected");
+    assert!(rejected.get("error").is_none());
+    assert_eq!(rejected["result"]["isError"], true);
+    let rejected_result = &rejected["result"]["structuredContent"];
+    assert_eq!(rejected_result["ok"], false);
+    assert_eq!(rejected_result["exit_code"], 1);
+    let summary = &rejected_result["report_summary"];
+    assert!(summary.is_object());
+    assert_eq!(summary.as_object().unwrap().len(), SUMMARY_FIELDS.len());
+    for field in SUMMARY_FIELDS {
+        assert!(
+            summary.get(field).is_some(),
+            "missing summary field {field}"
+        );
+    }
+    assert_eq!(summary["schema_version"], 1);
+    assert_eq!(summary["approved"], false);
+    assert_eq!(summary["error_count"], 1);
+    let retained = fs::read(&report).unwrap();
+    assert_eq!(summary["report_bytes"], retained.len());
+    assert_eq!(
+        summary["report_sha256"],
+        hex::encode(Sha256::digest(&retained))
+    );
+    let retained_json: Value = serde_json::from_slice(&retained).unwrap();
+    assert_eq!(retained_json["schema_version"], 1);
+    assert_eq!(retained_json["approved"], false);
+    assert_eq!(retained_json["error_count"], 1);
+    assert!(retained.ends_with(b"\n"));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "direct-malformed",
+            "method": "tools/call",
+            "params": {
+                "name": "run_native_kicad_drc",
+                "arguments": {
+                    "input": "board.kicad_pcb",
+                    "output": "malformed.json",
+                    "kicad_cli": "./fake-drc-direct-malformed"
+                }
+            }
+        }),
+    );
+    let malformed = receive(&mut stdout);
+    assert_eq!(malformed["jsonrpc"], "2.0");
+    assert_eq!(malformed["id"], "direct-malformed");
+    assert!(malformed.get("error").is_none());
+    assert_eq!(malformed["result"]["isError"], true);
+    let malformed_result = &malformed["result"]["structuredContent"];
+    assert_eq!(malformed_result["ok"], false);
+    assert_eq!(malformed_result["exit_code"], 1);
+    assert!(malformed_result["report_summary"].is_null());
+    assert!(!malformed_report.exists());
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert!(rejected_cli.is_file());
+    assert!(malformed_cli.is_file());
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_server_direct_native_erc_bridge_retains_rejected_report_and_trusted_summary() {
+    let output = temporary_directory("mcp-native-erc-direct-bridge");
+    fs::create_dir_all(&output).unwrap();
+    let rejected_cli = fake_native_kicad_erc_cli(&output, "fake-erc-direct-rejected", true);
+    let warning_cli = fake_native_kicad_erc_warning_cli(&output, "fake-erc-direct-warning");
+    let schematic = output.join("schematic.kicad_sch");
+    let report = output.join("rejected-erc.json");
+    let warning_report = output.join("warning-erc.json");
+    let warning_policy = output.join("warning-policy.json");
+    let warning_policy_source = br#"{"schema_version":1,"id":"test-warning-policy","maximum_total_warnings":1,"warning_limits":[{"finding_type":"warning_type","maximum_count":1}],"allowed_ignored_checks":["ignored"]}"#;
+    fs::write(&warning_policy, warning_policy_source).unwrap();
+    fs::write(&schematic, b"schematic").unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .current_dir(&output)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize(
+        &mut stdin,
+        &mut stdout,
+        json!("initialize-native-erc-direct-bridge"),
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "direct-erc-rejected",
+            "method": "tools/call",
+            "params": {
+                "name": "run_native_kicad_erc",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "output": "rejected-erc.json",
+                    "kicad_cli": rejected_cli,
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let rejected = receive(&mut stdout);
+    assert_eq!(rejected["jsonrpc"], "2.0");
+    assert_eq!(rejected["id"], "direct-erc-rejected");
+    assert!(rejected.get("error").is_none());
+    assert_eq!(rejected["result"]["isError"], true);
+    let rejected_result = &rejected["result"]["structuredContent"];
+    assert_eq!(rejected_result["ok"], false);
+    assert_eq!(rejected_result["exit_code"], 1);
+    let summary = &rejected_result["report_summary"];
+    assert!(summary.is_object());
+    assert_eq!(summary.as_object().unwrap().len(), 6);
+    assert_eq!(summary["schema_version"], 1);
+    assert_eq!(summary["approved"], false);
+    assert_eq!(summary["error_count"], 1);
+    assert_eq!(summary["run_sha256"].as_str().unwrap().len(), 64);
+    let retained = fs::read(&report).unwrap();
+    assert_eq!(summary["report_bytes"], retained.len());
+    assert_eq!(
+        summary["report_sha256"],
+        hex::encode(Sha256::digest(&retained))
+    );
+    let retained_json: Value = serde_json::from_slice(&retained).unwrap();
+    assert_eq!(retained_json["schema_version"], 1);
+    assert_eq!(retained_json["approved"], false);
+    assert_eq!(retained_json["error_count"], 1);
+    assert!(retained.ends_with(b"\n"));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "direct-erc-warning",
+            "method": "tools/call",
+            "params": {
+                "name": "run_native_kicad_erc",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "output": "warning-erc.json",
+                    "kicad_cli": warning_cli,
+                    "warning_policy": warning_policy,
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let warning = receive(&mut stdout);
+    assert_eq!(warning["jsonrpc"], "2.0");
+    assert_eq!(warning["id"], "direct-erc-warning");
+    assert!(warning.get("error").is_none());
+    assert_eq!(warning["result"]["isError"], false);
+    let warning_result = &warning["result"]["structuredContent"];
+    assert_eq!(warning_result["ok"], true);
+    assert_eq!(warning_result["exit_code"], 0);
+    let warning_summary = &warning_result["report_summary"];
+    let expected_fields = [
+        "schema_version",
+        "approved",
+        "error_count",
+        "warning_count",
+        "policy_failure_count",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+        "warning_policy_sha256",
+        "warning_policy_source_bytes",
+        "warning_policy_source_sha256",
+    ];
+    let warning_summary_object = warning_summary.as_object().unwrap();
+    assert_eq!(warning_summary_object.len(), expected_fields.len());
+    for field in expected_fields {
+        assert!(
+            warning_summary_object.contains_key(field),
+            "missing {field}"
+        );
+    }
+    assert_eq!(warning_summary["schema_version"], 2);
+    assert_eq!(warning_summary["approved"], true);
+    assert_eq!(warning_summary["error_count"], 0);
+    assert_eq!(warning_summary["warning_count"], 1);
+    assert_eq!(warning_summary["policy_failure_count"], 0);
+    assert_eq!(
+        warning_summary["warning_policy_source_bytes"],
+        warning_policy_source.len()
+    );
+    let warning_policy_source_sha256 = hex::encode(Sha256::digest(warning_policy_source));
+    assert_eq!(
+        warning_summary["warning_policy_source_sha256"],
+        warning_policy_source_sha256
+    );
+    let mut policy_hasher = Sha256::new();
+    policy_hasher.update(b"pcbex/native-kicad-erc-warning-policy/v1\0");
+    policy_hasher.update(warning_policy_source);
+    let warning_policy_sha256 = hex::encode(policy_hasher.finalize());
+    assert_eq!(
+        warning_summary["warning_policy_sha256"],
+        warning_policy_sha256
+    );
+    assert_eq!(warning_summary["run_sha256"].as_str().unwrap().len(), 64);
+    let warning_retained = fs::read(&warning_report).unwrap();
+    assert_eq!(warning_summary["report_bytes"], warning_retained.len());
+    assert_eq!(
+        warning_summary["report_sha256"],
+        hex::encode(Sha256::digest(&warning_retained))
+    );
+    let warning_retained_json: Value = serde_json::from_slice(&warning_retained).unwrap();
+    assert_eq!(warning_retained_json["schema_version"], 2);
+    assert_eq!(warning_retained_json["approved"], true);
+    assert_eq!(warning_retained_json["error_count"], 0);
+    assert_eq!(warning_retained_json["warning_count"], 1);
+    assert!(
+        warning_retained_json["policy_failures"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        warning_retained_json["warning_policy"]["policy_sha256"],
+        warning_policy_sha256
+    );
+    assert_eq!(
+        warning_retained_json["warning_policy"]["source"]["bytes"],
+        warning_policy_source.len()
+    );
+    assert_eq!(
+        warning_retained_json["warning_policy"]["source"]["sha256"],
+        warning_policy_source_sha256
+    );
+    assert_eq!(
+        warning_retained_json["run_sha256"],
+        warning_summary["run_sha256"]
+    );
+    assert!(warning_retained.ends_with(b"\n"));
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert!(rejected_cli.is_file());
+    assert!(warning_cli.is_file());
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn stdio_server_cancels_native_drc_replay_without_orphaning_kicad() {
     let output = temporary_directory("mcp-native-drc-replay-cancel");
     fs::create_dir_all(&output).unwrap();
     let approved_cli = fake_native_kicad_drc_cli(&output, "fake-drc-approved", false);
-    let sleeping_cli = fake_sleeping_native_kicad_drc_cli(&output);
+    let sleeping_cli = fake_sleeping_native_kicad_cli(&output, "fake-drc-sleeping");
     let board = output.join("board.kicad_pcb");
     let report = output.join("retained.json");
     let pid_file = output.join("kicad.pid");
+    let mut process_cleanup = KicadProcessCleanup::new(&pid_file);
     fs::write(&board, b"board").unwrap();
 
     let generated = Command::new(env!("CARGO_BIN_EXE_pcbex"))
@@ -667,17 +1181,13 @@ fn stdio_server_cancels_native_drc_replay_without_orphaning_kicad() {
         .to_string();
     assert_eq!(created["result"]["task"]["status"], "working");
 
-    let pid_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while !pid_file.is_file() && std::time::Instant::now() < pid_deadline {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    let pids = process_cleanup.wait_for_start();
     assert!(pid_file.is_file(), "sleeping KiCad child did not start");
-    let pids = fs::read_to_string(&pid_file)
-        .unwrap()
-        .split_whitespace()
-        .map(|value| value.parse::<i32>().unwrap())
-        .collect::<Vec<_>>();
     assert_eq!(pids.len(), 2, "fixture must record shell and sleep PIDs");
+    assert!(
+        process_cleanup.process_group.is_some(),
+        "fixture process group was not validated"
+    );
     assert!(pids.iter().all(|pid| unix_process_exists(*pid)));
 
     send(
@@ -692,22 +1202,7 @@ fn stdio_server_cancels_native_drc_replay_without_orphaning_kicad() {
     let cancelled = receive(&mut stdout);
     assert_eq!(cancelled["result"]["status"], "cancelled");
 
-    let exit_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    while pids.iter().any(|pid| unix_process_exists(*pid))
-        && std::time::Instant::now() < exit_deadline
-    {
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    let orphaned = pids
-        .iter()
-        .copied()
-        .filter(|pid| unix_process_exists(*pid))
-        .collect::<Vec<_>>();
-    if !orphaned.is_empty() {
-        // Keep a failing regression from leaking the deliberately long-lived
-        // fixture into the test host.
-        kill_unix_process_group(pids[0]);
-    }
+    let orphaned = process_cleanup.wait_for_exit();
     assert!(
         orphaned.is_empty(),
         "cancelled replay left KiCad processes {orphaned:?} running"
@@ -725,6 +1220,194 @@ fn stdio_server_cancels_native_drc_replay_without_orphaning_kicad() {
     );
     assert!(approved_cli.is_file());
     assert!(sleeping_cli.is_file());
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_server_cancels_native_drc_task_without_orphaning_kicad() {
+    let output = temporary_directory("mcp-native-drc-run-cancel");
+    fs::create_dir_all(&output).unwrap();
+    let sleeping_cli = fake_sleeping_native_kicad_cli(&output, "fake-drc-run-sleeping");
+    let board = output.join("board.kicad_pcb");
+    let report = output.join("drc.json");
+    let pid_file = output.join("drc-run.kicad.pid");
+    let mut process_cleanup = KicadProcessCleanup::new(&pid_file);
+    fs::write(&board, b"board").unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .current_dir(&output)
+        .env("PCBEX_TEST_KICAD_PID_FILE", &pid_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    initialize(
+        &mut stdin,
+        &mut stdout,
+        json!("initialize-native-drc-run-cancel"),
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "create-drc-run-task",
+            "method": "tools/call",
+            "params": {
+                "name": "run_native_kicad_drc",
+                "arguments": {
+                    "input": "board.kicad_pcb",
+                    "output": "drc.json",
+                    "kicad_cli": "./fake-drc-run-sleeping"
+                },
+                "task": {"ttl": 60_000}
+            }
+        }),
+    );
+    let created = receive(&mut stdout);
+    let task_id = created["result"]["task"]["taskId"]
+        .as_str()
+        .expect("DRC task id")
+        .to_string();
+    assert_eq!(created["result"]["task"]["status"], "working");
+
+    let pids = process_cleanup.wait_for_start();
+    assert_eq!(pids.len(), 2, "fixture must record shell and sleep PIDs");
+    assert!(
+        process_cleanup.process_group.is_some(),
+        "fixture process group was not validated"
+    );
+    assert!(pids.iter().all(|pid| unix_process_exists(*pid)));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "cancel-drc-run-task",
+            "method": "tasks/cancel",
+            "params": {"taskId": task_id}
+        }),
+    );
+    let cancelled = receive(&mut stdout);
+    assert_eq!(cancelled["result"]["status"], "cancelled");
+
+    let orphaned = process_cleanup.wait_for_exit();
+    assert!(
+        orphaned.is_empty(),
+        "cancelled native DRC run left KiCad processes {orphaned:?} running"
+    );
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert!(sleeping_cli.is_file());
+    assert!(!report.exists(), "cancelled DRC must not publish a report");
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_server_cancels_native_erc_task_without_orphaning_kicad() {
+    let output = temporary_directory("mcp-native-erc-run-cancel");
+    fs::create_dir_all(&output).unwrap();
+    let sleeping_cli = fake_sleeping_native_kicad_cli(&output, "fake-erc-run-sleeping");
+    let schematic = output.join("schematic.kicad_sch");
+    let report = output.join("erc.json");
+    let pid_file = output.join("erc-run.kicad.pid");
+    let mut process_cleanup = KicadProcessCleanup::new(&pid_file);
+    fs::write(&schematic, b"schematic").unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .current_dir(&output)
+        .env("PCBEX_TEST_KICAD_PID_FILE", &pid_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    initialize(
+        &mut stdin,
+        &mut stdout,
+        json!("initialize-native-erc-run-cancel"),
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "create-erc-run-task",
+            "method": "tools/call",
+            "params": {
+                "name": "run_native_kicad_erc",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "output": "erc.json",
+                    "kicad_cli": sleeping_cli
+                },
+                "task": {"ttl": 60_000}
+            }
+        }),
+    );
+    let created = receive(&mut stdout);
+    let task_id = created["result"]["task"]["taskId"]
+        .as_str()
+        .expect("ERC task id")
+        .to_string();
+    assert_eq!(created["result"]["task"]["status"], "working");
+
+    let pids = process_cleanup.wait_for_start();
+    assert_eq!(pids.len(), 2, "fixture must record shell and sleep PIDs");
+    assert!(
+        process_cleanup.process_group.is_some(),
+        "fixture process group was not validated"
+    );
+    assert!(pids.iter().all(|pid| unix_process_exists(*pid)));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "cancel-erc-run-task",
+            "method": "tasks/cancel",
+            "params": {"taskId": task_id}
+        }),
+    );
+    let cancelled = receive(&mut stdout);
+    assert_eq!(cancelled["result"]["status"], "cancelled");
+
+    let orphaned = process_cleanup.wait_for_exit();
+    assert!(
+        orphaned.is_empty(),
+        "cancelled native ERC run left KiCad processes {orphaned:?} running"
+    );
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert!(sleeping_cli.is_file());
+    assert!(!report.exists(), "cancelled ERC must not publish a report");
     fs::remove_dir_all(output).unwrap();
 }
 

@@ -5926,32 +5926,162 @@ fn run_native_kicad_erc_tool(
     )?;
     let input = required_string(&arguments, "input")?;
     let output = required_string(&arguments, "output")?;
-    // Refuse stale evidence before starting the child so a rejected or
+    // Refuse stale evidence before starting native KiCad so a rejected or
     // cancelled native run can never be mistaken for a fresh report.
     require_absent_outputs([Some(output.as_str())])?;
-    let mut command = vec![
-        "run-native-kicad-erc".to_string(),
-        input,
-        "--output".to_string(),
-        output.clone(),
-        // Native reports are allowed to exceed the MCP frame limit; the
-        // child therefore emits a compact authenticated summary for MCP.
-        "--mcp-echo-report-summary".to_string(),
-    ];
-    optional_option(&arguments, "kicad_cli", "--kicad-cli", &mut command)?;
-    optional_option(
-        &arguments,
-        "warning_policy",
-        "--warning-policy",
-        &mut command,
-    )?;
-    optional_flag(
-        &arguments,
-        "require_approved",
-        "--require-approved",
-        &mut command,
-    )?;
-    let execution = execute(&command, cancellation)?;
+    let kicad_cli = optional_string(&arguments, "kicad_cli")?;
+    let warning_policy = optional_string(&arguments, "warning_policy")?;
+    let require_approved = optional_bool(&arguments, "require_approved")?;
+    let output_path = Path::new(&output);
+    let input_path = Path::new(&input);
+    let policy_path = warning_policy.as_deref().map(Path::new);
+    let authorized_inputs =
+        policy_path.map_or_else(|| vec![input_path], |policy| vec![input_path, policy]);
+    let prepared = match crate::prepare_pipeline_output(output_path, &authorized_inputs) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return Ok(native_kicad_execution_failure(
+                error,
+                json!({"output": output, "report_summary": Value::Null}),
+            ));
+        }
+    };
+    let kicad_cli = std::ffi::OsStr::new(kicad_cli.as_deref().unwrap_or("kicad-cli"));
+    let (report_summary, approved, error_count, warning_count, policy_failure_count) =
+        if let Some(policy) = policy_path {
+            let report = match crate::native_kicad_erc::run_native_kicad_erc_with_warning_policy(
+                input_path,
+                policy,
+                kicad_cli,
+                cancellation,
+            ) {
+                Ok(report) => report,
+                Err(error) => {
+                    ensure_native_kicad_not_cancelled(cancellation)?;
+                    return Ok(native_kicad_execution_failure(
+                        error,
+                        json!({"output": output, "report_summary": Value::Null}),
+                    ));
+                }
+            };
+            ensure_native_kicad_not_cancelled(cancellation)?;
+            let rendered =
+                match crate::native_kicad_erc::render_native_kicad_erc_warning_report(&report) {
+                    Ok(rendered) => rendered,
+                    Err(error) => {
+                        return Ok(native_kicad_execution_failure(
+                            error,
+                            json!({"output": output, "report_summary": Value::Null}),
+                        ));
+                    }
+                };
+            ensure_native_kicad_not_cancelled(cancellation)?;
+            if let Err(error) =
+                crate::persist_atomic_new_file_bytes(prepared, output_path, &rendered)
+            {
+                return Ok(native_kicad_execution_failure(
+                    error,
+                    json!({"output": output, "report_summary": Value::Null}),
+                ));
+            }
+            let summary = json!({
+                "schema_version": report.schema_version,
+                "approved": report.approved,
+                "error_count": report.error_count,
+                "warning_count": report.warning_count,
+                "policy_failure_count": report.policy_failures.len(),
+                "warning_policy_sha256": report.warning_policy.policy_sha256,
+                "warning_policy_source_bytes": report.warning_policy.source.bytes,
+                "warning_policy_source_sha256": report.warning_policy.source.sha256,
+                "run_sha256": report.run_sha256,
+                "report_bytes": rendered.len(),
+                "report_sha256": hex::encode(Sha256::digest(&rendered)),
+            });
+            (
+                summary,
+                report.approved,
+                report.error_count,
+                report.warning_count,
+                report.policy_failures.len(),
+            )
+        } else {
+            let report = match crate::native_kicad_erc::run_native_kicad_erc(
+                input_path,
+                kicad_cli,
+                cancellation,
+            ) {
+                Ok(report) => report,
+                Err(error) => {
+                    ensure_native_kicad_not_cancelled(cancellation)?;
+                    return Ok(native_kicad_execution_failure(
+                        error,
+                        json!({"output": output, "report_summary": Value::Null}),
+                    ));
+                }
+            };
+            ensure_native_kicad_not_cancelled(cancellation)?;
+            let rendered = match crate::native_kicad_erc::render_native_kicad_erc_report(&report) {
+                Ok(rendered) => rendered,
+                Err(error) => {
+                    return Ok(native_kicad_execution_failure(
+                        error,
+                        json!({"output": output, "report_summary": Value::Null}),
+                    ));
+                }
+            };
+            ensure_native_kicad_not_cancelled(cancellation)?;
+            if let Err(error) =
+                crate::persist_atomic_new_file_bytes(prepared, output_path, &rendered)
+            {
+                return Ok(native_kicad_execution_failure(
+                    error,
+                    json!({"output": output, "report_summary": Value::Null}),
+                ));
+            }
+            let summary = json!({
+                "schema_version": report.schema_version,
+                "approved": report.approved,
+                "error_count": report.error_count,
+                "run_sha256": report.run_sha256,
+                "report_bytes": rendered.len(),
+                "report_sha256": hex::encode(Sha256::digest(&rendered)),
+            });
+            (summary, report.approved, report.error_count, 0, 0)
+        };
+    let mut stdout =
+        serde_json::to_vec(&report_summary).expect("native KiCad ERC summary always serializes");
+    stdout.push(b'\n');
+    let success = !require_approved || approved;
+    let mut stderr = if warning_policy.is_some() {
+        format!(
+            "native KiCad ERC warning policy: {}; {} error(s), {} warning(s), {} policy failure(s); report={}",
+            if approved { "approved" } else { "rejected" },
+            error_count,
+            warning_count,
+            policy_failure_count,
+            output_path.display()
+        )
+    } else {
+        format!(
+            "native KiCad ERC: {}; {} error(s); report={}",
+            if approved { "approved" } else { "rejected" },
+            error_count,
+            output_path.display()
+        )
+    };
+    if require_approved && !approved {
+        stderr.push_str(if warning_policy.is_some() {
+            "\nError: native KiCad schematic ERC warning policy rejected"
+        } else {
+            "\nError: native KiCad schematic ERC rejected"
+        });
+    }
+    let execution = Execution {
+        success,
+        exit_code: Some(if success { 0 } else { 1 }),
+        stdout,
+        stderr: bounded_process_message(stderr.as_bytes()),
+    };
     let report_summary = trusted_native_kicad_erc_summary(&execution, Path::new(&output));
     let execution = require_retained_json(
         execution,
@@ -5981,51 +6111,103 @@ fn run_native_kicad_drc_tool(
     )?;
     let input = required_string(&arguments, "input")?;
     let output = required_string(&arguments, "output")?;
-    // Refuse stale evidence before starting the child so a rejected or
+    // Refuse stale evidence before starting native KiCad so a rejected or
     // cancelled native run can never be mistaken for a fresh report.
     require_absent_outputs([Some(output.as_str())])?;
-    let mut command = vec![
-        "run-native-kicad-drc".to_string(),
-        format!("--output={output}"),
-    ];
-    // Use `--name=value` for every path.  A path beginning with `-` must never
-    // be parsed as a second Clap option, and the input itself is protected by
-    // the final `--` marker below.
-    for (name, option) in [
-        ("project", "--project"),
-        ("rules_file", "--rules-file"),
-        ("kicad_cli", "--kicad-cli"),
-    ] {
-        if let Some(value) = arguments.get(name) {
-            let value = value
-                .as_str()
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| json!({"detail": format!("{name} must be a non-empty string")}))?;
-            command.push(format!("{option}={value}"));
-        }
+    let project = optional_string(&arguments, "project")?;
+    let rules_file = optional_string(&arguments, "rules_file")?;
+    let kicad_cli = optional_string(&arguments, "kicad_cli")?;
+    let require_approved = optional_bool(&arguments, "require_approved")?;
+    let input_path = Path::new(&input);
+    let output_path = Path::new(&output);
+    let project_path = project.as_deref().map(Path::new);
+    let rules_path = rules_file.as_deref().map(Path::new);
+    let kicad_cli = std::ffi::OsStr::new(kicad_cli.as_deref().unwrap_or("kicad-cli"));
+    let auto_project = input_path.with_extension("kicad_pro");
+    let auto_rules = input_path.with_extension("kicad_dru");
+    let mut authorized_inputs = vec![input_path, auto_project.as_path(), auto_rules.as_path()];
+    if let Some(project) = project_path {
+        authorized_inputs.push(project);
     }
-    optional_flag(
-        &arguments,
-        "require_approved",
-        "--require-approved",
-        &mut command,
-    )?;
-    command.push("--mcp-echo-report-summary".to_string());
-    command.push("--".to_string());
-    command.push(input.clone());
-    let execution = execute(&command, cancellation)?;
+    if let Some(rules_file) = rules_path {
+        authorized_inputs.push(rules_file);
+    }
+    let prepared = match crate::prepare_pipeline_output(output_path, &authorized_inputs) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return Ok(native_kicad_execution_failure(
+                error,
+                json!({"input": input, "output": output, "report_summary": Value::Null}),
+            ));
+        }
+    };
+    let report = match crate::native_kicad_drc::run_native_kicad_drc(
+        input_path,
+        project_path,
+        rules_path,
+        kicad_cli,
+        cancellation,
+    ) {
+        Ok(report) => report,
+        Err(error) => {
+            ensure_native_kicad_not_cancelled(cancellation)?;
+            return Ok(native_kicad_execution_failure(
+                error,
+                json!({"input": input, "output": output, "report_summary": Value::Null}),
+            ));
+        }
+    };
+    ensure_native_kicad_not_cancelled(cancellation)?;
+    let rendered = match crate::native_kicad_drc::render_native_kicad_drc_report(&report) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            return Ok(native_kicad_execution_failure(
+                error,
+                json!({"input": input, "output": output, "report_summary": Value::Null}),
+            ));
+        }
+    };
+    ensure_native_kicad_not_cancelled(cancellation)?;
+    if let Err(error) = crate::persist_atomic_new_file_bytes(prepared, output_path, &rendered) {
+        return Ok(native_kicad_execution_failure(
+            error,
+            json!({"input": input, "output": output, "report_summary": Value::Null}),
+        ));
+    }
+    let summary = crate::native_kicad_drc::native_kicad_drc_report_summary(&report, &rendered);
+    let mut stdout =
+        serde_json::to_vec(&summary).expect("native KiCad DRC summary always serializes");
+    stdout.push(b'\n');
+    let success = !require_approved || report.approved;
+    let mut stderr = format!(
+        "native KiCad DRC: {}; {} finding(s) ({} violation(s), {} unconnected item(s)), {} error(s), {} warning(s); report={}",
+        if report.approved {
+            "approved"
+        } else {
+            "rejected"
+        },
+        report.findings.len(),
+        report.violation_count,
+        report.unconnected_item_count,
+        report.error_count,
+        report.warning_count,
+        output_path.display()
+    );
+    if require_approved && !report.approved {
+        stderr.push_str("\nError: native KiCad PCB DRC rejected");
+    }
+    let execution = Execution {
+        success,
+        exit_code: Some(if success { 0 } else { 1 }),
+        stdout,
+        stderr: bounded_process_message(stderr.as_bytes()),
+    };
     let report_summary = trusted_native_kicad_drc_summary(
         &execution,
-        Path::new(&output),
-        Path::new(&input),
-        arguments
-            .get("project")
-            .and_then(Value::as_str)
-            .map(Path::new),
-        arguments
-            .get("rules_file")
-            .and_then(Value::as_str)
-            .map(Path::new),
+        output_path,
+        input_path,
+        project_path,
+        rules_path,
     );
     let execution = require_retained_json(
         execution,
@@ -6036,6 +6218,36 @@ fn run_native_kicad_drc_tool(
         execution,
         json!({"input": input, "output": output, "report_summary": report_summary}),
     ))
+}
+
+fn optional_bool(arguments: &Map<String, Value>, name: &str) -> std::result::Result<bool, Value> {
+    match arguments.get(name) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(json!({"detail": format!("{name} must be a boolean")})),
+    }
+}
+
+fn native_kicad_execution_failure(error: anyhow::Error, fields: Value) -> Value {
+    execution_result(
+        Execution {
+            success: false,
+            exit_code: Some(1),
+            stdout: Vec::new(),
+            stderr: bounded_process_message(format!("Error: {error:#}").as_bytes()),
+        },
+        fields,
+    )
+}
+
+fn ensure_native_kicad_not_cancelled(
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<(), Value> {
+    if cancellation.is_some_and(|cancelled| cancelled.load(Ordering::SeqCst)) {
+        Err(json!({"detail": "task execution cancelled"}))
+    } else {
+        Ok(())
+    }
 }
 
 fn verify_native_kicad_drc_report_tool(

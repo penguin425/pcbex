@@ -9,7 +9,9 @@ schema shape (which omits `ignored_checks`) has a dedicated compatibility test.
 The generation boundary is available from release `v1.429.0` through the Rust
 CLI, MCP server, focused composite Action, and an opt-in path in the root
 Action. Release `v1.430.0` adds read-only fresh replay through CLI/MCP and a
-backward-compatible verify mode in the focused Action.
+backward-compatible verify mode in the focused Action. Release `v1.431.0`
+hardens Unix MCP Task cancellation for the native runner without changing the
+CLI or Action contracts.
 
 ## Scope
 
@@ -189,13 +191,13 @@ only and do not by themselves fail v1, so review them explicitly.
 
 The MCP server exposes the runner as `run_native_kicad_drc`. Its arguments
 are the CLI inputs expressed as JSON (`input`, `output`, optional `project`,
-optional `rules_file`, `kicad_cli`, and `require_approved`). The subprocess
-bridge returns a compact, digest-bound summary rather than embedding the full
-report in the MCP frame. The server reopens the retained report, recomputes
-its canonical bytes and source/companion identities, and rejects stale,
-linked, malformed, aliased, or digest-mismatched evidence. Optional MCP Tasks
-use the same allow-list and cancellation/resource limits as the existing
-bounded tools.
+optional `rules_file`, `kicad_cli`, and `require_approved`). The direct MCP
+runner returns a compact, digest-bound summary rather than embedding the full
+report in the MCP frame. The server reopens the retained report, recomputes its
+canonical bytes and source/companion identities, and rejects stale, linked,
+malformed, aliased, or digest-mismatched evidence. Optional MCP Tasks use the
+same allow-list and cancellation/resource limits as the existing bounded
+tools.
 
 `verify_native_kicad_drc_report` accepts `input` and `report`, plus the same
 optional companion, executable, and approval arguments. It is advertised as a
@@ -205,7 +207,14 @@ failure can therefore retain an authenticated rejected summary without
 embedding the full report in the MCP frame. Task execution invokes replay in
 the MCP worker and passes cancellation directly to the bounded KiCad
 supervisor, so cancelling the task terminates KiCad's process group instead of
-leaving nested native work behind.
+leaving nested native work behind. Every MCP `run_native_kicad_drc` invocation
+now calls the Rust runner directly; Task calls additionally pass cancellation
+to that same supervisor. On Unix, cancellation terminates the KiCad
+process-group leader and all descendants together. The runner stages output
+privately and publishes only after a complete normalized report has been
+validated; a cancelled run therefore never exposes an incomplete report. The
+MCP response contract, synchronous CLI execution, and both focused/root Action
+contracts remain unchanged.
 
 ## GitHub Actions
 
@@ -215,7 +224,7 @@ literal, caller-relative directory:
 
 ```yaml
 - id: native-drc
-  uses: penguin425/pcbex/actions/native-kicad-drc@v1.430.0
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.431.0
   with:
     board: hardware/controller.kicad_pcb
     # project: hardware/controller.kicad_pro
@@ -229,7 +238,7 @@ directory:
 
 ```yaml
 - id: native-drc-replay
-  uses: penguin425/pcbex/actions/native-kicad-drc@v1.430.0
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.431.0
   with:
     mode: verify
     board: hardware/controller.kicad_pcb
@@ -284,6 +293,9 @@ output is written or uploaded.
 KiCad is invoked without a
 shell under the shared process-tree supervisor with fixed timeout,
 stdout/stderr, raw-report, finding, item, and aggregate resource limits.
+Unix MCP Tasks pass cancellation to that supervisor when invoking the Rust
+runner directly, so the KiCad process-group leader and every descendant are
+terminated together. A cancelled task never publishes an incomplete report.
 The 32 MiB raw-report limit is enforced when the trusted KiCad child exits and
 the report is read; it is not a filesystem quota against an untrusted
 executable. Atomic publication happens only after canonical validation;
