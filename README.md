@@ -8,6 +8,10 @@ model. It uses integer nanometre coordinates and multi-layer A* with eight-way
 movement, bend/via/congestion/proximity costs, clearance-inflated obstacles,
 route simplification, Steiner-style multi-terminal branching, and SVG
 inspection output.
+An optional native KiCad PCB DRC evidence gate is exposed separately; it
+normalizes the `drc.v1` JSON shapes used by KiCad 9 and 10 (with real KiCad 10
+E2E coverage) but does not replace internal DRC, repair boards, or imply
+electrical, manufacturing, or AI approval.
 
 The core crate keeps geometry, checking, placement, schema/migration, and
 routing-quality analysis in separate modules. Stable root-level re-exports
@@ -206,6 +210,47 @@ digest-mismatched evidence fails closed. Its twelve root-compatible
 fields, warning-policy identities, run identity, and report byte/SHA
 identities; warning-policy fields are empty for report v1. Neither Action
 automatically populates the separate `ai-review-*` retained-report flow.
+
+## Native KiCad PCB DRC evidence
+
+Release v1.429.0 adds a standalone, canonical and digest-bound native KiCad PCB
+DRC evidence gate. It runs `drc.v1`-compatible KiCad in private staging, strips
+volatile dates, paths, and generated UUIDs, and canonicalizes findings to
+integer nanometres. CI proves byte-identical reruns with real KiCad 10.
+Approval requires both native error and warning counts to be zero; rejected
+reports are retained before an optional required-approval failure. Optional
+same-stem `.kicad_pro` and `.kicad_dru` companions are auto-discovered when
+not supplied, and explicit `--project`/`--rules-file` paths are bound by the
+same snapshot and digest rules. See
+[`docs/NATIVE_KICAD_DRC.md`](docs/NATIVE_KICAD_DRC.md) for the closed schema,
+reproducibility, and security contract.
+
+```sh
+pcbex native-kicad-drc-report-schema \
+  --output build/native-kicad-drc.schema.json
+pcbex run-native-kicad-drc hardware/controller.kicad_pcb \
+  --output build/native-kicad-drc.json --require-approved
+```
+
+The focused Action can be used without enabling the root hardware-analysis
+flow:
+
+```yaml
+- id: native-drc
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.429.0
+  with:
+    board: hardware/controller.kicad_pcb
+    # project: hardware/controller.kicad_pro
+    # rules-file: hardware/controller.kicad_dru
+    require-approved: "true"
+```
+
+The root Action keeps its required board contract and native PCB DRC remains
+opt-in; set `native-kicad-drc-enabled: "true"` when using its corresponding
+DRC inputs. Unsafe artifact-glob output paths fail during preflight while
+ordinary relative paths, including spaces, remain supported. This evidence
+boundary does not automatically connect `drc.rpt`, the existing internal DRC,
+native ERC, AI approval, or manufacturing/pipeline phases.
 
 ## KiCad boards
 

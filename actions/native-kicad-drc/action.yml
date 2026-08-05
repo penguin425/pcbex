@@ -1,0 +1,318 @@
+name: pcbex native KiCad PCB DRC
+description: Run authenticated native KiCad PCB design-rules checking with retained evidence.
+author: pcbex contributors
+
+branding:
+  icon: check-circle
+  color: green
+
+inputs:
+  board:
+    description: Caller-workspace-relative KiCad PCB board to verify.
+    required: true
+  project:
+    description: Optional caller-workspace-relative KiCad project; same-stem .kicad_pro is auto-discovered when omitted.
+    required: false
+    default: ""
+  rules-file:
+    description: Optional caller-workspace-relative KiCad DRC rules file; same-stem .kicad_dru is auto-discovered when omitted.
+    required: false
+    default: ""
+  kicad-cli:
+    description: Trusted KiCad CLI executable; do not select it from pull-request-controlled content.
+    required: false
+    default: kicad-cli
+  require-approved:
+    description: Fail after evidence publication unless the normalized native DRC report is approved.
+    required: false
+    default: "false"
+  output-dir:
+    description: Empty caller-relative literal directory; components use only ASCII letters, digits, dot, underscore, or hyphen.
+    required: false
+    default: pcbex-native-kicad-drc
+  upload-artifact:
+    description: Upload the bounded native DRC evidence directory.
+    required: false
+    default: "true"
+  artifact-name:
+    description: GitHub Actions artifact name for retained native DRC evidence.
+    required: false
+    default: pcbex-native-kicad-drc
+  retention-days:
+    description: Artifact retention in days from 1 through 90.
+    required: false
+    default: "14"
+
+outputs:
+  status:
+    description: Verified runner status, either ok or error.
+    value: ${{ steps.native-drc.outputs.status }}
+  artifact-dir:
+    description: Bounded caller-workspace-relative evidence directory.
+    value: ${{ steps.native-drc.outputs.artifact-dir }}
+  native-kicad-drc-report:
+    description: Fixed retained normalized native KiCad PCB DRC report path.
+    value: ${{ steps.native-drc.outputs.native-kicad-drc-report }}
+  schema-version:
+    description: Native KiCad PCB DRC report schema version.
+    value: ${{ steps.native-drc.outputs.schema-version }}
+  approved:
+    description: Whether the normalized native KiCad PCB DRC report is approved.
+    value: ${{ steps.native-drc.outputs.approved }}
+  violation-count:
+    description: Native DRC violation count.
+    value: ${{ steps.native-drc.outputs.violation-count }}
+  unconnected-item-count:
+    description: Native DRC unconnected item count.
+    value: ${{ steps.native-drc.outputs.unconnected-item-count }}
+  schematic-parity-count:
+    description: Native DRC schematic parity finding count.
+    value: ${{ steps.native-drc.outputs.schematic-parity-count }}
+  error-count:
+    description: Native DRC error finding count.
+    value: ${{ steps.native-drc.outputs.error-count }}
+  warning-count:
+    description: Native DRC warning finding count.
+    value: ${{ steps.native-drc.outputs.warning-count }}
+  ignored-check-count:
+    description: Native DRC ignored-check count.
+    value: ${{ steps.native-drc.outputs.ignored-check-count }}
+  board-bytes:
+    description: Exact board source byte count.
+    value: ${{ steps.native-drc.outputs.board-bytes }}
+  board-sha256:
+    description: Exact board source SHA-256.
+    value: ${{ steps.native-drc.outputs.board-sha256 }}
+  project-bytes:
+    description: Exact optional project source byte count.
+    value: ${{ steps.native-drc.outputs.project-bytes }}
+  project-sha256:
+    description: Exact optional project source SHA-256.
+    value: ${{ steps.native-drc.outputs.project-sha256 }}
+  rules-file-bytes:
+    description: Exact optional rules-file source byte count.
+    value: ${{ steps.native-drc.outputs.rules-file-bytes }}
+  rules-file-sha256:
+    description: Exact optional rules-file source SHA-256.
+    value: ${{ steps.native-drc.outputs.rules-file-sha256 }}
+  run-sha256:
+    description: Domain-separated normalized native KiCad PCB DRC run identity.
+    value: ${{ steps.native-drc.outputs.run-sha256 }}
+  report-bytes:
+    description: Exact retained report byte count.
+    value: ${{ steps.native-drc.outputs.report-bytes }}
+  report-sha256:
+    description: Exact retained report SHA-256.
+    value: ${{ steps.native-drc.outputs.report-sha256 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate native PCB DRC Action inputs
+      id: preflight
+      shell: bash
+      env:
+        PCBEX_BOARD: ${{ inputs.board }}
+        PCBEX_PROJECT: ${{ inputs.project }}
+        PCBEX_RULES_FILE: ${{ inputs.rules-file }}
+        PCBEX_KICAD_CLI: ${{ inputs.kicad-cli }}
+        PCBEX_REQUIRE_APPROVED: ${{ inputs.require-approved }}
+        PCBEX_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        PCBEX_RETENTION_DAYS: ${{ inputs.retention-days }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        repository_root="$(cd -- "$GITHUB_ACTION_PATH/../.." && pwd -P)"
+        if [[ -z "$PCBEX_BOARD" ]]; then
+          echo "board must not be empty" >&2
+          exit 2
+        fi
+        if [[ -z "$PCBEX_KICAD_CLI" ]]; then
+          echo "kicad-cli must not be empty" >&2
+          exit 2
+        fi
+        case "$PCBEX_REQUIRE_APPROVED" in
+          true|false) ;;
+          *) echo "require-approved must be true or false" >&2; exit 2 ;;
+        esac
+        case "$PCBEX_UPLOAD_ARTIFACT" in
+          true|false) ;;
+          *) echo "upload-artifact must be true or false" >&2; exit 2 ;;
+        esac
+        if [[ -z "$PCBEX_ARTIFACT_NAME" ]]; then
+          echo "artifact-name must not be empty" >&2
+          exit 2
+        fi
+        if [[ "$PCBEX_ARTIFACT_NAME" =~ [[:cntrl:]] ]]; then
+          echo "artifact-name must not contain control characters" >&2
+          exit 2
+        fi
+        if [[ ! "$PCBEX_RETENTION_DAYS" =~ ^([1-9]|[1-8][0-9]|90)$ ]]; then
+          echo "retention-days must be an integer from 1 through 90" >&2
+          exit 2
+        fi
+        python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+          "--path=$PCBEX_BOARD"
+        if [[ -n "$PCBEX_PROJECT" ]]; then
+          python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+            "--path=$PCBEX_PROJECT"
+        fi
+        if [[ -n "$PCBEX_RULES_FILE" ]]; then
+          python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+            "--path=$PCBEX_RULES_FILE"
+        fi
+
+        resolved="$(python3 - "$PCBEX_BOARD" "$PCBEX_PROJECT" "$PCBEX_RULES_FILE" <<'PY'
+        import os
+        import stat
+        import sys
+        from pathlib import Path
+
+        board, project, rules = sys.argv[1:]
+
+        def companion(explicit: str, suffix: str) -> str:
+            if explicit:
+                return explicit
+            candidate = Path(board).with_suffix(suffix)
+            try:
+                metadata = os.lstat(candidate)
+            except FileNotFoundError:
+                return ""
+            except OSError as error:
+                print(f"could not inspect companion {candidate}: {error}", file=sys.stderr)
+                raise SystemExit(2)
+            if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+                print(f"auto-discovered companion is not a regular file: {candidate}", file=sys.stderr)
+                raise SystemExit(2)
+            return os.fspath(candidate)
+
+        print(f"project={companion(project, '.kicad_pro')}")
+        print(f"rules={companion(rules, '.kicad_dru')}")
+        PY
+        )"
+        resolved_project=""
+        resolved_rules=""
+        while IFS='=' read -r key value; do
+          case "$key" in
+            project) resolved_project="$value" ;;
+            rules) resolved_rules="$value" ;;
+            *) echo "invalid companion resolution" >&2; exit 2 ;;
+          esac
+        done <<< "$resolved"
+        if [[ -n "$resolved_project" ]]; then
+          python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+            "--path=$resolved_project"
+        fi
+        if [[ -n "$resolved_rules" ]]; then
+          python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+            "--path=$resolved_rules"
+        fi
+        python3 "$repository_root/scripts/ci_runtime.py" validate-output \
+          "--output-root=$PCBEX_OUTPUT_DIR"
+        printf 'project=%s\n' "$resolved_project" >> "$GITHUB_OUTPUT"
+        printf 'rules-file=%s\n' "$resolved_rules" >> "$GITHUB_OUTPUT"
+        printf 'valid=true\n' >> "$GITHUB_OUTPUT"
+
+    - name: Build pcbex
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+        repository_root="$(cd -- "$GITHUB_ACTION_PATH/../.." && pwd -P)"
+        python3 "$repository_root/scripts/ci_runtime.py" exec \
+          --timeout-seconds 600 \
+          --max-stdout-bytes 8388608 \
+          --max-stderr-bytes 8388608 \
+          -- rustup toolchain install stable --profile minimal
+        python3 "$repository_root/scripts/ci_runtime.py" exec \
+          --timeout-seconds 1800 \
+          --max-stdout-bytes 8388608 \
+          --max-stderr-bytes 8388608 \
+          -- cargo +stable build \
+            --manifest-path "$repository_root/Cargo.toml" \
+            --package pcbex \
+            --release \
+            --locked
+        target_directory="$(
+          python3 "$repository_root/scripts/ci_runtime.py" exec \
+            --timeout-seconds 60 \
+            --max-stdout-bytes 1048576 \
+            --max-stderr-bytes 1048576 \
+            -- cargo +stable metadata \
+              --manifest-path "$repository_root/Cargo.toml" \
+              --format-version 1 \
+              --no-deps |
+          python3 -c 'import json,sys; value=json.load(sys.stdin)["target_directory"]; valid=isinstance(value,str) and bool(value) and not any(ord(c)<32 or ord(c)==127 for c in value); sys.exit(2) if not valid else print(value,end="")'
+        )"
+        binary="$target_directory/release/pcbex"
+        if [[ ! -x "$binary" && -x "${binary}.exe" ]]; then
+          binary="${binary}.exe"
+        fi
+        if [[ ! -f "$binary" || ! -x "$binary" ]]; then
+          echo "built pcbex binary is unavailable" >&2
+          exit 2
+        fi
+        printf 'binary=%s\n' "$binary" >> "$GITHUB_OUTPUT"
+        printf 'repository-root=%s\n' "$repository_root" >> "$GITHUB_OUTPUT"
+
+    - name: Run native KiCad PCB DRC
+      id: native-drc
+      shell: bash
+      env:
+        PCBEX_BINARY: ${{ steps.build.outputs.binary }}
+        PCBEX_NATIVE_KICAD_DRC_BOARD: ${{ inputs.board }}
+        PCBEX_NATIVE_KICAD_DRC_PROJECT: ${{ steps.preflight.outputs.project }}
+        PCBEX_NATIVE_KICAD_DRC_RULES_FILE: ${{ steps.preflight.outputs.rules-file }}
+        PCBEX_NATIVE_KICAD_DRC_KICAD_CLI: ${{ inputs.kicad-cli }}
+        PCBEX_NATIVE_KICAD_DRC_REQUIRE_APPROVED: ${{ inputs.require-approved }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+        PCBEX_REPOSITORY_ROOT: ${{ steps.build.outputs.repository-root }}
+      run: >-
+        python3 "$PCBEX_REPOSITORY_ROOT/scripts/ci_runtime.py" exec
+        --timeout-seconds 900
+        --max-stdout-bytes 1048576
+        --max-stderr-bytes 8388608
+        --output-root="$PCBEX_OUTPUT_DIR"
+        -- "$PCBEX_REPOSITORY_ROOT/scripts/native-kicad-drc-action.sh"
+
+    - name: Validate bounded native DRC evidence
+      id: artifact-boundary
+      if: ${{ always() && steps.native-drc.outputs.artifact-dir != '' }}
+      shell: bash
+      env:
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+        PCBEX_REPOSITORY_ROOT: ${{ steps.build.outputs.repository-root }}
+      run: |
+        python3 "$PCBEX_REPOSITORY_ROOT/scripts/ci_runtime.py" scan \
+          "--output-root=$PCBEX_OUTPUT_DIR" \
+          --max-entries 16 \
+          --max-depth 2 \
+          --max-file-bytes 33554432 \
+          --max-total-bytes 33554432
+        echo "safe=true" >> "$GITHUB_OUTPUT"
+
+    - name: Upload native DRC evidence
+      id: upload
+      if: ${{ always() && steps.artifact-boundary.outputs.safe == 'true' && inputs.upload-artifact == 'true' && steps.native-drc.outputs.artifact-dir != '' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.native-drc.outputs.artifact-dir }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
+
+    - name: Enforce native DRC gate
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PCBEX_PREFLIGHT_VALID: ${{ steps.preflight.outputs.valid }}
+        PCBEX_NATIVE_DRC_OUTCOME: ${{ steps.native-drc.outcome }}
+        PCBEX_NATIVE_DRC_STATUS: ${{ steps.native-drc.outputs.status }}
+        PCBEX_NATIVE_DRC_REPORT: ${{ steps.native-drc.outputs.native-kicad-drc-report }}
+        PCBEX_NATIVE_DRC_APPROVED: ${{ steps.native-drc.outputs.approved }}
+        PCBEX_ARTIFACT_SAFE: ${{ steps.artifact-boundary.outputs.safe }}
+        PCBEX_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        PCBEX_REQUIRE_APPROVED: ${{ inputs.require-approved }}
+      run: "$GITHUB_ACTION_PATH/../../scripts/native-kicad-drc-action-gate.sh"

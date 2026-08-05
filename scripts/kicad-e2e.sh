@@ -290,6 +290,186 @@ for fixture in "${fixtures[@]}"; do
   cmp "$first" "$second"
 done
 
+# Native KiCad PCB DRC is an independent evidence gate.  The routed simple
+# fixture is clean; run it twice into fresh reports so that normalization also
+# proves volatile KiCad UUID/date/path fields cannot affect the retained bytes.
+native_drc_first="$output_directory/simple.native-drc.first.json"
+native_drc_second="$output_directory/simple.native-drc.second.json"
+native_drc_board="$output_directory/simple.routed.kicad_pcb"
+"$pcbex_binary" run-native-kicad-drc "$native_drc_board" \
+  --output "$native_drc_first" --require-approved
+"$pcbex_binary" run-native-kicad-drc "$native_drc_board" \
+  --output "$native_drc_second" --require-approved
+cmp "$native_drc_first" "$native_drc_second"
+python3 - "$native_drc_board" "$native_drc_first" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+board_path = Path(sys.argv[1])
+report_path = Path(sys.argv[2])
+board = board_path.read_bytes()
+raw = report_path.read_text(encoding="utf-8")
+report = json.loads(raw)
+
+expected_fields = {
+    "schema_version", "engine", "engine_version", "kicad_version", "source",
+    "project", "rules_file", "invocation", "ignored_checks", "findings",
+    "violation_count", "unconnected_item_count", "schematic_parity_count",
+    "error_count", "warning_count", "approved", "run_sha256",
+}
+assert set(report) == expected_fields
+assert report["schema_version"] == 1
+assert report["engine"] == "pcbex"
+assert report["engine_version"]
+assert report["kicad_version"]
+assert report["source"] == {
+    "bytes": len(board),
+    "sha256": hashlib.sha256(board).hexdigest(),
+}
+assert report["project"] is None
+assert report["rules_file"] is None
+assert report["invocation"] == {
+    "command": "pcb drc",
+    "format": "json",
+    "units": "mm",
+    "severities": ["error", "warning"],
+    "exit_code_violations": True,
+    "all_track_errors": False,
+    "schematic_parity": False,
+    "refill_zones": False,
+    "save_board": False,
+}
+assert isinstance(report["ignored_checks"], list)
+assert report["findings"] == []
+for field in (
+    "violation_count", "unconnected_item_count", "schematic_parity_count",
+    "error_count", "warning_count",
+):
+    assert report[field] == 0, (field, report[field])
+assert report["approved"] is True
+assert len(report["run_sha256"]) == 64
+assert all(character in "0123456789abcdef" for character in report["run_sha256"])
+# Raw KiCad evidence is deliberately not retained in the normalized report.
+lower = raw.lower()
+for forbidden in ('"uuid"', '"date"', '"path"'):
+    assert forbidden not in lower, forbidden
+PY
+
+native_drc_schema="$output_directory/native-kicad-drc.schema.json"
+"$pcbex_binary" native-kicad-drc-report-schema --output "$native_drc_schema"
+python3 - "$native_drc_schema" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+schema = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+assert schema["$id"].endswith("/schemas/native-kicad-pcb-drc-v1.json")
+assert schema["additionalProperties"] is False
+required = set(schema["required"])
+assert required == {
+    "schema_version", "engine", "engine_version", "kicad_version", "source",
+    "project", "rules_file", "invocation", "ignored_checks", "findings",
+    "violation_count", "unconnected_item_count", "schematic_parity_count",
+    "error_count", "warning_count", "approved", "run_sha256",
+}
+properties = schema["properties"]
+assert properties["schema_version"] == {"const": 1}
+assert properties["engine"] == {"const": "pcbex"}
+invocation = properties["invocation"]
+assert invocation["additionalProperties"] is False
+assert invocation["properties"]["command"] == {"const": "pcb drc"}
+assert invocation["properties"]["format"] == {"const": "json"}
+assert invocation["properties"]["units"] == {"const": "mm"}
+assert invocation["properties"]["severities"] == {
+    "const": ["error", "warning"]
+}
+for field in (
+    "exit_code_violations", "all_track_errors", "schematic_parity",
+    "refill_zones", "save_board",
+):
+    assert field in invocation["required"]
+assert invocation["properties"]["exit_code_violations"] == {"const": True}
+assert invocation["properties"]["all_track_errors"] == {"const": False}
+assert invocation["properties"]["schematic_parity"] == {"const": False}
+assert invocation["properties"]["refill_zones"] == {"const": False}
+assert invocation["properties"]["save_board"] == {"const": False}
+item = schema["$defs"]["item"]
+assert item["additionalProperties"] is False
+assert set(item["required"]) == {"description", "position_nm"}
+assert item["properties"]["position_nm"] == {"$ref": "#/$defs/position"}
+position = schema["$defs"]["position"]
+assert position["additionalProperties"] is False
+assert set(position["required"]) == {"x", "y"}
+finding = schema["$defs"]["finding"]
+assert finding["properties"]["category"] == {
+    "enum": ["violation", "unconnected-item", "schematic-parity"]
+}
+assert finding["properties"]["type"]["type"] == "string"
+assert "type" in finding["required"]
+PY
+
+# The source fixture intentionally contains one unconnected item.  KiCad uses
+# exit code 5 for that valid rejected report; pcbex must retain and normalize
+# it before --require-approved returns non-zero.
+native_drc_rejected="$output_directory/simple.native-drc.rejected.json"
+if "$pcbex_binary" run-native-kicad-drc examples/simple.kicad_pcb \
+  --output "$native_drc_rejected" --require-approved; then
+  echo "expected native KiCad PCB DRC rejection for examples/simple.kicad_pcb" >&2
+  exit 1
+fi
+test -s "$native_drc_rejected"
+python3 - "examples/simple.kicad_pcb" "$native_drc_rejected" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+board_path, report_path = map(Path, sys.argv[1:])
+board = board_path.read_bytes()
+raw = report_path.read_text(encoding="utf-8")
+report = json.loads(raw)
+assert set(report) == {
+    "schema_version", "engine", "engine_version", "kicad_version", "source",
+    "project", "rules_file", "invocation", "ignored_checks", "findings",
+    "violation_count", "unconnected_item_count", "schematic_parity_count",
+    "error_count", "warning_count", "approved", "run_sha256",
+}
+assert report["schema_version"] == 1
+assert report["engine"] == "pcbex"
+assert report["source"] == {
+    "bytes": len(board),
+    "sha256": hashlib.sha256(board).hexdigest(),
+}
+assert report["project"] is None
+assert report["rules_file"] is None
+assert report["invocation"] == {
+    "command": "pcb drc",
+    "format": "json",
+    "units": "mm",
+    "severities": ["error", "warning"],
+    "exit_code_violations": True,
+    "all_track_errors": False,
+    "schematic_parity": False,
+    "refill_zones": False,
+    "save_board": False,
+}
+assert report["approved"] is False
+assert report["unconnected_item_count"] > 0
+assert report["error_count"] > 0
+assert report["warning_count"] >= 0
+assert report["violation_count"] == 0
+assert report["schematic_parity_count"] == 0
+assert len(report["findings"]) == report["unconnected_item_count"]
+assert all(finding["category"] == "unconnected-item" for finding in report["findings"])
+assert len(report["run_sha256"]) == 64
+assert all(character in "0123456789abcdef" for character in report["run_sha256"])
+lower = raw.lower()
+for forbidden in ('"uuid"', '"date"', '"path"'):
+    assert forbidden not in lower, forbidden
+PY
+
 placed="$output_directory/simple.placed.kicad_pcb"
 placement_json="$output_directory/simple.placement.json"
 "$pcbex_binary" place-kicad examples/simple.kicad_pcb \

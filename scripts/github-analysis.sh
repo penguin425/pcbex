@@ -19,10 +19,10 @@ analysis_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PYTHONPATH="$analysis_script_dir" python3 - "$PCBEX_OUTPUT_DIR" <<'PY'
 import sys
 
-from ci_runtime import ExecutionBoundaryError, validate_relative_output_root
+from ci_runtime import ExecutionBoundaryError, validate_artifact_relative_output_root
 
 try:
-    validate_relative_output_root(sys.argv[1])
+    validate_artifact_relative_output_root(sys.argv[1])
 except (ExecutionBoundaryError, OSError, TypeError, ValueError) as error:
     print(f"invalid PCBEX_OUTPUT_DIR: {error}", file=sys.stderr)
     raise SystemExit(2)
@@ -87,6 +87,24 @@ write_output native-kicad-erc-warning-policy-source-sha256 ""
 write_output native-kicad-erc-run-sha256 ""
 write_output native-kicad-erc-report-bytes ""
 write_output native-kicad-erc-report-sha256 ""
+write_output native-kicad-drc-report ""
+write_output native-kicad-drc-schema-version ""
+write_output native-kicad-drc-approved ""
+write_output native-kicad-drc-violation-count ""
+write_output native-kicad-drc-unconnected-item-count ""
+write_output native-kicad-drc-schematic-parity-count ""
+write_output native-kicad-drc-error-count ""
+write_output native-kicad-drc-warning-count ""
+write_output native-kicad-drc-ignored-check-count ""
+write_output native-kicad-drc-board-bytes ""
+write_output native-kicad-drc-board-sha256 ""
+write_output native-kicad-drc-project-bytes ""
+write_output native-kicad-drc-project-sha256 ""
+write_output native-kicad-drc-rules-file-bytes ""
+write_output native-kicad-drc-rules-file-sha256 ""
+write_output native-kicad-drc-run-sha256 ""
+write_output native-kicad-drc-report-bytes ""
+write_output native-kicad-drc-report-sha256 ""
 write_output sarif-dir ""
 write_output current-sarif ""
 write_output comparison-sarif ""
@@ -233,6 +251,29 @@ native_kicad_erc_report_bytes=""
 native_kicad_erc_report_sha256=""
 native_kicad_erc_rc=0
 native_kicad_erc_summary_json=""
+native_kicad_drc_enabled="${PCBEX_NATIVE_KICAD_DRC_ENABLED:-false}"
+native_kicad_drc_kicad_cli="${PCBEX_NATIVE_KICAD_DRC_KICAD_CLI-kicad-cli}"
+native_kicad_drc_require_approved="${PCBEX_NATIVE_KICAD_DRC_REQUIRE_APPROVED:-false}"
+native_kicad_drc_report=""
+native_kicad_drc_schema_version=""
+native_kicad_drc_approved=""
+native_kicad_drc_violation_count=""
+native_kicad_drc_unconnected_item_count=""
+native_kicad_drc_schematic_parity_count=""
+native_kicad_drc_error_count=""
+native_kicad_drc_warning_count=""
+native_kicad_drc_ignored_check_count=""
+native_kicad_drc_board_bytes=""
+native_kicad_drc_board_sha256=""
+native_kicad_drc_project_bytes=""
+native_kicad_drc_project_sha256=""
+native_kicad_drc_rules_file_bytes=""
+native_kicad_drc_rules_file_sha256=""
+native_kicad_drc_run_sha256=""
+native_kicad_drc_report_bytes=""
+native_kicad_drc_report_sha256=""
+native_kicad_drc_rc=0
+native_kicad_drc_summary_json=""
 ai_review_generated_schematic="${PCBEX_AI_REVIEW_GENERATED_SCHEMATIC:-}"
 ai_review_artifacts_verified=""
 ai_review_generated_schematic_bytes=""
@@ -275,6 +316,26 @@ if [[ "$native_kicad_erc_require_approved" == "true" && -z "$native_kicad_erc_sc
 fi
 if [[ -n "$native_kicad_erc_schematic" && -z "$native_kicad_erc_kicad_cli" ]]; then
   echo "PCBEX_NATIVE_KICAD_ERC_KICAD_CLI must not be empty when standalone native ERC is enabled" >&2
+  exit 2
+fi
+if [[ "$native_kicad_drc_enabled" != "true" &&
+  "$native_kicad_drc_enabled" != "false" ]]; then
+  echo "PCBEX_NATIVE_KICAD_DRC_ENABLED must be true or false" >&2
+  exit 2
+fi
+if [[ "$native_kicad_drc_require_approved" != "true" &&
+  "$native_kicad_drc_require_approved" != "false" ]]; then
+  echo "PCBEX_NATIVE_KICAD_DRC_REQUIRE_APPROVED must be true or false" >&2
+  exit 2
+fi
+if [[ "$native_kicad_drc_require_approved" == "true" &&
+  "$native_kicad_drc_enabled" != "true" ]]; then
+  echo "PCBEX_NATIVE_KICAD_DRC_REQUIRE_APPROVED requires PCBEX_NATIVE_KICAD_DRC_ENABLED=true" >&2
+  exit 2
+fi
+if [[ "$native_kicad_drc_enabled" == "true" &&
+  -z "$native_kicad_drc_kicad_cli" ]]; then
+  echo "PCBEX_NATIVE_KICAD_DRC_KICAD_CLI must not be empty when native PCB DRC is enabled" >&2
   exit 2
 fi
 ai_quorum_inputs=0
@@ -443,6 +504,309 @@ violation_count="$(
   cat "$current_dir/summary.md"
 } > "$comment_body"
 cat "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+
+if [[ "$native_kicad_drc_enabled" == "true" ]]; then
+  native_kicad_drc_report_candidate="${artifact_dir}/native-kicad-drc.json"
+  native_kicad_drc_project=""
+  native_kicad_drc_rules_file=""
+  native_kicad_drc_companion_rc=0
+  resolve_native_kicad_drc_companion() {
+    python3 - "$PCBEX_BOARD" "$1" <<'PY'
+import os
+import stat
+import sys
+from pathlib import Path
+
+board, suffix = sys.argv[1:]
+try:
+    candidate = Path(board).with_suffix(suffix)
+    metadata = os.lstat(candidate)
+except FileNotFoundError:
+    raise SystemExit(0)
+except (OSError, ValueError) as error:
+    print(f"could not inspect native KiCad PCB DRC companion: {error}", file=sys.stderr)
+    raise SystemExit(2)
+if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+    print(f"native KiCad PCB DRC companion is not a regular file: {candidate}", file=sys.stderr)
+    raise SystemExit(2)
+print(candidate)
+PY
+  }
+  if native_kicad_drc_project_candidate="$(resolve_native_kicad_drc_companion .kicad_pro)"; then
+    :
+  else
+    native_kicad_drc_project_candidate=""
+    native_kicad_drc_companion_rc=2
+  fi
+  if native_kicad_drc_rules_file_candidate="$(resolve_native_kicad_drc_companion .kicad_dru)"; then
+    :
+  else
+    native_kicad_drc_rules_file_candidate=""
+    native_kicad_drc_companion_rc=2
+  fi
+  for native_kicad_drc_companion in \
+    "$native_kicad_drc_project_candidate" \
+    "$native_kicad_drc_rules_file_candidate"; do
+    if [[ -n "$native_kicad_drc_companion" ]]; then
+      if [[ "$native_kicad_drc_companion" == "$native_kicad_drc_project_candidate" ]]; then
+        native_kicad_drc_project="$native_kicad_drc_companion"
+      else
+        native_kicad_drc_rules_file="$native_kicad_drc_companion"
+      fi
+    fi
+  done
+  if [[ "$native_kicad_drc_companion_rc" != "0" ]]; then
+    native_kicad_drc_rc=2
+  elif [[ -e "$native_kicad_drc_report_candidate" ||
+    -L "$native_kicad_drc_report_candidate" ]]; then
+    echo "refusing to reuse an existing native KiCad PCB DRC report" >&2
+    native_kicad_drc_rc=2
+  else
+    native_kicad_drc_arguments=(
+      run-native-kicad-drc
+      "--output=$native_kicad_drc_report_candidate"
+      "--kicad-cli=$native_kicad_drc_kicad_cli"
+      --mcp-echo-report-summary
+    )
+    native_kicad_drc_summary_arguments=(
+      --verify
+      "--board=$PCBEX_BOARD"
+      "--report=$native_kicad_drc_report_candidate"
+    )
+    if [[ -n "$native_kicad_drc_project" ]]; then
+      native_kicad_drc_arguments+=("--project=$native_kicad_drc_project")
+      native_kicad_drc_summary_arguments+=("--project=$native_kicad_drc_project")
+    fi
+    if [[ -n "$native_kicad_drc_rules_file" ]]; then
+      native_kicad_drc_arguments+=("--rules-file=$native_kicad_drc_rules_file")
+      native_kicad_drc_summary_arguments+=("--rules-file=$native_kicad_drc_rules_file")
+    fi
+    native_kicad_drc_arguments+=(-- "$PCBEX_BOARD")
+    native_kicad_drc_summary_json=""
+    if native_kicad_drc_summary_json="$(
+      python3 "$GITHUB_ACTION_PATH/scripts/ci_runtime.py" exec \
+        --timeout-seconds 600 \
+        --max-stdout-bytes 4096 \
+        --max-stderr-bytes 8388608 \
+        --output-root "$PCBEX_OUTPUT_DIR" \
+        -- "$PCBEX_BINARY" "${native_kicad_drc_arguments[@]}" |
+      python3 "$GITHUB_ACTION_PATH/scripts/native_kicad_drc_summary.py" \
+        "${native_kicad_drc_summary_arguments[@]}"
+    )"; then
+      native_kicad_drc_rc=0
+    else
+      native_kicad_drc_rc=$?
+    fi
+  fi
+
+  if [[ -f "$native_kicad_drc_report_candidate" &&
+    ! -L "$native_kicad_drc_report_candidate" &&
+    -n "$native_kicad_drc_summary_json" ]]; then
+    native_kicad_drc_summary_values=""
+    if native_kicad_drc_summary_values="$(
+      python3 - "$native_kicad_drc_summary_json" <<'PY'
+import json
+import re
+import sys
+
+fields = (
+    "schema_version",
+    "approved",
+    "violation_count",
+    "unconnected_item_count",
+    "schematic_parity_count",
+    "error_count",
+    "warning_count",
+    "ignored_check_count",
+    "board_bytes",
+    "board_sha256",
+    "project_bytes",
+    "project_sha256",
+    "rules_file_bytes",
+    "rules_file_sha256",
+    "run_sha256",
+    "report_bytes",
+    "report_sha256",
+)
+sha256 = re.compile(r"^[0-9a-f]{64}$")
+
+def reject_constant(value):
+    raise ValueError(f"non-standard JSON number: {value}")
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, item in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = item
+    return result
+
+try:
+    value = json.loads(
+        sys.argv[1],
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_constant,
+    )
+except (IndexError, json.JSONDecodeError, TypeError, ValueError):
+    raise SystemExit(2)
+if type(value) is not dict or set(value) != set(fields) or len(value) != len(fields):
+    raise SystemExit(2)
+if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+    raise SystemExit(2)
+if type(value["approved"]) is not bool:
+    raise SystemExit(2)
+for field in (
+    "violation_count",
+    "unconnected_item_count",
+    "schematic_parity_count",
+    "error_count",
+    "warning_count",
+    "ignored_check_count",
+):
+    item = value[field]
+    if type(item) is not int or item < 0:
+        raise SystemExit(2)
+for field in ("board_bytes", "report_bytes"):
+    item = value[field]
+    if type(item) is not int or item < 1:
+        raise SystemExit(2)
+for field in ("board_sha256", "run_sha256", "report_sha256"):
+    if not isinstance(value[field], str) or sha256.fullmatch(value[field]) is None:
+        raise SystemExit(2)
+for bytes_field, sha_field in (
+    ("project_bytes", "project_sha256"),
+    ("rules_file_bytes", "rules_file_sha256"),
+):
+    byte_value = value[bytes_field]
+    sha_value = value[sha_field]
+    if byte_value == "" or sha_value == "":
+        if byte_value != "" or sha_value != "":
+            raise SystemExit(2)
+    elif (
+        type(byte_value) is not int
+        or byte_value < 1
+        or not isinstance(sha_value, str)
+        or sha256.fullmatch(sha_value) is None
+    ):
+        raise SystemExit(2)
+for field in fields:
+    item = value[field]
+    if type(item) is bool:
+        rendered = str(item).lower()
+    elif type(item) in (int, str):
+        rendered = str(item)
+    else:
+        raise SystemExit(2)
+    print(f"{field}={rendered}")
+PY
+    )"; then
+      while IFS='=' read -r field value; do
+        case "$field" in
+          schema_version) native_kicad_drc_schema_version="$value" ;;
+          approved) native_kicad_drc_approved="$value" ;;
+          violation_count) native_kicad_drc_violation_count="$value" ;;
+          unconnected_item_count) native_kicad_drc_unconnected_item_count="$value" ;;
+          schematic_parity_count) native_kicad_drc_schematic_parity_count="$value" ;;
+          error_count) native_kicad_drc_error_count="$value" ;;
+          warning_count) native_kicad_drc_warning_count="$value" ;;
+          ignored_check_count) native_kicad_drc_ignored_check_count="$value" ;;
+          board_bytes) native_kicad_drc_board_bytes="$value" ;;
+          board_sha256) native_kicad_drc_board_sha256="$value" ;;
+          project_bytes) native_kicad_drc_project_bytes="$value" ;;
+          project_sha256) native_kicad_drc_project_sha256="$value" ;;
+          rules_file_bytes) native_kicad_drc_rules_file_bytes="$value" ;;
+          rules_file_sha256) native_kicad_drc_rules_file_sha256="$value" ;;
+          run_sha256) native_kicad_drc_run_sha256="$value" ;;
+          report_bytes) native_kicad_drc_report_bytes="$value" ;;
+          report_sha256) native_kicad_drc_report_sha256="$value" ;;
+          *) native_kicad_drc_rc=2 ;;
+        esac
+      done <<< "$native_kicad_drc_summary_values"
+      if [[ ! "$native_kicad_drc_schema_version" =~ ^1$ ||
+        ! "$native_kicad_drc_approved" =~ ^(true|false)$ ||
+        ! "$native_kicad_drc_violation_count" =~ ^(0|[1-9][0-9]*)$ ||
+        ! "$native_kicad_drc_unconnected_item_count" =~ ^(0|[1-9][0-9]*)$ ||
+        ! "$native_kicad_drc_schematic_parity_count" =~ ^(0|[1-9][0-9]*)$ ||
+        ! "$native_kicad_drc_error_count" =~ ^(0|[1-9][0-9]*)$ ||
+        ! "$native_kicad_drc_warning_count" =~ ^(0|[1-9][0-9]*)$ ||
+        ! "$native_kicad_drc_ignored_check_count" =~ ^(0|[1-9][0-9]*)$ ||
+        ! "$native_kicad_drc_board_bytes" =~ ^[1-9][0-9]*$ ||
+        ! "$native_kicad_drc_board_sha256" =~ ^[0-9a-f]{64}$ ||
+        ! "$native_kicad_drc_run_sha256" =~ ^[0-9a-f]{64}$ ||
+        ! "$native_kicad_drc_report_bytes" =~ ^[1-9][0-9]*$ ||
+        ! "$native_kicad_drc_report_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+        native_kicad_drc_rc=2
+      elif [[ -n "$native_kicad_drc_project_bytes" &&
+        ( ! "$native_kicad_drc_project_bytes" =~ ^[1-9][0-9]*$ ||
+          ! "$native_kicad_drc_project_sha256" =~ ^[0-9a-f]{64}$ ) ]]; then
+        native_kicad_drc_rc=2
+      elif [[ -n "$native_kicad_drc_rules_file_bytes" &&
+        ( ! "$native_kicad_drc_rules_file_bytes" =~ ^[1-9][0-9]*$ ||
+          ! "$native_kicad_drc_rules_file_sha256" =~ ^[0-9a-f]{64}$ ) ]]; then
+        native_kicad_drc_rc=2
+      elif [[ -z "$native_kicad_drc_project_bytes" &&
+        -n "$native_kicad_drc_project_sha256" ]]; then
+        native_kicad_drc_rc=2
+      elif [[ -z "$native_kicad_drc_rules_file_bytes" &&
+        -n "$native_kicad_drc_rules_file_sha256" ]]; then
+        native_kicad_drc_rc=2
+      fi
+      if ((native_kicad_drc_rc == 0)); then
+        native_kicad_drc_report="$native_kicad_drc_report_candidate"
+      fi
+    else
+      native_kicad_drc_rc=2
+    fi
+  else
+    native_kicad_drc_rc=2
+  fi
+
+  if ((native_kicad_drc_rc != 0)); then
+    native_kicad_drc_report=""
+    native_kicad_drc_schema_version=""
+    native_kicad_drc_approved=""
+    native_kicad_drc_violation_count=""
+    native_kicad_drc_unconnected_item_count=""
+    native_kicad_drc_schematic_parity_count=""
+    native_kicad_drc_error_count=""
+    native_kicad_drc_warning_count=""
+    native_kicad_drc_ignored_check_count=""
+    native_kicad_drc_board_bytes=""
+    native_kicad_drc_board_sha256=""
+    native_kicad_drc_project_bytes=""
+    native_kicad_drc_project_sha256=""
+    native_kicad_drc_rules_file_bytes=""
+    native_kicad_drc_rules_file_sha256=""
+    native_kicad_drc_run_sha256=""
+    native_kicad_drc_report_bytes=""
+    native_kicad_drc_report_sha256=""
+  fi
+  {
+    printf '\n# pcbex native KiCad PCB DRC\n\n'
+    printf -- '- Schema version: %s\n' "${native_kicad_drc_schema_version:-unavailable}"
+    printf -- '- Approved: %s\n' "${native_kicad_drc_approved:-unavailable}"
+    printf -- '- Violations: %s\n' "${native_kicad_drc_violation_count:-unavailable}"
+    printf -- '- Unconnected items: %s\n' "${native_kicad_drc_unconnected_item_count:-unavailable}"
+    printf -- '- Schematic parity: %s\n' "${native_kicad_drc_schematic_parity_count:-unavailable}"
+    printf -- '- Errors: %s\n' "${native_kicad_drc_error_count:-unavailable}"
+    printf -- '- Warnings: %s\n' "${native_kicad_drc_warning_count:-unavailable}"
+    printf -- '- Ignored checks: %s\n' "${native_kicad_drc_ignored_check_count:-unavailable}"
+    printf -- '- Board bytes: %s\n' "${native_kicad_drc_board_bytes:-unavailable}"
+    printf -- '- Board SHA-256: %s\n' "${native_kicad_drc_board_sha256:-unavailable}"
+    printf -- '- Project bytes: %s\n' "${native_kicad_drc_project_bytes:-unavailable}"
+    printf -- '- Project SHA-256: %s\n' "${native_kicad_drc_project_sha256:-unavailable}"
+    printf -- '- Rules-file bytes: %s\n' "${native_kicad_drc_rules_file_bytes:-unavailable}"
+    printf -- '- Rules-file SHA-256: %s\n' "${native_kicad_drc_rules_file_sha256:-unavailable}"
+    printf -- '- Run SHA-256: %s\n' "${native_kicad_drc_run_sha256:-unavailable}"
+    printf -- '- Report bytes: %s\n' "${native_kicad_drc_report_bytes:-unavailable}"
+    printf -- '- Report SHA-256: %s\n' "${native_kicad_drc_report_sha256:-unavailable}"
+    if [[ -n "$native_kicad_drc_report" ]]; then
+      printf -- '- Report: %s\n' "$native_kicad_drc_report"
+    else
+      printf -- '- Report: unavailable\n'
+    fi
+  } | tee -a "$comment_body" >> "$GITHUB_STEP_SUMMARY"
+fi
 
 if [[ -n "$native_kicad_erc_schematic" ]]; then
   native_kicad_erc_report_candidate="${artifact_dir}/native-kicad-erc.json"
@@ -4237,6 +4601,24 @@ write_output native-kicad-erc-warning-policy-source-sha256 "$native_kicad_erc_wa
 write_output native-kicad-erc-run-sha256 "$native_kicad_erc_run_sha256"
 write_output native-kicad-erc-report-bytes "$native_kicad_erc_report_bytes"
 write_output native-kicad-erc-report-sha256 "$native_kicad_erc_report_sha256"
+write_output native-kicad-drc-report "$native_kicad_drc_report"
+write_output native-kicad-drc-schema-version "$native_kicad_drc_schema_version"
+write_output native-kicad-drc-approved "$native_kicad_drc_approved"
+write_output native-kicad-drc-violation-count "$native_kicad_drc_violation_count"
+write_output native-kicad-drc-unconnected-item-count "$native_kicad_drc_unconnected_item_count"
+write_output native-kicad-drc-schematic-parity-count "$native_kicad_drc_schematic_parity_count"
+write_output native-kicad-drc-error-count "$native_kicad_drc_error_count"
+write_output native-kicad-drc-warning-count "$native_kicad_drc_warning_count"
+write_output native-kicad-drc-ignored-check-count "$native_kicad_drc_ignored_check_count"
+write_output native-kicad-drc-board-bytes "$native_kicad_drc_board_bytes"
+write_output native-kicad-drc-board-sha256 "$native_kicad_drc_board_sha256"
+write_output native-kicad-drc-project-bytes "$native_kicad_drc_project_bytes"
+write_output native-kicad-drc-project-sha256 "$native_kicad_drc_project_sha256"
+write_output native-kicad-drc-rules-file-bytes "$native_kicad_drc_rules_file_bytes"
+write_output native-kicad-drc-rules-file-sha256 "$native_kicad_drc_rules_file_sha256"
+write_output native-kicad-drc-run-sha256 "$native_kicad_drc_run_sha256"
+write_output native-kicad-drc-report-bytes "$native_kicad_drc_report_bytes"
+write_output native-kicad-drc-report-sha256 "$native_kicad_drc_report_sha256"
 write_output policy-pack-fetch-receipt "$policy_pack_fetch_receipt"
 write_output manufacturing-feedback "$manufacturing_feedback"
 write_output manufacturing-feedback-passed "$manufacturing_feedback_passed"
@@ -4355,6 +4737,10 @@ write_output deterministic-pipeline-failure-count "$deterministic_pipeline_failu
 write_output deterministic-pipeline-report-bytes "$deterministic_pipeline_report_bytes"
 write_output deterministic-pipeline-report-sha256 "$deterministic_pipeline_report_sha256"
 if [[ -n "$native_kicad_erc_schematic" && "$native_kicad_erc_rc" != "0" ]]; then
+  write_output status error
+  exit 1
+fi
+if [[ "$native_kicad_drc_enabled" == "true" && "$native_kicad_drc_rc" != "0" ]]; then
   write_output status error
   exit 1
 fi

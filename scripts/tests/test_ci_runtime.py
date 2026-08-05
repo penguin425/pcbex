@@ -171,6 +171,35 @@ class CiRuntimeTests(unittest.TestCase):
                             value, base=workspace
                         )
 
+    def test_artifact_relative_output_root_preserves_spaces_but_rejects_globs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            workspace = Path(temporary).resolve()
+            for value in (
+                "build/result name",
+                "build/result+name@example.com",
+                "build/(draft)",
+            ):
+                with self.subTest(value=value):
+                    self.assertEqual(
+                        ci_runtime.validate_artifact_relative_output_root(
+                            value, base=workspace
+                        ),
+                        workspace / value,
+                    )
+            for value in (
+                "build/*",
+                "build/result?",
+                "build/[result]",
+                "build/{one,two}",
+                "!build/result",
+                "build/@(one|two)",
+            ):
+                with self.subTest(value=value):
+                    with self.assertRaises(ci_runtime.ExecutionBoundaryError):
+                        ci_runtime.validate_artifact_relative_output_root(
+                            value, base=workspace
+                        )
+
     def test_relative_input_file_rejects_escape_absolute_links_and_directories(self):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary).resolve()

@@ -174,6 +174,7 @@ mod manufacturing_feedback;
 mod manufacturing_limits;
 mod manufacturing_package;
 mod mcp;
+mod native_kicad_drc;
 mod native_kicad_erc;
 mod physical_profile;
 mod pipeline;
@@ -240,6 +241,9 @@ use manufacturing_package::{
     KiCadIdentity, KiCadProjectInput, collect_staged_artifacts, normalize_kicad_artifacts,
     prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
     write_manufacturing_package_with_workspace_reservation,
+};
+use native_kicad_drc::{
+    native_kicad_drc_report_schema, render_native_kicad_drc_report, run_native_kicad_drc,
 };
 use native_kicad_erc::{
     native_kicad_erc_report_schema, native_kicad_erc_warning_policy_schema,
@@ -831,6 +835,34 @@ enum Command {
     NativeKicadErcWarningReportSchema {
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+    /// Print the closed normalized native KiCad PCB DRC report JSON Schema.
+    NativeKicadDrcReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Run KiCad's native PCB design-rules checker in an isolated, bounded environment.
+    RunNativeKicadDrc {
+        /// Exact `.kicad_pcb` source to stage and check.
+        input: PathBuf,
+        /// New normalized report path; existing, aliased, or symlinked destinations are refused.
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Optional KiCad project used by the DRC invocation.
+        #[arg(long, value_name = "PATH")]
+        project: Option<PathBuf>,
+        /// Optional custom KiCad DRC rules file.
+        #[arg(long, value_name = "PATH")]
+        rules_file: Option<PathBuf>,
+        /// KiCad CLI executable or path. The command is invoked directly without a shell.
+        #[arg(long, default_value = "kicad-cli")]
+        kicad_cli: PathBuf,
+        /// Fail after retaining the report when native DRC is not approved.
+        #[arg(long)]
+        require_approved: bool,
+        /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
+        #[arg(long, hide = true)]
+        mcp_echo_report_summary: bool,
     },
     /// Run KiCad's native schematic ERC in an isolated, bounded environment.
     RunNativeKicadErc {
@@ -5333,6 +5365,97 @@ fn run_cli() -> Result<()> {
                 output.as_deref(),
                 "native KiCad ERC warning report schema output",
             )?;
+        }
+        Command::NativeKicadDrcReportSchema { output } => {
+            write_closed_schema(
+                &native_kicad_drc_report_schema(),
+                output.as_deref(),
+                "native KiCad DRC report schema output",
+            )?;
+        }
+        Command::RunNativeKicadDrc {
+            input,
+            output,
+            project,
+            rules_file,
+            kicad_cli,
+            require_approved,
+            mcp_echo_report_summary,
+        } => {
+            // The DRC runner auto-discovers same-stem KiCad project/rules
+            // companions. Reserve those candidate paths for the alias check
+            // even when they do not exist yet, so an output cannot become a
+            // newly-created sidecar during the run.
+            let auto_project = input.with_extension("kicad_pro");
+            let auto_rules = input.with_extension("kicad_dru");
+            let mut authorized_inputs = vec![input.as_path()];
+            authorized_inputs.push(auto_project.as_path());
+            authorized_inputs.push(auto_rules.as_path());
+            if let Some(project) = project.as_deref() {
+                authorized_inputs.push(project);
+            }
+            if let Some(rules_file) = rules_file.as_deref() {
+                authorized_inputs.push(rules_file);
+            }
+            let prepared = prepare_pipeline_output(&output, &authorized_inputs)?;
+            let report = run_native_kicad_drc(
+                &input,
+                project.as_deref(),
+                rules_file.as_deref(),
+                kicad_cli.as_os_str(),
+                None,
+            )?;
+            let rendered = render_native_kicad_drc_report(&report)?;
+            persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
+            if mcp_echo_report_summary {
+                let summary = serde_json::json!({
+                    "schema_version": report.schema_version,
+                    "approved": report.approved,
+                    "violation_count": report.violation_count,
+                    "unconnected_item_count": report.unconnected_item_count,
+                    "schematic_parity_count": report.schematic_parity_count,
+                    "error_count": report.error_count,
+                    "warning_count": report.warning_count,
+                    "ignored_check_count": report.ignored_checks.len(),
+                    "board_bytes": report.source.bytes,
+                    "board_sha256": report.source.sha256,
+                    "project_bytes": report.project.as_ref().map_or_else(
+                        || serde_json::Value::String(String::new()),
+                        |identity| serde_json::Value::from(identity.bytes),
+                    ),
+                    "project_sha256": report.project.as_ref().map_or_else(
+                        || serde_json::Value::String(String::new()),
+                        |identity| serde_json::Value::String(identity.sha256.clone()),
+                    ),
+                    "rules_file_bytes": report.rules_file.as_ref().map_or_else(
+                        || serde_json::Value::String(String::new()),
+                        |identity| serde_json::Value::from(identity.bytes),
+                    ),
+                    "rules_file_sha256": report.rules_file.as_ref().map_or_else(
+                        || serde_json::Value::String(String::new()),
+                        |identity| serde_json::Value::String(identity.sha256.clone()),
+                    ),
+                    "run_sha256": report.run_sha256,
+                    "report_bytes": rendered.len(),
+                    "report_sha256": hex::encode(Sha256::digest(&rendered)),
+                });
+                serde_json::to_writer(&mut io::stdout(), &summary)?;
+                io::stdout().write_all(b"\n")?;
+                io::stdout().flush()?;
+            }
+            eprintln!(
+                "native KiCad DRC: {}; {} finding(s) ({} violation(s), {} unconnected item(s)), {} error(s), {} warning(s); report={}",
+                if report.approved { "approved" } else { "rejected" },
+                report.findings.len(),
+                report.violation_count,
+                report.unconnected_item_count,
+                report.error_count,
+                report.warning_count,
+                output.display()
+            );
+            if require_approved && !report.approved {
+                bail!("native KiCad PCB DRC rejected");
+            }
         }
         Command::RunNativeKicadErc {
             input,
@@ -17504,6 +17627,73 @@ mod tests {
                 warning_policy: Some(policy),
                 ..
             } if policy.as_os_str() == "policy.json"
+        ));
+    }
+
+    #[test]
+    fn parses_native_drc_schema_and_runner_options() {
+        let schema = parse_cli(&[
+            "pcbex",
+            "native-kicad-drc-report-schema",
+            "--output",
+            "drc.schema.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *schema.command,
+            Command::NativeKicadDrcReportSchema { output: Some(path) }
+                if path.as_os_str() == "drc.schema.json"
+        ));
+
+        let runner = parse_cli(&[
+            "pcbex",
+            "run-native-kicad-drc",
+            "board.kicad_pcb",
+            "--output",
+            "drc.json",
+            "--project",
+            "board.kicad_pro",
+            "--rules-file",
+            "board.kicad_dru",
+            "--require-approved",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *runner.command,
+            Command::RunNativeKicadDrc {
+                project: Some(project),
+                rules_file: Some(rules),
+                require_approved: true,
+                ..
+            } if project.as_os_str() == "board.kicad_pro"
+                && rules.as_os_str() == "board.kicad_dru"
+        ));
+
+        let option_like = parse_cli(&[
+            "pcbex",
+            "run-native-kicad-drc",
+            "--output=-out.json",
+            "--project=-project.kicad_pro",
+            "--rules-file=-rules.kicad_dru",
+            "--kicad-cli=-kicad-cli",
+            "--",
+            "-board.kicad_pcb",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *option_like.command,
+            Command::RunNativeKicadDrc {
+                input,
+                output,
+                project: Some(project),
+                rules_file: Some(rules),
+                kicad_cli,
+                ..
+            } if input.as_os_str() == "-board.kicad_pcb"
+                && output.as_os_str() == "-out.json"
+                && project.as_os_str() == "-project.kicad_pro"
+                && rules.as_os_str() == "-rules.kicad_dru"
+                && kicad_cli.as_os_str() == "-kicad-cli"
         ));
     }
 

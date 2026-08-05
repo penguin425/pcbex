@@ -669,6 +669,11 @@
     {
       "id": "boardless-native-kicad-erc-action",
       "release": "v1.428.0",
+      "status": "released"
+    },
+    {
+      "id": "native-kicad-pcb-drc-evidence",
+      "release": "v1.429.0",
       "status": "current"
     }
   ]
