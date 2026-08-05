@@ -3249,7 +3249,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_schematic_approval",
             "Verify AI schematic approval",
-            "Strictly verify an Ed25519 approval against its exact request, AI response, and any live request-schema-v2/v3/v4 artifacts, including native KiCad ERC evidence.",
+            "Strictly verify an Ed25519 approval against its exact request, AI response, and either a live schema-v1 KiCad schematic or request-schema-v2/v3/v4 artifacts, including native KiCad ERC evidence.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3265,6 +3265,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "public_key": {"type": "string"},
                     "policy_pack": {"type": "string"},
                     "session": {"type": "string"},
+                    "schematic": {"type": "string"},
                     "generated_schematic": {"type": "string"},
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
@@ -3283,10 +3284,12 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                             ],
                             "not": {"anyOf": [
                                 {"required": ["native_kicad_erc_report"]},
-                                {"required": ["native_kicad_erc_warning_policy"]}
+                                {"required": ["native_kicad_erc_warning_policy"]},
+                                {"required": ["schematic"]}
                             ]}
                         },
                         {"not": {"anyOf": [
+                            {"required": ["schematic"]},
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
                             {"required": ["deterministic_pipeline_report"]},
@@ -3298,7 +3301,18 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                             "deterministic_pipeline_plan",
                             "deterministic_pipeline_report",
                             "native_kicad_erc_report"
-                        ]}
+                        ], "not": {"required": ["schematic"]}},
+                        {
+                            "required": ["schematic"],
+                            "not": {"anyOf": [
+                                {"required": ["generated_schematic"]},
+                                {"required": ["deterministic_pipeline_plan"]},
+                                {"required": ["deterministic_pipeline_report"]},
+                                {"required": ["native_kicad_erc_report"]},
+                                {"required": ["native_kicad_erc_warning_policy"]},
+                                {"required": ["kicad_cli"]}
+                            ]}
+                        }
                     ]
                 }, {
                     "if": {"required": ["kicad_cli"]},
@@ -3315,7 +3329,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "verify_schematic_approval_quorum",
             "Verify AI schematic approval quorum",
-            "Verify independent signed reviews and any live request-schema-v2/v3/v4 artifacts, including native KiCad ERC evidence, against one bound request, then enforce approval, provider, and model thresholds.",
+            "Verify independent signed reviews and either a live schema-v1 KiCad schematic or request-schema-v2/v3/v4 artifacts, including native KiCad ERC evidence, against one bound request, then enforce approval, provider, and model thresholds.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3346,6 +3360,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "current_schematic": {"type": "string"},
                     "reviewer_routing_policy": {"type": "string"},
                     "session": {"type": "string"},
+                    "schematic": {"type": "string"},
                     "generated_schematic": {"type": "string"},
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
@@ -3366,10 +3381,12 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                             ],
                             "not": {"anyOf": [
                                 {"required": ["native_kicad_erc_report"]},
-                                {"required": ["native_kicad_erc_warning_policy"]}
+                                {"required": ["native_kicad_erc_warning_policy"]},
+                                {"required": ["schematic"]}
                             ]}
                         },
                         {"not": {"anyOf": [
+                            {"required": ["schematic"]},
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
                             {"required": ["deterministic_pipeline_report"]},
@@ -3381,7 +3398,18 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                             "deterministic_pipeline_plan",
                             "deterministic_pipeline_report",
                             "native_kicad_erc_report"
-                        ]}
+                        ], "not": {"required": ["schematic"]}},
+                        {
+                            "required": ["schematic"],
+                            "not": {"anyOf": [
+                                {"required": ["generated_schematic"]},
+                                {"required": ["deterministic_pipeline_plan"]},
+                                {"required": ["deterministic_pipeline_report"]},
+                                {"required": ["native_kicad_erc_report"]},
+                                {"required": ["native_kicad_erc_warning_policy"]},
+                                {"required": ["kicad_cli"]}
+                            ]}
+                        }
                     ]
                 }, {
                     "if": {"required": ["kicad_cli"]},
@@ -10589,6 +10617,7 @@ fn verify_schematic_approval(
             "public_key",
             "policy_pack",
             "session",
+            "schematic",
             "generated_schematic",
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
@@ -10612,6 +10641,7 @@ fn verify_schematic_approval(
     optional_option(&arguments, "public_key", "--public-key", &mut command)?;
     optional_option(&arguments, "policy_pack", "--policy-pack", &mut command)?;
     optional_option(&arguments, "session", "--session", &mut command)?;
+    append_live_schematic_option(&arguments, &mut command)?;
     append_native_ai_review_options(
         &arguments,
         &[
@@ -10657,6 +10687,7 @@ fn verify_schematic_approval_quorum(
             "current_schematic",
             "reviewer_routing_policy",
             "session",
+            "schematic",
             "generated_schematic",
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
@@ -10741,6 +10772,7 @@ fn verify_schematic_approval_quorum(
         "--reviewer-routing-policy",
         &mut command,
     )?;
+    append_live_schematic_option(&arguments, &mut command)?;
     append_native_ai_review_options(
         &arguments,
         &[
@@ -14261,6 +14293,35 @@ fn append_complete_options(
     Ok(())
 }
 
+/// Append the schema-v1 live schematic binding while rejecting every
+/// generated/native artifact field.  The CLI performs the authoritative
+/// semantic binding; MCP still fails closed before spawning a child when a
+/// caller mixes mutually exclusive binding modes.
+fn append_live_schematic_option(
+    arguments: &Map<String, Value>,
+    command: &mut Vec<String>,
+) -> std::result::Result<(), Value> {
+    if arguments.contains_key("schematic") {
+        let artifact_fields = [
+            "generated_schematic",
+            "deterministic_pipeline_plan",
+            "deterministic_pipeline_report",
+            "native_kicad_erc_report",
+            "native_kicad_erc_warning_policy",
+            "kicad_cli",
+        ];
+        if artifact_fields
+            .iter()
+            .any(|field| arguments.contains_key(*field))
+        {
+            return Err(json!({
+                "detail": "schematic cannot be combined with generated/native AI review artifacts"
+            }));
+        }
+    }
+    optional_option(arguments, "schematic", "--schematic", command)
+}
+
 /// Append the optional AI-review artifact identity flags while enforcing the
 /// schema-version groups shared by prepare/sign/verify/quorum.  Error-only
 /// native ERC evidence upgrades a complete deterministic artifact set to
@@ -14794,6 +14855,30 @@ mod tests {
     }
 
     #[test]
+    fn live_schematic_binding_forwards_exact_cli_flag_and_rejects_artifacts() {
+        let arguments = json!({"schematic": "live.kicad_sch"});
+        let mut command = vec!["verify-ai-approval".to_string()];
+        append_live_schematic_option(arguments.as_object().unwrap(), &mut command).unwrap();
+        assert_eq!(
+            command,
+            vec!["verify-ai-approval", "--schematic", "live.kicad_sch"]
+        );
+
+        let conflicting = json!({
+            "schematic": "live.kicad_sch",
+            "generated_schematic": "generated.kicad_sch",
+            "deterministic_pipeline_plan": "plan.json",
+            "deterministic_pipeline_report": "report.json"
+        });
+        let error = append_live_schematic_option(conflicting.as_object().unwrap(), &mut Vec::new())
+            .unwrap_err();
+        assert_eq!(
+            error["detail"],
+            "schematic cannot be combined with generated/native AI review artifacts"
+        );
+    }
+
+    #[test]
     fn ai_review_handlers_reject_partial_artifact_binding_before_dispatch() {
         let prepare = prepare_schematic_review(
             json!({
@@ -14901,6 +14986,47 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("must be supplied together")
+        );
+
+        let verify_live_conflict = verify_schematic_approval(
+            json!({
+                "approval": "approval.json",
+                "request": "request.json",
+                "response": "response.json",
+                "public_key": "public.key",
+                "schematic": "live.kicad_sch",
+                "generated_schematic": "generated.kicad_sch"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            verify_live_conflict["detail"],
+            "schematic cannot be combined with generated/native AI review artifacts"
+        );
+
+        let quorum_live_conflict = verify_schematic_approval_quorum(
+            json!({
+                "request": "request.json",
+                "approvals": ["approval.json"],
+                "responses": ["response.json"],
+                "policy_pack": "policy-pack.json",
+                "output": "quorum-live-conflict.json",
+                "schematic": "live.kicad_sch",
+                "native_kicad_erc_report": "native-erc.json"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            quorum_live_conflict["detail"],
+            "schematic cannot be combined with generated/native AI review artifacts"
         );
     }
 
@@ -15679,6 +15805,15 @@ mod tests {
             "deterministic_pipeline_report"
         );
         assert_eq!(
+            named("verify_schematic_approval")["inputSchema"]["properties"]["schematic"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("verify_schematic_approval")["inputSchema"]["allOf"][0]["oneOf"][3]["required"]
+                [0],
+            "schematic"
+        );
+        assert_eq!(
             named("verify_schematic_approval")["annotations"]["readOnlyHint"],
             true
         );
@@ -15704,6 +15839,15 @@ mod tests {
             named("verify_schematic_approval_quorum")["inputSchema"]["allOf"][0]["oneOf"][0]["required"]
                 [0],
             "generated_schematic"
+        );
+        assert_eq!(
+            named("verify_schematic_approval_quorum")["inputSchema"]["properties"]["schematic"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("verify_schematic_approval_quorum")["inputSchema"]["allOf"][0]["oneOf"][3]["required"]
+                [0],
+            "schematic"
         );
         assert_eq!(
             named("verify_schematic_approval_quorum")["annotations"]["destructiveHint"],

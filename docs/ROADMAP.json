@@ -729,6 +729,11 @@
     {
       "id": "boardless-ai-schematic-approval-action",
       "release": "v1.440.0",
+      "status": "released"
+    },
+    {
+      "id": "ai-schematic-approval-cli-mcp-parity",
+      "release": "v1.441.0",
       "status": "current"
     }
   ]

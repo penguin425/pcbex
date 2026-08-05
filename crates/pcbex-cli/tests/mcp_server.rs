@@ -2780,3 +2780,269 @@ fn stdio_server_board_binding_retains_rejected_report() {
     );
     fs::remove_dir_all(output).unwrap();
 }
+
+#[test]
+fn stdio_server_verifies_live_ai_schematic_approval_and_quorum() {
+    let output = temporary_directory("mcp-live-ai-approval");
+    fs::create_dir_all(&output).unwrap();
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/approved-empty.kicad_sch");
+    let run_cli = |arguments: &[String]| {
+        Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .args(arguments)
+            .output()
+            .unwrap()
+    };
+    let path = |value: &Path| value.display().to_string();
+
+    // Build every signed schema-v1 input through the public CLI.  The only
+    // files touched are inside this test's private temporary directory.
+    let policy = output.join("electrical-policy.json");
+    assert!(
+        run_cli(&["electrical-policy".into(), "--output".into(), path(&policy),])
+            .status
+            .success()
+    );
+    let policy_value: Value = serde_json::from_slice(&fs::read(&policy).unwrap()).unwrap();
+
+    let review = output.join("electrical-review.json");
+    assert!(
+        run_cli(&[
+            "check-schematic".into(),
+            path(&fixture),
+            "--policy".into(),
+            path(&policy),
+            "--output".into(),
+            path(&review),
+            "--require-approved".into(),
+        ])
+        .status
+        .success()
+    );
+
+    let private_key = output.join("approval.key");
+    let public_key = output.join("approval.pub");
+    assert!(
+        run_cli(&[
+            "approval-keygen".into(),
+            "--private-key".into(),
+            path(&private_key),
+            "--public-key".into(),
+            path(&public_key),
+        ])
+        .status
+        .success()
+    );
+
+    let sample_pack =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/acme-policy-pack.json");
+    let mut pack: Value = serde_json::from_slice(&fs::read(sample_pack).unwrap()).unwrap();
+    pack["electrical_policy"] = policy_value;
+    pack["ai_requirements"] = json!([{
+        "id": "power",
+        "text": "Power input treatment is intentional"
+    }]);
+    pack["require_simulation_evidence"] = false.into();
+    pack["trusted_approval_keys"] = json!([{
+        "signer_id": "ci-production",
+        "public_key": fs::read_to_string(&public_key).unwrap().trim()
+    }]);
+    let policy_pack = output.join("policy-pack.json");
+    fs::write(&policy_pack, serde_json::to_vec_pretty(&pack).unwrap()).unwrap();
+    assert!(
+        run_cli(&["validate-policy-pack".into(), path(&policy_pack),])
+            .status
+            .success()
+    );
+
+    let request = output.join("request.json");
+    assert!(
+        run_cli(&[
+            "prepare-ai-review".into(),
+            path(&fixture),
+            "--electrical-review".into(),
+            path(&review),
+            "--policy-pack".into(),
+            path(&policy_pack),
+            "--output".into(),
+            path(&request),
+        ])
+        .status
+        .success()
+    );
+    let request_value: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    assert_eq!(request_value["schema_version"], 1);
+
+    let response = output.join("response.json");
+    fs::write(
+        &response,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "request_sha256": request_value["request_sha256"],
+            "model": {
+                "provider": "test-provider",
+                "model": "schematic-reviewer",
+                "version": "1"
+            },
+            "decision": "approve",
+            "summary": "The deterministic review supports approval.",
+            "requirements": [{
+                "id": "power",
+                "status": "pass",
+                "rationale": "The electrical review is approved.",
+                "evidence_refs": ["electrical-review"]
+            }],
+            "risks": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let approval = output.join("approval.json");
+    assert!(
+        run_cli(&[
+            "sign-ai-review".into(),
+            path(&request),
+            path(&response),
+            "--private-key".into(),
+            path(&private_key),
+            "--signer-id".into(),
+            "ci-production".into(),
+            "--output".into(),
+            path(&approval),
+            "--require-approved".into(),
+        ])
+        .status
+        .success()
+    );
+
+    let equivalent_schematic = output.join("equivalent-live.kicad_sch");
+    fs::write(
+        &equivalent_schematic,
+        format!("{}\n\n", fs::read_to_string(&fixture).unwrap()),
+    )
+    .unwrap();
+    let mutated_schematic = output.join("mutated-live.kicad_sch");
+    let mutated_source = fs::read_to_string(&fixture).unwrap().replace(
+        "00000000-0000-0000-0000-000000000100",
+        "00000000-0000-0000-0000-000000000101",
+    );
+    assert_ne!(mutated_source, fs::read_to_string(&fixture).unwrap());
+    fs::write(&mutated_schematic, mutated_source).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let initialized = initialize(&mut stdin, &mut stdout, json!("live-ai-approval-init"));
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "live-ai-approval-success",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_schematic_approval",
+                "arguments": {
+                    "approval": path(&approval),
+                    "request": path(&request),
+                    "response": path(&response),
+                    "policy_pack": path(&policy_pack),
+                    "schematic": path(&equivalent_schematic),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let verified = receive(&mut stdout);
+    assert_eq!(verified["id"], "live-ai-approval-success");
+    assert_eq!(verified["result"]["isError"], false);
+    assert_eq!(verified["result"]["structuredContent"]["ok"], true);
+    assert_eq!(verified["result"]["structuredContent"]["verified"], true);
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "live-ai-approval-mutated",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_schematic_approval",
+                "arguments": {
+                    "approval": path(&approval),
+                    "request": path(&request),
+                    "response": path(&response),
+                    "policy_pack": path(&policy_pack),
+                    "schematic": path(&mutated_schematic),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let rejected = receive(&mut stdout);
+    assert_eq!(rejected["id"], "live-ai-approval-mutated");
+    assert_eq!(rejected["result"]["isError"], true);
+    assert_eq!(rejected["result"]["structuredContent"]["ok"], false);
+    assert_eq!(rejected["result"]["structuredContent"]["verified"], false);
+    assert!(
+        rejected["result"]["structuredContent"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("live schematic semantic document does not match")
+    );
+
+    let quorum_report = output.join("quorum.json");
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "live-ai-approval-quorum",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_schematic_approval_quorum",
+                "arguments": {
+                    "request": path(&request),
+                    "approvals": [path(&approval)],
+                    "responses": [path(&response)],
+                    "policy_pack": path(&policy_pack),
+                    "minimum_approvals": 1,
+                    "minimum_distinct_providers": 1,
+                    "minimum_distinct_models": 1,
+                    "schematic": path(&equivalent_schematic),
+                    "output": path(&quorum_report),
+                    "require_quorum": true
+                }
+            }
+        }),
+    );
+    let quorum = receive(&mut stdout);
+    assert_eq!(quorum["id"], "live-ai-approval-quorum");
+    assert_eq!(quorum["result"]["isError"], false);
+    assert_eq!(quorum["result"]["structuredContent"]["ok"], true);
+    assert_eq!(
+        quorum["result"]["structuredContent"]["report"]["quorum_met"],
+        true
+    );
+    assert!(quorum_report.is_file());
+    let retained: Value = serde_json::from_slice(&fs::read(&quorum_report).unwrap()).unwrap();
+    assert_eq!(retained["quorum_met"], true);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    fs::remove_dir_all(output).unwrap();
+}

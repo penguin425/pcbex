@@ -91,10 +91,13 @@ bounds and revalidation requirements.
 - Only unbound AI review request schema v1 is accepted. Schema-v2 through v4
   bind generated schematic, deterministic pipeline, and native ERC artifacts;
   verify those through the existing CLI, MCP, or root Action paths.
-- The focused Action and `pcbex verify-ai-quorum --schematic` are the schema-v1
-  live-source binding surfaces in this release. The root Action's legacy
-  schema-v1 quorum route and the MCP quorum tool do not automatically inject a
-  live schematic; use this focused Action when that binding is required.
+- The focused Action, `pcbex verify-ai-approval --schematic`, and
+  `pcbex verify-ai-quorum --schematic` are schema-v1 live-source binding
+  surfaces. MCP callers can pass the same explicit `schematic` path to
+  `verify_schematic_approval` or `verify_schematic_approval_quorum`. The root
+  Action's legacy schema-v1 quorum route still does not automatically inject a
+  live schematic; use this focused Action when an Action-level binding is
+  required.
 - AI provider execution and response normalization remain separate steps.
 - The verification path has no provider/network input. Like the other source
   Actions, its build step may use the runner's configured Rust toolchain and
