@@ -553,6 +553,25 @@ fn stdio_server_advertises_native_kicad_drc_contract_and_rejects_bad_arguments()
     assert_eq!(verifier["annotations"]["readOnlyHint"], true);
     assert_eq!(verifier["annotations"]["destructiveHint"], false);
 
+    let erc_verifier = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "verify_native_kicad_erc_report")
+        .expect("native ERC replay MCP tool is advertised");
+    assert_eq!(erc_verifier["inputSchema"]["additionalProperties"], false);
+    assert_eq!(
+        erc_verifier["inputSchema"]["required"],
+        json!(["input", "retained_report"])
+    );
+    assert_eq!(
+        erc_verifier["inputSchema"]["properties"]["retained_report"]["minLength"],
+        1
+    );
+    assert_eq!(erc_verifier["execution"]["taskSupport"], "optional");
+    assert_eq!(erc_verifier["annotations"]["readOnlyHint"], true);
+    assert_eq!(erc_verifier["annotations"]["destructiveHint"], false);
+
     send(
         &mut stdin,
         json!({
@@ -593,6 +612,27 @@ fn stdio_server_advertises_native_kicad_drc_contract_and_rejects_bad_arguments()
             .as_str()
             .unwrap()
             .contains("report")
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "erc-replay-wrong-type",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_erc_report",
+                "arguments": {"input": "schematic.kicad_sch", "retained_report": 4}
+            }
+        }),
+    );
+    let erc_replay_wrong_type = receive(&mut stdout);
+    assert_eq!(erc_replay_wrong_type["error"]["code"], -32602);
+    assert!(
+        erc_replay_wrong_type["error"]["data"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("retained_report")
     );
 
     send(
@@ -918,6 +958,260 @@ fn stdio_server_direct_native_drc_bridge_retains_rejected_report_and_structured_
 
 #[cfg(unix)]
 #[test]
+fn stdio_server_verifies_native_erc_replay_and_preserves_report_bytes() {
+    let output = temporary_directory("mcp-native-erc-replay");
+    fs::create_dir_all(&output).unwrap();
+    let rejected_cli = fake_native_kicad_erc_cli(&output, "fake-erc-rejected", true);
+    let approved_cli = fake_native_kicad_erc_cli(&output, "fake-erc-approved", false);
+    let warning_cli = fake_native_kicad_erc_warning_cli(&output, "fake-erc-warning");
+    let schematic = output.join("schematic.kicad_sch");
+    let rejected_report = output.join("rejected.json");
+    let warning_report = output.join("warning.json");
+    let warning_policy = output.join("warning-policy.json");
+    let warning_policy_source = br#"{"schema_version":1,"id":"test-warning-policy","maximum_total_warnings":1,"warning_limits":[{"finding_type":"warning_type","maximum_count":1}],"allowed_ignored_checks":["ignored"]}"#;
+    fs::write(&schematic, b"schematic").unwrap();
+    fs::write(&warning_policy, warning_policy_source).unwrap();
+
+    let generated = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .current_dir(&output)
+        .args([
+            "run-native-kicad-erc",
+            "schematic.kicad_sch",
+            "--output",
+            "rejected.json",
+            "--kicad-cli",
+        ])
+        .arg(&rejected_cli)
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "native ERC seed failed: {}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let retained_rejected = fs::read(&rejected_report).unwrap();
+
+    let generated_warning = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .current_dir(&output)
+        .args([
+            "run-native-kicad-erc",
+            "schematic.kicad_sch",
+            "--output",
+            "warning.json",
+            "--kicad-cli",
+        ])
+        .arg(&warning_cli)
+        .arg("--warning-policy")
+        .arg(&warning_policy)
+        .output()
+        .unwrap();
+    assert!(
+        generated_warning.status.success(),
+        "native ERC warning seed failed: {}",
+        String::from_utf8_lossy(&generated_warning.stderr)
+    );
+    let retained_warning = fs::read(&warning_report).unwrap();
+
+    let malformed = output.join("malformed.json");
+    fs::write(&malformed, b"not-json").unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .current_dir(&output)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize(
+        &mut stdin,
+        &mut stdout,
+        json!("initialize-native-erc-replay"),
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "replay-rejected-evidence",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_erc_report",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "retained_report": "rejected.json",
+                    "kicad_cli": rejected_cli.display().to_string()
+                }
+            }
+        }),
+    );
+    let rejected = receive(&mut stdout);
+    assert_eq!(rejected["id"], "replay-rejected-evidence");
+    assert_eq!(rejected["result"]["isError"], false);
+    let rejected_result = &rejected["result"]["structuredContent"];
+    assert_eq!(rejected_result["ok"], true);
+    let rejected_summary = &rejected_result["report_summary"];
+    assert_eq!(rejected_summary.as_object().unwrap().len(), 6);
+    assert_eq!(rejected_summary["schema_version"], 1);
+    assert_eq!(rejected_summary["approved"], false);
+    assert_eq!(rejected_summary["error_count"], 1);
+    assert_eq!(rejected_summary["report_bytes"], retained_rejected.len());
+    assert_eq!(
+        rejected_summary["report_sha256"],
+        hex::encode(Sha256::digest(&retained_rejected))
+    );
+    assert_eq!(fs::read(&rejected_report).unwrap(), retained_rejected);
+
+    // A fresh run with different findings is stale evidence, not a new
+    // retained report.  Replay must reject it without touching the original.
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "replay-stale",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_erc_report",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "retained_report": "rejected.json",
+                    "kicad_cli": approved_cli.display().to_string()
+                }
+            }
+        }),
+    );
+    let stale = receive(&mut stdout);
+    assert_eq!(stale["id"], "replay-stale");
+    assert_eq!(stale["result"]["isError"], true);
+    assert_eq!(stale["result"]["structuredContent"]["ok"], false);
+    assert!(stale["result"]["structuredContent"]["report_summary"].is_null());
+    assert_eq!(fs::read(&rejected_report).unwrap(), retained_rejected);
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "replay-rejected-gate",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_erc_report",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "retained_report": "rejected.json",
+                    "kicad_cli": rejected_cli.display().to_string(),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let rejected_gate = receive(&mut stdout);
+    assert_eq!(rejected_gate["id"], "replay-rejected-gate");
+    assert_eq!(rejected_gate["result"]["isError"], true);
+    assert_eq!(rejected_gate["result"]["structuredContent"]["ok"], false);
+    assert_eq!(
+        rejected_gate["result"]["structuredContent"]["report_summary"],
+        rejected_summary.clone()
+    );
+    assert_eq!(fs::read(&rejected_report).unwrap(), retained_rejected);
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "replay-warning",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_erc_report",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "retained_report": "warning.json",
+                    "warning_policy": warning_policy.display().to_string(),
+                    "kicad_cli": warning_cli.display().to_string(),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let warning = receive(&mut stdout);
+    assert_eq!(warning["id"], "replay-warning");
+    assert_eq!(warning["result"]["isError"], false);
+    let warning_summary = &warning["result"]["structuredContent"]["report_summary"];
+    let expected_warning_fields = [
+        "schema_version",
+        "approved",
+        "error_count",
+        "warning_count",
+        "policy_failure_count",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+        "warning_policy_sha256",
+        "warning_policy_source_bytes",
+        "warning_policy_source_sha256",
+    ];
+    assert_eq!(
+        warning_summary.as_object().unwrap().len(),
+        expected_warning_fields.len()
+    );
+    for field in expected_warning_fields {
+        assert!(warning_summary.get(field).is_some(), "missing {field}");
+    }
+    assert_eq!(warning_summary["schema_version"], 2);
+    assert_eq!(warning_summary["approved"], true);
+    assert_eq!(warning_summary["warning_count"], 1);
+    assert_eq!(warning_summary["policy_failure_count"], 0);
+    assert_eq!(warning_summary["report_bytes"], retained_warning.len());
+    assert_eq!(
+        warning_summary["report_sha256"],
+        hex::encode(Sha256::digest(&retained_warning))
+    );
+    assert_eq!(fs::read(&warning_report).unwrap(), retained_warning);
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "replay-malformed",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_erc_report",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "retained_report": "malformed.json",
+                    "kicad_cli": rejected_cli.display().to_string()
+                }
+            }
+        }),
+    );
+    let malformed_response = receive(&mut stdout);
+    assert_eq!(malformed_response["id"], "replay-malformed");
+    assert_eq!(malformed_response["result"]["isError"], true);
+    assert_eq!(
+        malformed_response["result"]["structuredContent"]["ok"],
+        false
+    );
+    assert!(malformed_response["result"]["structuredContent"]["report_summary"].is_null());
+    assert_eq!(fs::read(&malformed).unwrap(), b"not-json");
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert!(rejected_cli.is_file());
+    assert!(approved_cli.is_file());
+    assert!(warning_cli.is_file());
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn stdio_server_direct_native_erc_bridge_retains_rejected_report_and_trusted_summary() {
     let output = temporary_directory("mcp-native-erc-direct-bridge");
     fs::create_dir_all(&output).unwrap();
@@ -1206,6 +1500,122 @@ fn stdio_server_cancels_native_drc_replay_without_orphaning_kicad() {
     assert!(
         orphaned.is_empty(),
         "cancelled replay left KiCad processes {orphaned:?} running"
+    );
+    assert_eq!(fs::read(&report).unwrap(), retained);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert!(approved_cli.is_file());
+    assert!(sleeping_cli.is_file());
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_server_cancels_native_erc_replay_without_orphaning_kicad() {
+    let output = temporary_directory("mcp-native-erc-replay-cancel");
+    fs::create_dir_all(&output).unwrap();
+    let approved_cli = fake_native_kicad_erc_cli(&output, "fake-erc-approved", false);
+    let sleeping_cli = fake_sleeping_native_kicad_cli(&output, "fake-erc-sleeping");
+    let schematic = output.join("schematic.kicad_sch");
+    let report = output.join("retained.json");
+    let pid_file = output.join("kicad.pid");
+    let mut process_cleanup = KicadProcessCleanup::new(&pid_file);
+    fs::write(&schematic, b"schematic").unwrap();
+
+    let generated = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .current_dir(&output)
+        .args([
+            "run-native-kicad-erc",
+            "schematic.kicad_sch",
+            "--output",
+            "retained.json",
+            "--kicad-cli",
+        ])
+        .arg(&approved_cli)
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "native ERC seed failed: {}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let retained = fs::read(&report).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .current_dir(&output)
+        .env("PCBEX_TEST_KICAD_PID_FILE", &pid_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize(
+        &mut stdin,
+        &mut stdout,
+        json!("initialize-native-erc-replay-cancel"),
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "create-erc-replay-task",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_erc_report",
+                "arguments": {
+                    "input": "schematic.kicad_sch",
+                    "retained_report": "retained.json",
+                    "kicad_cli": sleeping_cli.display().to_string()
+                },
+                "task": {"ttl": 60_000}
+            }
+        }),
+    );
+    let created = receive(&mut stdout);
+    let task_id = created["result"]["task"]["taskId"]
+        .as_str()
+        .expect("ERC replay task id")
+        .to_string();
+    assert_eq!(created["result"]["task"]["status"], "working");
+
+    let pids = process_cleanup.wait_for_start();
+    assert!(pid_file.is_file(), "sleeping KiCad child did not start");
+    assert_eq!(pids.len(), 2, "fixture must record shell and sleep PIDs");
+    assert!(
+        process_cleanup.process_group.is_some(),
+        "fixture process group was not validated"
+    );
+    assert!(pids.iter().all(|pid| unix_process_exists(*pid)));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "cancel-erc-replay-task",
+            "method": "tasks/cancel",
+            "params": {"taskId": task_id}
+        }),
+    );
+    let cancelled = receive(&mut stdout);
+    assert_eq!(cancelled["result"]["status"], "cancelled");
+
+    let orphaned = process_cleanup.wait_for_exit();
+    assert!(
+        orphaned.is_empty(),
+        "cancelled ERC replay left KiCad processes {orphaned:?} running"
     );
     assert_eq!(fs::read(&report).unwrap(), retained);
 

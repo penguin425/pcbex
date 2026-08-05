@@ -6,6 +6,11 @@ pcbex's semantic electrical review and board DRC.
 Release v1.431.0 also hardens the Unix MCP Task path: cancellation reaches
 the KiCad process group and descendants, and no incomplete report is
 published. The synchronous CLI and composite-Action contracts are unchanged.
+Release v1.432.0 adds a standalone fresh-replay boundary for retained native
+ERC evidence. CLI, MCP, and the focused Action replay report schema v1 or v2
+read-only, retain rejected evidence before an optional approval gate, and
+stable-read the original schematic around the KiCad run. Existing native run
+and AI-review contracts remain unchanged.
 
 ```sh
 pcbex run-native-kicad-erc hardware/generated.kicad_sch \
@@ -49,7 +54,7 @@ approval from the normalized findings: every error rejects, while warnings
 must fit both the global and per-type budgets. `--require-approved` returns a
 non-zero status only after publishing valid rejected evidence.
 
-## Boardless composite Action (v1.428.0)
+## Boardless composite Action (introduced v1.428.0; replay in v1.432.0)
 
 The focused public Action runs native ERC in repositories that have a KiCad
 schematic but no PCB board. The caller must install a trusted KiCad CLI; the
@@ -58,7 +63,7 @@ review, or deterministic-pipeline input:
 
 ```yaml
 - id: native-erc
-  uses: penguin425/pcbex/actions/native-kicad-erc@v1.428.0
+  uses: penguin425/pcbex/actions/native-kicad-erc@v1.432.0
   with:
     schematic: hardware/controller.kicad_sch
     require-approved: "true"
@@ -118,6 +123,49 @@ other invalid native evidence fails closed and publishes no native report
 identity. Valid rejected evidence is retained before the optional final gate,
 so the artifact and summary remain available for diagnosis.
 
+## Standalone fresh replay (v1.432.0)
+
+Fresh replay is input-read-only: the retained report, original schematic, and
+optional warning policy are never overwritten. The CLI command reruns the
+bounded KiCad invocation, compares the newly normalized bytes with the
+retained report, and returns the same approval decision without publishing a
+replacement:
+
+```sh
+pcbex verify-native-kicad-erc-report \
+  hardware/controller.kicad_sch build/native-kicad-erc.json \
+  --kicad-cli kicad-cli --require-approved
+
+pcbex verify-native-kicad-erc-report \
+  hardware/controller.kicad_sch build/native-kicad-erc-warning.json \
+  --warning-policy examples/native-kicad-warning-policy.json \
+  --kicad-cli kicad-cli --require-approved
+```
+
+The first command replays fixed error-only report v1; supplying the same
+closed warning policy selects report v2. Both forms stable-read the original
+schematic before and after the child exits, and compare the retained report
+under the bounded report limit. Any source, policy, retained-report, or
+normalized-byte mutation fails closed while leaving retained evidence
+untouched. `--require-approved` is evaluated only after a complete replay and
+does not delete rejected evidence.
+
+MCP exposes the same boundary as
+`verify_native_kicad_erc_report` with `input`, `retained_report`, optional
+`warning_policy`, `kicad_cli`, and `require_approved` arguments. Its compact
+summary authenticates the replayed schema, counts, report bytes/SHA-256, and
+run identity without embedding report contents. Synchronous calls and
+Task-backed calls use the same read-only verifier; Task cancellation reaches
+the bounded KiCad process group.
+
+The focused Action accepts `mode: verify` and a caller-relative `report`
+input in addition to its existing `schematic` and optional `warning-policy`.
+It reruns the same v1/v2 verifier and publishes a freshly authenticated,
+no-clobber copy under the new `output-dir`. The copy and Job Summary remain
+available for valid rejected evidence; the final `always()` gate applies
+`require-approved` only after evidence has been retained. The root Action is
+still run-only, and replay does not change its board-required contract.
+
 ## Root Action compatibility (v1.427.0 and later)
 
 The root `penguin425/pcbex` Action retains its independent opt-in native ERC
@@ -126,7 +174,7 @@ gate and remains board-required. Existing callers can continue to use
 `native-kicad-erc-kicad-cli`, and `native-kicad-erc-require-approved`; its
 twelve output names are identical to the focused Action. The root Action also
 supports its separate hardware analysis, PR comment, deterministic-pipeline,
-and AI review features. v1.428.0 does not change that contract.
+and AI review features. v1.432.0 does not change that contract.
 
 ## Warning policy
 
@@ -194,8 +242,9 @@ schematic is not equivalent.
 
 Warning report schema v2 adds `warning_count`, sorted `warning_counts`, the
 normalized `warning_policy` evidence, and sorted `policy_failures`. Its
-domain-separated run digest covers all of those fields. The policy and
-schematic are stable-read around execution; fresh verification also
+domain-separated run digest covers all of those fields. Both report versions
+stable-read the original schematic before and after KiCad execution; v2 also
+stable-reads the warning-policy source. Fresh verification additionally
 stable-reads the retained report and requires a byte-for-byte replay match.
 
 ## MCP Task cancellation
@@ -209,8 +258,13 @@ supervisor. On Unix, cancelling the Task terminates the KiCad process-group
 leader and every descendant, rather than leaving native work running. Output
 is staged privately and published atomically only after a complete normalized
 report has been validated, so cancellation cannot expose an incomplete report.
-The MCP response contract, synchronous CLI behavior, and focused/root Action
-contracts remain unchanged.
+
+The read-only `verify_native_kicad_erc_report` tool accepts the retained report
+and optional warning policy and uses the same runner boundary for schema v1 or
+v2 replay. It never rewrites the retained report; Task cancellation also
+reaches its bounded KiCad process group. The MCP response contract,
+synchronous CLI behavior, focused replay Action, root Action, and existing
+AI/run contracts remain unchanged.
 
 ## AI approval binding
 

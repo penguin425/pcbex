@@ -18,11 +18,35 @@ for variable in "${required_variables[@]}"; do
 done
 
 action_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+native_kicad_erc_mode="${PCBEX_NATIVE_KICAD_ERC_MODE:-run}"
+native_kicad_erc_retained_report="${PCBEX_NATIVE_KICAD_ERC_REPORT:-}"
+case "$native_kicad_erc_mode" in
+  run)
+    if [[ -n "$native_kicad_erc_retained_report" ]]; then
+      echo "report must be empty when mode is run" >&2
+      exit 2
+    fi
+    ;;
+  verify)
+    if [[ -z "$native_kicad_erc_retained_report" ]]; then
+      echo "report must not be empty when mode is verify" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "mode must be run or verify" >&2
+    exit 2
+    ;;
+esac
 python3 "$action_script_dir/ci_runtime.py" validate-input \
   "--path=$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC"
 if [[ -n "${PCBEX_NATIVE_KICAD_ERC_WARNING_POLICY:-}" ]]; then
   python3 "$action_script_dir/ci_runtime.py" validate-input \
     "--path=$PCBEX_NATIVE_KICAD_ERC_WARNING_POLICY"
+fi
+if [[ "$native_kicad_erc_mode" == "verify" ]]; then
+  python3 "$action_script_dir/ci_runtime.py" validate-input \
+    "--path=$native_kicad_erc_retained_report"
 fi
 PYTHONPATH="$action_script_dir" python3 - "$PCBEX_OUTPUT_DIR" <<'PY'
 import sys
@@ -96,16 +120,70 @@ if [[ -e "$native_kicad_erc_report_candidate" ||
   exit 2
 fi
 
-native_kicad_erc_arguments=(
-  run-native-kicad-erc
-  "--output=$native_kicad_erc_report_candidate"
-  "--kicad-cli=$PCBEX_NATIVE_KICAD_ERC_KICAD_CLI"
-  --mcp-echo-report-summary
-)
+# The output directory was empty when this script started, so this is the
+# only report path that this wrapper is allowed to remove on an authentication
+# failure.  Never recurse or follow a link while cleaning up a failed run.
+cleanup_candidate_on_failure() {
+  if ! PYTHONPATH="$action_script_dir" python3 - "$artifact_dir" <<'PY'
+import os
+import stat
+import sys
+
+directory = sys.argv[1]
+basename = "native-kicad-erc.json"
+if not all(
+    hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW", "supports_dir_fd")
+):
+    raise SystemExit(2)
+if os.stat not in os.supports_dir_fd or os.unlink not in os.supports_dir_fd:
+    raise SystemExit(2)
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+try:
+    directory_fd = os.open(directory, flags)
+except OSError:
+    raise SystemExit(2)
+try:
+    try:
+        metadata = os.stat(basename, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        raise SystemExit(0)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(2)
+    try:
+        os.unlink(basename, dir_fd=directory_fd)
+    except FileNotFoundError:
+        pass
+finally:
+    os.close(directory_fd)
+PY
+  then
+    # A platform without race-resistant dir-fd primitives must fail closed:
+    # do not let the always-running artifact boundary upload an unverified
+    # candidate if it could not be safely removed.
+    write_output artifact-dir ""
+  fi
+}
+
+if [[ "$native_kicad_erc_mode" == "run" ]]; then
+  native_kicad_erc_arguments=(
+    run-native-kicad-erc
+    "--output=$native_kicad_erc_report_candidate"
+    "--kicad-cli=$PCBEX_NATIVE_KICAD_ERC_KICAD_CLI"
+    --mcp-echo-report-summary
+  )
+  native_kicad_erc_summary_report="$native_kicad_erc_report_candidate"
+else
+  native_kicad_erc_arguments=(
+    verify-native-kicad-erc-report
+    "--kicad-cli=$PCBEX_NATIVE_KICAD_ERC_KICAD_CLI"
+    --mcp-echo-report-summary
+  )
+  native_kicad_erc_summary_report="$native_kicad_erc_retained_report"
+fi
 native_kicad_erc_summary_arguments=(
   --verify
   "--schematic=$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC"
-  "--report=$native_kicad_erc_report_candidate"
+  "--report=$native_kicad_erc_summary_report"
 )
 if [[ -n "$native_kicad_erc_warning_policy" ]]; then
   native_kicad_erc_arguments+=(
@@ -115,7 +193,13 @@ if [[ -n "$native_kicad_erc_warning_policy" ]]; then
     "--warning-policy=$native_kicad_erc_warning_policy"
   )
 fi
-native_kicad_erc_arguments+=(-- "$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC")
+if [[ "$native_kicad_erc_mode" == "run" ]]; then
+  native_kicad_erc_arguments+=(-- "$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC")
+else
+  # Keep caller-controlled paths after `--`: a basename can never become an
+  # option to clap or KiCad, even when it begins with a dash.
+  native_kicad_erc_arguments+=(-- "$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC" "$native_kicad_erc_retained_report")
+fi
 
 native_kicad_erc_summary_json=""
 if native_kicad_erc_summary_json="$(
@@ -147,9 +231,10 @@ native_kicad_erc_report_bytes=""
 native_kicad_erc_report_sha256=""
 
 if ((native_kicad_erc_rc == 0)) &&
-  [[ -f "$native_kicad_erc_report_candidate" &&
-    ! -L "$native_kicad_erc_report_candidate" &&
-    -n "$native_kicad_erc_summary_json" ]]; then
+  [[ -n "$native_kicad_erc_summary_json" ]] &&
+  { [[ "$native_kicad_erc_mode" == "verify" ]] ||
+    [[ -f "$native_kicad_erc_report_candidate" &&
+      ! -L "$native_kicad_erc_report_candidate" ]]; }; then
   native_kicad_erc_summary_values=""
   if native_kicad_erc_summary_values="$(
     python3 - "$native_kicad_erc_summary_json" <<'PY'
@@ -233,10 +318,167 @@ PY
   fi
 
   if ((native_kicad_erc_rc == 0)); then
-    native_kicad_erc_report="$native_kicad_erc_report_candidate"
+    if [[ "$native_kicad_erc_mode" == "verify" ]]; then
+      if ! PYTHONPATH="$action_script_dir" python3 - \
+        "$native_kicad_erc_retained_report" \
+        "$native_kicad_erc_report_candidate" \
+        "$native_kicad_erc_report_bytes" \
+        "$native_kicad_erc_report_sha256" <<'PY'
+import hashlib
+import sys
+
+from ci_runtime import ExecutionBoundaryError, atomic_write_no_clobber, read_bytes
+
+REPORT_MAX_BYTES = 32 * 1024 * 1024
+
+source, destination, expected_bytes, expected_sha256 = sys.argv[1:]
+try:
+    expected_size = int(expected_bytes)
+    # Read the authenticated source twice immediately before publication. A
+    # source mutation is therefore rejected instead of copied into evidence.
+    first = read_bytes(source, max_bytes=REPORT_MAX_BYTES)
+    second = read_bytes(source, max_bytes=REPORT_MAX_BYTES)
+    if first != second:
+        raise ExecutionBoundaryError("retained report changed between bounded reads")
+    if len(first) != expected_size or hashlib.sha256(first).hexdigest() != expected_sha256:
+        raise ExecutionBoundaryError("retained report no longer matches authenticated summary")
+    # Publish the exact authenticated bytes through the bounded no-clobber
+    # primitive; links, aliases, and creator races fail closed.
+    atomic_write_no_clobber(destination, first, max_bytes=REPORT_MAX_BYTES)
+except (ExecutionBoundaryError, OSError, TypeError, ValueError) as error:
+    print(f"could not publish authenticated retained report: {error}", file=sys.stderr)
+    raise SystemExit(2)
+PY
+      then
+        native_kicad_erc_rc=2
+      fi
+      if ((native_kicad_erc_rc == 0)); then
+        native_kicad_erc_copy_summary_arguments=(
+          --verify
+          "--schematic=$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC"
+          "--report=$native_kicad_erc_report_candidate"
+        )
+        if [[ -n "$native_kicad_erc_warning_policy" ]]; then
+          native_kicad_erc_copy_summary_arguments+=(
+            "--warning-policy=$native_kicad_erc_warning_policy"
+          )
+        fi
+        native_kicad_erc_copy_summary_json=""
+        if native_kicad_erc_copy_summary_json="$({
+          printf '%s\n' "$native_kicad_erc_summary_json" |
+            python3 "$action_script_dir/native_kicad_erc_summary.py" \
+              "${native_kicad_erc_copy_summary_arguments[@]}"
+        })"; then
+          if ! python3 - "$native_kicad_erc_summary_json" "$native_kicad_erc_copy_summary_json" <<'PY'
+import json
+import sys
+
+try:
+    original = json.loads(sys.argv[1])
+    copied = json.loads(sys.argv[2])
+except (IndexError, json.JSONDecodeError, TypeError, ValueError):
+    raise SystemExit(2)
+if type(original) is not dict or type(copied) is not dict or original != copied:
+    raise SystemExit(2)
+PY
+          then
+            native_kicad_erc_rc=2
+          fi
+        else
+          native_kicad_erc_rc=2
+        fi
+      fi
+    fi
+    if ((native_kicad_erc_rc == 0)) &&
+      [[ -f "$native_kicad_erc_report_candidate" &&
+        ! -L "$native_kicad_erc_report_candidate" ]]; then
+      native_kicad_erc_report="$native_kicad_erc_report_candidate"
+    else
+      native_kicad_erc_rc=2
+    fi
   fi
 else
   native_kicad_erc_rc=2
+fi
+
+# Re-authenticate the exact artifact immediately before exposing any output
+# fields.  The first summary check authenticates the CLI response, while this
+# second pass closes the post-check mutation window for both run and replay.
+if ((native_kicad_erc_rc == 0)); then
+  if [[ ! -f "$native_kicad_erc_report_candidate" ||
+    -L "$native_kicad_erc_report_candidate" ]]; then
+    native_kicad_erc_rc=2
+  else
+    native_kicad_erc_final_summary_arguments=(
+      --verify
+      "--schematic=$PCBEX_NATIVE_KICAD_ERC_SCHEMATIC"
+      "--report=$native_kicad_erc_report_candidate"
+    )
+    if [[ -n "$native_kicad_erc_warning_policy" ]]; then
+      native_kicad_erc_final_summary_arguments+=(
+        "--warning-policy=$native_kicad_erc_warning_policy"
+      )
+    fi
+    native_kicad_erc_final_summary_json=""
+    if native_kicad_erc_final_summary_json="$({
+      printf '%s\n' "$native_kicad_erc_summary_json" |
+        python3 "$action_script_dir/native_kicad_erc_summary.py" \
+          "${native_kicad_erc_final_summary_arguments[@]}"
+    })"; then
+      if ! python3 - "$native_kicad_erc_summary_json" "$native_kicad_erc_final_summary_json" <<'PY'
+import json
+import sys
+
+try:
+    original = json.loads(sys.argv[1])
+    final = json.loads(sys.argv[2])
+except (IndexError, json.JSONDecodeError, TypeError, ValueError):
+    raise SystemExit(2)
+if type(original) is not dict or type(final) is not dict or original != final:
+    raise SystemExit(2)
+PY
+      then
+        native_kicad_erc_rc=2
+      fi
+      if ((native_kicad_erc_rc == 0)); then
+        if ! PYTHONPATH="$action_script_dir" python3 - \
+          "$native_kicad_erc_report_candidate" \
+          "$native_kicad_erc_report_bytes" \
+          "$native_kicad_erc_report_sha256" <<'PY'
+import hashlib
+import sys
+
+from ci_runtime import ExecutionBoundaryError, read_bytes
+
+REPORT_MAX_BYTES = 32 * 1024 * 1024
+path, expected_bytes, expected_sha256 = sys.argv[1:]
+try:
+    first = read_bytes(path, max_bytes=REPORT_MAX_BYTES)
+    second = read_bytes(path, max_bytes=REPORT_MAX_BYTES)
+    if first != second:
+        raise ExecutionBoundaryError("native KiCad ERC report changed between bounded reads")
+    if len(first) != int(expected_bytes) or hashlib.sha256(first).hexdigest() != expected_sha256:
+        raise ExecutionBoundaryError("native KiCad ERC report no longer matches authenticated summary")
+except (ExecutionBoundaryError, OSError, TypeError, ValueError) as error:
+    print(f"native KiCad ERC report authentication failed: {error}", file=sys.stderr)
+    raise SystemExit(2)
+PY
+        then
+          native_kicad_erc_rc=2
+        fi
+      fi
+    else
+      native_kicad_erc_rc=2
+    fi
+  fi
+fi
+
+if ((native_kicad_erc_rc != 0)); then
+  native_kicad_erc_report=""
+  cleanup_candidate_on_failure
+  # Do not let the always-running artifact boundary inspect/upload a failed
+  # output tree, even when cleanup succeeded and left an empty directory.
+  write_output artifact-dir ""
 fi
 
 {

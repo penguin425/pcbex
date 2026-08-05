@@ -1,5 +1,5 @@
 name: pcbex native KiCad ERC
-description: Run authenticated native KiCad schematic ERC without requiring a PCB board.
+description: Run or freshly replay authenticated native KiCad schematic ERC evidence without requiring a PCB board.
 author: pcbex contributors
 
 branding:
@@ -7,11 +7,19 @@ branding:
   color: green
 
 inputs:
+  mode:
+    description: "Native ERC evidence mode: run a fresh KiCad check or verify a retained report by replaying KiCad."
+    required: false
+    default: run
   schematic:
     description: Caller-workspace-relative KiCad schematic to verify.
     required: true
   warning-policy:
     description: Optional closed native ERC warning-policy JSON file.
+    required: false
+    default: ""
+  report:
+    description: Caller-workspace-relative retained normalized native ERC report; required only when mode is verify.
     required: false
     default: ""
   kicad-cli:
@@ -41,13 +49,13 @@ inputs:
 
 outputs:
   status:
-    description: Verified runner status, either ok or error.
+    description: Verified run/replay status, either ok or error.
     value: ${{ steps.native-erc.outputs.status }}
   artifact-dir:
     description: Bounded caller-workspace-relative evidence directory.
     value: ${{ steps.native-erc.outputs.artifact-dir }}
   native-kicad-erc-report:
-    description: Fixed retained normalized native KiCad ERC report path.
+    description: Fixed generated or freshly re-authenticated normalized native KiCad ERC report path.
     value: ${{ steps.native-erc.outputs.native-kicad-erc-report }}
   native-kicad-erc-schema-version:
     description: Native KiCad ERC report schema version.
@@ -90,8 +98,10 @@ runs:
       id: preflight
       shell: bash
       env:
+        PCBEX_MODE: ${{ inputs.mode }}
         PCBEX_SCHEMATIC: ${{ inputs.schematic }}
         PCBEX_WARNING_POLICY: ${{ inputs.warning-policy }}
+        PCBEX_REPORT: ${{ inputs.report }}
         PCBEX_KICAD_CLI: ${{ inputs.kicad-cli }}
         PCBEX_REQUIRE_APPROVED: ${{ inputs.require-approved }}
         PCBEX_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
@@ -103,6 +113,18 @@ runs:
         repository_root="$(cd -- "$GITHUB_ACTION_PATH/../.." && pwd -P)"
         if [[ -z "$PCBEX_SCHEMATIC" ]]; then
           echo "schematic must not be empty" >&2
+          exit 2
+        fi
+        case "$PCBEX_MODE" in
+          run|verify) ;;
+          *) echo "mode must be run or verify" >&2; exit 2 ;;
+        esac
+        if [[ "$PCBEX_MODE" == "run" && -n "$PCBEX_REPORT" ]]; then
+          echo "report must be empty when mode is run" >&2
+          exit 2
+        fi
+        if [[ "$PCBEX_MODE" == "verify" && -z "$PCBEX_REPORT" ]]; then
+          echo "report must not be empty when mode is verify" >&2
           exit 2
         fi
         if [[ -z "$PCBEX_KICAD_CLI" ]]; then
@@ -130,6 +152,10 @@ runs:
         if [[ -n "$PCBEX_WARNING_POLICY" ]]; then
           python3 "$repository_root/scripts/ci_runtime.py" validate-input \
             "--path=$PCBEX_WARNING_POLICY"
+        fi
+        if [[ "$PCBEX_MODE" == "verify" ]]; then
+          python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+            "--path=$PCBEX_REPORT"
         fi
         python3 "$repository_root/scripts/ci_runtime.py" validate-output \
           "--output-root=$PCBEX_OUTPUT_DIR"
@@ -177,13 +203,15 @@ runs:
         printf 'binary=%s\n' "$binary" >> "$GITHUB_OUTPUT"
         printf 'repository-root=%s\n' "$repository_root" >> "$GITHUB_OUTPUT"
 
-    - name: Run boardless native KiCad ERC
+    - name: Run or replay boardless native KiCad ERC
       id: native-erc
       shell: bash
       env:
         PCBEX_BINARY: ${{ steps.build.outputs.binary }}
+        PCBEX_NATIVE_KICAD_ERC_MODE: ${{ inputs.mode }}
         PCBEX_NATIVE_KICAD_ERC_SCHEMATIC: ${{ inputs.schematic }}
         PCBEX_NATIVE_KICAD_ERC_WARNING_POLICY: ${{ inputs.warning-policy }}
+        PCBEX_NATIVE_KICAD_ERC_REPORT: ${{ inputs.report }}
         PCBEX_NATIVE_KICAD_ERC_KICAD_CLI: ${{ inputs.kicad-cli }}
         PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED: ${{ inputs.require-approved }}
         PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}

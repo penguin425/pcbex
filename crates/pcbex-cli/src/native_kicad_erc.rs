@@ -17,7 +17,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
@@ -43,6 +43,58 @@ const NATIVE_ERC_WARNING_DOMAIN: &[u8] = b"pcbex/native-kicad-erc/v2\0";
 const NATIVE_ERC_WARNING_POLICY_DOMAIN: &[u8] = b"pcbex/native-kicad-erc-warning-policy/v1\0";
 const STAGED_INPUT_NAME: &str = "input.kicad_sch";
 const STAGED_REPORT_NAME: &str = "erc.json";
+
+/// Resolve an explicitly path-qualified KiCad CLI before changing the child
+/// current directory to the private ERC environment.
+///
+/// A single executable basename deliberately remains a PATH lookup.  Relative
+/// paths containing a component (for example `./fake-kicad-cli`) must be made
+/// absolute while the caller's current directory is still in effect.
+fn resolve_kicad_cli(kicad_cli: &OsStr) -> Result<PathBuf> {
+    let requested = Path::new(kicad_cli);
+    if requested.as_os_str().is_empty() {
+        bail!("native KiCad schematic ERC kicad-cli path must not be empty")
+    }
+    let mut components = requested.components();
+    let first = components.next();
+    let is_single_basename =
+        matches!(first, Some(Component::Normal(_))) && components.next().is_none();
+    if is_single_basename {
+        return Ok(requested.to_path_buf());
+    }
+    if requested == Path::new(".") || requested == Path::new("..") {
+        bail!("native KiCad schematic ERC kicad-cli path must not be . or ..")
+    }
+    let current_directory = std::env::current_dir()
+        .context("resolving caller current directory for native KiCad schematic ERC kicad-cli")?;
+    let absolute = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        current_directory.join(requested)
+    };
+    if absolute.as_os_str().is_empty() {
+        bail!("native KiCad schematic ERC kicad-cli path resolved to empty")
+    }
+    Ok(absolute)
+}
+
+/// Re-read a bounded input after a child run and reject any byte-level change.
+/// Keeping this check in one helper makes the final pre-publication checks in
+/// the v1/v2 runners and replay paths use the same bounded-read boundary.
+fn reread_unchanged(
+    path: &Path,
+    max_bytes: u64,
+    expected: &[u8],
+    read_context: &str,
+    changed_message: &str,
+) -> Result<Vec<u8>> {
+    let bytes = crate::bounded_io::read_with_limit(path, max_bytes)
+        .with_context(|| format!("{read_context} {}", path.display()))?;
+    if bytes != expected {
+        bail!("{changed_message}")
+    }
+    Ok(bytes)
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -998,12 +1050,14 @@ pub(crate) fn run_native_kicad_erc(
             .with_context(|| format!("creating private KiCad directory {}", directory.display()))?;
     }
 
-    let mut command = std::process::Command::new(kicad_cli);
+    let resolved_kicad_cli = resolve_kicad_cli(kicad_cli)?;
+    let mut command = std::process::Command::new(resolved_kicad_cli);
     command
         .current_dir(environment.path())
         // Keep KiCad's supported profile/configuration locations private.
         // XDG variables cover native Unix paths; profile variables keep the
         // same boundary when this binary is run on Windows.
+        .env("HOME", environment.path())
         .env("USERPROFILE", environment.path())
         .env("KICAD_CONFIG_HOME", &config)
         .env("XDG_CONFIG_HOME", &config)
@@ -1037,6 +1091,13 @@ pub(crate) fn run_native_kicad_erc(
     if staged_bytes != source_bytes {
         bail!("staged KiCad schematic changed during native ERC")
     }
+    reread_unchanged(
+        input,
+        MAX_SOURCE_BYTES,
+        &source_bytes,
+        "re-reading KiCad schematic",
+        "KiCad schematic changed during native ERC",
+    )?;
     let report_bytes = crate::bounded_io::read_with_limit(&staged_report, MAX_REPORT_BYTES)
         .context("reading bounded native KiCad ERC report")?;
     let report = parse_raw_report(&report_bytes, &source_bytes)?;
@@ -1060,6 +1121,13 @@ pub(crate) fn run_native_kicad_erc(
             bail!("native KiCad ERC failed with status {status}: {diagnostic}")
         }
     }
+    reread_unchanged(
+        input,
+        MAX_SOURCE_BYTES,
+        &source_bytes,
+        "re-reading KiCad schematic",
+        "KiCad schematic changed during native ERC",
+    )?;
     Ok(report)
 }
 
@@ -1117,9 +1185,11 @@ pub(crate) fn run_native_kicad_erc_with_warning_policy(
             .with_context(|| format!("creating private KiCad directory {}", directory.display()))?;
     }
 
-    let mut command = std::process::Command::new(kicad_cli);
+    let resolved_kicad_cli = resolve_kicad_cli(kicad_cli)?;
+    let mut command = std::process::Command::new(resolved_kicad_cli);
     command
         .current_dir(environment.path())
+        .env("HOME", environment.path())
         .env("USERPROFILE", environment.path())
         .env("KICAD_CONFIG_HOME", &config)
         .env("XDG_CONFIG_HOME", &config)
@@ -1155,17 +1225,20 @@ pub(crate) fn run_native_kicad_erc_with_warning_policy(
     if staged_bytes != source_bytes {
         bail!("staged KiCad schematic changed during native ERC warning run")
     }
-    let policy_bytes_after =
-        crate::bounded_io::read_with_limit(warning_policy_path, MAX_WARNING_POLICY_BYTES)
-            .with_context(|| {
-                format!(
-                    "re-reading native KiCad ERC warning policy {}",
-                    warning_policy_path.display()
-                )
-            })?;
-    if policy_bytes_after != policy_bytes {
-        bail!("native KiCad ERC warning policy changed during execution")
-    }
+    reread_unchanged(
+        warning_policy_path,
+        MAX_WARNING_POLICY_BYTES,
+        &policy_bytes,
+        "re-reading native KiCad ERC warning policy",
+        "native KiCad ERC warning policy changed during execution",
+    )?;
+    reread_unchanged(
+        input,
+        MAX_SOURCE_BYTES,
+        &source_bytes,
+        "re-reading KiCad schematic",
+        "KiCad schematic changed during native ERC warning run",
+    )?;
     let report_bytes = crate::bounded_io::read_with_limit(&staged_report, MAX_REPORT_BYTES)
         .context("reading bounded native KiCad ERC warning report")?;
     let report = parse_raw_warning_report(&report_bytes, &source_bytes, warning_policy)?;
@@ -1188,24 +1261,33 @@ pub(crate) fn run_native_kicad_erc_with_warning_policy(
             bail!("native KiCad ERC failed with status {status}: {diagnostic}")
         }
     }
+    reread_unchanged(
+        input,
+        MAX_SOURCE_BYTES,
+        &source_bytes,
+        "re-reading KiCad schematic",
+        "KiCad schematic changed during native ERC warning run",
+    )?;
+    reread_unchanged(
+        warning_policy_path,
+        MAX_WARNING_POLICY_BYTES,
+        &policy_bytes,
+        "re-reading native KiCad ERC warning policy",
+        "native KiCad ERC warning policy changed during execution",
+    )?;
     Ok(report)
 }
 
 /// Re-run native ERC and verify a retained normalized report byte-for-byte.
 ///
-/// The returned identity binds the exact retained report bytes; the separate
-/// artifact identity is the schematic source identity embedded in that
-/// report.  Callers can therefore compare the latter with their own generated
-/// schematic binding before adding the native identity to a review request.
-pub(crate) fn verify_native_kicad_erc_report(
+/// Rejected evidence is a valid replay result.  Callers that use ERC as an
+/// approval gate must apply that policy separately after this evidence check.
+pub(crate) fn replay_native_kicad_erc_report(
     input: &Path,
     retained_report_path: &Path,
     kicad_cli: &OsStr,
     cancellation: Option<&AtomicBool>,
-) -> Result<(
-    pcbex_kicad::NativeKicadErcIdentity,
-    pcbex_kicad::ExactArtifactIdentity,
-)> {
+) -> Result<NativeKicadErcReport> {
     let source_before = crate::bounded_io::read_with_limit(input, MAX_SOURCE_BYTES)
         .with_context(|| format!("reading generated schematic {}", input.display()))?;
     if source_before.is_empty() {
@@ -1253,25 +1335,55 @@ pub(crate) fn verify_native_kicad_erc_report(
     if fresh_bytes != report_bytes_after {
         bail!("retained native KiCad ERC report does not match a fresh native KiCad ERC run");
     }
+    let source_final = reread_unchanged(
+        input,
+        MAX_SOURCE_BYTES,
+        &source_before,
+        "re-reading generated schematic",
+        "generated schematic changed during native KiCad ERC verification",
+    )?;
+    let source = pcbex_kicad::ExactArtifactIdentity {
+        bytes: source_final.len() as u64,
+        sha256: hex::encode(Sha256::digest(&source_final)),
+    };
+    if fresh.source.bytes != source.bytes || fresh.source.sha256 != source.sha256 {
+        bail!("native KiCad ERC report schematic identity does not match the generated schematic");
+    }
+    Ok(fresh)
+}
+
+/// Re-run native ERC and verify an approved retained report for AI approval.
+///
+/// This wrapper intentionally preserves the historical approved-only contract
+/// used by request/signature/quorum verification while the standalone replay
+/// helper above accepts rejected evidence for inspection.
+pub(crate) fn verify_native_kicad_erc_report(
+    input: &Path,
+    retained_report_path: &Path,
+    kicad_cli: &OsStr,
+    cancellation: Option<&AtomicBool>,
+) -> Result<(
+    pcbex_kicad::NativeKicadErcIdentity,
+    pcbex_kicad::ExactArtifactIdentity,
+)> {
+    let fresh =
+        replay_native_kicad_erc_report(input, retained_report_path, kicad_cli, cancellation)?;
     if !fresh.approved {
         bail!(
             "native KiCad ERC evidence is rejected with {} error finding(s)",
             fresh.error_count
         );
     }
-
+    let rendered = render_native_kicad_erc_report(&fresh)?;
     let source = pcbex_kicad::ExactArtifactIdentity {
-        bytes: source_after.len() as u64,
-        sha256: hex::encode(Sha256::digest(&source_after)),
+        bytes: fresh.source.bytes,
+        sha256: fresh.source.sha256.clone(),
     };
-    if fresh.source.bytes != source.bytes || fresh.source.sha256 != source.sha256 {
-        bail!("native KiCad ERC report schematic identity does not match the generated schematic");
-    }
     let native_identity = pcbex_kicad::NativeKicadErcIdentity {
         schema_version: fresh.schema_version,
         report: pcbex_kicad::ExactArtifactIdentity {
-            bytes: report_bytes_after.len() as u64,
-            sha256: hex::encode(Sha256::digest(&report_bytes_after)),
+            bytes: rendered.len() as u64,
+            sha256: hex::encode(Sha256::digest(&rendered)),
         },
         run_sha256: fresh.run_sha256,
     };
@@ -1281,17 +1393,15 @@ pub(crate) fn verify_native_kicad_erc_report(
 /// Re-run native ERC with a static warning policy and verify a retained v2
 /// report byte-for-byte.  The policy source identity is part of the report,
 /// so changing even formatting in the policy file invalidates the retained
-/// evidence and forces a fresh report.
-pub(crate) fn verify_native_kicad_erc_report_with_warning_policy(
+/// evidence and forces a fresh report.  Rejected evidence is a valid replay
+/// result; approval is enforced by the caller.
+pub(crate) fn replay_native_kicad_erc_report_with_warning_policy(
     input: &Path,
     retained_report_path: &Path,
     warning_policy_path: &Path,
     kicad_cli: &OsStr,
     cancellation: Option<&AtomicBool>,
-) -> Result<(
-    pcbex_kicad::NativeKicadErcIdentity,
-    pcbex_kicad::ExactArtifactIdentity,
-)> {
+) -> Result<NativeKicadErcWarningReport> {
     let source_before = crate::bounded_io::read_with_limit(input, MAX_SOURCE_BYTES)
         .with_context(|| format!("reading generated schematic {}", input.display()))?;
     if source_before.is_empty() {
@@ -1372,6 +1482,53 @@ pub(crate) fn verify_native_kicad_erc_report_with_warning_policy(
             "retained native KiCad ERC warning report does not match a fresh native KiCad ERC run"
         );
     }
+    reread_unchanged(
+        warning_policy_path,
+        MAX_WARNING_POLICY_BYTES,
+        &policy_bytes_before,
+        "re-reading native KiCad ERC warning policy",
+        "native KiCad ERC warning policy changed during verification",
+    )?;
+    let source_final = reread_unchanged(
+        input,
+        MAX_SOURCE_BYTES,
+        &source_before,
+        "re-reading generated schematic",
+        "generated schematic changed during native KiCad ERC warning verification",
+    )?;
+    let source = pcbex_kicad::ExactArtifactIdentity {
+        bytes: source_final.len() as u64,
+        sha256: hex::encode(Sha256::digest(&source_final)),
+    };
+    if fresh.source.bytes != source.bytes || fresh.source.sha256 != source.sha256 {
+        bail!(
+            "native KiCad ERC warning report schematic identity does not match the generated schematic"
+        );
+    }
+    Ok(fresh)
+}
+
+/// Re-run native ERC with a warning policy for AI approval.
+///
+/// Keep the approved-only behavior used by existing request/signature/quorum
+/// paths separate from standalone replay, which must preserve rejected data.
+pub(crate) fn verify_native_kicad_erc_report_with_warning_policy(
+    input: &Path,
+    retained_report_path: &Path,
+    warning_policy_path: &Path,
+    kicad_cli: &OsStr,
+    cancellation: Option<&AtomicBool>,
+) -> Result<(
+    pcbex_kicad::NativeKicadErcIdentity,
+    pcbex_kicad::ExactArtifactIdentity,
+)> {
+    let fresh = replay_native_kicad_erc_report_with_warning_policy(
+        input,
+        retained_report_path,
+        warning_policy_path,
+        kicad_cli,
+        cancellation,
+    )?;
     if !fresh.approved {
         bail!(
             "native KiCad ERC warning evidence is rejected with {} error(s) and {} policy failure(s)",
@@ -1379,21 +1536,16 @@ pub(crate) fn verify_native_kicad_erc_report_with_warning_policy(
             fresh.policy_failures.len()
         );
     }
-
+    let rendered = render_native_kicad_erc_warning_report(&fresh)?;
     let source = pcbex_kicad::ExactArtifactIdentity {
-        bytes: source_after.len() as u64,
-        sha256: hex::encode(Sha256::digest(&source_after)),
+        bytes: fresh.source.bytes,
+        sha256: fresh.source.sha256.clone(),
     };
-    if fresh.source.bytes != source.bytes || fresh.source.sha256 != source.sha256 {
-        bail!(
-            "native KiCad ERC warning report schematic identity does not match the generated schematic"
-        );
-    }
     let native_identity = pcbex_kicad::NativeKicadErcIdentity {
         schema_version: fresh.schema_version,
         report: pcbex_kicad::ExactArtifactIdentity {
-            bytes: report_bytes_after.len() as u64,
-            sha256: hex::encode(Sha256::digest(&report_bytes_after)),
+            bytes: rendered.len() as u64,
+            sha256: hex::encode(Sha256::digest(&rendered)),
         },
         run_sha256: fresh.run_sha256,
     };
@@ -1609,6 +1761,44 @@ pub(crate) fn render_native_kicad_erc_warning_report(
         bail!("native KiCad ERC warning report exceeds {MAX_REPORT_BYTES} bytes")
     }
     Ok(bytes)
+}
+
+/// Build the fixed compact summary used by CLI, MCP, and Action bridges.
+/// `rendered` must be the canonical bytes returned by
+/// [`render_native_kicad_erc_report`] for `report`.
+pub(crate) fn native_kicad_erc_report_summary(
+    report: &NativeKicadErcReport,
+    rendered: &[u8],
+) -> Value {
+    json!({
+        "schema_version": report.schema_version,
+        "approved": report.approved,
+        "error_count": report.error_count,
+        "run_sha256": report.run_sha256,
+        "report_bytes": rendered.len(),
+        "report_sha256": hex::encode(Sha256::digest(rendered)),
+    })
+}
+
+/// Build the fixed compact summary used by CLI, MCP, and Action bridges for a
+/// warning-policy (schema-v2) report.
+pub(crate) fn native_kicad_erc_warning_report_summary(
+    report: &NativeKicadErcWarningReport,
+    rendered: &[u8],
+) -> Value {
+    json!({
+        "schema_version": report.schema_version,
+        "approved": report.approved,
+        "error_count": report.error_count,
+        "warning_count": report.warning_count,
+        "policy_failure_count": report.policy_failures.len(),
+        "warning_policy_sha256": report.warning_policy.policy_sha256,
+        "warning_policy_source_bytes": report.warning_policy.source.bytes,
+        "warning_policy_source_sha256": report.warning_policy.source.sha256,
+        "run_sha256": report.run_sha256,
+        "report_bytes": rendered.len(),
+        "report_sha256": hex::encode(Sha256::digest(rendered)),
+    })
 }
 
 /// Return the manually closed JSON schema for the warning policy document.

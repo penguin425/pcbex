@@ -184,15 +184,16 @@ v3/v2/v1, while warning-policy evidence maps to v4/v3/v2. Older flows remain
 compatible. See
 [`docs/NATIVE_KICAD_ERC.md`](docs/NATIVE_KICAD_ERC.md).
 
-Version 1.428.0 adds a focused public composite Action for schematic-only
-repositories. It does not accept or analyze a board and does not enable AI
-review or a deterministic pipeline plan. Install a trusted KiCad CLI on the
-runner, then select error-only report v1 by omitting `warning-policy`, or the
-closed warning-policy report v2 by supplying it:
+Version 1.428.0 introduced the focused public composite Action for
+schematic-only repositories; v1.432.0 adds its read-only fresh replay. It does
+not accept or analyze a board and does not enable AI review or a
+deterministic pipeline plan. Install a trusted KiCad CLI on the runner, then
+select error-only report v1 by omitting `warning-policy`, or the closed
+warning-policy report v2 by supplying it:
 
 ```yaml
 - id: native-erc
-  uses: penguin425/pcbex/actions/native-kicad-erc@v1.428.0
+  uses: penguin425/pcbex/actions/native-kicad-erc@v1.432.0
   with:
     schematic: hardware/controller.kicad_sch
     require-approved: "true"
@@ -210,6 +211,23 @@ digest-mismatched evidence fails closed. Its twelve root-compatible
 fields, warning-policy identities, run identity, and report byte/SHA
 identities; warning-policy fields are empty for report v1. Neither Action
 automatically populates the separate `ai-review-*` retained-report flow.
+
+To re-verify a retained native ERC report without modifying the schematic,
+policy, or retained report, select `mode: verify`. The Action reruns KiCad,
+publishes a fresh authenticated copy under a no-clobber output directory, and
+retains valid rejected evidence before the optional final approval gate:
+
+```yaml
+- id: replay-native-erc
+  uses: penguin425/pcbex/actions/native-kicad-erc@v1.432.0
+  with:
+    mode: verify
+    schematic: hardware/controller.kicad_sch
+    report: retained/native-kicad-erc.json
+    # warning-policy: hardware/native-kicad-warning-policy.json
+    output-dir: build/native-erc-replay
+    require-approved: "true"
+```
 
 ## Native KiCad PCB DRC evidence
 
@@ -242,7 +260,7 @@ flow:
 
 ```yaml
 - id: native-drc
-  uses: penguin425/pcbex/actions/native-kicad-drc@v1.431.0
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.432.0
   with:
     board: hardware/controller.kicad_pcb
     # project: hardware/controller.kicad_pro
@@ -256,7 +274,7 @@ authenticated no-clobber copy under the new output directory:
 
 ```yaml
 - id: replay-native-drc
-  uses: penguin425/pcbex/actions/native-kicad-drc@v1.431.0
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.432.0
   with:
     mode: verify
     board: hardware/controller.kicad_pcb
@@ -283,6 +301,16 @@ publication stays atomic and waits for complete, validated report bytes, so an
 interrupted run never exposes an incomplete report. The MCP response contract,
 CLI commands, and composite Actions retain their existing external contracts;
 this release changes the MCP implementation path.
+
+Release v1.432.0 adds standalone native KiCad schematic ERC fresh replay.
+`verify-native-kicad-erc-report` and the MCP
+`verify_native_kicad_erc_report` tool replay retained report schema v1 or v2
+read-only, while the focused Action exposes the same boundary through
+`mode: verify`. Replays stable-read the original schematic and compare fresh
+canonical bytes with retained evidence; valid rejected evidence remains
+available before an optional approval gate, and Task cancellation reaches the
+bounded KiCad process group. Existing native run outputs, AI request/binding
+schemas, and prepare/sign/verify/quorum contracts remain unchanged.
 
 ## KiCad boards
 
