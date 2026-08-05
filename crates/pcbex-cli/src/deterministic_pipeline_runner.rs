@@ -824,8 +824,10 @@ pub(crate) fn run_deterministic_pipeline(
     }
 
     // The manifest is also an explicit descriptor and is read again above.
-    // Re-scan after every snapshot so an entry added or removed between that
-    // read and the firmware pre-scan cannot be hidden by the private stage.
+    // Re-scan after every initial snapshot so an entry added or removed between
+    // that read and the firmware pre-scan cannot be hidden by the private
+    // stage. Complete content identities are re-snapshotted directly around
+    // the pipeline gate below.
     if firmware_bundle.is_some() {
         let parent = plan
             .firmware_manifest
@@ -973,7 +975,7 @@ pub(crate) fn run_deterministic_pipeline(
         .all(|(role, configured)| !configured || snapshots.contains_key(role))
         && firmware_inputs_ready;
     let pipeline = if pipeline_inputs_ready {
-        Some(verify_pipeline(&PipelineInputs {
+        let pipeline_inputs = PipelineInputs {
             schematic: pipeline_targets("schematic"),
             electrical_policy: plan
                 .electrical_policy
@@ -1011,7 +1013,18 @@ pub(crate) fn run_deterministic_pipeline(
                 .as_ref()
                 .map(|_| pipeline_targets("factory_receipt")),
             require_factory: plan.require_factory,
-        }))
+        };
+
+        // Keep the pre/post checks directly adjacent to the gate invocation.
+        // The earlier post-staging scan preserves the exact-entry structure;
+        // this helper is the authoritative content-identity precondition and
+        // final source-integrity check for verification.
+        let initial_bundle = firmware_bundle
+            .as_ref()
+            .expect("pipeline inputs require a complete firmware bundle");
+        run_pipeline_with_firmware_resnapshot(plan, initial_bundle, &mut failures, || {
+            verify_pipeline(&pipeline_inputs)
+        })
     } else {
         None
     };
@@ -1403,6 +1416,93 @@ fn prescan_firmware_bundle(
     Some(snapshots)
 }
 
+/// Re-read the complete firmware bundle and compare every source identity with
+/// the original exact-eight prescan.  The caller retains the returned strings
+/// in the deterministic report instead of treating a source race as an
+/// infrastructure error.
+fn compare_firmware_bundle_snapshot(
+    plan: &DeterministicPipelinePlan,
+    initial: &BTreeMap<String, Snapshot>,
+) -> Vec<String> {
+    let mut resnapshot_failures = FailureCollector::new();
+    let current = prescan_firmware_bundle(plan, &mut resnapshot_failures);
+    let mut failures = match resnapshot_failures.finish() {
+        Ok(failures) => failures,
+        Err(error) => vec![format!("firmware_manifest: {error}")],
+    };
+
+    let Some(current) = current else {
+        if failures.is_empty() {
+            failures.push("firmware_manifest: firmware bundle could not be re-snapshotted".into());
+        }
+        return failures;
+    };
+
+    let mut expected_names = FIRMWARE_ARTIFACTS
+        .iter()
+        .map(ToString::to_string)
+        .chain(std::iter::once("manifest.json".to_string()))
+        .collect::<Vec<_>>();
+    expected_names.sort();
+
+    if initial.len() != expected_names.len() || current.len() != expected_names.len() {
+        failures.push(
+            "firmware_manifest: firmware bundle snapshot must contain exactly manifest.json and the seven fixed artifacts".into(),
+        );
+    }
+
+    for name in expected_names {
+        match (initial.get(&name), current.get(&name)) {
+            (Some(before), Some(after))
+                if before.evidence.bytes == after.evidence.bytes
+                    && before.evidence.sha256 == after.evidence.sha256 => {}
+            (Some(_), Some(_)) => failures.push(format!(
+                "firmware_manifest: firmware bundle artifact {name} changed after the initial snapshot"
+            )),
+            (Some(_), None) => failures.push(format!(
+                "firmware_manifest: firmware bundle artifact {name} was not captured during re-snapshot"
+            )),
+            (None, Some(_)) => failures.push(format!(
+                "firmware_manifest: firmware bundle artifact {name} was not present in the initial snapshot"
+            )),
+            (None, None) => failures.push(format!(
+                "firmware_manifest: firmware bundle artifact {name} was not captured"
+            )),
+        }
+    }
+
+    failures.sort();
+    failures.dedup();
+    failures
+}
+
+/// Run one gate only when the source firmware bundle still matches its
+/// initial exact-eight snapshot, then perform a final content re-snapshot
+/// before returning the gate result.  The generic return keeps this boundary
+/// unit-testable without constructing a full pipeline report; production uses
+/// it for `verify_pipeline` and retains every mismatch in the caller's report
+/// failure collector.
+fn run_pipeline_with_firmware_resnapshot<T>(
+    plan: &DeterministicPipelinePlan,
+    initial: &BTreeMap<String, Snapshot>,
+    failures: &mut FailureCollector,
+    verify: impl FnOnce() -> T,
+) -> Option<T> {
+    let preflight_failures = compare_firmware_bundle_snapshot(plan, initial);
+    if !preflight_failures.is_empty() {
+        for failure in preflight_failures {
+            failures.push(failure);
+        }
+        return None;
+    }
+
+    let result = verify();
+    for failure in compare_firmware_bundle_snapshot(plan, initial) {
+        failures.push(failure);
+    }
+    Some(result)
+}
+
 /// Apply the runner's exact-eight firmware bundle prescan as a strict
 /// compiler preflight and return only stable byte identities.
 ///
@@ -1781,6 +1881,24 @@ mod tests {
         })
     }
 
+    fn firmware_bundle_fixture() -> (tempfile::TempDir, DeterministicPipelinePlan) {
+        let workspace = tempfile::tempdir().unwrap();
+        let firmware = workspace.path().join("firmware");
+        fs::create_dir_all(&firmware).unwrap();
+        let manifest = b"firmware-manifest";
+        fs::write(firmware.join("manifest.json"), manifest).unwrap();
+        for (index, name) in FIRMWARE_ARTIFACTS.iter().enumerate() {
+            fs::write(firmware.join(name), format!("artifact-{index}")).unwrap();
+        }
+
+        let mut value = plan_json();
+        value["firmware_manifest"] = descriptor("firmware/manifest.json", manifest);
+        let plan_path = workspace.path().join("plan.json");
+        fs::write(&plan_path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let plan = load_deterministic_pipeline_plan(&plan_path).unwrap();
+        (workspace, plan)
+    }
+
     #[test]
     fn parser_requires_explicit_optional_nulls_and_rejects_parent_paths() {
         let workspace = tempfile::tempdir().unwrap();
@@ -1937,6 +2055,98 @@ mod tests {
         assert_eq!(
             report["allOf"][0]["else"]["properties"]["failures"]["minItems"],
             1
+        );
+    }
+
+    #[test]
+    fn firmware_bundle_resnapshot_rejects_same_size_overwrite() {
+        let (workspace, plan) = firmware_bundle_fixture();
+        let mut initial_failures = FailureCollector::new();
+        let initial = prescan_firmware_bundle(&plan, &mut initial_failures).unwrap();
+        assert!(initial_failures.finish().unwrap().is_empty());
+
+        let artifact = workspace
+            .path()
+            .join("firmware")
+            .join(FIRMWARE_ARTIFACTS[0]);
+        let original = fs::read(&artifact).unwrap();
+        let replacement = vec![b'X'; original.len()];
+        assert_eq!(replacement.len(), original.len());
+        fs::write(&artifact, replacement).unwrap();
+
+        let failures = compare_firmware_bundle_snapshot(&plan, &initial);
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("pinout.h") && failure.contains("changed")),
+            "expected same-size overwrite rejection, got {failures:?}"
+        );
+    }
+
+    #[test]
+    fn firmware_gate_resnapshot_fails_closed_before_and_after_gate() {
+        // Mutation before the gate must suppress invocation entirely.
+        let (workspace, plan) = firmware_bundle_fixture();
+        let mut initial_failures = FailureCollector::new();
+        let initial = prescan_firmware_bundle(&plan, &mut initial_failures).unwrap();
+        assert!(initial_failures.finish().unwrap().is_empty());
+        let artifact = workspace
+            .path()
+            .join("firmware")
+            .join(FIRMWARE_ARTIFACTS[0]);
+        fs::write(&artifact, b"XXXXXXXXX").unwrap();
+        let mut failures = FailureCollector::new();
+        let mut invoked = false;
+        let result = run_pipeline_with_firmware_resnapshot(&plan, &initial, &mut failures, || {
+            invoked = true;
+            "pipeline"
+        });
+        assert!(result.is_none());
+        assert!(!invoked);
+        assert!(!failures.finish().unwrap().is_empty());
+
+        // Mutation performed by the gate itself is observed by the final
+        // re-snapshot.  The gate result remains retained, but callers will
+        // compute approved=false from the retained failure.
+        let (workspace, plan) = firmware_bundle_fixture();
+        let mut initial_failures = FailureCollector::new();
+        let initial = prescan_firmware_bundle(&plan, &mut initial_failures).unwrap();
+        assert!(initial_failures.finish().unwrap().is_empty());
+        let artifact = workspace
+            .path()
+            .join("firmware")
+            .join(FIRMWARE_ARTIFACTS[1]);
+        let mut failures = FailureCollector::new();
+        let result = run_pipeline_with_firmware_resnapshot(&plan, &initial, &mut failures, || {
+            fs::write(&artifact, b"rename-replaced").unwrap();
+            "pipeline"
+        });
+        assert_eq!(result, Some("pipeline"));
+        assert!(!failures.finish().unwrap().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn firmware_bundle_resnapshot_rejects_rename_replace() {
+        let (workspace, plan) = firmware_bundle_fixture();
+        let mut initial_failures = FailureCollector::new();
+        let initial = prescan_firmware_bundle(&plan, &mut initial_failures).unwrap();
+        assert!(initial_failures.finish().unwrap().is_empty());
+
+        let artifact = workspace
+            .path()
+            .join("firmware")
+            .join(FIRMWARE_ARTIFACTS[1]);
+        let replacement = workspace.path().join("firmware").join("replacement.tmp");
+        fs::write(&replacement, b"rename-replaced").unwrap();
+        fs::rename(&replacement, &artifact).unwrap();
+
+        let failures = compare_firmware_bundle_snapshot(&plan, &initial);
+        assert!(
+            failures
+                .iter()
+                .any(|failure| failure.contains("firmware.h") && failure.contains("changed")),
+            "expected rename-replace rejection, got {failures:?}"
         );
     }
 }

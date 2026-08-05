@@ -709,6 +709,11 @@
     {
       "id": "deterministic-pipeline-firmware-bundle-compiler-preflight",
       "release": "v1.436.0",
+      "status": "released"
+    },
+    {
+      "id": "deterministic-pipeline-firmware-bundle-gate-resnapshot",
+      "release": "v1.437.0",
       "status": "current"
     }
   ]

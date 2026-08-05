@@ -53,6 +53,134 @@ fn temporary_directory(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("pcbex-{name}-{}-{unique}", std::process::id()))
 }
 
+const DETERMINISTIC_FIRMWARE_ARTIFACTS: [&str; 7] = [
+    "pinout.h",
+    "firmware.h",
+    "firmware.c",
+    "firmware_smoke_test.c",
+    "firmware.cpp",
+    "firmware_cpp_smoke_test.cpp",
+    "host.py",
+];
+
+fn skipped_firmware_build(command: &str) -> Value {
+    json!({
+        "attempted": false,
+        "passed": false,
+        "command": [command],
+        "exit_code": null,
+        "smoke": {
+            "attempted": false,
+            "passed": false,
+            "command": ["smoke"],
+            "exit_code": null
+        }
+    })
+}
+
+/// Build the same closed fixture used by the successful deterministic intent
+/// MCP test.  Invalid-bundle tests mutate only the firmware manifest after
+/// this helper returns, keeping all non-firmware inputs identical.
+fn write_deterministic_pipeline_fixture(output: &Path) -> PathBuf {
+    fs::create_dir_all(output.join("intent")).unwrap();
+    for (relative, bytes) in [
+        ("circuit.json", b"circuit".as_slice()),
+        ("design.kicad_sch", b"schematic".as_slice()),
+        ("review.json", b"review".as_slice()),
+        ("design.kicad_pcb", b"board".as_slice()),
+        ("analysis/run.json", b"manifest".as_slice()),
+        ("analysis/checks.json", b"checks".as_slice()),
+        ("analysis/quality.json", b"quality".as_slice()),
+        ("manufacturing.zip", b"package".as_slice()),
+    ] {
+        let path = output.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+
+    let firmware = output.join("firmware");
+    fs::create_dir_all(&firmware).unwrap();
+    let artifacts = DETERMINISTIC_FIRMWARE_ARTIFACTS
+        .iter()
+        .map(|name| {
+            let bytes = name.as_bytes();
+            fs::write(firmware.join(name), bytes).unwrap();
+            json!({
+                "path": name,
+                "bytes": bytes.len(),
+                "sha256": hex::encode(Sha256::digest(bytes))
+            })
+        })
+        .collect::<Vec<_>>();
+    fs::write(
+        firmware.join("manifest.json"),
+        serde_json::to_vec(&json!({
+            "schema_version": 2,
+            "engine": "pcbex",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "schematic_sha256": "a".repeat(64),
+            "artifacts": artifacts,
+            "c_build": skipped_firmware_build("cc"),
+            "cpp_build": skipped_firmware_build("c++"),
+            "python_check": skipped_firmware_build("python3")
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let intent = output.join("intent/pipeline-intent.json");
+    fs::write(
+        &intent,
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "circuit_spec": "circuit.json",
+            "schematic": "design.kicad_sch",
+            "electrical_policy": null,
+            "electrical_review": "review.json",
+            "board": "design.kicad_pcb",
+            "analysis_manifest": "analysis/run.json",
+            "analysis_checks": "analysis/checks.json",
+            "quality": "analysis/quality.json",
+            "analysis_project": null,
+            "analysis_rules": null,
+            "analysis_dfm_profile": null,
+            "analysis_policy_pack": null,
+            "analysis_physical_profile": null,
+            "manufacturing_package": "manufacturing.zip",
+            "firmware_manifest": "firmware/manifest.json",
+            "factory_receipt": null,
+            "require_factory": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    intent
+}
+
+fn mutate_firmware_manifest(root: &Path, mutate: impl FnOnce(&mut Value)) {
+    let path = root.join("firmware/manifest.json");
+    let mut manifest: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    mutate(&mut manifest);
+    fs::write(&path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+}
+
+fn assert_compile_bundle_rejected(response: &Value, output: &Path, context: &str) {
+    assert_eq!(response["result"]["isError"], true, "{context}: {response}");
+    let structured = &response["result"]["structuredContent"];
+    assert_eq!(structured["ok"], false, "{context}: {response}");
+    assert!(structured["plan"].is_null(), "{context}: {response}");
+    let message = structured["message"].as_str().unwrap_or_default();
+    assert!(message.len() <= 4 * 1024, "{context}: unbounded message");
+    assert!(
+        response.to_string().len() < 16 * 1024 * 1024,
+        "{context}: unbounded response"
+    );
+    assert!(
+        !output.exists(),
+        "{context}: rejected compile published output"
+    );
+}
+
 #[cfg(unix)]
 fn fake_native_kicad_drc_cli(directory: &Path, name: &str, with_finding: bool) -> PathBuf {
     const DRC_SCHEMA: &str = "https://schemas.kicad.org/drc.v1.json";
@@ -2174,99 +2302,7 @@ fn stdio_server_pipeline_verify_retains_rejected_report() {
 #[test]
 fn stdio_server_compiles_deterministic_pipeline_intent_sync_and_as_task() {
     let output = temporary_directory("mcp-compile-deterministic-intent");
-    fs::create_dir_all(output.join("intent")).unwrap();
-    for (relative, bytes) in [
-        ("circuit.json", b"circuit".as_slice()),
-        ("design.kicad_sch", b"schematic".as_slice()),
-        ("review.json", b"review".as_slice()),
-        ("design.kicad_pcb", b"board".as_slice()),
-        ("analysis/run.json", b"manifest".as_slice()),
-        ("analysis/checks.json", b"checks".as_slice()),
-        ("analysis/quality.json", b"quality".as_slice()),
-        ("manufacturing.zip", b"package".as_slice()),
-    ] {
-        let path = output.join(relative);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, bytes).unwrap();
-    }
-    const FIRMWARE_ARTIFACTS: [&str; 7] = [
-        "pinout.h",
-        "firmware.h",
-        "firmware.c",
-        "firmware_smoke_test.c",
-        "firmware.cpp",
-        "firmware_cpp_smoke_test.cpp",
-        "host.py",
-    ];
-    let firmware = output.join("firmware");
-    fs::create_dir_all(&firmware).unwrap();
-    let artifacts = FIRMWARE_ARTIFACTS
-        .iter()
-        .map(|name| {
-            let bytes = name.as_bytes();
-            fs::write(firmware.join(name), bytes).unwrap();
-            json!({
-                "path": name,
-                "bytes": bytes.len(),
-                "sha256": hex::encode(Sha256::digest(bytes))
-            })
-        })
-        .collect::<Vec<_>>();
-    let skipped_build = |command: &str| {
-        json!({
-            "attempted": false,
-            "passed": false,
-            "command": [command],
-            "exit_code": null,
-            "smoke": {
-                "attempted": false,
-                "passed": false,
-                "command": ["smoke"],
-                "exit_code": null
-            }
-        })
-    };
-    fs::write(
-        firmware.join("manifest.json"),
-        serde_json::to_vec(&json!({
-            "schema_version": 2,
-            "engine": "pcbex",
-            "engine_version": env!("CARGO_PKG_VERSION"),
-            "schematic_sha256": "a".repeat(64),
-            "artifacts": artifacts,
-            "c_build": skipped_build("cc"),
-            "cpp_build": skipped_build("c++"),
-            "python_check": skipped_build("python3")
-        }))
-        .unwrap(),
-    )
-    .unwrap();
-    let intent = output.join("intent/pipeline-intent.json");
-    fs::write(
-        &intent,
-        serde_json::to_vec(&json!({
-            "schema_version": 1,
-            "circuit_spec": "circuit.json",
-            "schematic": "design.kicad_sch",
-            "electrical_policy": null,
-            "electrical_review": "review.json",
-            "board": "design.kicad_pcb",
-            "analysis_manifest": "analysis/run.json",
-            "analysis_checks": "analysis/checks.json",
-            "quality": "analysis/quality.json",
-            "analysis_project": null,
-            "analysis_rules": null,
-            "analysis_dfm_profile": null,
-            "analysis_policy_pack": null,
-            "analysis_physical_profile": null,
-            "manufacturing_package": "manufacturing.zip",
-            "firmware_manifest": "firmware/manifest.json",
-            "factory_receipt": null,
-            "require_factory": false
-        }))
-        .unwrap(),
-    )
-    .unwrap();
+    let intent = write_deterministic_pipeline_fixture(&output);
     let plan = output.join("pipeline-plan.json");
     let task_plan = output.join("pipeline-plan-task.json");
     let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
@@ -2369,6 +2405,179 @@ fn stdio_server_compiles_deterministic_pipeline_intent_sync_and_as_task() {
         String::from_utf8_lossy(&stderr_bytes)
     );
     fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
+fn stdio_server_rejects_invalid_deterministic_firmware_bundle_sync_and_as_task() {
+    for case in ["extra-entry", "hash-mismatch"] {
+        let output = temporary_directory(&format!("mcp-compile-invalid-{case}"));
+        let intent = write_deterministic_pipeline_fixture(&output);
+        if case == "extra-entry" {
+            let extra = b"unexpected-extra-artifact";
+            fs::write(output.join("firmware/extra.bin"), extra).unwrap();
+            mutate_firmware_manifest(&output, |manifest| {
+                manifest["artifacts"].as_array_mut().unwrap().push(json!({
+                    "path": "extra.bin",
+                    "bytes": extra.len(),
+                    "sha256": hex::encode(Sha256::digest(extra))
+                }));
+            });
+        } else {
+            mutate_firmware_manifest(&output, |manifest| {
+                manifest["artifacts"].as_array_mut().unwrap()[0]["sha256"] =
+                    Value::String("0".repeat(64));
+            });
+        }
+
+        let sync_plan = output.join("invalid-sync-plan.json");
+        let task_plan = output.join("invalid-task-plan.json");
+        let stale_plan = output.join("stale-sync-plan.json");
+        let stale_contents = br#"{"stale":true}"#;
+        fs::write(&stale_plan, stale_contents).unwrap();
+
+        let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+            .arg("mcp-server")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut stderr = child.stderr.take().unwrap();
+        let initialized = initialize(
+            &mut stdin,
+            &mut stdout,
+            json!(format!("initialize-invalid-{case}")),
+        );
+        assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "compile-invalid-sync",
+                "method": "tools/call",
+                "params": {
+                    "name": "compile_deterministic_pipeline_plan",
+                    "arguments": {"intent": intent, "output": sync_plan}
+                }
+            }),
+        );
+        let sync_response = receive(&mut stdout);
+        assert_eq!(sync_response["id"], "compile-invalid-sync");
+        assert_compile_bundle_rejected(&sync_response, &sync_plan, case);
+
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "compile-invalid-task",
+                "method": "tools/call",
+                "params": {
+                    "name": "compile_deterministic_pipeline_plan",
+                    "arguments": {"intent": intent, "output": task_plan},
+                    "task": {"ttl": 60_000}
+                }
+            }),
+        );
+        let created = receive(&mut stdout);
+        let task_id = created["result"]["task"]["taskId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(created["result"]["task"]["status"], "working");
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "compile-invalid-task-result",
+                "method": "tasks/result",
+                "params": {"taskId": task_id}
+            }),
+        );
+        let task_response = receive(&mut stdout);
+        assert_eq!(task_response["id"], "compile-invalid-task-result");
+        assert_eq!(
+            task_response["result"]["_meta"]["io.modelcontextprotocol/related-task"]["taskId"],
+            task_id
+        );
+        assert_compile_bundle_rejected(&task_response, &task_plan, case);
+
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "compile-stale-sync",
+                "method": "tools/call",
+                "params": {
+                    "name": "compile_deterministic_pipeline_plan",
+                    "arguments": {"intent": intent, "output": stale_plan}
+                }
+            }),
+        );
+        let stale_response = receive(&mut stdout);
+        assert_eq!(stale_response["id"], "compile-stale-sync");
+        assert_eq!(stale_response["error"]["code"], -32602);
+        assert!(
+            stale_response["error"]["data"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(fs::read(&stale_plan).unwrap(), stale_contents);
+
+        let stale_task_plan = output.join("stale-task-plan.json");
+        fs::write(&stale_task_plan, stale_contents).unwrap();
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "compile-stale-task",
+                "method": "tools/call",
+                "params": {
+                    "name": "compile_deterministic_pipeline_plan",
+                    "arguments": {"intent": intent, "output": stale_task_plan},
+                    "task": {"ttl": 60_000}
+                }
+            }),
+        );
+        let stale_task_created = receive(&mut stdout);
+        let stale_task_id = stale_task_created["result"]["task"]["taskId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        send(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": "compile-stale-task-result",
+                "method": "tasks/result",
+                "params": {"taskId": stale_task_id}
+            }),
+        );
+        let stale_task_response = receive(&mut stdout);
+        assert_eq!(stale_task_response["id"], "compile-stale-task-result");
+        assert_eq!(stale_task_response["error"]["code"], -32602);
+        assert!(
+            stale_task_response["error"]["data"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(fs::read(&stale_task_plan).unwrap(), stale_contents);
+
+        drop(stdin);
+        assert!(child.wait().unwrap().success());
+        let mut stderr_bytes = Vec::new();
+        stderr.read_to_end(&mut stderr_bytes).unwrap();
+        assert!(
+            stderr_bytes.is_empty(),
+            "MCP server stderr: {}",
+            String::from_utf8_lossy(&stderr_bytes)
+        );
+        fs::remove_dir_all(output).unwrap();
+    }
 }
 
 #[test]

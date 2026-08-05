@@ -237,6 +237,8 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | Composite-Action deterministic pipeline intent compiler parity | The root Action accepts one explicit workspace-relative intent/output pair, rejects partial or mixed legacy-plan selection before analysis, authenticates the compiler's exact bounded intent/plan source identities, passes the resulting effective plan to the unchanged final-authority runner, and after runner EOF rechecks both source identities plus the report's raw plan binding before publishing metadata only | Action schema and environment wiring, compiler-before-analysis ordering, strict summary/canonical-plan verification, stale/link/oversize/change/no-output/nonzero rejection, post-compilation intent/plan substitution rejection, retained runner-rejection evidence, legacy-plan compatibility, and public CI smoke regressions |
 | Deterministic firmware-bundle compiler preflight | Before publishing a plan, the compiler stable-preflights the explicit `firmware_manifest` descriptor as `manifest.json` in an exact eight-entry directory (manifest plus the seven fixed v2 source artifacts), rejecting symbolic links, special files, unsafe names, missing/extra entries, malformed or duplicate manifest fields, and every bounded manifest-to-source byte-count/SHA-256 mismatch; the plan remains schema v1 with no source descriptors or artifact hashes, and the compiler does not execute builds, approve build evidence, bind the canonical schematic, or call LLM/network services | Compiler unit and CLI/MCP regressions cover exact-set enumeration, regular-file/symlink/special-file rejection, strict manifest parsing, per-artifact bytes/hash verification, no-clobber/no-output failure, and runner compatibility; the shared runner prescan, final full resnapshot, and public Action success fixture are implementation/CI boundary checks |
 
+| Deterministic firmware-bundle gate re-snapshot | Around the deterministic pipeline gate, the runner reopens all eight exact-entry firmware files and compares complete byte/SHA-256 snapshots immediately before and after the gate, retaining a valid rejected report when either snapshot observes an entry added, removed, replaced, or content-mutated; plan schema v1 and firmware manifest v2 remain unchanged, and regular hardlinks remain allowed/content-bound rather than inode-pinned | Runner unit regressions cover same-size overwrite, rename-replace, pre-gate suppression, and post-gate result retention; existing CLI/MCP/Action compatibility tests remain green, and new MCP compiler regressions cover invalid exact-eight bundles plus stale-output preservation. Hardlink acceptance and adversarial filesystem race freedom are documented boundaries, not claims backed by new tests |
+
 ## Final verification commands
 
 ```sh
@@ -253,7 +255,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.436.0 exposes 989 Rust tests and 204 Python tests. The release workflow
+Version 1.437.0 exposes 993 Rust tests and 204 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

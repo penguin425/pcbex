@@ -118,6 +118,16 @@ commands, evaluate build evidence, bind the canonical schematic, or call an
 LLM/network. The runner and pipeline gate repeat the exact-eight checks and
 remain final authority.
 
+Version 1.437.0 extends the runner boundary around the deterministic pipeline
+gate. It records complete byte and SHA-256 snapshots for all eight firmware
+entries immediately before the gate and again after it returns. Any added,
+removed, replaced, or content-mutated entry observed by those snapshots
+produces a retained rejected report before optional approval enforcement. The
+plan remains schema v1 and the firmware manifest remains v2. Regular hardlinks
+are allowed and are content-bound by the bytes and SHA-256 read through each
+named path; the runner does not pin inodes or promise a race-free filesystem
+boundary.
+
 A composite action cannot set `timeout-minutes` on its caller's job. Its three
 supervised commands remain individually finite (10, 30, and 40 minutes), but
 artifact and SARIF service actions are governed by the calling job. Public
