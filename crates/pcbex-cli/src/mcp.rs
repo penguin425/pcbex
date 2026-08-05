@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use pcbex_core::dfm_profiles;
+use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    env,
+    env, fmt,
     io::{self, BufRead, Write},
     path::Path,
     process::Command,
@@ -461,6 +462,7 @@ impl McpServer {
                     | "pipeline_verify"
                     | "run_deterministic_pipeline"
                     | "run_native_kicad_erc"
+                    | "run_native_kicad_drc"
             )
         ) {
             return error_response(
@@ -1057,6 +1059,27 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "output": {"type": "string"},
                     "kicad_cli": {"type": "string"},
                     "warning_policy": {"type": "string"},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "run_native_kicad_drc",
+            "Run native KiCad PCB DRC",
+            "Run KiCad's native PCB design-rules checker against a board and retain its closed, digest-bound report, including rejected reports before an optional approval gate fails.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "output"],
+                "properties": {
+                    "input": {"type": "string", "minLength": 1},
+                    "output": {"type": "string", "minLength": 1},
+                    "project": {"type": "string", "minLength": 1},
+                    "rules_file": {"type": "string", "minLength": 1},
+                    "kicad_cli": {"type": "string", "minLength": 1},
                     "require_approved": {"type": "boolean", "default": false}
                 }
             }),
@@ -4770,6 +4793,7 @@ fn call_tool(
             run_deterministic_pipeline_tool(arguments, cancellation)?
         }
         "run_native_kicad_erc" => run_native_kicad_erc_tool(arguments, cancellation)?,
+        "run_native_kicad_drc" => run_native_kicad_drc_tool(arguments, cancellation)?,
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
         "compare_manufacturing_feedback" => {
@@ -5912,6 +5936,80 @@ fn run_native_kicad_erc_tool(
     Ok(execution_result(
         execution,
         json!({"output": output, "report_summary": report_summary}),
+    ))
+}
+
+fn run_native_kicad_drc_tool(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "input",
+            "output",
+            "project",
+            "rules_file",
+            "kicad_cli",
+            "require_approved",
+        ],
+    )?;
+    let input = required_string(&arguments, "input")?;
+    let output = required_string(&arguments, "output")?;
+    // Refuse stale evidence before starting the child so a rejected or
+    // cancelled native run can never be mistaken for a fresh report.
+    require_absent_outputs([Some(output.as_str())])?;
+    let mut command = vec![
+        "run-native-kicad-drc".to_string(),
+        format!("--output={output}"),
+    ];
+    // Use `--name=value` for every path.  A path beginning with `-` must never
+    // be parsed as a second Clap option, and the input itself is protected by
+    // the final `--` marker below.
+    for (name, option) in [
+        ("project", "--project"),
+        ("rules_file", "--rules-file"),
+        ("kicad_cli", "--kicad-cli"),
+    ] {
+        if let Some(value) = arguments.get(name) {
+            let value = value
+                .as_str()
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| json!({"detail": format!("{name} must be a non-empty string")}))?;
+            command.push(format!("{option}={value}"));
+        }
+    }
+    optional_flag(
+        &arguments,
+        "require_approved",
+        "--require-approved",
+        &mut command,
+    )?;
+    command.push("--mcp-echo-report-summary".to_string());
+    command.push("--".to_string());
+    command.push(input.clone());
+    let execution = execute(&command, cancellation)?;
+    let report_summary = trusted_native_kicad_drc_summary(
+        &execution,
+        Path::new(&output),
+        Path::new(&input),
+        arguments
+            .get("project")
+            .and_then(Value::as_str)
+            .map(Path::new),
+        arguments
+            .get("rules_file")
+            .and_then(Value::as_str)
+            .map(Path::new),
+    );
+    let execution = require_retained_json(
+        execution,
+        &report_summary,
+        "native KiCad DRC output summary",
+    );
+    Ok(execution_result(
+        execution,
+        json!({"input": input, "output": output, "report_summary": report_summary}),
     ))
 }
 
@@ -13053,6 +13151,301 @@ fn trusted_native_kicad_erc_summary(execution: &Execution, path: &Path) -> Value
     summary
 }
 
+/// Verify the compact stdout bridge emitted by the native KiCad PCB DRC
+/// child.  The complete report remains on disk; MCP exposes only this
+/// digest-bound summary after checking the retained report's closed top-level
+/// shape and every summary count.
+fn trusted_native_kicad_drc_summary(
+    execution: &Execution,
+    path: &Path,
+    input: &Path,
+    project: Option<&Path>,
+    rules_file: Option<&Path>,
+) -> Value {
+    const SUMMARY_FIELDS: [&str; 17] = [
+        "schema_version",
+        "approved",
+        "violation_count",
+        "unconnected_item_count",
+        "schematic_parity_count",
+        "error_count",
+        "warning_count",
+        "ignored_check_count",
+        "board_bytes",
+        "board_sha256",
+        "project_bytes",
+        "project_sha256",
+        "rules_file_bytes",
+        "rules_file_sha256",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+    ];
+    if execution.stdout.len() > MAX_MCP_PROCESS_MESSAGE_BYTES
+        || has_duplicate_json_keys(&execution.stdout)
+    {
+        return Value::Null;
+    }
+    let summary = serde_json::from_slice::<Value>(&execution.stdout).unwrap_or(Value::Null);
+    let Some(object) = summary.as_object() else {
+        return Value::Null;
+    };
+    if object.len() != SUMMARY_FIELDS.len()
+        || SUMMARY_FIELDS
+            .iter()
+            .any(|field| !object.contains_key(*field))
+    {
+        return Value::Null;
+    }
+
+    let schema_version = object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .filter(|value| *value == 1);
+    let approved = object.get("approved").and_then(Value::as_bool);
+    let violation_count = object.get("violation_count").and_then(Value::as_u64);
+    let unconnected_item_count = object.get("unconnected_item_count").and_then(Value::as_u64);
+    let schematic_parity_count = object.get("schematic_parity_count").and_then(Value::as_u64);
+    let error_count = object.get("error_count").and_then(Value::as_u64);
+    let warning_count = object.get("warning_count").and_then(Value::as_u64);
+    let ignored_check_count = object.get("ignored_check_count").and_then(Value::as_u64);
+    let board_bytes = object.get("board_bytes").and_then(Value::as_u64);
+    let board_sha256 = object
+        .get("board_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let project_bytes = object.get("project_bytes");
+    let project_sha256 = object.get("project_sha256");
+    let rules_file_bytes = object.get("rules_file_bytes");
+    let rules_file_sha256 = object.get("rules_file_sha256");
+    let run_sha256 = object
+        .get("run_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let report_bytes = object
+        .get("report_bytes")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0 && *value <= crate::native_kicad_drc::MAX_REPORT_BYTES);
+    let report_sha256 = object
+        .get("report_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let (
+        Some(schema_version),
+        Some(approved),
+        Some(violation_count),
+        Some(unconnected_item_count),
+        Some(schematic_parity_count),
+        Some(error_count),
+        Some(warning_count),
+        Some(ignored_check_count),
+        Some(board_bytes),
+        Some(board_sha256),
+        Some(run_sha256),
+        Some(report_bytes),
+        Some(report_sha256),
+    ) = (
+        schema_version,
+        approved,
+        violation_count,
+        unconnected_item_count,
+        schematic_parity_count,
+        error_count,
+        warning_count,
+        ignored_check_count,
+        board_bytes,
+        board_sha256,
+        run_sha256,
+        report_bytes,
+        report_sha256,
+    )
+    else {
+        return Value::Null;
+    };
+    let Ok(retained) =
+        crate::bounded_io::read_with_limit(path, crate::native_kicad_drc::MAX_REPORT_BYTES)
+    else {
+        return Value::Null;
+    };
+    if retained.len() as u64 != report_bytes || sha256_hex(&retained) != report_sha256 {
+        return Value::Null;
+    }
+    if has_duplicate_json_keys(&retained) {
+        return Value::Null;
+    }
+    let Ok(report) = crate::native_kicad_drc::decode_native_kicad_drc_report(&retained) else {
+        return Value::Null;
+    };
+    if report.schema_version as u64 != schema_version
+        || report.approved != approved
+        || report.violation_count as u64 != violation_count
+        || report.unconnected_item_count as u64 != unconnected_item_count
+        || report.schematic_parity_count as u64 != schematic_parity_count
+        || report.error_count as u64 != error_count
+        || report.warning_count as u64 != warning_count
+        || report.ignored_checks.len() as u64 != ignored_check_count
+        || report.run_sha256 != run_sha256
+    {
+        return Value::Null;
+    }
+    let Ok((resolved_project, resolved_rules)) =
+        crate::native_kicad_drc::resolve_native_kicad_drc_companions(input, project, rules_file)
+    else {
+        return Value::Null;
+    };
+    let Some(source_identity) = native_drc_file_identity(input) else {
+        return Value::Null;
+    };
+    if report.source != source_identity {
+        return Value::Null;
+    }
+    let project_identity = resolved_project
+        .as_deref()
+        .and_then(native_drc_file_identity);
+    let rules_identity = resolved_rules.as_deref().and_then(native_drc_file_identity);
+    if report.project != project_identity || report.rules_file != rules_identity {
+        return Value::Null;
+    }
+    let expected_project_bytes = report.project.as_ref().map_or_else(
+        || Value::String(String::new()),
+        |identity| json!(identity.bytes),
+    );
+    let expected_project_sha256 = report.project.as_ref().map_or_else(
+        || Value::String(String::new()),
+        |identity| Value::String(identity.sha256.clone()),
+    );
+    let expected_rules_file_bytes = report.rules_file.as_ref().map_or_else(
+        || Value::String(String::new()),
+        |identity| json!(identity.bytes),
+    );
+    let expected_rules_file_sha256 = report.rules_file.as_ref().map_or_else(
+        || Value::String(String::new()),
+        |identity| Value::String(identity.sha256.clone()),
+    );
+    if board_bytes != report.source.bytes
+        || board_sha256 != report.source.sha256.as_str()
+        || project_bytes != Some(&expected_project_bytes)
+        || project_sha256 != Some(&expected_project_sha256)
+        || rules_file_bytes != Some(&expected_rules_file_bytes)
+        || rules_file_sha256 != Some(&expected_rules_file_sha256)
+    {
+        return Value::Null;
+    }
+    summary
+}
+
+fn native_drc_file_identity(
+    path: &Path,
+) -> Option<crate::native_kicad_drc::NativeKicadDrcSourceIdentity> {
+    const MAX_INPUT_BYTES: u64 = 128 * 1024 * 1024;
+    let bytes = crate::bounded_io::read_with_limit(path, MAX_INPUT_BYTES).ok()?;
+    (!bytes.is_empty()).then(|| crate::native_kicad_drc::NativeKicadDrcSourceIdentity {
+        bytes: bytes.len() as u64,
+        sha256: sha256_hex(&bytes),
+    })
+}
+
+struct DuplicateKeySeed;
+
+impl<'de> DeserializeSeed<'de> for DuplicateKeySeed {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(DuplicateKeyVisitor)
+    }
+}
+
+struct DuplicateKeyVisitor;
+
+impl<'de> Visitor<'de> for DuplicateKeyVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON value with unique object keys")
+    }
+
+    fn visit_map<M>(self, mut access: M) -> std::result::Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut keys = BTreeSet::new();
+        while let Some(key) = access.next_key::<String>()? {
+            if !keys.insert(key) {
+                return Err(serde::de::Error::custom("duplicate JSON object key"));
+            }
+            access.next_value_seed(DuplicateKeySeed)?;
+        }
+        Ok(())
+    }
+
+    fn visit_seq<A>(self, mut access: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while access.next_element_seed(DuplicateKeySeed)?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_str<E>(self, _value: &str) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_borrowed_str<E>(self, _value: &'de str) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_string<E>(self, _value: String) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_bytes<E>(self, _value: &[u8]) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_borrowed_bytes<E>(self, _value: &'de [u8]) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_byte_buf<E>(self, _value: Vec<u8>) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(())
+    }
+}
+
+fn has_duplicate_json_keys(bytes: &[u8]) -> bool {
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    if deserializer.deserialize_any(DuplicateKeyVisitor).is_err() {
+        return true;
+    }
+    deserializer.end().is_err()
+}
+
 fn is_lowercase_sha256(value: &str) -> bool {
     value.len() == 64
         && value
@@ -13875,13 +14268,21 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 148);
+        assert_eq!(tools.len(), 149);
         let named = |name: &str| {
             tools
                 .iter()
                 .find(|tool| tool["name"] == name)
                 .unwrap_or_else(|| panic!("missing MCP tool {name}"))
         };
+        assert_eq!(
+            named("run_native_kicad_drc")["inputSchema"]["required"],
+            json!(["input", "output"])
+        );
+        assert_eq!(
+            named("run_native_kicad_drc")["inputSchema"]["additionalProperties"],
+            false
+        );
         assert_eq!(
             named(
                 "verify_approval_transparency_public_log_gossip_organization_registry_history_checkpoint_witnesses"
@@ -15150,6 +15551,158 @@ mod tests {
         };
         assert_eq!(
             trusted_native_kicad_erc_summary(&tampered_execution, &report_path),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn native_kicad_drc_summary_is_digest_bound_and_identity_checked() {
+        #[derive(serde::Serialize)]
+        struct RunIdentity<'a> {
+            schema_version: u32,
+            engine: &'a str,
+            engine_version: &'a str,
+            kicad_version: &'a str,
+            source: &'a crate::native_kicad_drc::NativeKicadDrcSourceIdentity,
+            project: &'a Option<crate::native_kicad_drc::NativeKicadDrcSourceIdentity>,
+            rules_file: &'a Option<crate::native_kicad_drc::NativeKicadDrcSourceIdentity>,
+            invocation: &'a crate::native_kicad_drc::NativeKicadDrcInvocation,
+            ignored_checks: &'a [crate::native_kicad_drc::NativeKicadDrcIgnoredCheck],
+            findings: &'a [crate::native_kicad_drc::NativeKicadDrcFinding],
+            violation_count: usize,
+            unconnected_item_count: usize,
+            schematic_parity_count: usize,
+            error_count: usize,
+            warning_count: usize,
+            approved: bool,
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let board_path = directory.path().join("board.kicad_pcb");
+        let board = b"board";
+        std::fs::write(&board_path, board).unwrap();
+        let source = crate::native_kicad_drc::NativeKicadDrcSourceIdentity {
+            bytes: board.len() as u64,
+            sha256: sha256_hex(board),
+        };
+        let invocation = crate::native_kicad_drc::NativeKicadDrcInvocation {
+            command: "pcb drc".into(),
+            format: "json".into(),
+            units: "mm".into(),
+            severities: vec!["error".into(), "warning".into()],
+            exit_code_violations: true,
+            all_track_errors: false,
+            schematic_parity: false,
+            refill_zones: false,
+            save_board: false,
+        };
+        let mut report = crate::native_kicad_drc::NativeKicadDrcReport {
+            schema_version: 1,
+            engine: "pcbex".into(),
+            engine_version: env!("CARGO_PKG_VERSION").into(),
+            kicad_version: "10.0.5".into(),
+            source,
+            project: None,
+            rules_file: None,
+            invocation,
+            ignored_checks: Vec::new(),
+            findings: Vec::new(),
+            violation_count: 0,
+            unconnected_item_count: 0,
+            schematic_parity_count: 0,
+            error_count: 0,
+            warning_count: 0,
+            approved: true,
+            run_sha256: String::new(),
+        };
+        let identity = RunIdentity {
+            schema_version: report.schema_version,
+            engine: &report.engine,
+            engine_version: &report.engine_version,
+            kicad_version: &report.kicad_version,
+            source: &report.source,
+            project: &report.project,
+            rules_file: &report.rules_file,
+            invocation: &report.invocation,
+            ignored_checks: &report.ignored_checks,
+            findings: &report.findings,
+            violation_count: report.violation_count,
+            unconnected_item_count: report.unconnected_item_count,
+            schematic_parity_count: report.schematic_parity_count,
+            error_count: report.error_count,
+            warning_count: report.warning_count,
+            approved: report.approved,
+        };
+        let canonical = serde_json::to_vec(&identity).unwrap();
+        let mut hasher = Sha256::new();
+        hasher.update(b"pcbex/native-kicad-pcb-drc/v1\0");
+        hasher.update(canonical);
+        report.run_sha256 = hex::encode(hasher.finalize());
+        let rendered = crate::native_kicad_drc::render_native_kicad_drc_report(&report).unwrap();
+        let report_path = directory.path().join("drc.json");
+        std::fs::write(&report_path, &rendered).unwrap();
+        let summary = json!({
+            "schema_version": 1,
+            "approved": true,
+            "violation_count": 0,
+            "unconnected_item_count": 0,
+            "schematic_parity_count": 0,
+            "error_count": 0,
+            "warning_count": 0,
+            "ignored_check_count": 0,
+            "board_bytes": board.len(),
+            "board_sha256": sha256_hex(board),
+            "project_bytes": "",
+            "project_sha256": "",
+            "rules_file_bytes": "",
+            "rules_file_sha256": "",
+            "run_sha256": report.run_sha256,
+            "report_bytes": rendered.len(),
+            "report_sha256": sha256_hex(&rendered)
+        });
+        let execution = || Execution {
+            success: false,
+            exit_code: Some(5),
+            stdout: serde_json::to_vec(&summary).unwrap(),
+            stderr: "required approval rejected after retaining a report".into(),
+        };
+        assert_eq!(
+            trusted_native_kicad_drc_summary(&execution(), &report_path, &board_path, None, None),
+            summary
+        );
+
+        let mut tampered = summary.clone();
+        tampered["error_count"] = json!(1);
+        let tampered_execution = Execution {
+            stdout: serde_json::to_vec(&tampered).unwrap(),
+            ..execution()
+        };
+        assert_eq!(
+            trusted_native_kicad_drc_summary(
+                &tampered_execution,
+                &report_path,
+                &board_path,
+                None,
+                None
+            ),
+            Value::Null
+        );
+        let oversized = Execution {
+            stdout: vec![b'x'; MAX_MCP_PROCESS_MESSAGE_BYTES + 1],
+            ..execution()
+        };
+        assert_eq!(
+            trusted_native_kicad_drc_summary(&oversized, &report_path, &board_path, None, None),
+            Value::Null
+        );
+        std::fs::write(&board_path, b"changed").unwrap();
+        assert_eq!(
+            trusted_native_kicad_drc_summary(&execution(), &report_path, &board_path, None, None),
+            Value::Null
+        );
+        std::fs::remove_file(&report_path).unwrap();
+        assert_eq!(
+            trusted_native_kicad_drc_summary(&execution(), &report_path, &board_path, None, None),
             Value::Null
         );
     }

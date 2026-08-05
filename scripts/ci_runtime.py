@@ -50,6 +50,7 @@ DEFAULT_TREE_BYTES = 512 * MIB
 DEFAULT_STDOUT_BYTES = 16 * MIB
 DEFAULT_STDERR_BYTES = 4 * MIB
 PORTABLE_OUTPUT_COMPONENT = re.compile(r"^[A-Za-z0-9._-]+$")
+ARTIFACT_GLOB_SYNTAX = re.compile(r"[*?\[\]{}]|(?:^|/)!|[+@!]\(")
 
 
 class ExecutionBoundaryError(RuntimeError):
@@ -355,6 +356,26 @@ def validate_literal_relative_output_root(
     if any(PORTABLE_OUTPUT_COMPONENT.fullmatch(part) is None for part in raw_components):
         raise ExecutionBoundaryError(
             "literal output root components may contain only ASCII letters, digits, dot, underscore, and hyphen"
+        )
+    return path
+
+
+def validate_artifact_relative_output_root(
+    value: str | os.PathLike[str], *, base: Path | None = None
+) -> Path:
+    """Validate a relative output root without changing legacy space handling.
+
+    ``upload-artifact`` treats its ``path`` input as a glob. The root Action
+    historically accepted spaces and other ordinary filename characters, so
+    preserve those while refusing syntax that could make upload escape the
+    tree which was just scanned.
+    """
+
+    path = validate_relative_output_root(value, base=base)
+    raw = os.fspath(value)
+    if ARTIFACT_GLOB_SYNTAX.search(raw) is not None:
+        raise ExecutionBoundaryError(
+            "output root must not contain artifact glob syntax"
         )
     return path
 

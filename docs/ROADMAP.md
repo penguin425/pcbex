@@ -140,6 +140,7 @@ auditable release.
 | v1.426.1 | Darwin process-group cleanup race | Preserve the primary bounded-process failure when Darwin reports a transient `killpg` `EPERM` only after the direct child is reaped and a signal-zero probe proves the process group is gone; retain every live or ambiguous cleanup failure |
 | v1.427.0 | Standalone native KiCad ERC Action gate | Run error-only or warning-policy native schematic ERC from the root Action without AI or deterministic-pipeline inputs, authenticate retained report/source/policy identities, and publish rejection evidence before optional approval enforcement |
 | v1.428.0 | Boardless native KiCad ERC Action | Provide a focused public composite Action that runs authenticated native schematic ERC without a board, preserves the root Action contract, publishes the same twelve identities, and retains bounded rejection evidence before its final approval gate |
+| v1.429.0 | Native KiCad PCB DRC evidence gate | Run canonical, digest-bound `drc.v1` PCB DRC evidence through CLI, MCP, and focused/root Actions with private staging, real KiCad 10 reproducibility coverage, strict error/warning approval, and retained rejected evidence |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -301,6 +302,29 @@ and a separate final `always()` gate enforces execution, scan, upload, and
 optional approval only after valid evidence is observable. Unit tests exercise
 approved, rejected, malformed, fatal, option-like, stale, linked, and escaping
 inputs, while the KiCad 10 E2E workflow invokes both an approved and a rejected
-local composite Action. The root Action remains board-required and unchanged,
+local composite Action. The root Action remains board-required,
 and neither Action automatically joins native evidence to the separate AI
 approval flow.
+
+The v1.429.0 milestone adds the standalone `native-kicad-pcb-drc-evidence`
+boundary. Its CLI, MCP tool, focused Action, and opt-in root Action path run
+KiCad `drc.v1`-compatible native PCB DRC in private staging without mutating
+the caller's board, project, or rules file. Optional same-stem project and
+rules identities are auto-discovered only when the caller leaves them empty;
+explicit paths are also bound and both forms retain exact source bytes and
+SHA-256 identities.
+Volatile KiCad dates, paths, and generated UUIDs are removed before findings
+are canonicalized to integer nanometres. The closed vocabulary reserves three
+native categories, but v1 disables schematic parity and therefore requires its
+category/count to be absent/zero. The report retains ignored checks, invocation
+identity, and source/project/rules/run hashes; MCP and Action summaries expose
+the exact normalized-report digest. The raw report is validated in private
+staging and discarded. Native DRC is approved only
+when both errors and warnings are zero; `--require-approved` and equivalent
+Action/MCP gates fail after retaining a valid rejected report. Real KiCad 10
+two-run reproducibility,
+regular-file/link-safe staging, bounded resources, atomic no-clobber output,
+and rejected-evidence retention are part of the contract. Native `drc.rpt`,
+the existing internal DRC, native ERC, AI approval, and the broader
+pipeline/manufacturing boundaries remain explicit later integrations rather
+than being connected automatically by this release.

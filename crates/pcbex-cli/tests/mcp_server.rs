@@ -257,6 +257,103 @@ fn stdio_server_negotiates_and_returns_failed_gate_artifacts() {
 }
 
 #[test]
+fn stdio_server_advertises_native_kicad_drc_contract_and_rejects_bad_arguments() {
+    let output = temporary_directory("mcp-native-drc-contract");
+    fs::create_dir_all(&output).unwrap();
+    let stale = output.join("stale.json");
+    fs::write(&stale, br#"{"old":true}"#).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let initialized = initialize(&mut stdin, &mut stdout, json!("native-drc-init"));
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "tools",
+            "method": "tools/list",
+            "params": {}
+        }),
+    );
+    let tools = receive(&mut stdout);
+    let drc = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "run_native_kicad_drc")
+        .expect("native DRC MCP tool is advertised");
+    assert_eq!(drc["inputSchema"]["additionalProperties"], false);
+    assert_eq!(drc["inputSchema"]["required"], json!(["input", "output"]));
+    assert_eq!(
+        drc["inputSchema"]["properties"]["project"]["type"],
+        "string"
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "wrong-type",
+            "method": "tools/call",
+            "params": {
+                "name": "run_native_kicad_drc",
+                "arguments": {"input": "board.kicad_pcb", "output": "new.json", "project": 4}
+            }
+        }),
+    );
+    let wrong_type = receive(&mut stdout);
+    assert_eq!(wrong_type["error"]["code"], -32602);
+    assert!(
+        wrong_type["error"]["data"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("project")
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "stale",
+            "method": "tools/call",
+            "params": {
+                "name": "run_native_kicad_drc",
+                "arguments": {"input": "board.kicad_pcb", "output": stale}
+            }
+        }),
+    );
+    let stale_response = receive(&mut stdout);
+    assert_eq!(stale_response["error"]["code"], -32602);
+    assert!(
+        stale_response["error"]["data"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("stale MCP evidence")
+    );
+    assert_eq!(fs::read(&stale).unwrap(), br#"{"old":true}"#);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
 fn physical_profile_is_forwarded_and_cli_rejects_conflicting_fabrication_profile() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let input = root.join("examples/simple.kicad_pcb");

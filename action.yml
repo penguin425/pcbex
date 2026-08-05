@@ -42,6 +42,18 @@ inputs:
     description: Fail after publishing the standalone native KiCad ERC report unless it is approved.
     required: false
     default: "false"
+  native-kicad-drc-enabled:
+    description: Opt in to a native KiCad PCB DRC evidence report for the required board; disabled by default for backward compatibility.
+    required: false
+    default: "false"
+  native-kicad-drc-kicad-cli:
+    description: Trusted KiCad CLI executable used by the opt-in native PCB DRC evidence gate.
+    required: false
+    default: "kicad-cli"
+  native-kicad-drc-require-approved:
+    description: Fail after retaining a valid native KiCad PCB DRC report unless it is approved; requires native-kicad-drc-enabled=true.
+    required: false
+    default: "false"
   schematic-reviewer-routing-policy:
     description: Optional strict reviewer-routing policy applied to the schematic semantic diff.
     required: false
@@ -1019,7 +1031,7 @@ inputs:
     required: false
     default: "30"
   output-dir:
-    description: Directory for analysis bundles, relative to the caller workspace.
+    description: Directory for analysis bundles, relative to the caller workspace; spaces are accepted but artifact glob syntax is rejected.
     required: false
     default: pcbex-analysis
   fail-on-violations:
@@ -1162,6 +1174,60 @@ outputs:
   native-kicad-erc-report-sha256:
     description: Exact SHA-256 of the standalone normalized native KiCad ERC report.
     value: ${{ steps.analyze.outputs.native-kicad-erc-report-sha256 }}
+  native-kicad-drc-report:
+    description: Fixed native KiCad PCB DRC report path (output-dir/native-kicad-drc.json), when enabled.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-report }}
+  native-kicad-drc-schema-version:
+    description: Verified native KiCad PCB DRC report schema version.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-schema-version }}
+  native-kicad-drc-approved:
+    description: Whether the native KiCad PCB DRC report is approved.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-approved }}
+  native-kicad-drc-violation-count:
+    description: Total violation count from the native KiCad PCB DRC report.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-violation-count }}
+  native-kicad-drc-unconnected-item-count:
+    description: Unconnected-item count from the native KiCad PCB DRC report.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-unconnected-item-count }}
+  native-kicad-drc-schematic-parity-count:
+    description: Schematic-parity count from the native KiCad PCB DRC report.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-schematic-parity-count }}
+  native-kicad-drc-error-count:
+    description: Error finding count from the native KiCad PCB DRC report.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-error-count }}
+  native-kicad-drc-warning-count:
+    description: Warning finding count from the native KiCad PCB DRC report.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-warning-count }}
+  native-kicad-drc-ignored-check-count:
+    description: Ignored-check count from the native KiCad PCB DRC report.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-ignored-check-count }}
+  native-kicad-drc-board-bytes:
+    description: Exact byte count of the bound PCB board source.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-board-bytes }}
+  native-kicad-drc-board-sha256:
+    description: Exact SHA-256 of the bound PCB board source.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-board-sha256 }}
+  native-kicad-drc-project-bytes:
+    description: Exact byte count of the auto-discovered KiCad project source, when present.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-project-bytes }}
+  native-kicad-drc-project-sha256:
+    description: Exact SHA-256 of the auto-discovered KiCad project source, when present.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-project-sha256 }}
+  native-kicad-drc-rules-file-bytes:
+    description: Exact byte count of the auto-discovered KiCad rules source, when present.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-rules-file-bytes }}
+  native-kicad-drc-rules-file-sha256:
+    description: Exact SHA-256 of the auto-discovered KiCad rules source, when present.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-rules-file-sha256 }}
+  native-kicad-drc-run-sha256:
+    description: Native KiCad PCB DRC run identity.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-run-sha256 }}
+  native-kicad-drc-report-bytes:
+    description: Exact byte count of the normalized native KiCad PCB DRC report.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-report-bytes }}
+  native-kicad-drc-report-sha256:
+    description: Exact SHA-256 of the normalized native KiCad PCB DRC report.
+    value: ${{ steps.analyze.outputs.native-kicad-drc-report-sha256 }}
   pipeline-report:
     description: Fixed hardware pipeline verification report path (output-dir/pipeline-gate.json), when enabled.
     value: ${{ steps.analyze.outputs.pipeline-report }}
@@ -1538,6 +1604,37 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Validate artifact inputs
+      id: artifact-inputs
+      shell: bash
+      env:
+        PCBEX_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
+        PCBEX_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        PCBEX_RETENTION_DAYS: ${{ inputs.retention-days }}
+      run: |
+        set -euo pipefail
+        case "$PCBEX_UPLOAD_ARTIFACT" in
+          true|false) ;;
+          *) echo "upload-artifact must be true or false" >&2; exit 2 ;;
+        esac
+        case "$PCBEX_UPLOAD_SARIF" in
+          true|false) ;;
+          *) echo "upload-sarif must be true or false" >&2; exit 2 ;;
+        esac
+        if [[ -z "$PCBEX_ARTIFACT_NAME" ]]; then
+          echo "artifact-name must not be empty" >&2
+          exit 2
+        fi
+        if [[ "$PCBEX_ARTIFACT_NAME" =~ [[:cntrl:]] ]]; then
+          echo "artifact-name must not contain control characters" >&2
+          exit 2
+        fi
+        if [[ ! "$PCBEX_RETENTION_DAYS" =~ ^([1-9]|[1-8][0-9]|90)$ ]]; then
+          echo "retention-days must be an integer from 1 through 90" >&2
+          exit 2
+        fi
+
     - name: Build pcbex
       id: build
       shell: bash
@@ -1573,6 +1670,9 @@ runs:
         PCBEX_NATIVE_KICAD_ERC_WARNING_POLICY: ${{ inputs.native-kicad-erc-warning-policy }}
         PCBEX_NATIVE_KICAD_ERC_KICAD_CLI: ${{ inputs.native-kicad-erc-kicad-cli }}
         PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED: ${{ inputs.native-kicad-erc-require-approved }}
+        PCBEX_NATIVE_KICAD_DRC_ENABLED: ${{ inputs.native-kicad-drc-enabled }}
+        PCBEX_NATIVE_KICAD_DRC_KICAD_CLI: ${{ inputs.native-kicad-drc-kicad-cli }}
+        PCBEX_NATIVE_KICAD_DRC_REQUIRE_APPROVED: ${{ inputs.native-kicad-drc-require-approved }}
         PCBEX_SCHEMATIC_REVIEWER_ROUTING_POLICY: ${{ inputs.schematic-reviewer-routing-policy }}
         PCBEX_FAB: ${{ inputs.fab }}
         PCBEX_FAB_PROFILE: ${{ inputs.fab-profile }}
@@ -1824,6 +1924,7 @@ runs:
         echo "safe=true" >> "$GITHUB_OUTPUT"
 
     - name: Upload analysis artifact
+      id: upload
       if: ${{ always() && steps.artifact-boundary.outputs.safe == 'true' && inputs.upload-artifact == 'true' && steps.analyze.outputs.artifact-dir != '' }}
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
@@ -1833,6 +1934,7 @@ runs:
         retention-days: ${{ inputs.retention-days }}
 
     - name: Upload SARIF
+      id: upload-sarif
       if: ${{ always() && steps.artifact-boundary.outputs.safe == 'true' && inputs.upload-sarif == 'true' && steps.analyze.outputs.sarif-dir != '' }}
       uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
       with:
@@ -1857,6 +1959,11 @@ runs:
       shell: bash
       env:
         PCBEX_ANALYSIS_STATUS: ${{ steps.analyze.outputs.status }}
+        PCBEX_ARTIFACT_BOUNDARY_SAFE: ${{ steps.artifact-boundary.outputs.safe }}
+        PCBEX_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        PCBEX_UPLOAD_SARIF: ${{ inputs.upload-sarif }}
+        PCBEX_UPLOAD_SARIF_OUTCOME: ${{ steps.upload-sarif.outcome }}
         PCBEX_PIPELINE_VERIFY: ${{ inputs.pipeline-verify }}
         PCBEX_PIPELINE_PASSED: ${{ steps.analyze.outputs.pipeline-passed }}
         PCBEX_DETERMINISTIC_PIPELINE_PLAN: ${{ inputs.deterministic-pipeline-plan }}
@@ -1867,6 +1974,10 @@ runs:
         PCBEX_NATIVE_KICAD_ERC_REQUIRE_APPROVED: ${{ inputs.native-kicad-erc-require-approved }}
         PCBEX_NATIVE_KICAD_ERC_APPROVED: ${{ steps.analyze.outputs.native-kicad-erc-approved }}
         PCBEX_NATIVE_KICAD_ERC_REPORT: ${{ steps.analyze.outputs.native-kicad-erc-report }}
+        PCBEX_NATIVE_KICAD_DRC_ENABLED: ${{ inputs.native-kicad-drc-enabled }}
+        PCBEX_NATIVE_KICAD_DRC_REQUIRE_APPROVED: ${{ inputs.native-kicad-drc-require-approved }}
+        PCBEX_NATIVE_KICAD_DRC_APPROVED: ${{ steps.analyze.outputs.native-kicad-drc-approved }}
+        PCBEX_NATIVE_KICAD_DRC_REPORT: ${{ steps.analyze.outputs.native-kicad-drc-report }}
         PCBEX_VIOLATION_COUNT: ${{ steps.analyze.outputs.violation-count }}
         PCBEX_REGRESSION: ${{ steps.analyze.outputs.regression }}
         PCBEX_MANUFACTURING_FEEDBACK_PASSED: ${{ steps.analyze.outputs.manufacturing-feedback-passed }}
@@ -1931,6 +2042,18 @@ runs:
         PCBEX_FAIL_ON_POLICY_LIFECYCLE_LOG_GOSSIP_QUORUM: ${{ inputs.fail-on-policy-lifecycle-log-gossip-quorum }}
       run: |
         set -euo pipefail
+        if [[ "$PCBEX_ARTIFACT_BOUNDARY_SAFE" != "true" ]]; then
+          echo "::error::pcbex analysis artifact boundary was not verified"
+          exit 1
+        fi
+        if [[ "$PCBEX_UPLOAD_ARTIFACT" == "true" && "$PCBEX_UPLOAD_OUTCOME" != "success" ]]; then
+          echo "::error::pcbex analysis artifact upload did not succeed"
+          exit 1
+        fi
+        if [[ "$PCBEX_UPLOAD_SARIF" == "true" && "$PCBEX_UPLOAD_SARIF_OUTCOME" != "success" ]]; then
+          echo "::error::pcbex SARIF upload did not succeed"
+          exit 1
+        fi
         if [[ "$PCBEX_PIPELINE_VERIFY" == "true" && "$PCBEX_PIPELINE_PASSED" != "true" ]]; then
           echo "::error::pcbex pipeline verification is absent or did not pass"
           exit 1
@@ -1947,6 +2070,13 @@ runs:
           ( "$PCBEX_NATIVE_KICAD_ERC_APPROVED" != "true" ||
             -z "$PCBEX_NATIVE_KICAD_ERC_REPORT" ) ]]; then
           echo "::error::pcbex native KiCad ERC report is absent or not approved"
+          exit 1
+        fi
+        if [[ "$PCBEX_NATIVE_KICAD_DRC_ENABLED" == "true" &&
+          "$PCBEX_NATIVE_KICAD_DRC_REQUIRE_APPROVED" == "true" &&
+          ( "$PCBEX_NATIVE_KICAD_DRC_APPROVED" != "true" ||
+            -z "$PCBEX_NATIVE_KICAD_DRC_REPORT" ) ]]; then
+          echo "::error::pcbex native KiCad PCB DRC report is absent or not approved"
           exit 1
         fi
         if [[ "$PCBEX_ANALYSIS_STATUS" != "ok" ]]; then

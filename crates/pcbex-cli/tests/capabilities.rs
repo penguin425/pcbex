@@ -178,6 +178,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "deterministic-pipeline-report-schema",
         "native-kicad-erc-report-schema",
         "run-native-kicad-erc",
+        "native-kicad-drc-report-schema",
+        "run-native-kicad-drc",
         "run-deterministic-pipeline",
         "pipeline-schema",
         "pipeline-verify",

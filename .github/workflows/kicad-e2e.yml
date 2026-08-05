@@ -98,6 +98,144 @@ jobs:
             (.policy_failures | length) == 1 and
             .policy_failures[0].code == "total"
           ' "$REPORT" >/dev/null
+      - name: Exercise approved native PCB DRC Action
+        id: native-drc-approved
+        uses: ./actions/native-kicad-drc
+        with:
+          board: build/kicad-e2e/simple.routed.kicad_pcb
+          require-approved: "true"
+          output-dir: build/native-drc-approved
+          artifact-name: native-drc-approved
+      - name: Verify approved native PCB DRC outputs
+        env:
+          ACTION_OUTCOME: ${{ steps.native-drc-approved.outcome }}
+          BOARD: build/kicad-e2e/simple.routed.kicad_pcb
+          BOARD_BYTES: ${{ steps.native-drc-approved.outputs.board-bytes }}
+          BOARD_SHA256: ${{ steps.native-drc-approved.outputs.board-sha256 }}
+          REPORT: ${{ steps.native-drc-approved.outputs.native-kicad-drc-report }}
+          REPORT_BYTES: ${{ steps.native-drc-approved.outputs.report-bytes }}
+          REPORT_SHA256: ${{ steps.native-drc-approved.outputs.report-sha256 }}
+          RUN_SHA256: ${{ steps.native-drc-approved.outputs.run-sha256 }}
+          APPROVED: ${{ steps.native-drc-approved.outputs.approved }}
+          VIOLATION_COUNT: ${{ steps.native-drc-approved.outputs.violation-count }}
+          UNCONNECTED_ITEM_COUNT: ${{ steps.native-drc-approved.outputs.unconnected-item-count }}
+          SCHEMATIC_PARITY_COUNT: ${{ steps.native-drc-approved.outputs.schematic-parity-count }}
+          ERROR_COUNT: ${{ steps.native-drc-approved.outputs.error-count }}
+          WARNING_COUNT: ${{ steps.native-drc-approved.outputs.warning-count }}
+        run: |
+          set -euo pipefail
+          test "$ACTION_OUTCOME" = success
+          test "$APPROVED" = true
+          test "$VIOLATION_COUNT" = 0
+          test "$UNCONNECTED_ITEM_COUNT" = 0
+          test "$SCHEMATIC_PARITY_COUNT" = 0
+          test "$ERROR_COUNT" = 0
+          test "$WARNING_COUNT" = 0
+          test -s "$REPORT"
+          test "$BOARD_BYTES" = "$(wc -c < "$BOARD" | tr -d ' ')"
+          test "$BOARD_SHA256" = "$(sha256sum "$BOARD" | cut -d ' ' -f 1)"
+          test "$REPORT_BYTES" = "$(wc -c < "$REPORT" | tr -d ' ')"
+          test "$REPORT_SHA256" = "$(sha256sum "$REPORT" | cut -d ' ' -f 1)"
+          test "${#RUN_SHA256}" = 64
+          python3 - "$BOARD" "$REPORT" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+
+          board_path, report_path = map(Path, sys.argv[1:])
+          board = board_path.read_bytes()
+          raw = report_path.read_text(encoding="utf-8")
+          report = json.loads(raw)
+          assert set(report) == {
+              "schema_version", "engine", "engine_version", "kicad_version", "source",
+              "project", "rules_file", "invocation", "ignored_checks", "findings",
+              "violation_count", "unconnected_item_count", "schematic_parity_count",
+              "error_count", "warning_count", "approved", "run_sha256",
+          }
+          assert report["source"] == {
+              "bytes": len(board),
+              "sha256": hashlib.sha256(board).hexdigest(),
+          }
+          assert report["approved"] is True
+          assert report["findings"] == []
+          assert report["invocation"] == {
+              "command": "pcb drc",
+              "format": "json",
+              "units": "mm",
+              "severities": ["error", "warning"],
+              "exit_code_violations": True,
+              "all_track_errors": False,
+              "schematic_parity": False,
+              "refill_zones": False,
+              "save_board": False,
+          }
+          lower = raw.lower()
+          for forbidden in ('"uuid"', '"date"', '"path"'):
+              assert forbidden not in lower, forbidden
+          assert len(report["run_sha256"]) == 64
+          assert all(c in "0123456789abcdef" for c in report["run_sha256"])
+          PY
+      - name: Exercise rejected native PCB DRC Action
+        id: native-drc-rejected
+        continue-on-error: true
+        uses: ./actions/native-kicad-drc
+        with:
+          board: examples/simple.kicad_pcb
+          require-approved: "true"
+          output-dir: build/native-drc-rejected
+          artifact-name: native-drc-rejected
+      - name: Verify rejected native PCB DRC evidence was retained
+        env:
+          ACTION_OUTCOME: ${{ steps.native-drc-rejected.outcome }}
+          BOARD: examples/simple.kicad_pcb
+          BOARD_BYTES: ${{ steps.native-drc-rejected.outputs.board-bytes }}
+          BOARD_SHA256: ${{ steps.native-drc-rejected.outputs.board-sha256 }}
+          REPORT: ${{ steps.native-drc-rejected.outputs.native-kicad-drc-report }}
+          REPORT_BYTES: ${{ steps.native-drc-rejected.outputs.report-bytes }}
+          REPORT_SHA256: ${{ steps.native-drc-rejected.outputs.report-sha256 }}
+          RUN_SHA256: ${{ steps.native-drc-rejected.outputs.run-sha256 }}
+          APPROVED: ${{ steps.native-drc-rejected.outputs.approved }}
+          VIOLATION_COUNT: ${{ steps.native-drc-rejected.outputs.violation-count }}
+          UNCONNECTED_ITEM_COUNT: ${{ steps.native-drc-rejected.outputs.unconnected-item-count }}
+          SCHEMATIC_PARITY_COUNT: ${{ steps.native-drc-rejected.outputs.schematic-parity-count }}
+          ERROR_COUNT: ${{ steps.native-drc-rejected.outputs.error-count }}
+          WARNING_COUNT: ${{ steps.native-drc-rejected.outputs.warning-count }}
+        run: |
+          set -euo pipefail
+          test "$ACTION_OUTCOME" = failure
+          test "$APPROVED" = false
+          test "$UNCONNECTED_ITEM_COUNT" -gt 0
+          test "$ERROR_COUNT" -gt 0
+          test "$VIOLATION_COUNT" = 0
+          test "$SCHEMATIC_PARITY_COUNT" = 0
+          test -s "$REPORT"
+          test "$BOARD_BYTES" = "$(wc -c < "$BOARD" | tr -d ' ')"
+          test "$BOARD_SHA256" = "$(sha256sum "$BOARD" | cut -d ' ' -f 1)"
+          test "$REPORT_BYTES" = "$(wc -c < "$REPORT" | tr -d ' ')"
+          test "$REPORT_SHA256" = "$(sha256sum "$REPORT" | cut -d ' ' -f 1)"
+          test "${#RUN_SHA256}" = 64
+          python3 - "$REPORT" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          raw = Path(sys.argv[1]).read_text(encoding="utf-8")
+          report = json.loads(raw)
+          assert report["schema_version"] == 1
+          assert report["approved"] is False
+          assert report["unconnected_item_count"] > 0
+          assert report["error_count"] > 0
+          assert report["violation_count"] == 0
+          assert report["schematic_parity_count"] == 0
+          assert len(report["findings"]) == report["unconnected_item_count"]
+          assert all(item["category"] == "unconnected-item" for item in report["findings"])
+          lower = raw.lower()
+          for forbidden in ('"uuid"', '"date"', '"path"'):
+              assert forbidden not in lower, forbidden
+          assert len(report["run_sha256"]) == 64
+          assert all(c in "0123456789abcdef" for c in report["run_sha256"])
+          PY
       - name: Upload routed boards and DRC reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
