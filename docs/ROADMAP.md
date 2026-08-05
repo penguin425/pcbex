@@ -153,6 +153,7 @@ auditable release.
 | v1.439.0 | Semantic BOM/CPL package validation | Enforce one shared bounded RFC 4180 CSV validator for exact manufacturing headers, BOM quantity/type/layer/count semantics, and unique finite checked-decimal CPL references/layer/counts across fabrication, factory submission/repair, and pipeline verification without changing schema versions or adding a Gerber semantic parser |
 | v1.440.0 | Boardless AI schematic approval Action | Bind a live KiCad schematic to an existing schema-v1 AI review request, re-verify signed reviewer/provider/model quorum evidence without PCB, provider, or signing-secret inputs, and retain bounded JSON/Markdown evidence before the optional final quorum gate |
 | v1.441.0 | AI schematic approval CLI/MCP parity | Extend schema-v1 live KiCad schematic binding to single approval verification and MCP single/quorum tools; semantically equivalent formatting is accepted while semantic or fresh electrical-review mismatches fail closed |
+| v1.442.0 | AI schematic approval live signing parity | Extend the bounded schema-v1 live KiCad schematic binding to `sign-ai-review --schematic` and MCP `sign_schematic_approval`, completing semantic and fresh electrical-review verification before private-key access while leaving wire schemas and schema-v2 through v4 artifact paths unchanged |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -517,17 +518,18 @@ remains structural and does not gain a semantic parser in this release.
 
 The released v1.440.0 milestone exposes a focused public Action for boardless
 AI schematic approval verification. It semantically binds a live `.kicad_sch` to
-an unbound schema-v1 request, freshly recomputes the deterministic electrical
-review, and then applies the existing signature, trusted-key, reviewer,
-provider, model, and optional session quorum checks. The Action does not call
-an AI provider and has no board, provider-endpoint, API-key, or signing-
+an artifact-path-unbound schema-v1 request, freshly recomputes the
+deterministic electrical review, and then applies the existing signature,
+trusted-key, reviewer, provider, model, and optional session quorum checks.
+The Action does not call an AI provider and has no board, provider-endpoint,
+API-key, or signing-
 private-key input. It retains bounded closed quorum JSON/Markdown before an
 optional final threshold gate, while source substitution or invalid approval
 evidence fails before publication. Schema-v2 through v4 generated-schematic/
 pipeline/native-ERC bindings remain on their existing CLI, MCP, and root-Action
 paths.
 
-The current v1.441.0 milestone extends the same schema-v1 live binding to the
+The released v1.441.0 milestone extends the same schema-v1 live binding to the
 single `verify-ai-approval --schematic` command and the MCP
 `verify_schematic_approval` and `verify_schematic_approval_quorum` tools. Each
 path imports the bounded live schematic, freshly recomputes the deterministic
@@ -535,3 +537,16 @@ electrical review, and rejects semantic substitution or a fresh-review
 mismatch before accepting signatures or quorum evidence. Formatting-only
 changes that preserve semantic IR remain accepted; schema-v2 through v4
 artifact-bound workflows are unchanged.
+
+The current v1.442.0 milestone extends that live binding to signing. The CLI
+`sign-ai-review --schematic` command and MCP `sign_schematic_approval` import
+the bounded live KiCad schematic, compare its semantic IR and freshly
+recompute the deterministic electrical review before reading the
+private key or creating an approval. The live source is a schema-v1 semantic
+input, not an artifact-path binding; schema-v2 through v4 continue to require
+their complete generated-schematic, deterministic-pipeline, and native-ERC
+artifact paths, with no wire-schema changes. Run signing in an isolated
+workspace: bounded stable reads detect replacements observed around
+verification, but verification, private-key access, and output publication are
+not one atomic filesystem transaction and no race-free filesystem boundary is
+claimed.

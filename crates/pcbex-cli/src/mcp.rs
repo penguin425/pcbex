@@ -3185,7 +3185,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
         tool(
             "sign_schematic_approval",
             "Sign AI schematic approval",
-            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Request-schema-v2/v3/v4 artifacts are rerun and revalidated, including native KiCad ERC evidence, before the private key is read.",
+            "Evaluate a bound AI response and create an Ed25519-signed approval or rejection. Either a live schema-v1 KiCad schematic is revalidated, or request-schema-v2/v3/v4 artifacts are rerun and revalidated, including native KiCad ERC evidence, before the private key is read.",
             json!({
                 "type": "object",
                 "additionalProperties": false,
@@ -3198,6 +3198,7 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "private_key": {"type": "string"},
                     "signer_id": {"type": "string"},
                     "session": {"type": "string"},
+                    "schematic": {"type": "string"},
                     "generated_schematic": {"type": "string"},
                     "deterministic_pipeline_plan": {"type": "string"},
                     "deterministic_pipeline_report": {"type": "string"},
@@ -3217,10 +3218,12 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                             ],
                             "not": {"anyOf": [
                                 {"required": ["native_kicad_erc_report"]},
-                                {"required": ["native_kicad_erc_warning_policy"]}
+                                {"required": ["native_kicad_erc_warning_policy"]},
+                                {"required": ["schematic"]}
                             ]}
                         },
                         {"not": {"anyOf": [
+                            {"required": ["schematic"]},
                             {"required": ["generated_schematic"]},
                             {"required": ["deterministic_pipeline_plan"]},
                             {"required": ["deterministic_pipeline_report"]},
@@ -3232,7 +3235,18 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                             "deterministic_pipeline_plan",
                             "deterministic_pipeline_report",
                             "native_kicad_erc_report"
-                        ]}
+                        ], "not": {"required": ["schematic"]}},
+                        {
+                            "required": ["schematic"],
+                            "not": {"anyOf": [
+                                {"required": ["generated_schematic"]},
+                                {"required": ["deterministic_pipeline_plan"]},
+                                {"required": ["deterministic_pipeline_report"]},
+                                {"required": ["native_kicad_erc_report"]},
+                                {"required": ["native_kicad_erc_warning_policy"]},
+                                {"required": ["kicad_cli"]}
+                            ]}
+                        }
                     ]
                 }, {
                     "if": {"required": ["kicad_cli"]},
@@ -10536,6 +10550,7 @@ fn sign_schematic_approval(
             "private_key",
             "signer_id",
             "session",
+            "schematic",
             "generated_schematic",
             "deterministic_pipeline_plan",
             "deterministic_pipeline_report",
@@ -10564,6 +10579,7 @@ fn sign_schematic_approval(
         output.clone(),
     ];
     optional_option(&arguments, "session", "--session", &mut command)?;
+    append_live_schematic_option(&arguments, &mut command)?;
     append_native_ai_review_options(
         &arguments,
         &[
@@ -14857,10 +14873,17 @@ mod tests {
     #[test]
     fn live_schematic_binding_forwards_exact_cli_flag_and_rejects_artifacts() {
         let arguments = json!({"schematic": "live.kicad_sch"});
-        let mut command = vec!["verify-ai-approval".to_string()];
+        let mut command = vec!["sign-ai-review".to_string()];
         append_live_schematic_option(arguments.as_object().unwrap(), &mut command).unwrap();
         assert_eq!(
             command,
+            vec!["sign-ai-review", "--schematic", "live.kicad_sch"]
+        );
+
+        let mut verify_command = vec!["verify-ai-approval".to_string()];
+        append_live_schematic_option(arguments.as_object().unwrap(), &mut verify_command).unwrap();
+        assert_eq!(
+            verify_command,
             vec!["verify-ai-approval", "--schematic", "live.kicad_sch"]
         );
 
@@ -14942,6 +14965,27 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("must be supplied together")
+        );
+
+        let sign_live_conflict = sign_schematic_approval(
+            json!({
+                "request": "request.json",
+                "response": "response.json",
+                "private_key": "private.key",
+                "signer_id": "reviewer",
+                "output": "approval.json",
+                "schematic": "live.kicad_sch",
+                "generated_schematic": "generated.kicad_sch"
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(
+            sign_live_conflict["detail"],
+            "schematic cannot be combined with generated/native AI review artifacts"
         );
 
         let verify = verify_schematic_approval(
@@ -15798,6 +15842,18 @@ mod tests {
         assert_eq!(
             named("sign_schematic_approval")["inputSchema"]["properties"]["generated_schematic"]["type"],
             "string"
+        );
+        assert_eq!(
+            named("sign_schematic_approval")["inputSchema"]["properties"]["schematic"]["type"],
+            "string"
+        );
+        assert_eq!(
+            named("sign_schematic_approval")["inputSchema"]["allOf"][0]["oneOf"][3]["required"][0],
+            "schematic"
+        );
+        assert_eq!(
+            named("sign_schematic_approval")["execution"]["taskSupport"],
+            "forbidden"
         );
         assert_eq!(
             named("verify_schematic_approval")["inputSchema"]["allOf"][0]["oneOf"][0]["required"]
@@ -17073,6 +17129,18 @@ mod tests {
             ))
             .unwrap();
         assert_eq!(forbidden["error"]["code"], -32601);
+        let signing_forbidden = server
+            .handle_message(request(
+                6,
+                "tools/call",
+                json!({
+                    "name": "sign_schematic_approval",
+                    "arguments": {},
+                    "task": {"ttl": 60_000}
+                }),
+            ))
+            .unwrap();
+        assert_eq!(signing_forbidden["error"]["code"], -32601);
         let invalid_ttl = server
             .handle_message(request(
                 1,

@@ -7,8 +7,9 @@ key, provider endpoint, prompt, private signing key, or network destination.
 
 ## Trust boundary
 
-The Action requires a live `.kicad_sch`, one unbound schema-v1 AI review
-request, positionally paired signed approval and exact response files, and an
+The Action requires a live `.kicad_sch`, one schema-v1 AI review request
+without artifact-path binding, positionally paired signed approval and exact
+response files, and an
 organization policy pack containing the trusted reviewer keys. It performs the
 following sequence:
 
@@ -88,9 +89,10 @@ bounds and revalidation requirements.
 
 ## Deliberate limits
 
-- Only unbound AI review request schema v1 is accepted. Schema-v2 through v4
-  bind generated schematic, deterministic pipeline, and native ERC artifacts;
-  verify those through the existing CLI, MCP, or root Action paths.
+- Only AI review request schema v1 without artifact-path binding is accepted.
+  The focused Action's live schematic is a semantic input; schema-v2 through
+  v4 bind generated schematic, deterministic pipeline, and native ERC
+  artifacts, which remain on their existing CLI, MCP, or root Action paths.
 - The focused Action, `pcbex verify-ai-approval --schematic`, and
   `pcbex verify-ai-quorum --schematic` are schema-v1 live-source binding
   surfaces. MCP callers can pass the same explicit `schematic` path to
@@ -98,6 +100,12 @@ bounds and revalidation requirements.
   Action's legacy schema-v1 quorum route still does not automatically inject a
   live schematic; use this focused Action when an Action-level binding is
   required.
+- Version 1.442.0 adds the matching live signing boundary to
+  `pcbex sign-ai-review --schematic` and MCP `sign_schematic_approval`.
+  Those paths perform the semantic and fresh electrical-review checks before
+  reading a private key; they do not change the request, response, or signed
+  approval wire schemas. Signing remains outside this verification-only
+  Action.
 - AI provider execution and response normalization remain separate steps.
 - The verification path has no provider/network input. Like the other source
   Actions, its build step may use the runner's configured Rust toolchain and

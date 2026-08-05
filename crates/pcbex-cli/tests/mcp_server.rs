@@ -2795,8 +2795,8 @@ fn stdio_server_verifies_live_ai_schematic_approval_and_quorum() {
     };
     let path = |value: &Path| value.display().to_string();
 
-    // Build every signed schema-v1 input through the public CLI.  The only
-    // files touched are inside this test's private temporary directory.
+    // Build the schema-v1 request and response through the public CLI.  The
+    // only files touched are inside this test's private temporary directory.
     let policy = output.join("electrical-policy.json");
     assert!(
         run_cli(&["electrical-policy".into(), "--output".into(), path(&policy),])
@@ -2898,24 +2898,6 @@ fn stdio_server_verifies_live_ai_schematic_approval_and_quorum() {
     )
     .unwrap();
 
-    let approval = output.join("approval.json");
-    assert!(
-        run_cli(&[
-            "sign-ai-review".into(),
-            path(&request),
-            path(&response),
-            "--private-key".into(),
-            path(&private_key),
-            "--signer-id".into(),
-            "ci-production".into(),
-            "--output".into(),
-            path(&approval),
-            "--require-approved".into(),
-        ])
-        .status
-        .success()
-    );
-
     let equivalent_schematic = output.join("equivalent-live.kicad_sch");
     fs::write(
         &equivalent_schematic,
@@ -2942,6 +2924,75 @@ fn stdio_server_verifies_live_ai_schematic_approval_and_quorum() {
     let mut stderr = child.stderr.take().unwrap();
     let initialized = initialize(&mut stdin, &mut stdout, json!("live-ai-approval-init"));
     assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    let approval = output.join("approval.json");
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "live-ai-approval-sign-success",
+            "method": "tools/call",
+            "params": {
+                "name": "sign_schematic_approval",
+                "arguments": {
+                    "request": path(&request),
+                    "response": path(&response),
+                    "private_key": path(&private_key),
+                    "signer_id": "ci-production",
+                    "schematic": path(&equivalent_schematic),
+                    "output": path(&approval),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let signed = receive(&mut stdout);
+    assert_eq!(signed["id"], "live-ai-approval-sign-success");
+    assert_eq!(signed["result"]["isError"], false);
+    assert_eq!(signed["result"]["structuredContent"]["ok"], true);
+    assert_eq!(
+        signed["result"]["structuredContent"]["approval"]["approved"],
+        true
+    );
+    assert!(approval.is_file());
+
+    let failed_approval = output.join("failed-approval.json");
+    let missing_private_key = output.join("missing-approval.key");
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "live-ai-approval-sign-mutated",
+            "method": "tools/call",
+            "params": {
+                "name": "sign_schematic_approval",
+                "arguments": {
+                    "request": path(&request),
+                    "response": path(&response),
+                    "private_key": path(&missing_private_key),
+                    "signer_id": "ci-production",
+                    "schematic": path(&mutated_schematic),
+                    "output": path(&failed_approval),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let sign_rejected = receive(&mut stdout);
+    assert_eq!(sign_rejected["id"], "live-ai-approval-sign-mutated");
+    assert_eq!(sign_rejected["result"]["isError"], true);
+    assert_eq!(sign_rejected["result"]["structuredContent"]["ok"], false);
+    assert_eq!(
+        sign_rejected["result"]["structuredContent"]["approval"],
+        Value::Null
+    );
+    assert!(!failed_approval.exists());
+    assert!(
+        sign_rejected["result"]["structuredContent"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("live schematic semantic document does not match")
+    );
 
     send(
         &mut stdin,
