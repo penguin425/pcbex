@@ -324,8 +324,16 @@ def _write_manufacturing_package(path: Path, board: Path, *, engine_version: str
             ("design-job.gbrjob", gerber_job, ""),
             ("design.drl", b"drill", ""),
             ("drc.rpt", b"DRC clean\n", ""),
-            ("bom.csv", b"Comment,Designator\n", ""),
-            ("cpl.csv", b"Designator,Mid X (mm)\n", ""),
+            (
+                "bom.csv",
+                b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n",
+                "",
+            ),
+            (
+                "cpl.csv",
+                b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n",
+                "",
+            ),
         ]
     )
     manifest = {

@@ -719,6 +719,11 @@
     {
       "id": "deterministic-pipeline-required-ci-check",
       "release": "v1.438.0",
+      "status": "released"
+    },
+    {
+      "id": "semantic-bom-cpl-package-validation",
+      "release": "v1.439.0",
       "status": "current"
     }
   ]

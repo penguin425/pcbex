@@ -94,6 +94,41 @@ of the archive are still charged to the private package-directory quota, and
 bytes/entries used by the sibling source and KiCad-environment stages are
 reserved before package creation.
 
+Before a ZIP is published, pcbex applies one semantic BOM/CPL validator to
+the generated files. The validator uses a bounded RFC 4180 record reader:
+quoted fields may contain commas, doubled quotes, and embedded CR/LF records,
+but malformed quoting, unterminated records, oversized fields/records, and
+aggregate CSV input beyond the manufacturing quotas fail closed. The first
+record must match the exact byte-level headers (with no aliases, reordered
+columns, extra columns, or leading BOM):
+
+```text
+Comment,Designator,Footprint,Quantity,MPN,Layer,Type
+Designator,Mid X (mm),Mid Y (mm),Rotation,Layer
+```
+
+Every BOM row must have exactly seven fields. Its non-empty `Comment`,
+`Designator`, and `Footprint` fields, positive checked base-10 integer
+`Quantity`, `SMD`/`THT` `Type`, and `F`/`B` `Layer` are validated. The checked
+aggregate quantity must match the manifest, and both quantity and logical
+record counts stay within the bounded manufacturing-part contract. Every CPL row must have exactly
+five fields, a non-empty unique designator, finite checked-decimal X/Y and
+rotation values (no NaN, infinity, exponent, overflow, or unchecked float
+conversion), an `F`/`B` layer, and a bounded placement-row count. The validator
+does not require CPL designators to be a subset of BOM designators and does
+not impose a BOM/CPL canonical ordering; uniqueness is enforced only within
+the CPL. This is a semantic CSV gate, not a vendor coordinate transform: CPL
+coordinates retain the vendor-neutral board-origin convention below and must
+be transformed by a factory profile when a vendor requires another origin,
+axis, or rotation convention.
+
+The same validator is authoritative for the generated package, `factory-submit`
+before network access, every candidate in `factory-feedback-loop`, and the
+manufacturing phase of `pipeline-verify` (including deterministic-pipeline
+verification). This milestone changes no manifest/receipt/plan/report schema
+version and adds no Gerber semantic parser; Gerber-job structure remains the
+existing structural validator boundary.
+
 The archive is written through a size-limited temporary regular file with
 sorted unique names, flushed and synchronized, then atomically replaces the
 private staged archive. A normalization, source-change, archive, or publication

@@ -28,6 +28,14 @@ unbound Gerbers and unsupported artifact classes fail closed. Missing,
 unlisted, duplicate, or self-referential entries also fail closed.
 The Gerber job must declare 2 to 32 copper layers, including `F.Cu` and
 `B.Cu`; all intermediate layers are allowed when each one is explicitly bound.
+The same bounded semantic BOM/CPL validator used by `fabricate` then requires
+the exact seven-column BOM header and five-column CPL header, RFC 4180-safe
+quoting (including bounded embedded newlines), checked BOM quantity/type/layer
+and count fields, and unique CPL references with finite checked-decimal
+coordinates/rotation, valid layer, and bounded count. It intentionally does
+not apply vendor-specific CPL transforms, require CPL designators to be a BOM
+subset, or require a BOM/CPL canonical row order. `factory-submit` therefore
+cannot bypass semantic CSV validation by supplying a structurally valid ZIP.
 
 The adapter accepts a provider response such as:
 
@@ -87,8 +95,9 @@ wrapper writes to a fresh candidate path. pcbex performs the complete
 closed schema-v1 manifest, complete manufacturing artifact set, Gerber-job
 layer binding, entry-name, entry-count, expanded-size, artifact-size, and
 artifact-digest validation again before that candidate may replace the
-known-good package or reach the network. The original input is never a repair
-output or fallback target.
+known-good package or reach the network. Semantic BOM/CPL validation is part of
+that repeated check, so a structurally valid candidate cannot bypass the same
+CSV contract. The original input is never a repair output or fallback target.
 
 The wrapper is launched directly without a shell. pcbex concurrently drains
 stdout and stderr up to 1 MiB each and discards the captured bytes after the
@@ -170,3 +179,6 @@ both factory options only when the backward-compatible five-phase local v1
 report is intentional. Do not pair a repaired ZIP with the original package's
 pipeline manifest or receipt. The factory pass decision continues to use the
 fail-closed severity rules above, including rejection of unknown severities.
+Both pipeline variants re-run the same semantic BOM/CPL validator before
+accepting the manufacturing phase; the deterministic pipeline does not weaken
+that check or add vendor transforms.

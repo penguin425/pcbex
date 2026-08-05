@@ -3491,7 +3491,7 @@ schema v1 and firmware manifest v2 are unchanged. Regular hardlinks remain
 allowed and are content-bound by the bytes and SHA-256 read through each named
 path; the runner does not pin inodes or claim a race-free filesystem boundary.
 
-Version 1.438.0 adds an independent `Deterministic Pipeline` GitHub Actions
+The released Version 1.438.0 adds an independent `Deterministic Pipeline` GitHub Actions
 check for normal pull requests and pushes. It builds and runs the real Rust
 binary against a closed compiler fixture, verifies an accepted circuit-to-board
 chain and a semantic manufacturing rejection, retains ordinary rejection
@@ -3508,6 +3508,32 @@ confirmed on the latest commit. The repository release audit also verifies that
 the required `Deterministic Pipeline` context is pinned to the GitHub Actions
 app (`app_id: 15368`). A pull-request-controlled workflow is not an
 authorization boundary against a malicious write collaborator.
+
+Version 1.439.0 makes BOM/CPL semantics one shared, fail-closed package
+boundary. Before publication and before any downstream acceptance, pcbex reads
+both CSVs with a bounded RFC 4180 parser that supports quoted commas, doubled
+quotes, and embedded newlines. Headers are exact and closed:
+
+```text
+Comment,Designator,Footprint,Quantity,MPN,Layer,Type
+Designator,Mid X (mm),Mid Y (mm),Rotation,Layer
+```
+
+The BOM validator requires seven fields per row, non-empty comment,
+designator, and footprint fields, positive checked base-10 integer quantities,
+`SMD`/`THT` type, `F`/`B` layer, and a bounded aggregate quantity matching the
+manifest. The CPL validator requires five
+fields, non-empty unique references, finite checked-decimal X/Y/rotation
+values, `F`/`B` layer, and a bounded placement count. Malformed quotes,
+unterminated records, overflows, NaN/infinity/exponent forms, duplicate CPL
+references, and count mismatches are rejected. The validator deliberately
+does not transform coordinates for a vendor, require CPL designators to be a
+subset of BOM designators, or impose a canonical BOM/CPL row order. The same
+contract is used by `fabricate`, `factory-submit`, every
+`factory-feedback-loop` candidate, local/factory-bound `pipeline-verify`, and
+deterministic-pipeline verification. Manifest, receipt, plan, and report
+schema versions are unchanged, and Gerber validation remains structural with
+no new semantic parser.
 
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set

@@ -10,7 +10,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
-use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_pcbex"))
@@ -46,8 +46,14 @@ fn manufacturing_package() -> Vec<u8> {
         ("board-job.gbrjob", job),
         ("board.drl", b"drill".to_vec()),
         ("drc.rpt", b"DRC clean".to_vec()),
-        ("bom.csv", b"Comment,Designator\n".to_vec()),
-        ("cpl.csv", b"Designator,Mid X (mm)\n".to_vec()),
+        (
+            "bom.csv",
+            b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n".to_vec(),
+        ),
+        (
+            "cpl.csv",
+            b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n".to_vec(),
+        ),
     ];
     let manifest = json!({
         "schema_version": 1,
@@ -84,6 +90,62 @@ fn write_package(path: &Path) -> Vec<u8> {
     let package = manufacturing_package();
     fs::write(path, &package).unwrap();
     package
+}
+
+/// Replace one generated CSV and update its manifest descriptor so tests reach
+/// the CSV semantic validator instead of failing at the archive hash gate.
+fn rewrite_csv(
+    path: &Path,
+    name: &str,
+    contents: &[u8],
+    part_counts: Option<(u64, u64, u64, u64)>,
+) {
+    let package = fs::read(path).unwrap();
+    let mut archive = ZipArchive::new(Cursor::new(package)).unwrap();
+    let mut entries = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let entry_name = entry.name().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        entries.push((entry_name, bytes));
+    }
+
+    let csv = entries
+        .iter_mut()
+        .find(|(entry_name, _)| entry_name == name)
+        .unwrap();
+    csv.1 = contents.to_vec();
+    let manifest = entries
+        .iter_mut()
+        .find(|(entry_name, _)| entry_name == "manifest.json")
+        .unwrap();
+    let mut value: Value = serde_json::from_slice(&manifest.1).unwrap();
+    let descriptor = value["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|artifact| artifact["path"] == name)
+        .unwrap();
+    descriptor["bytes"] = json!(contents.len());
+    descriptor["sha256"] = json!(sha256(contents));
+    if let Some((total, bom, placement, dnp)) = part_counts {
+        value["parts"] = json!({
+            "total": total,
+            "bom": bom,
+            "placement": placement,
+            "dnp": dnp,
+        });
+    }
+    manifest.1 = serde_json::to_vec(&value).unwrap();
+
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for (entry_name, bytes) in entries {
+        writer.start_file(entry_name, options).unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+    fs::write(path, writer.finish().unwrap().into_inner()).unwrap();
 }
 
 fn passing_response() -> Value {
@@ -372,6 +434,83 @@ fn all_existing_loop_outputs_fail_before_network_access() {
         assert_eq!(fs::read(existing).unwrap(), sentinel.as_bytes());
         assert_no_connection(&listener);
         assert_no_prepared_outputs(temporary.path());
+    }
+}
+
+#[test]
+fn malformed_bom_and_cpl_are_rejected_before_factory_network_access() {
+    struct Case<'a> {
+        label: &'a str,
+        artifact: &'a str,
+        contents: &'a [u8],
+        counts: Option<(u64, u64, u64, u64)>,
+        expected_fragment: &'a str,
+    }
+
+    let cases = [
+        Case {
+            label: "wrong BOM header",
+            artifact: "bom.csv",
+            contents: b"Designator,Comment,Footprint,Quantity,MPN,Layer,Type\n",
+            counts: None,
+            expected_fragment: "bom.csv",
+        },
+        Case {
+            label: "CPL row count",
+            artifact: "cpl.csv",
+            contents: b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\nR1,1.000000,2.000000,0,F\n",
+            counts: None,
+            expected_fragment: "cpl.csv",
+        },
+        Case {
+            label: "duplicate CPL designator",
+            artifact: "cpl.csv",
+            contents: b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\nR1,1.000000,2.000000,0,F\nR1,1.000000,2.000000,0,F\n",
+            counts: Some((2, 2, 2, 0)),
+            expected_fragment: "cpl.csv",
+        },
+        Case {
+            label: "nonfinite CPL coordinate",
+            artifact: "cpl.csv",
+            contents: b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\nR1,nan,2.000000,0,F\n",
+            counts: Some((1, 1, 1, 0)),
+            expected_fragment: "cpl.csv",
+        },
+    ];
+
+    for case in cases {
+        let temporary = tempfile::tempdir().unwrap();
+        let input = temporary.path().join("manufacturing.zip");
+        write_package(&input);
+        if let Some((_, bom_count, _, _)) = case.counts {
+            let bom = format!(
+                "Comment,Designator,Footprint,Quantity,MPN,Layer,Type\nresistor,R1,Test:Footprint,{bom_count},C123,F,SMD\n"
+            );
+            rewrite_csv(&input, "bom.csv", bom.as_bytes(), case.counts);
+        }
+        rewrite_csv(&input, case.artifact, case.contents, None);
+        let report = temporary.path().join("loop.json");
+        let (listener, endpoint) = unused_loopback_endpoint();
+        let result = feedback_command(&input, &endpoint, &report)
+            .output()
+            .unwrap();
+        assert!(
+            !result.status.success(),
+            "{} unexpectedly passed",
+            case.label
+        );
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains(case.expected_fragment),
+            "{} did not identify the malformed CSV: {stderr}",
+            case.label
+        );
+        assert_no_connection(&listener);
+        assert!(
+            !report.exists(),
+            "{} wrote a report before preflight",
+            case.label
+        );
     }
 }
 

@@ -322,8 +322,14 @@ fn write_manufacturing_package_with_profile(
         ("board-job.gbrjob", gerber_job),
         ("board.drl", b"drill".to_vec()),
         ("drc.rpt", b"DRC clean\n".to_vec()),
-        ("bom.csv", b"Comment,Designator\n".to_vec()),
-        ("cpl.csv", b"Designator,Mid X (mm)\n".to_vec()),
+        (
+            "bom.csv",
+            b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n".to_vec(),
+        ),
+        (
+            "cpl.csv",
+            b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n".to_vec(),
+        ),
     ];
     let mut manifest = json!({
         "schema_version": if physical_profile.is_some() { 2 } else { 1 },
@@ -742,6 +748,49 @@ fn tamper_zip_entry(path: &Path, entry_name: &str) {
     fs::write(path, bytes).unwrap();
 }
 
+/// Replace one generated CSV and update its manifest descriptor so the
+/// pipeline test reaches semantic CSV validation rather than the archive hash
+/// check.
+fn rewrite_csv(path: &Path, name: &str, contents: &[u8]) {
+    let package = fs::read(path).unwrap();
+    let mut archive = ZipArchive::new(Cursor::new(package)).unwrap();
+    let mut entries = Vec::with_capacity(archive.len());
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let entry_name = entry.name().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        entries.push((entry_name, bytes));
+    }
+    let csv = entries
+        .iter_mut()
+        .find(|(entry_name, _)| entry_name == name)
+        .unwrap();
+    csv.1 = contents.to_vec();
+    let manifest = entries
+        .iter_mut()
+        .find(|(entry_name, _)| entry_name == "manifest.json")
+        .unwrap();
+    let mut value: Value = serde_json::from_slice(&manifest.1).unwrap();
+    let descriptor = value["artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|artifact| artifact["path"] == name)
+        .unwrap();
+    descriptor["bytes"] = json!(contents.len());
+    descriptor["sha256"] = json!(sha256(contents));
+    manifest.1 = serde_json::to_vec(&value).unwrap();
+
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for (entry_name, bytes) in entries {
+        writer.start_file(entry_name, options).unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+    fs::write(path, writer.finish().unwrap().into_inner()).unwrap();
+}
+
 #[test]
 fn pipeline_verify_accepts_a_digest_bound_end_to_end_pipeline() {
     let temporary = tempfile::tempdir().unwrap();
@@ -781,6 +830,34 @@ fn pipeline_verify_accepts_a_digest_bound_end_to_end_pipeline() {
     assert_eq!(report["identities"]["schematic_sha256"], schematic_sha256);
     assert_eq!(report["identities"]["board_sha256"], board_sha256);
     assert_evidence_descriptors(&report);
+}
+
+#[test]
+fn pipeline_verify_rejects_malformed_manufacturing_csv_before_acceptance() {
+    let temporary = tempfile::tempdir().unwrap();
+    let (inputs, _, _) = passing_inputs(temporary.path());
+    rewrite_csv(
+        &inputs.manufacturing_package,
+        "bom.csv",
+        b"Designator,Comment,Footprint,Quantity,MPN,Layer,Type\n",
+    );
+    let report_path = temporary.path().join("malformed-csv-report.json");
+    let output = inputs.command(&report_path).output().unwrap();
+    assert!(!output.status.success());
+    let report = read_json(&report_path);
+    assert_eq!(report["passed"], false);
+    assert_eq!(phase(&report, "electrical-erc")["passed"], true);
+    assert_eq!(phase(&report, "analysis-drc")["passed"], true);
+    assert_eq!(phase(&report, "routing-quality")["passed"], true);
+    assert_eq!(phase(&report, "manufacturing-package")["passed"], false);
+    assert_eq!(phase(&report, "firmware-build")["passed"], true);
+    assert!(
+        phase(&report, "manufacturing-package")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("bom.csv"))
+    );
 }
 
 #[test]
