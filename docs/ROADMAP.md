@@ -145,6 +145,7 @@ auditable release.
 | v1.431.0 | MCP native KiCad task cancellation propagation | Run `run_native_kicad_drc` and `run_native_kicad_erc` directly in the MCP worker, with Unix Task cancellation reaching the KiCad process-group leader and descendants; preserve MCP responses and publish no incomplete report while leaving CLI and Action behavior unchanged |
 | v1.432.0 | Standalone native KiCad ERC fresh replay | Expose read-only fresh replay for standalone native KiCad schematic ERC v1/v2 through CLI, MCP, and focused Action; retain rejected evidence before optional approval gates, propagate Task cancellation, stable-read the original schematic, and preserve AI/run contracts |
 | v1.433.0 | Closed deterministic pipeline intent compiler | Compile a closed intent with explicit output-plan-parent-relative role paths into a canonical digest-bound deterministic pipeline plan, computing bytes/SHA identities without LLM, network, or path discovery; keep the existing runner as final authority and defer MCP/Action compiler parity |
+| v1.434.0 | MCP deterministic pipeline intent compiler parity | Expose the closed intent compiler synchronously and through optional MCP Tasks, authenticate retained plan and intent identities through a strict bounded child summary, and keep the runner and composite Action contracts unchanged |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -385,5 +386,18 @@ The compiler performs no LLM call, network access, or path discovery and does
 not run a gate or grant approval. `run-deterministic-pipeline` reopens and
 revalidates the compiled plan and remains authoritative for snapshots,
 board-binding, `pipeline-verify`, reports, and optional approval failure.
-MCP and composite-Action parity for compilation are intentionally deferred;
-their existing runner contracts are unchanged.
+MCP and composite-Action parity for compilation are intentionally deferred in
+v1.433.0; their existing runner contracts are unchanged.
+
+The v1.434.0 milestone exposes that compiler as the closed MCP tool
+`compile_deterministic_pipeline_plan`. It accepts only explicit `intent` and
+`output` paths, rejects stale output before starting the bounded shell-free
+child, and supports synchronous calls plus optional Tasks with cancellation
+and expiry. After atomic publication, the child returns a strict five-field
+identity summary; the MCP wrapper stable-reads the current intent and retained
+plan and verifies their exact byte counts and SHA-256 digests before returning
+metadata-only structured content. Plan and role-source bodies never enter the
+MCP response. The compiler still performs no LLM, network, path discovery,
+gate, approval, design mutation, or manufacturing action, and the existing
+runner remains final authority. Composite-Action compiler parity remains
+deferred.

@@ -461,6 +461,7 @@ impl McpServer {
                     | "verify_circuit_kicad_board_binding"
                     | "pipeline_verify"
                     | "run_deterministic_pipeline"
+                    | "compile_deterministic_pipeline_plan"
                     | "run_native_kicad_erc"
                     | "run_native_kicad_drc"
                     | "verify_native_kicad_erc_report"
@@ -1042,6 +1043,23 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "plan": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "compile_deterministic_pipeline_plan",
+            "Compile deterministic pipeline intent",
+            "Compile a closed deterministic pipeline intent into a canonical digest-bound plan and return only authenticated intent/plan metadata.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["intent", "output"],
+                "properties": {
+                    "intent": {"type": "string"},
+                    "output": {"type": "string"}
                 }
             }),
             false,
@@ -4835,6 +4853,9 @@ fn call_tool(
         "run_deterministic_pipeline" => {
             run_deterministic_pipeline_tool(arguments, cancellation)?
         }
+        "compile_deterministic_pipeline_plan" => {
+            compile_deterministic_pipeline_plan_tool(arguments, cancellation)?
+        }
         "run_native_kicad_erc" => run_native_kicad_erc_tool(arguments, cancellation)?,
         "run_native_kicad_drc" => run_native_kicad_drc_tool(arguments, cancellation)?,
         "verify_native_kicad_erc_report" => {
@@ -5931,6 +5952,68 @@ fn run_deterministic_pipeline_tool(
     Ok(execution_result(
         execution,
         json!({"plan": plan, "output": output, "report_summary": report_summary}),
+    ))
+}
+
+fn compile_deterministic_pipeline_plan_tool(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(&arguments, &["intent", "output"])?;
+    let intent = required_string(&arguments, "intent")?;
+    let output = required_string(&arguments, "output")?;
+    // Refuse stale evidence before starting the child.  The compiler performs
+    // the stronger output-parent, symlink, alias, and no-clobber checks after
+    // it has parsed the closed intent and stable-read every source.
+    require_absent_outputs([Some(output.as_str())])?;
+    let command = vec![
+        "compile-deterministic-pipeline-plan".to_string(),
+        intent.clone(),
+        "--output".to_string(),
+        output.clone(),
+        // The child emits only a compact, strict metadata summary.  MCP
+        // authenticates that echo against stable reads of both the intent and
+        // the atomically retained plan, without embedding plan contents.
+        "--mcp-echo-plan-summary".to_string(),
+    ];
+    let execution = execute(&command, cancellation)?;
+    let summary = trusted_deterministic_pipeline_plan_summary(
+        &execution,
+        Path::new(&intent),
+        Path::new(&output),
+    );
+    let execution = require_retained_json(execution, &summary, "deterministic pipeline plan");
+    let schema_version = summary
+        .as_object()
+        .map(|summary| summary["schema_version"].clone())
+        .unwrap_or(Value::Null);
+    let intent_metadata = summary
+        .as_object()
+        .map(|summary| {
+            json!({
+                "path": intent.clone(),
+                "bytes": summary["intent_source_bytes"],
+                "sha256": summary["intent_source_sha256"]
+            })
+        })
+        .unwrap_or(Value::Null);
+    let plan_metadata = summary
+        .as_object()
+        .map(|summary| {
+            json!({
+                "path": output.clone(),
+                "bytes": summary["plan_source_bytes"],
+                "sha256": summary["plan_source_sha256"]
+            })
+        })
+        .unwrap_or(Value::Null);
+    Ok(execution_result(
+        execution,
+        json!({
+            "schema_version": schema_version,
+            "intent": intent_metadata,
+            "plan": plan_metadata
+        }),
     ))
 }
 
@@ -13373,7 +13456,9 @@ fn trusted_deterministic_pipeline_summary(execution: &Execution, path: &Path) ->
     let schema_version = object
         .get("schema_version")
         .and_then(Value::as_u64)
-        .filter(|value| *value == 1);
+        .filter(|value| {
+            *value == u64::from(crate::deterministic_pipeline_runner::PLAN_SCHEMA_VERSION)
+        });
     let approved = object.get("approved").and_then(Value::as_bool);
     let plan_sha256 = object
         .get("plan_sha256")
@@ -13439,6 +13524,114 @@ fn trusted_deterministic_pipeline_summary(execution: &Execution, path: &Path) ->
             .and_then(Value::as_array)
             .is_none_or(|failures| failures.len() as u64 != failure_count)
         || approved != (failure_count == 0)
+    {
+        return Value::Null;
+    }
+
+    summary
+}
+
+/// Verify the compact stdout bridge emitted by the deterministic pipeline
+/// intent compiler against stable, bounded reads of the current intent and
+/// atomically retained plan.  The compiler has no rejected report to return;
+/// a malformed echo, changed source, or changed plan therefore fails closed.
+fn trusted_deterministic_pipeline_plan_summary(
+    execution: &Execution,
+    intent_path: &Path,
+    plan_path: &Path,
+) -> Value {
+    const SUMMARY_FIELDS: [&str; 5] = [
+        "schema_version",
+        "intent_source_bytes",
+        "intent_source_sha256",
+        "plan_source_bytes",
+        "plan_source_sha256",
+    ];
+
+    if execution.stdout.len() > MAX_MCP_PROCESS_MESSAGE_BYTES {
+        return Value::Null;
+    }
+    let summary = serde_json::from_slice::<Value>(&execution.stdout).unwrap_or(Value::Null);
+    let Some(object) = summary.as_object() else {
+        return Value::Null;
+    };
+    if object.len() != SUMMARY_FIELDS.len()
+        || SUMMARY_FIELDS
+            .iter()
+            .any(|field| !object.contains_key(*field))
+    {
+        return Value::Null;
+    }
+
+    let schema_version = object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .filter(|value| *value == 1);
+    let intent_source_bytes = object
+        .get("intent_source_bytes")
+        .and_then(Value::as_u64)
+        .filter(|value| {
+            *value > 0 && *value <= crate::deterministic_pipeline_compiler::MAX_INTENT_BYTES
+        });
+    let intent_source_sha256 = object
+        .get("intent_source_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let plan_source_bytes = object
+        .get("plan_source_bytes")
+        .and_then(Value::as_u64)
+        .filter(|value| {
+            *value > 0 && *value <= crate::deterministic_pipeline_runner::MAX_PLAN_BYTES
+        });
+    let plan_source_sha256 = object
+        .get("plan_source_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value));
+    let (
+        Some(_schema_version),
+        Some(intent_source_bytes),
+        Some(intent_source_sha256),
+        Some(plan_source_bytes),
+        Some(plan_source_sha256),
+    ) = (
+        schema_version,
+        intent_source_bytes,
+        intent_source_sha256,
+        plan_source_bytes,
+        plan_source_sha256,
+    )
+    else {
+        return Value::Null;
+    };
+
+    let Ok(intent) = crate::bounded_io::read_with_limit(
+        intent_path,
+        crate::deterministic_pipeline_compiler::MAX_INTENT_BYTES,
+    ) else {
+        return Value::Null;
+    };
+    if intent.len() as u64 != intent_source_bytes || sha256_hex(&intent) != intent_source_sha256 {
+        return Value::Null;
+    }
+
+    let Ok(plan) = crate::bounded_io::read_with_limit(
+        plan_path,
+        crate::deterministic_pipeline_runner::MAX_PLAN_BYTES,
+    ) else {
+        return Value::Null;
+    };
+    if plan.len() as u64 != plan_source_bytes || sha256_hex(&plan) != plan_source_sha256 {
+        return Value::Null;
+    }
+    let Ok(plan_document) = serde_json::from_slice::<Value>(&plan) else {
+        return Value::Null;
+    };
+    if plan.last() != Some(&b'\n')
+        || plan_document
+            .as_object()
+            .and_then(|plan| plan.get("schema_version"))
+            .and_then(Value::as_u64)
+            != Some(crate::deterministic_pipeline_runner::PLAN_SCHEMA_VERSION.into())
     {
         return Value::Null;
     }
@@ -14750,7 +14943,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 151);
+        assert_eq!(tools.len(), 152);
         let named = |name: &str| {
             tools
                 .iter()
@@ -14962,6 +15155,30 @@ mod tests {
         assert_eq!(
             named("run_deterministic_pipeline")["annotations"]["destructiveHint"],
             true
+        );
+        assert_eq!(
+            named("compile_deterministic_pipeline_plan")["inputSchema"]["required"],
+            json!(["intent", "output"])
+        );
+        assert_eq!(
+            named("compile_deterministic_pipeline_plan")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("compile_deterministic_pipeline_plan")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("compile_deterministic_pipeline_plan")["annotations"]["readOnlyHint"],
+            false
+        );
+        assert_eq!(
+            named("compile_deterministic_pipeline_plan")["annotations"]["destructiveHint"],
+            true
+        );
+        assert_eq!(
+            named("compile_deterministic_pipeline_plan")["annotations"]["openWorldHint"],
+            false
         );
         assert_eq!(
             named("run_native_kicad_erc")["inputSchema"]["properties"]["kicad_cli"]["type"],
@@ -15758,6 +15975,20 @@ mod tests {
                 }),
             ),
             (
+                19,
+                "compile_deterministic_pipeline_plan",
+                json!({
+                    "intent": "pipeline-intent.json",
+                    "output": "pipeline-plan.json",
+                    "extra": true
+                }),
+            ),
+            (
+                20,
+                "compile_deterministic_pipeline_plan",
+                json!({"intent": "", "output": "pipeline-plan.json"}),
+            ),
+            (
                 14,
                 "verify_circuit_kicad_handoff",
                 json!({
@@ -15948,6 +16179,92 @@ mod tests {
         std::fs::write(&report_path, b"{}\n").unwrap();
         assert_eq!(
             trusted_deterministic_pipeline_summary(&execution, &report_path),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn deterministic_pipeline_plan_summary_authenticates_intent_and_plan() {
+        let directory = tempfile::tempdir().unwrap();
+        let intent_path = directory.path().join("pipeline-intent.json");
+        let plan_path = directory.path().join("pipeline-plan.json");
+        let intent = b"{\"schema_version\":1}\n";
+        let plan = b"{\"schema_version\":1}\n";
+        std::fs::write(&intent_path, intent).unwrap();
+        std::fs::write(&plan_path, plan).unwrap();
+        let summary = json!({
+            "schema_version": 1,
+            "intent_source_bytes": intent.len(),
+            "intent_source_sha256": sha256_hex(intent),
+            "plan_source_bytes": plan.len(),
+            "plan_source_sha256": sha256_hex(plan)
+        });
+        let execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stdout: serde_json::to_vec(&summary).unwrap(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            trusted_deterministic_pipeline_plan_summary(&execution, &intent_path, &plan_path),
+            summary
+        );
+
+        std::fs::write(&intent_path, b"{\"schema_version\":2}\n").unwrap();
+        assert_eq!(
+            trusted_deterministic_pipeline_plan_summary(&execution, &intent_path, &plan_path),
+            Value::Null
+        );
+        std::fs::write(&intent_path, intent).unwrap();
+        let invalid_plan = b"not-json\n";
+        std::fs::write(&plan_path, invalid_plan).unwrap();
+        let mut invalid_plan_summary = summary.clone();
+        invalid_plan_summary["plan_source_bytes"] = Value::from(invalid_plan.len());
+        invalid_plan_summary["plan_source_sha256"] = Value::from(sha256_hex(invalid_plan));
+        let invalid_plan_execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stdout: serde_json::to_vec(&invalid_plan_summary).unwrap(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            trusted_deterministic_pipeline_plan_summary(
+                &invalid_plan_execution,
+                &intent_path,
+                &plan_path,
+            ),
+            Value::Null
+        );
+
+        let wrong_schema_plan = b"{\"schema_version\":2}\n";
+        std::fs::write(&plan_path, wrong_schema_plan).unwrap();
+        let mut wrong_schema_summary = summary.clone();
+        wrong_schema_summary["plan_source_bytes"] = Value::from(wrong_schema_plan.len());
+        wrong_schema_summary["plan_source_sha256"] = Value::from(sha256_hex(wrong_schema_plan));
+        let wrong_schema_execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stdout: serde_json::to_vec(&wrong_schema_summary).unwrap(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            trusted_deterministic_pipeline_plan_summary(
+                &wrong_schema_execution,
+                &intent_path,
+                &plan_path,
+            ),
+            Value::Null
+        );
+
+        let mut malformed = summary;
+        malformed["unexpected"] = Value::Bool(true);
+        let execution = Execution {
+            stdout: serde_json::to_vec(&malformed).unwrap(),
+            ..execution
+        };
+        std::fs::write(&plan_path, plan).unwrap();
+        assert_eq!(
+            trusted_deterministic_pipeline_plan_summary(&execution, &intent_path, &plan_path),
             Value::Null
         );
     }
@@ -16364,6 +16681,33 @@ mod tests {
             std::fs::read(&deterministic_output).unwrap(),
             br#"{"approved":true}"#
         );
+
+        let compiler_output = directory.path().join("old-compiled-plan.json");
+        std::fs::write(&compiler_output, br#"{"schema_version":1}"#).unwrap();
+        let response = server
+            .handle_message(request(
+                34,
+                "tools/call",
+                json!({
+                    "name": "compile_deterministic_pipeline_plan",
+                    "arguments": {
+                        "intent": "missing-intent.json",
+                        "output": compiler_output
+                    }
+                }),
+            ))
+            .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert!(
+            response["error"]["data"]["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&compiler_output).unwrap(),
+            br#"{"schema_version":1}"#
+        );
     }
 
     #[test]
@@ -16647,6 +16991,7 @@ mod tests {
             "verify_circuit_kicad_board_binding",
             "pipeline_verify",
             "run_deterministic_pipeline",
+            "compile_deterministic_pipeline_plan",
         ]
         .into_iter()
         .enumerate()

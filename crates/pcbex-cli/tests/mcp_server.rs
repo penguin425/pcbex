@@ -2172,6 +2172,155 @@ fn stdio_server_pipeline_verify_retains_rejected_report() {
 }
 
 #[test]
+fn stdio_server_compiles_deterministic_pipeline_intent_sync_and_as_task() {
+    let output = temporary_directory("mcp-compile-deterministic-intent");
+    fs::create_dir_all(output.join("intent")).unwrap();
+    for (relative, bytes) in [
+        ("circuit.json", b"circuit".as_slice()),
+        ("design.kicad_sch", b"schematic".as_slice()),
+        ("review.json", b"review".as_slice()),
+        ("design.kicad_pcb", b"board".as_slice()),
+        ("analysis/run.json", b"manifest".as_slice()),
+        ("analysis/checks.json", b"checks".as_slice()),
+        ("analysis/quality.json", b"quality".as_slice()),
+        ("manufacturing.zip", b"package".as_slice()),
+        ("firmware/manifest.json", b"firmware".as_slice()),
+    ] {
+        let path = output.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+    let intent = output.join("intent/pipeline-intent.json");
+    fs::write(
+        &intent,
+        serde_json::to_vec(&json!({
+            "schema_version": 1,
+            "circuit_spec": "circuit.json",
+            "schematic": "design.kicad_sch",
+            "electrical_policy": null,
+            "electrical_review": "review.json",
+            "board": "design.kicad_pcb",
+            "analysis_manifest": "analysis/run.json",
+            "analysis_checks": "analysis/checks.json",
+            "quality": "analysis/quality.json",
+            "analysis_project": null,
+            "analysis_rules": null,
+            "analysis_dfm_profile": null,
+            "analysis_policy_pack": null,
+            "analysis_physical_profile": null,
+            "manufacturing_package": "manufacturing.zip",
+            "firmware_manifest": "firmware/manifest.json",
+            "factory_receipt": null,
+            "require_factory": false
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let plan = output.join("pipeline-plan.json");
+    let task_plan = output.join("pipeline-plan-task.json");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let initialized = initialize(&mut stdin, &mut stdout, json!("initialize-compile-intent"));
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "compile-sync",
+            "method": "tools/call",
+            "params": {
+                "name": "compile_deterministic_pipeline_plan",
+                "arguments": {"intent": intent, "output": plan}
+            }
+        }),
+    );
+    let response = receive(&mut stdout);
+    assert_eq!(response["id"], "compile-sync");
+    assert_eq!(response["result"]["isError"], false);
+    let structured = &response["result"]["structuredContent"];
+    assert_eq!(structured["ok"], true);
+    assert_eq!(structured["schema_version"], 1);
+    assert_eq!(structured["intent"]["path"], intent.display().to_string());
+    assert_eq!(structured["plan"]["path"], plan.display().to_string());
+    let intent_bytes = fs::read(&intent).unwrap();
+    assert_eq!(structured["intent"]["bytes"], intent_bytes.len() as u64);
+    assert_eq!(
+        structured["intent"]["sha256"],
+        hex::encode(Sha256::digest(&intent_bytes))
+    );
+    let plan_bytes = fs::read(&plan).unwrap();
+    assert_eq!(structured["plan"]["bytes"], plan_bytes.len() as u64);
+    assert_eq!(
+        structured["plan"]["sha256"],
+        hex::encode(Sha256::digest(&plan_bytes))
+    );
+    assert_eq!(plan_bytes.last(), Some(&b'\n'));
+    assert!(structured["plan"].get("content").is_none());
+    assert!(response.to_string().len() < 16 * 1024 * 1024);
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "compile-task",
+            "method": "tools/call",
+            "params": {
+                "name": "compile_deterministic_pipeline_plan",
+                "arguments": {"intent": intent, "output": task_plan},
+                "task": {"ttl": 60_000}
+            }
+        }),
+    );
+    let created = receive(&mut stdout);
+    let task_id = created["result"]["task"]["taskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(created["result"]["task"]["status"], "working");
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "compile-task-result",
+            "method": "tasks/result",
+            "params": {"taskId": task_id}
+        }),
+    );
+    let task_result = receive(&mut stdout);
+    assert_eq!(task_result["id"], "compile-task-result");
+    assert_eq!(task_result["result"]["isError"], false);
+    assert_eq!(
+        task_result["result"]["structuredContent"]["plan"]["path"],
+        task_plan.display().to_string()
+    );
+    assert_eq!(
+        task_result["result"]["_meta"]["io.modelcontextprotocol/related-task"]["taskId"],
+        task_id
+    );
+    assert!(task_plan.is_file());
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[test]
 fn stdio_server_handoff_retains_success_and_rejected_reports() {
     let output = temporary_directory("mcp-handoff");
     fs::create_dir_all(&output).unwrap();

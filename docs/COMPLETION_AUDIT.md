@@ -233,6 +233,7 @@ coupled differential-pair routing, and native KiCad copper-zone generation.
 | MCP deterministic pipeline runner parity | The closed v1.417 runner is available synchronously and through optional MCP Tasks with the same explicit plan, output, and approval gate; complete reports remain retained while a compact summary authenticates their exact bytes and top-level decision without exceeding the 16 MiB MCP frame | Tool-schema, typed-argument, task allow-list, stale-output, digest-mutation, CLI bridge, synchronous rejection, and task-result E2E regressions cover no-clobber retention and the 128 MiB report/16 MiB response boundary |
 | Composite-Action deterministic pipeline runner parity | Root Action opt-in accepts the same closed plan and optional approval gate, retains the fixed `output-dir/deterministic-pipeline-report.json`, and publishes seven outputs only after revalidating report bytes, SHA-256, identities, counts, schema, and decision; valid rejection evidence is published before the final required-approval failure | Action input/output/static-contract, empty-plan compatibility, fixed-path/no-clobber, retained-rejection, stale/digest-mismatch, and output-authentication regressions |
 | Closed deterministic pipeline intent compiler | A CLI-only closed intent compiler accepts explicit required/optional role paths relative to the generated output plan's canonical parent (the intent may live elsewhere, but every role source must be a descendant and `..` rebasing is rejected), stable-reads each bounded source, computes descriptor bytes and SHA-256 identities, and emits compact plan-schema-v1 JSON with exactly one trailing newline; the runner binds raw output bytes as `plan_source_sha256` and the semantic plan as `plan_sha256`, without LLM, network, or path discovery; the existing runner remains final authority while MCP/Action compiler parity is deferred | Intent/plan schema, role completeness/null handling, path/link/snapshot bounds, compiler-owned digest and canonical-byte regressions, no-clobber output, and runner compatibility tests; no-network/no-LLM/path-discovery behavior is an implementation-boundary review rather than a direct marker test |
+| MCP deterministic pipeline intent compiler parity | The closed compiler is available synchronously and through optional MCP Tasks with explicit intent/output paths, pre-child stale-output rejection, bounded cancellation, and metadata-only intent/plan byte and SHA-256 identities authenticated against stable retained files; plan and role bodies stay outside the MCP response, the runner remains final authority, and Action parity is deferred | Closed tool schema and annotations, task allow-list/lifecycle, typed and unknown arguments, stale-output preservation, strict child-summary parsing, exact intent/plan digest matching, synchronous compilation, Task result, cancellation, and legacy-protocol regressions |
 
 ## Final verification commands
 
@@ -250,7 +251,7 @@ cargo run -p pcbex -- fabricate /tmp/pcbex-complete.kicad_pcb \
 ```
 
 <!-- completion-audit:start -->
-Version 1.433.0 exposes 985 Rust tests and 204 Python tests. The release workflow
+Version 1.434.0 exposes 987 Rust tests and 204 Python tests. The release workflow
 also verifies formatting, Clippy, release builds, KiCad DRC fixtures, SBOMs,
 and build-provenance attestations.
 <!-- completion-audit:end -->

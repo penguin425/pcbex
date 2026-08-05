@@ -694,6 +694,11 @@
     {
       "id": "closed-deterministic-pipeline-intent-compiler",
       "release": "v1.433.0",
+      "status": "released"
+    },
+    {
+      "id": "mcp-deterministic-pipeline-intent-compiler-parity",
+      "release": "v1.434.0",
       "status": "current"
     }
   ]
