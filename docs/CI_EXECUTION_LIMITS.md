@@ -14,6 +14,7 @@ and are never cancelled during publication.
 | Workflow job | Timeout |
 |---|---:|
 | CI hardware action | 45 minutes |
+| CI deterministic pipeline | 45 minutes |
 | CI Rust | 45 minutes |
 | CI Python | 20 minutes |
 | CI Python boundary matrix | 20 minutes |
@@ -127,6 +128,39 @@ plan remains schema v1 and the firmware manifest remains v2. Regular hardlinks
 are allowed and are content-bound by the bytes and SHA-256 read through each
 named path; the runner does not pin inodes or promise a race-free filesystem
 boundary.
+
+The CI workflow also has a separate `deterministic-pipeline` job. It builds the
+release-mode binary from the pull request and runs `scripts/deterministic_pipeline_ci.py` through
+the bounded runtime against the checked-in fixture. The helper exercises both
+an accepted report and a semantic rejection: the accepted run must be
+approved, the rejected run must retain a report with failures, and a subsequent
+`--require-approved` invocation must fail while leaving that rejected report
+available. The job scans the complete evidence tree with a tighter 64-entry,
+depth-8, 16 MiB-per-file, and 64 MiB-total bound before publishing a seven-day
+artifact named with the workflow run and attempt. Its Job Summary contains only
+fixed scalar metadata (decisions, counts, byte counts, and SHA-256 values), not
+report or input bodies.
+
+The manufacturing ZIP in this fixture is deterministic and synthetic. It tests
+the runner's manifest-bound manufacturing acceptance and semantic rejection;
+the separate `KiCad E2E` check remains responsible for real KiCad fabrication
+export coverage.
+
+The fixture's firmware manifest records producer build and smoke-test evidence;
+this CI job does not replay those firmware builds. That evidence remains an
+input to the deterministic gate rather than an independent toolchain
+provenance attestation.
+
+The job runs from the ordinary `pull_request` workflow with read-only contents
+permission and no secrets or write token. A pull-request-controlled workflow
+and pull-request-controlled source are not, by themselves, a trusted security
+or production-authorization boundary: an author who can change the workflow
+can change the check implementation. This context may be configured as a
+protected-branch required check for ordinary quality gating, but that status
+does not establish a trusted verifier or production-authorization boundary;
+those properties still require protected default-branch verifier logic or
+equivalent CODEOWNERS/Ruleset controls. The job remains useful for ordinary PR
+feedback and fail-closed evidence retention.
 
 A composite action cannot set `timeout-minutes` on its caller's job. Its three
 supervised commands remain individually finite (10, 30, and 40 minutes), but

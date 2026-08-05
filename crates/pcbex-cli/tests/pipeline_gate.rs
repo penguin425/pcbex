@@ -19,52 +19,10 @@ const FIRMWARE_FILES: [&str; 7] = [
     "host.py",
 ];
 
-const RUNNER_CIRCUIT_SPEC: &str = r#"{
-  "schema_version": 2,
-  "parts": [
-    {"reference":"U1","lib_id":"MCU:Chip","value":"Chip","footprint":"Package:QFN","mpn":null,"power":{"rail_voltage_uv":null,"max_voltage_uv":null,"requires_decoupling":false,"decoupling":false},"pins":[{"number":"1","name":"OUT","net":"SIGNAL","electrical_type":"output"},{"number":"2","name":"VCC","net":"VCC","electrical_type":"passive"}]},
-    {"reference":"R1","lib_id":"Device:R","value":"10k","footprint":"Resistor_SMD:R_0603","mpn":null,"power":{"rail_voltage_uv":null,"max_voltage_uv":null,"requires_decoupling":false,"decoupling":false},"pins":[{"number":"1","name":"~","net":"SIGNAL","electrical_type":"passive"},{"number":"2","name":"~","net":"VCC","electrical_type":"passive"}]}
-  ],
-  "nets": [
-    {"name":"SIGNAL","voltage_uv":null,"connections":[{"reference":"U1","pin":"1"},{"reference":"R1","pin":"1"}]},
-    {"name":"VCC","voltage_uv":null,"connections":[{"reference":"U1","pin":"2"},{"reference":"R1","pin":"2"}]}
-  ]
-}"#;
+const RUNNER_CIRCUIT_SPEC: &str =
+    include_str!("fixtures/deterministic-pipeline-ci/circuit-spec-v2.json");
 
-const RUNNER_BOARD: &str = r#"(kicad_pcb
-  (version 20250114)
-  (generator pcbex-test)
-  (general (thickness 1.6))
-  (paper "A4")
-  (layers
-    (0 "F.Cu" signal)
-    (31 "B.Cu" signal)
-    (34 "B.Mask" user "b.mask")
-    (35 "F.Mask" user "f.mask")
-    (36 "B.SilkS" user "b.silkscreen")
-    (37 "F.SilkS" user "f.silkscreen")
-    (44 "Edge.Cuts" user))
-  (setup (pad_to_mask_clearance 0))
-  (net 0 "")
-  (net 1 "SIGNAL")
-  (net 2 "VCC")
-  (footprint "Package:QFN"
-    (layer "F.Cu")
-    (at 10 10)
-    (fp_text reference "U1" (at 0 0) (layer "F.Fab") hide)
-    (fp_text value "Chip" (at 0 1) (layer "F.Fab") hide)
-    (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "SIGNAL"))
-    (pad "2" thru_hole circle (at 2 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 2 "VCC")))
-  (footprint "Resistor_SMD:R_0603"
-    (layer "F.Cu")
-    (at 20 20)
-    (fp_text reference "R1" (at 0 0) (layer "F.Fab") hide)
-    (fp_text value "10k" (at 0 1) (layer "F.Fab") hide)
-    (pad "1" thru_hole circle (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 1 "SIGNAL"))
-    (pad "2" thru_hole circle (at 2 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask") (net 2 "VCC")))
-  (segment (start 10 10) (end 20 20) (width 0.25) (layer "F.Cu") (net 1))
-  (segment (start 12 10) (end 22 20) (width 0.25) (layer "B.Cu") (net 2))
-  (gr_rect (start 0 0) (end 40 30) (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts")))"#;
+const RUNNER_BOARD: &str = include_str!("fixtures/deterministic-pipeline-ci/design.kicad_pcb");
 
 fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_pcbex"))
@@ -217,43 +175,7 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn runner_schematic() -> String {
-    let mut source = include_str!("../../../examples/simple.kicad_sch").to_string();
-    source = source.replace("(pin power_in line", "(pin passive line");
-    source = source.replace(
-        r##"  (no_connect
-    (at 42.54 20)
-    (uuid 00000000-0000-0000-0000-000000000015))"##,
-        r##"  (global_label "VCC"
-    (shape input)
-    (at 42.54 20 0)
-    (effects (font (size 1.27 1.27)) (justify left))
-    (uuid 00000000-0000-0000-0000-000000000015)
-    (property "Intersheetrefs" "${INTERSHEET_REFS}"
-      (at 42.54 20 0)
-      (effects (font (size 1.27 1.27)) hide)))"##,
-    );
-    for (footprint, property) in [
-        (
-            "Package:QFN",
-            "    (property \"pcbex:requires_decoupling\" \"false\")\n    (property \"pcbex:decoupling\" \"false\")",
-        ),
-        (
-            "Resistor_SMD:R_0603",
-            "    (property \"pcbex:requires_decoupling\" \"false\")\n    (property \"pcbex:decoupling\" \"false\")",
-        ),
-    ] {
-        let needle = format!(
-            "    (property \"Footprint\" \"{footprint}\"\n      (at {} 20 0)\n      (effects (font (size 1.27 1.27)) hide))",
-            if footprint == "Package:QFN" {
-                "12.54"
-            } else {
-                "40"
-            }
-        );
-        let replacement = format!("{needle}\n{property}");
-        source = source.replace(&needle, &replacement);
-    }
-    source
+    include_str!("fixtures/deterministic-pipeline-ci/design.kicad_sch").to_string()
 }
 
 fn plan_descriptor(root: &Path, path: &Path) -> Value {

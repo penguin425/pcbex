@@ -1140,6 +1140,146 @@ jobs:
             kill -KILL -- "-$server_pid" 2>/dev/null || true
           done
 
+  deterministic-pipeline:
+    name: Deterministic Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Build pcbex
+        run: cargo +stable build --package pcbex --release --locked
+      - name: Run deterministic pipeline fixture
+        id: pipeline
+        continue-on-error: true
+        run: >-
+          python3 scripts/ci_runtime.py exec
+          --timeout-seconds 1800
+          --max-stdout-bytes 8388608
+          --max-stderr-bytes 8388608
+          --output-root build/deterministic-pipeline-ci
+          -- python3 scripts/deterministic_pipeline_ci.py
+          --pcbex target/release/pcbex
+          --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci
+          --output-dir build/deterministic-pipeline-ci
+      - name: Scan deterministic pipeline outputs
+        id: scan
+        if: ${{ always() }}
+        run: >-
+          python3 scripts/ci_runtime.py scan
+          --output-root build/deterministic-pipeline-ci
+          --max-entries 64
+          --max-depth 8
+          --max-file-bytes 16777216
+          --max-total-bytes 67108864
+      - name: Publish deterministic pipeline summary
+        id: summary
+        if: ${{ always() && steps.scan.outcome == 'success' }}
+        env:
+          SUMMARY_JSON: build/deterministic-pipeline-ci/summary.json
+        run: |
+          set -euo pipefail
+          test -f "$SUMMARY_JSON"
+          test ! -L "$SUMMARY_JSON"
+          jq -e '
+            def integer_between($minimum; $maximum):
+              if type == "number" then
+                . == floor and . >= $minimum and . <= $maximum
+              else false end;
+            def sha256:
+              if type == "string" then test("^[0-9a-f]{64}$") else false end;
+            def accepted_case:
+              if type != "object" then false else
+                (keys | sort) == [
+                  "approved", "binding_approved", "failure_count",
+                  "intent_source_bytes", "intent_source_sha256",
+                  "pipeline_passed", "plan_sha256", "plan_source_bytes",
+                  "plan_source_sha256", "report_bytes", "report_sha256",
+                  "run_sha256"
+                ] and
+                .approved == true and
+                .binding_approved == true and
+                .pipeline_passed == true and
+                (.failure_count | integer_between(0; 0)) and
+                (.intent_source_bytes | integer_between(1; 4194304)) and
+                (.plan_source_bytes | integer_between(1; 4194304)) and
+                (.report_bytes | integer_between(1; 134217728)) and
+                (.intent_source_sha256 | sha256) and
+                (.plan_source_sha256 | sha256) and
+                (.plan_sha256 | sha256) and
+                (.run_sha256 | sha256) and
+                (.report_sha256 | sha256)
+              end;
+            def rejected_case:
+              if type != "object" then false else
+                (keys | sort) == [
+                  "approved", "binding_approved", "failure_count",
+                  "intent_source_bytes", "intent_source_sha256",
+                  "pipeline_passed", "plan_sha256", "plan_source_bytes",
+                  "plan_source_sha256", "report_bytes", "report_sha256",
+                  "required_exit_code", "required_report_bytes",
+                  "required_report_sha256", "run_sha256"
+                ] and
+                .approved == false and
+                .binding_approved == true and
+                .pipeline_passed == false and
+                (.failure_count | integer_between(1; 128)) and
+                (.intent_source_bytes | integer_between(1; 4194304)) and
+                (.plan_source_bytes | integer_between(1; 4194304)) and
+                (.report_bytes | integer_between(1; 134217728)) and
+                (.required_exit_code | integer_between(1; 255)) and
+                (.required_report_bytes | integer_between(1; 134217728)) and
+                (.intent_source_sha256 | sha256) and
+                (.plan_source_sha256 | sha256) and
+                (.plan_sha256 | sha256) and
+                (.run_sha256 | sha256) and
+                (.report_sha256 | sha256) and
+                (.required_report_sha256 | sha256) and
+                .report_bytes == .required_report_bytes and
+                .report_sha256 == .required_report_sha256
+              end;
+            if type != "object" then false else
+              (keys | sort) == ["accepted", "rejected", "schema_version"] and
+              (.schema_version | integer_between(1; 1)) and
+              (.accepted | accepted_case) and
+              (.rejected | rejected_case)
+            end
+          ' "$SUMMARY_JSON" >/dev/null
+          {
+            printf '## Deterministic pipeline\n\n'
+            jq -r '
+              "- Accepted: `\(.accepted.approved)` (failures: `\(.accepted.failure_count)`, report bytes: `\(.accepted.report_bytes)`, report SHA-256: `\(.accepted.report_sha256)`)",
+              "- Semantic rejection: `\(.rejected.approved)` (failures: `\(.rejected.failure_count)`, report bytes: `\(.rejected.report_bytes)`, report SHA-256: `\(.rejected.report_sha256)`)"
+            ' "$SUMMARY_JSON"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload deterministic pipeline evidence
+        id: upload
+        if: ${{ always() && steps.scan.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: deterministic-pipeline-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build/deterministic-pipeline-ci
+          if-no-files-found: error
+          retention-days: 7
+      - name: Enforce deterministic pipeline job
+        if: ${{ always() }}
+        env:
+          PIPELINE_OUTCOME: ${{ steps.pipeline.outcome }}
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          SUMMARY_OUTCOME: ${{ steps.summary.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          set -euo pipefail
+          test "$PIPELINE_OUTCOME" = success
+          test "$SCAN_OUTCOME" = success
+          test "$SUMMARY_OUTCOME" = success
+          test "$UPLOAD_OUTCOME" = success
+
   rust:
     name: Rust
     runs-on: ubuntu-latest

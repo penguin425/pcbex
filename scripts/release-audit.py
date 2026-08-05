@@ -38,7 +38,8 @@ TARGETS = (
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
-REQUIRED_CHECKS = {"Rust", "Python", "KiCad E2E"}
+REQUIRED_CHECKS = {"Rust", "Python", "KiCad E2E", "Deterministic Pipeline"}
+GITHUB_ACTIONS_APP_ID = 15368
 MIB = 1024 * 1024
 MAX_CONFIG_BYTES = MIB
 MAX_ROADMAP_MILESTONES = 1024
@@ -317,6 +318,27 @@ def validate_protection(protection: Any) -> None:
         raise AuditError("main protection status-check contexts must be strings")
     if not REQUIRED_CHECKS.issubset(set(contexts)):
         raise AuditError("main protection is missing required status checks")
+    protected_checks = checks.get("checks")
+    if not isinstance(protected_checks, list):
+        raise AuditError("main protection status checks must pin their GitHub Apps")
+    pinned_checks: dict[str, int] = {}
+    for protected_check in protected_checks:
+        if not isinstance(protected_check, dict):
+            raise AuditError("main protection status-check bindings must be objects")
+        context = protected_check.get("context")
+        app_id = protected_check.get("app_id")
+        if not isinstance(context, str) or type(app_id) is not int:
+            raise AuditError(
+                "main protection status-check bindings must contain a context and app_id"
+            )
+        if context in pinned_checks and pinned_checks[context] != app_id:
+            raise AuditError("main protection status-check bindings conflict")
+        pinned_checks[context] = app_id
+    if any(
+        pinned_checks.get(context) != GITHUB_ACTIONS_APP_ID
+        for context in REQUIRED_CHECKS
+    ):
+        raise AuditError("main protection required checks must be pinned to GitHub Actions")
     if not isinstance(protection.get("required_pull_request_reviews"), dict):
         raise AuditError("main protection must require the pull-request workflow")
     enforce_admins = protection.get("enforce_admins")

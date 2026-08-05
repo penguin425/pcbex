@@ -714,6 +714,11 @@
     {
       "id": "deterministic-pipeline-firmware-bundle-gate-resnapshot",
       "release": "v1.437.0",
+      "status": "released"
+    },
+    {
+      "id": "deterministic-pipeline-required-ci-check",
+      "release": "v1.438.0",
       "status": "current"
     }
   ]

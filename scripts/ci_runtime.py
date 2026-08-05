@@ -102,8 +102,10 @@ class TreeUsage:
 def run(
     argv: Sequence[str],
     *,
+    input_bytes: bytes | bytearray | memoryview | None = None,
     cwd: str | os.PathLike[str] | None = ROOT,
     timeout_seconds: float = 300,
+    max_stdin_bytes: int = 32 * MIB,
     max_stdout_bytes: int = DEFAULT_STDOUT_BYTES,
     max_stderr_bytes: int = DEFAULT_STDERR_BYTES,
     deadline: Deadline | None = None,
@@ -117,6 +119,8 @@ def run(
     try:
         return run_bounded(
             argv,
+            input_bytes=input_bytes,
+            max_stdin_bytes=max_stdin_bytes,
             timeout_seconds=effective_timeout,
             max_stdout_bytes=max_stdout_bytes,
             max_stderr_bytes=max_stderr_bytes,
