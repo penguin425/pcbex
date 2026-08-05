@@ -3535,6 +3535,49 @@ deterministic-pipeline verification. Manifest, receipt, plan, and report
 schema versions are unchanged, and Gerber validation remains structural with
 no new semantic parser.
 
+Version 1.440.0 adds a focused, boardless AI schematic approval Action. It
+does not call an AI provider or accept API/signing secrets. Instead, it binds a
+live `.kicad_sch` to an existing schema-v1 review request through the imported
+semantic IR, freshly recomputes the request's electrical review, and then
+re-verifies the caller-supplied signed approval/response pairs against the
+trusted keys and reviewer/provider/model thresholds in an organization policy
+pack. Formatting-only schematic changes remain compatible; a semantic edit or
+request substitution fails before quorum evaluation.
+
+```yaml
+- id: schematic-approval
+  uses: penguin425/pcbex/actions/ai-schematic-approval@v1.440.0
+  with:
+    schematic: hardware/controller.kicad_sch
+    request: build/ai-review-request.json
+    approval-files: |
+      build/reviewer-a.approval.json
+      build/reviewer-b.approval.json
+    response-files: |
+      build/reviewer-a.response.json
+      build/reviewer-b.response.json
+    policy-pack: policy/organization-policy.json
+    require-quorum: "true"
+```
+
+The Action writes the existing closed quorum JSON plus a fixed numeric-only
+summary into a fresh bounded directory. It snapshots all verifier inputs before
+and after execution, scans the result, revalidates the inputs and exact
+report-derived summary immediately before optional upload, requires the
+publication-time quorum decision to match the verifier-step decision, and only
+then applies the final quorum gate. A cryptographically valid result that does
+not meet the configured threshold remains inspectable; malformed, unsigned,
+source-substituted, or otherwise invalid candidates are not published by the
+normal Action flow. Run it in an isolated runner/workspace: the bounded checks
+detect observed replacements, but local verification and the artifact-service
+upload cannot be one atomic filesystem transaction in a composite Action.
+It is limited to schema-v1 requests; schema-v2 through v4 artifact-bound
+workflows remain available through the root Action and CLI. See
+[`docs/AI_SCHEMATIC_APPROVAL_ACTION.md`](docs/AI_SCHEMATIC_APPROVAL_ACTION.md).
+The focused Action (or `verify-ai-quorum --schematic`) is required for live
+schema-v1 source binding in this release; the legacy root-Action quorum route
+and MCP quorum tool do not add that live schematic automatically.
+
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set
 `deterministic-pipeline-require-approved: "true"` for a final fail gate. The

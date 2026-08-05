@@ -724,6 +724,11 @@
     {
       "id": "semantic-bom-cpl-package-validation",
       "release": "v1.439.0",
+      "status": "released"
+    },
+    {
+      "id": "boardless-ai-schematic-approval-action",
+      "release": "v1.440.0",
       "status": "current"
     }
   ]

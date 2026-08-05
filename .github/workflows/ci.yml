@@ -615,6 +615,79 @@ jobs:
           printf 'remote-witness-endpoint=%s\n' \
             "$(tr -d '\n' < build/action-quorum/remote-witness.endpoint)" \
             >> "$GITHUB_OUTPUT"
+      - name: Exercise boardless AI schematic approval action
+        id: boardless-ai-approval
+        uses: ./actions/ai-schematic-approval
+        with:
+          schematic: crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch
+          request: build/action-quorum/request.json
+          approval-files: |
+            build/action-quorum/approval-a.json
+            build/action-quorum/approval-b.json
+          response-files: |
+            build/action-quorum/response-a.json
+            build/action-quorum/response-b.json
+          policy-pack: build/action-quorum/policy-pack.json
+          session: build/action-quorum/session.json
+          minimum-approvals: "1"
+          minimum-distinct-providers: "1"
+          minimum-distinct-models: "1"
+          require-quorum: "true"
+          output-dir: build/boardless-ai-approval
+          upload-artifact: "false"
+      - name: Verify boardless AI schematic approval outputs
+        env:
+          STATUS: ${{ steps.boardless-ai-approval.outputs.status }}
+          ARTIFACT_DIR: ${{ steps.boardless-ai-approval.outputs.artifact-dir }}
+          REPORT: ${{ steps.boardless-ai-approval.outputs.ai-approval-quorum }}
+          SUMMARY: ${{ steps.boardless-ai-approval.outputs.ai-approval-quorum-summary }}
+          QUORUM_MET: ${{ steps.boardless-ai-approval.outputs.ai-approval-quorum-met }}
+          REQUEST_SHA256: ${{ steps.boardless-ai-approval.outputs.request-sha256 }}
+          SCHEMATIC_IR_SHA256: ${{ steps.boardless-ai-approval.outputs.schematic-ir-sha256 }}
+          INPUT_SNAPSHOT_SHA256: ${{ steps.boardless-ai-approval.outputs.input-snapshot-sha256 }}
+        run: |
+          test "$STATUS" = "ok"
+          test "$ARTIFACT_DIR" = "build/boardless-ai-approval"
+          test "$REPORT" = "build/boardless-ai-approval/ai-approval-quorum.json"
+          test "$SUMMARY" = "build/boardless-ai-approval/ai-approval-quorum.md"
+          test "$QUORUM_MET" = "true"
+          test "$REQUEST_SHA256" = "$(jq -r '.request_sha256' build/action-quorum/request.json)"
+          test "$SCHEMATIC_IR_SHA256" = "$(jq -r '.electrical_review.schematic_sha256' build/action-quorum/request.json)"
+          test "${#INPUT_SNAPSHOT_SHA256}" -eq 64
+          test -z "${INPUT_SNAPSHOT_SHA256//[0-9a-f]/}"
+          test -s "$REPORT"
+          test -s "$SUMMARY"
+          jq -e \
+            --arg request_sha256 "$REQUEST_SHA256" \
+            '.schema_version == 1
+             and (.session_sha256 | test("^[0-9a-f]{64}$"))
+             and .request_sha256 == $request_sha256
+             and .issued_at_unix <= .evaluated_at_unix
+             and .evaluated_at_unix <= .expires_at_unix
+             and .quorum.schema_version == 1
+             and .quorum.request_sha256 == $request_sha256
+             and .quorum.policy == {
+               minimum_approvals: 1,
+               minimum_distinct_providers: 1,
+               minimum_distinct_models: 1
+             }
+             and .quorum.counts == {
+               members: 2,
+               approvals: 1,
+               rejections: 1,
+               distinct_providers: 1,
+               distinct_models: 1
+             }
+             and ([.quorum.members[] | select(.signer_id == "reviewer-a")][0].approved == true)
+             and ([.quorum.members[] | select(.signer_id == "reviewer-b")][0].approved == false)
+             and ([.quorum.members[] | select(.signer_id == "reviewer-b")][0].gate_failures
+               | index("ai_decision_needs_human") != null)
+             and .quorum.quorum_met == true
+             and .quorum.quorum_failures == []' \
+            "$REPORT" >/dev/null
+          grep -F '# Time-bound AI schematic approval quorum' "$SUMMARY" >/dev/null
+          grep -F 'Result: quorum met' "$SUMMARY" >/dev/null
+          ! grep -F 'reviewer-a' "$SUMMARY" >/dev/null
       - name: Prepare deterministic pipeline plan fixture
         run: |
           smoke_dir=build/deterministic-pipeline

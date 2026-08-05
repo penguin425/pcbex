@@ -139,7 +139,8 @@ use pcbex_kicad::{
     validate_signed_approval_log_gossip_organization_registry_history_checkpoint,
     validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness,
     validate_signed_approval_log_gossip_organization_registry_history_checkpoint_witness_key_rotation,
-    verify_ai_approval_quorum, verify_approval_log_anchor_proof, verify_approval_log_checkpoint,
+    verify_ai_approval_quorum, verify_ai_review_schematic_binding,
+    verify_approval_log_anchor_proof, verify_approval_log_checkpoint,
     verify_approval_log_consistency_proof,
     verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses,
     verify_approval_log_gossip_organization_registry_history_checkpoint_witnesses_with_trust_states,
@@ -3581,6 +3582,9 @@ enum Command {
     /// Verify independent signed AI reviews and enforce a multi-reviewer quorum.
     VerifyAiQuorum {
         request: PathBuf,
+        /// Live KiCad schematic semantically bound to a schema-v1 request.
+        #[arg(long, value_name = "PATH")]
+        schematic: Option<PathBuf>,
         /// Generated schematic whose exact bytes are bound by a v2 request.
         #[arg(
             long,
@@ -11953,6 +11957,7 @@ fn run_cli() -> Result<()> {
         }
         Command::VerifyAiQuorum {
             request,
+            schematic,
             generated_schematic,
             deterministic_pipeline_plan,
             deterministic_pipeline_report,
@@ -11984,6 +11989,23 @@ fn run_cli() -> Result<()> {
                 bail!("quorum JSON and Markdown output paths must differ");
             }
             let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            if let Some(path) = schematic.as_deref() {
+                if request.schema_version != 1 {
+                    bail!(
+                        "--schematic live binding requires an AI review request schema version 1"
+                    );
+                }
+                let source = read_bounded_utf8(
+                    path,
+                    "AI review schematic",
+                    pcbex_kicad::CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES,
+                )?;
+                let live_schematic = import_schematic(&source)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("importing {}", path.display()))?;
+                verify_ai_review_schematic_binding(&request, &live_schematic)
+                    .map_err(anyhow::Error::msg)?;
+            }
             verify_bound_ai_review_artifacts(
                 &request,
                 generated_schematic.as_deref(),

@@ -1,3 +1,7 @@
+use pcbex_kicad::{
+    AiReviewArtifactBinding, AiReviewRequest, DeterministicPipelineIdentity, ExactArtifactIdentity,
+    bind_ai_review_request,
+};
 use serde_json::{Value, json};
 use std::{
     fs,
@@ -150,6 +154,12 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
         .success()
     );
     let request_value: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    let equivalent_schematic = directory.join("equivalent-live.kicad_sch");
+    fs::write(
+        &equivalent_schematic,
+        format!("{}\n\n", fs::read_to_string(&schematic).unwrap()),
+    )
+    .unwrap();
 
     let response = |provider: &str, model: &str| {
         json!({
@@ -210,6 +220,8 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
         run(&[
             "verify-ai-quorum",
             path(&request),
+            "--schematic",
+            path(&equivalent_schematic),
             "--approval",
             path(&approval_b),
             "--approval",
@@ -245,6 +257,101 @@ fn verifies_gates_and_retains_multi_reviewer_quorum_evidence() {
             .unwrap()
             .contains("**Result:** approved")
     );
+
+    let mutated_schematic = directory.join("mutated-live.kicad_sch");
+    fs::write(
+        &mutated_schematic,
+        fs::read_to_string(&schematic)
+            .unwrap()
+            .replace("\"10k\"", "\"22k\""),
+    )
+    .unwrap();
+    let rejected_live = directory.join("rejected-live.json");
+    let rejected_live_result = run(&[
+        "verify-ai-quorum",
+        path(&request),
+        "--schematic",
+        path(&mutated_schematic),
+        "--approval",
+        path(&approval_a),
+        "--approval",
+        path(&approval_b),
+        "--response",
+        path(&response_a),
+        "--response",
+        path(&response_b),
+        "--policy-pack",
+        path(&policy_pack),
+        "--minimum-approvals",
+        "2",
+        "--minimum-distinct-providers",
+        "2",
+        "--minimum-distinct-models",
+        "2",
+        "--output",
+        path(&rejected_live),
+    ]);
+    assert!(!rejected_live_result.status.success());
+    assert!(!rejected_live.exists());
+
+    let request_model: AiReviewRequest =
+        serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    let schema_v2_request = bind_ai_review_request(
+        &request_model,
+        &AiReviewArtifactBinding {
+            schema_version: 1,
+            generated_schematic: ExactArtifactIdentity {
+                bytes: 1,
+                sha256: "a".repeat(64),
+            },
+            pipeline: DeterministicPipelineIdentity {
+                plan_source: ExactArtifactIdentity {
+                    bytes: 1,
+                    sha256: "b".repeat(64),
+                },
+                plan_sha256: "c".repeat(64),
+                report: ExactArtifactIdentity {
+                    bytes: 1,
+                    sha256: "d".repeat(64),
+                },
+                run_sha256: "e".repeat(64),
+            },
+            native_kicad_erc: None,
+        },
+    )
+    .unwrap();
+    let schema_v2_request_path = directory.join("schema-v2-request.json");
+    fs::write(
+        &schema_v2_request_path,
+        serde_json::to_vec_pretty(&schema_v2_request).unwrap(),
+    )
+    .unwrap();
+    let rejected_schema_v2 = directory.join("rejected-schema-v2.json");
+    let rejected_schema_v2_result = run(&[
+        "verify-ai-quorum",
+        path(&schema_v2_request_path),
+        "--schematic",
+        path(&schematic),
+        "--approval",
+        path(&approval_a),
+        "--response",
+        path(&response_a),
+        "--policy-pack",
+        path(&policy_pack),
+        "--minimum-approvals",
+        "1",
+        "--minimum-distinct-providers",
+        "1",
+        "--minimum-distinct-models",
+        "1",
+        "--output",
+        path(&rejected_schema_v2),
+    ]);
+    assert!(!rejected_schema_v2_result.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_schema_v2_result.stderr).contains("schema version 1")
+    );
+    assert!(!rejected_schema_v2.exists());
 
     let session = directory.join("session.json");
     let session_approval_a = directory.join("session-approval-a.json");

@@ -161,7 +161,8 @@ pub use approval::{
     bind_native_kicad_erc_to_ai_review_request,
     bind_native_kicad_erc_warning_policy_to_ai_review_request, build_ai_review_request,
     parse_ai_review_response, sign_ai_review, sign_ai_review_for_session,
-    signed_ai_approval_json_schema, verify_session_signed_ai_approval, verify_signed_ai_approval,
+    signed_ai_approval_json_schema, verify_ai_review_schematic_binding,
+    verify_session_signed_ai_approval, verify_signed_ai_approval,
 };
 mod approval_quorum;
 pub use approval_quorum::{
