@@ -211,6 +211,40 @@ are accepted and remain content-bound by the bytes and SHA-256 read through
 each named path. The boundary does not pin inodes or claim to be race-free
 against an adversarial filesystem.
 
+## Required CI check (v1.438.0)
+
+The repository runs an independent `Deterministic Pipeline` job on every normal
+pull request and push. The job compiles a closed intent fixture with the real
+Rust `pcbex` binary, then exercises two bounded paths: an accepted circuit,
+schematic, board, manufacturing, and firmware-evidence chain, and a semantic
+manufacturing rejection. The normal rejected run retains its report. A second
+invocation uses `--require-approved`; it exits nonzero only after retaining and
+authenticating a separate rejected report, so the failure cannot erase the
+evidence from the first run.
+
+The manufacturing archive used here is a deterministic synthetic gate fixture,
+not a replay of KiCad Gerber generation. Real KiCad fabrication export remains
+the responsibility of the separate `KiCad E2E` check.
+
+Before accepting either result, the fixture checks the compiler's exact intent
+and plan byte/SHA-256 identities and requires the runner report's raw plan
+binding to match the compiled plan. The job exposes only bounded scalar
+identities, counts, and decisions in the GitHub Job Summary, and uploads the
+retained reports as scanned artifacts. It does not embed full report bodies in
+workflow metadata.
+
+This check keeps plan schema v1 and deterministic report schema v1 unchanged.
+The firmware phase validates the exact manifest and seven source-artifact
+evidence; it does not replay the build commands recorded by that manifest. The
+workflow performs no path discovery, LLM/network call, design mutation, factory
+submission, or order. Its successful conclusion is a status check for the latest
+commit and may be selected by branch protection. Confirm a successful run on the
+latest commit before adding the `Deterministic Pipeline` context to `main`; the
+release audit verifies that the context is required and pinned to the GitHub
+Actions app (`app_id: 15368`). A pull-request-controlled workflow is not an
+authorization boundary against a malicious write collaborator; repository
+permissions and protected-branch policy remain required.
+
 ## MCP parity
 
 The MCP server exposes `run_deterministic_pipeline` with the same explicit

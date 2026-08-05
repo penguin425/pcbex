@@ -2305,6 +2305,17 @@ violation count, regression result, and optional PR comment URL.
 `upload-sarif` is opt-in because the calling job must grant
 `security-events: write`; artifact upload defaults to on.
 
+The repository's own CI additionally runs an independent `Deterministic
+Pipeline` job on normal pull requests and pushes. It builds the Rust binary,
+checks an accepted chain and a semantic manufacturing rejection, retains both
+ordinary and required-approval rejection reports, and publishes bounded scalar
+summary fields plus scanned artifacts. After a successful run on the latest
+commit is confirmed, `Deterministic Pipeline` can be added to `main` branch
+protection; `scripts/release-audit.py --check-protection` verifies that its
+required status context is pinned to the GitHub Actions app (`app_id: 15368`).
+The pull-request workflow is not an authorization boundary against malicious
+write collaborators.
+
 Version 1.423 adds opt-in circuit-spec writer parity. Supplying
 `circuit-spec` first retains the immutable ERC report at the fixed
 `${output-dir}/circuit-spec-check.json` path. A rejected design exposes
@@ -3479,6 +3490,24 @@ valid rejected report is retained before an optional approval failure. Plan
 schema v1 and firmware manifest v2 are unchanged. Regular hardlinks remain
 allowed and are content-bound by the bytes and SHA-256 read through each named
 path; the runner does not pin inodes or claim a race-free filesystem boundary.
+
+Version 1.438.0 adds an independent `Deterministic Pipeline` GitHub Actions
+check for normal pull requests and pushes. It builds and runs the real Rust
+binary against a closed compiler fixture, verifies an accepted circuit-to-board
+chain and a semantic manufacturing rejection, retains ordinary rejection
+evidence, and runs a separate `--require-approved` case that exits nonzero only
+after retaining its own report. The check authenticates compiler source and
+report bindings, publishes bounded scalar values in the Job Summary, and
+uploads scanned report artifacts. The manufacturing archive is a deterministic
+synthetic gate fixture; real KiCad fabrication export remains covered by the
+separate `KiCad E2E` check. Plan and report schema v1 remain unchanged;
+the firmware phase validates manifest evidence rather than replaying firmware
+builds. The job is a status check that can be required for the latest commit,
+but it should be added to `main` protection only after a successful run has been
+confirmed on the latest commit. The repository release audit also verifies that
+the required `Deterministic Pipeline` context is pinned to the GitHub Actions
+app (`app_id: 15368`). A pull-request-controlled workflow is not an
+authorization boundary against a malicious write collaborator.
 
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set
@@ -4995,9 +5024,13 @@ python3 scripts/release-audit.py \
   --check-protection
 ```
 
-The protection audit requires pull-request flow, strict Rust/Python/KiCad
-checks, administrator enforcement, linear history, conversation resolution,
-and disabled force-pushes and deletions.
+The protection audit requires pull-request flow, strict Rust/Python/KiCad/
+Deterministic Pipeline checks pinned to the GitHub Actions app (`app_id:
+15368`), administrator enforcement, linear history, conversation resolution,
+and disabled force-pushes and deletions. Add the Deterministic Pipeline context
+only after confirming a successful run for the latest commit; a pull-request
+controlled workflow is not an authorization boundary against a malicious write
+collaborator.
 
 ## Scope
 

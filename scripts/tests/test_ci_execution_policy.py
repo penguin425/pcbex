@@ -15,6 +15,7 @@ BOARDLESS_NATIVE_ERC_ACTION = ROOT / "actions" / "native-kicad-erc" / "action.ym
 EXPECTED_TIMEOUTS = {
     "ci.yml": {
         "hardware-ci-action": 45,
+        "deterministic-pipeline": 45,
         "rust": 45,
         "python": 20,
         "python-boundaries": 20,
@@ -72,6 +73,13 @@ def _direct_integer(block: str, key: str) -> int | None:
 
 
 class CiExecutionPolicyTests(unittest.TestCase):
+    def test_ci_required_context_triggers_are_not_path_or_activity_filtered(self):
+        document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        header, separator, _ = document.partition("\npermissions:\n")
+        self.assertTrue(separator, "CI workflow has no top-level permissions boundary")
+        self.assertIn("  push:\n    branches: [main]\n  pull_request:\n", header)
+        self.assertNotRegex(header, r"(?m)^\s+(?:paths|paths-ignore|types):")
+
     def test_every_workflow_job_has_the_reviewed_timeout(self):
         actual_files = {
             path.name
@@ -166,6 +174,85 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertGreaterEqual(
             document.count("steps.artifact-boundary.outputs.safe == 'true'"), 3
         )
+
+    def test_deterministic_pipeline_job_is_independent_and_fully_enforced(self):
+        document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        block = _job_blocks(document)["deterministic-pipeline"]
+        self.assertIn("name: Deterministic Pipeline", block)
+        self.assertNotRegex(block, r"(?m)^    (?:if|needs|strategy):")
+        self.assertRegex(block, r"(?m)^    permissions:\s*$")
+        self.assertRegex(block, r"(?m)^      contents:\s*read\s*$")
+        self.assertNotRegex(block, r"(?m)^      (?!contents:)\S+:\s*")
+        self.assertIn(
+            "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+            block,
+        )
+        self.assertIn("persist-credentials: false", block)
+        self.assertIn("rustup toolchain install stable --profile minimal", block)
+        self.assertIn("cargo +stable build --package pcbex --release --locked", block)
+        self.assertIn("continue-on-error: true", block)
+        self.assertIn("python3 scripts/deterministic_pipeline_ci.py", block)
+        self.assertIn("--pcbex target/release/pcbex", block)
+        self.assertIn(
+            "--fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci",
+            block,
+        )
+        self.assertIn("--output-dir build/deterministic-pipeline-ci", block)
+        for required in (
+            "--timeout-seconds 1800",
+            "--max-stdout-bytes 8388608",
+            "--max-stderr-bytes 8388608",
+            "--output-root build/deterministic-pipeline-ci",
+            "--max-entries 64",
+            "--max-depth 8",
+            "--max-file-bytes 16777216",
+            "--max-total-bytes 67108864",
+        ):
+            self.assertIn(required, block)
+        self.assertIn(
+            "SUMMARY_JSON: build/deterministic-pipeline-ci/summary.json", block
+        )
+        self.assertIn("id: summary", block)
+        self.assertIn(
+            '(keys | sort) == ["accepted", "rejected", "schema_version"]', block
+        )
+        self.assertIn("def integer_between($minimum; $maximum):", block)
+        self.assertIn("def accepted_case:", block)
+        self.assertIn("def rejected_case:", block)
+        self.assertIn('"intent_source_sha256"', block)
+        self.assertIn('"required_report_sha256"', block)
+        self.assertIn("(.required_exit_code | integer_between(1; 255))", block)
+        self.assertIn("(.required_report_sha256 | sha256)", block)
+        self.assertIn(".approved == true", block)
+        self.assertIn(".approved == false", block)
+        self.assertIn("GITHUB_STEP_SUMMARY", block)
+        self.assertIn("report_sha256", block)
+        self.assertRegex(
+            block,
+            r"(?m)^\s*if: \$\{\{ always\(\) && steps\.scan\.outcome == 'success' \}\}$",
+        )
+        self.assertIn(
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            block,
+        )
+        self.assertIn(
+            "name: deterministic-pipeline-${{ github.run_id }}-${{ github.run_attempt }}",
+            block,
+        )
+        self.assertIn("if-no-files-found: error", block)
+        self.assertIn("retention-days: 7", block)
+        self.assertRegex(
+            block,
+            r"(?m)^      - name: Enforce deterministic pipeline job$",
+        )
+        self.assertRegex(block, r"(?m)^        if: \$\{\{ always\(\) \}\}$")
+        for outcome in (
+            "PIPELINE_OUTCOME",
+            "SCAN_OUTCOME",
+            "SUMMARY_OUTCOME",
+            "UPLOAD_OUTCOME",
+        ):
+            self.assertIn(f'test "${outcome}" = success', block)
 
     def test_boardless_native_erc_action_is_bounded_and_gates_after_upload(self):
         document = BOARDLESS_NATIVE_ERC_ACTION.read_text(encoding="utf-8")

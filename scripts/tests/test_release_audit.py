@@ -286,7 +286,18 @@ class ReleaseAuditTests(unittest.TestCase):
             {
                 "required_status_checks": {
                     "strict": True,
-                    "contexts": ["Rust", "Python", "KiCad E2E"],
+                    "contexts": [
+                        "Rust",
+                        "Python",
+                        "KiCad E2E",
+                        "Deterministic Pipeline",
+                    ],
+                    "checks": [
+                        {"context": "Rust", "app_id": 15368},
+                        {"context": "Python", "app_id": 15368},
+                        {"context": "KiCad E2E", "app_id": 15368},
+                        {"context": "Deterministic Pipeline", "app_id": 15368},
+                    ],
                 },
                 "required_pull_request_reviews": {
                     "required_approving_review_count": 0
@@ -319,6 +330,42 @@ class ReleaseAuditTests(unittest.TestCase):
             with self.subTest(protection=protection):
                 with self.assertRaises(release_audit.AuditError):
                     release_audit.validate_protection(protection)
+
+    def test_rejects_missing_or_unpinned_required_check(self):
+        base = {
+            "required_status_checks": {
+                "strict": True,
+                "contexts": [
+                    "Rust",
+                    "Python",
+                    "KiCad E2E",
+                    "Deterministic Pipeline",
+                ],
+                "checks": [
+                    {"context": "Rust", "app_id": 15368},
+                    {"context": "Python", "app_id": 15368},
+                    {"context": "KiCad E2E", "app_id": 15368},
+                ],
+            },
+            "required_pull_request_reviews": {},
+            "enforce_admins": {"enabled": True},
+            "required_linear_history": {"enabled": True},
+            "required_conversation_resolution": {"enabled": True},
+            "allow_force_pushes": {"enabled": False},
+            "allow_deletions": {"enabled": False},
+        }
+        with self.assertRaisesRegex(
+            release_audit.AuditError, "pinned to GitHub Actions"
+        ):
+            release_audit.validate_protection(base)
+
+        base["required_status_checks"]["checks"].append(
+            {"context": "Deterministic Pipeline", "app_id": 1}
+        )
+        with self.assertRaisesRegex(
+            release_audit.AuditError, "pinned to GitHub Actions"
+        ):
+            release_audit.validate_protection(base)
 
     def test_accepts_enabled_actions_with_sha_pinning(self):
         release_audit.validate_actions_permissions(

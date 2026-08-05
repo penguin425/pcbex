@@ -149,12 +149,14 @@ auditable release.
 | v1.435.0 | Composite-Action deterministic pipeline intent compiler parity | Accept an explicit intent/output pair, compile before analysis, authenticate exact intent/plan bytes and SHA identities, reuse the effective plan with the unchanged runner, and publish bounded metadata while preserving legacy plan and analysis-only behavior |
 | v1.436.0 | Deterministic firmware-bundle compiler preflight | Stable-preflight an exact eight-entry firmware bundle (manifest plus seven fixed source artifacts) before publishing a plan, validating strict manifest/artifact bytes, hashes, and link/extra rejection while keeping the v1 plan, runner, and pipeline authorities unchanged |
 | v1.437.0 | Deterministic firmware-bundle gate re-snapshot | Reopen every exact-eight firmware entry and compare complete bytes/SHA-256 snapshots immediately before and after the deterministic pipeline gate, retaining a rejected report for observed bundle mutation while preserving plan schema v1 and manifest v2 |
+| v1.438.0 | Deterministic pipeline required CI check | Run the real Rust deterministic-pipeline binary on every normal PR and push, retain accepted and rejected reports, authenticate compiler source/report bindings, and publish bounded scalar Job Summary and scanned artifacts without changing schema v1 |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
 tags, malformed release metadata, missing or extra assets, invalid SPDX JSON,
 and archive checksum mismatches. An optional repository audit also verifies
-that `main` has strict required checks, linear history, conversation
+that `main` has strict Rust/Python/KiCad/Deterministic Pipeline checks pinned
+to the GitHub Actions app (`app_id: 15368`), linear history, conversation
 resolution, and force-push/deletion protection.
 
 The v1.413.0 release added a closed physical constraint profile for board
@@ -468,3 +470,29 @@ an optional approval failure. The plan remains schema v1 and the firmware
 manifest remains v2. Regular hardlinks are allowed and are bound by the bytes
 and SHA-256 read from the named paths; this release does not pin inodes or
 claim a race-free filesystem boundary.
+
+The v1.438.0 milestone promotes the closed deterministic pipeline to an
+independent `Deterministic Pipeline` GitHub Actions job on normal pull requests
+and pushes. The job builds and invokes the real Rust binary against a closed
+compiler fixture, verifies the accepted circuit/schematic/board chain and the
+semantic manufacturing rejection path, and retains the ordinary rejected report
+before a separate `--require-approved` invocation exits nonzero with its own
+report. It authenticates the compiler's source identities and the runner report
+binding, publishes only bounded scalar values in the Job Summary, and uploads
+scanned report artifacts for review. The deterministic pipeline plan and report
+schemas remain v1; the firmware phase validates manifest evidence and does not
+replay the recorded firmware builds.
+
+The manufacturing archive is a deterministic synthetic gate fixture. It covers
+manifest-bound acceptance and rejection semantics; real KiCad fabrication
+export remains covered by the separate `KiCad E2E` check.
+
+The job's success is a normal status check on the latest commit and can be made
+required by branch protection. Confirm a successful run on the latest commit
+before adding the `Deterministic Pipeline` context to `main`; the release audit
+also verifies that this context is pinned to the GitHub Actions app
+(`app_id: 15368`) alongside the other required checks. A workflow controlled by
+a pull request is not an authorization boundary against a malicious write
+collaborator; repository permissions and protected-branch policy remain
+necessary. The check does not discover files, invoke an LLM or network service,
+mutate a design, submit to a factory, or place an order.

@@ -55,6 +55,30 @@ class CiRuntimeTests(unittest.TestCase):
                 max_stderr_bytes=8,
             )
 
+    def test_process_delivers_bounded_stdin_and_rejects_one_byte_over(self):
+        result = ci_runtime.run(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())",
+            ],
+            input_bytes=b"hello",
+            max_stdin_bytes=5,
+            max_stdout_bytes=5,
+            max_stderr_bytes=8,
+            timeout_seconds=5,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"hello")
+        with self.assertRaises(ci_runtime.ExecutionBoundaryError):
+            ci_runtime.run(
+                [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+                input_bytes=b"hello",
+                max_stdin_bytes=4,
+                max_stdout_bytes=8,
+                max_stderr_bytes=8,
+                timeout_seconds=5,
+            )
     def test_aggregate_deadline_is_shared_across_calls(self):
         with mock.patch.object(
             ci_runtime.time, "monotonic", side_effect=[100.0, 105.0, 111.0]

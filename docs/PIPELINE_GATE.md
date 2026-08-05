@@ -386,10 +386,39 @@ integrity boundary, not a factory-authenticity or signature-verification
 boundary. A passing pipeline report by itself is not authorization to
 fabricate.
 
-`pipeline-verify` is also not automatically wired as a repository required
-status check. Once a workflow produces every input above, a team can add this
-command as a CI job, retain its report on success and failure, and configure
-that job's name as a required check in the repository's branch rules.
+## Deterministic Pipeline CI check (v1.438.0)
+
+The repository's independent `Deterministic Pipeline` job runs on every normal
+pull request and push. It builds the real Rust `pcbex` binary, compiles a
+closed intent fixture, and runs the resulting plan through the deterministic
+runner. The accepted case verifies the complete circuit/schematic/board chain;
+the second case exercises a semantic manufacturing rejection. Both the normal
+rejection and the explicit `--require-approved` rejection retain their reports:
+the latter exits nonzero only after writing and authenticating a separate report
+path. The job also rechecks the compiler's intent/plan source identities against
+the runner report's raw-plan binding before it trusts the result.
+
+Its manufacturing archive is a deterministic synthetic gate fixture. The job
+therefore verifies manifest-bound manufacturing semantics, while the separate
+`KiCad E2E` check covers real KiCad fabrication export.
+
+The job writes only bounded scalar identities, counts, and decisions to the
+GitHub Job Summary and uploads the retained reports as scanned artifacts. It
+uses the plan-schema-v1 and deterministic-report-schema-v1 contracts unchanged;
+the firmware phase validates the manifest and source evidence but does not
+replay the recorded firmware builds. It performs no path discovery, LLM or
+network call, design mutation, factory submission, or order.
+
+The job's successful conclusion is a normal status check for the latest commit
+and can be selected as a required check in branch protection. Confirm a
+successful run for the latest commit before adding the `Deterministic Pipeline`
+context to `main`; `scripts/release-audit.py --check-protection` verifies that
+the context is required and pinned to the GitHub Actions app (`app_id: 15368`)
+alongside the other required checks. A pull-request-controlled workflow is not
+an authorization boundary against a malicious write collaborator; repository
+permissions, protected branches, and review policy remain necessary. The
+existing `pipeline-verify` CLI and composite Action interfaces remain available
+independently of this CI fixture.
 
 ## Operational checks
 
