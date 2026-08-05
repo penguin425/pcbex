@@ -30,6 +30,7 @@ if str(AGENT_SRC) not in sys.path:
 
 from pcbex_agent.bounded_io import (  # noqa: E402
     BoundedIOError,
+    atomic_write_no_clobber,
     atomic_write_text,
     atomic_write_text_no_clobber,
     read_bytes,

@@ -213,10 +213,12 @@ automatically populates the separate `ai-review-*` retained-report flow.
 
 ## Native KiCad PCB DRC evidence
 
-Release v1.429.0 adds a standalone, canonical and digest-bound native KiCad PCB
-DRC evidence gate. It runs `drc.v1`-compatible KiCad in private staging, strips
-volatile dates, paths, and generated UUIDs, and canonicalizes findings to
-integer nanometres. CI proves byte-identical reruns with real KiCad 10.
+Release v1.430.0 adds fresh replay for the standalone, canonical and
+digest-bound native KiCad PCB DRC evidence gate introduced in v1.429.0. It
+runs `drc.v1`-compatible KiCad in private staging, strips volatile dates,
+paths, and generated UUIDs, and canonicalizes findings to integer nanometres.
+CI proves byte-identical generation and retained-report replay with real
+KiCad 10.
 Approval requires both native error and warning counts to be zero; rejected
 reports are retained before an optional required-approval failure. Optional
 same-stem `.kicad_pro` and `.kicad_dru` companions are auto-discovered when
@@ -230,6 +232,9 @@ pcbex native-kicad-drc-report-schema \
   --output build/native-kicad-drc.schema.json
 pcbex run-native-kicad-drc hardware/controller.kicad_pcb \
   --output build/native-kicad-drc.json --require-approved
+pcbex verify-native-kicad-drc-report \
+  hardware/controller.kicad_pcb build/native-kicad-drc.json \
+  --require-approved
 ```
 
 The focused Action can be used without enabling the root hardware-analysis
@@ -237,11 +242,26 @@ flow:
 
 ```yaml
 - id: native-drc
-  uses: penguin425/pcbex/actions/native-kicad-drc@v1.429.0
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.430.0
   with:
     board: hardware/controller.kicad_pcb
     # project: hardware/controller.kicad_pro
     # rules-file: hardware/controller.kicad_dru
+    require-approved: "true"
+```
+
+To re-verify a report restored from an earlier job or trusted artifact, use
+the same focused Action in verify mode. It reruns KiCad and publishes a newly
+authenticated no-clobber copy under the new output directory:
+
+```yaml
+- id: replay-native-drc
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.430.0
+  with:
+    mode: verify
+    board: hardware/controller.kicad_pcb
+    report: retained/native-kicad-drc.json
+    output-dir: build/native-drc-replay
     require-approved: "true"
 ```
 
@@ -251,6 +271,8 @@ DRC inputs. Unsafe artifact-glob output paths fail during preflight while
 ordinary relative paths, including spaces, remain supported. This evidence
 boundary does not automatically connect `drc.rpt`, the existing internal DRC,
 native ERC, AI approval, or manufacturing/pipeline phases.
+The root Action remains run-only; retained-report replay is exposed by the
+focused Action and MCP tool.
 
 ## KiCad boards
 

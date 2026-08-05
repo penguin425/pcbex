@@ -888,7 +888,10 @@ fn constraint_penalty(
                 edge,
                 max_distance_nm,
             } => {
-                let p = center(&components[index[subject.as_str()]]);
+                // Board-edge subjects may name a component anchor (for example
+                // `J1.PIN1`), so score the transformed named position rather
+                // than indexing the component with the qualified reference.
+                let p = named_position(subject, components, index);
                 board_edge_excess_nm(
                     p,
                     *edge,
@@ -912,7 +915,11 @@ fn constraint_penalty(
                 }
             }
             PlacementConstraint::Region { subject, min, max } => {
-                let bounds = bounds(&components[index[subject.as_str()]]);
+                // Regions constrain the complete component body (see the
+                // placement contract), not an individual anchor.  Keep the
+                // anchor qualifier valid for reference checking, but use the
+                // owning component's transformed courtyard/bounds here.
+                let bounds = bounds(&components[index[component_name(subject)]]);
                 region_overflow_nm(bounds, *min, *max) / unit
             }
         })
@@ -1694,6 +1701,105 @@ mod tests {
         };
         let result = place(&p, &PlacementOptions::default()).unwrap();
         assert_eq!(result.final_score.constraint_violation, 0.0);
+    }
+
+    #[test]
+    fn board_edge_and_region_constraints_support_named_anchors() {
+        let mut u1 = component(
+            "U1",
+            Some(Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            }),
+        );
+        u1.fixed = true;
+        // The anchor is on the left board edge while the component body is
+        // centered well inside the board.
+        u1.anchors.insert(
+            "EDGE".into(),
+            Point {
+                x_nm: -5_000_000,
+                y_nm: 0,
+            },
+        );
+        // This anchor is outside the region; the region still passes because
+        // its contract constrains the complete component body.
+        u1.anchors.insert(
+            "OUTSIDE".into(),
+            Point {
+                x_nm: 5_000_000,
+                y_nm: 0,
+            },
+        );
+        let problem = PlacementProblem {
+            width_nm: 10_000_000,
+            height_nm: 10_000_000,
+            grid_nm: 500_000,
+            components: vec![u1],
+            connections: vec![],
+            constraints: vec![
+                PlacementConstraint::BoardEdge {
+                    subject: "U1.EDGE".into(),
+                    edge: Edge::Left,
+                    max_distance_nm: 0,
+                },
+                PlacementConstraint::Region {
+                    subject: "U1.OUTSIDE".into(),
+                    min: Point {
+                        x_nm: 4_000_000,
+                        y_nm: 4_000_000,
+                    },
+                    max: Point {
+                        x_nm: 6_000_000,
+                        y_nm: 6_000_000,
+                    },
+                },
+            ],
+        };
+
+        let score = evaluate(&problem, &problem.components, &ScoreWeights::default()).unwrap();
+        assert_eq!(score.constraint_violation, 0.0);
+    }
+
+    #[test]
+    fn board_edge_and_region_constraints_reject_unknown_anchors() {
+        let u1 = component(
+            "U1",
+            Some(Point {
+                x_nm: 5_000_000,
+                y_nm: 5_000_000,
+            }),
+        );
+        for constraint in [
+            PlacementConstraint::BoardEdge {
+                subject: "U1.MISSING".into(),
+                edge: Edge::Left,
+                max_distance_nm: 0,
+            },
+            PlacementConstraint::Region {
+                subject: "U1.MISSING".into(),
+                min: Point {
+                    x_nm: 4_000_000,
+                    y_nm: 4_000_000,
+                },
+                max: Point {
+                    x_nm: 6_000_000,
+                    y_nm: 6_000_000,
+                },
+            },
+        ] {
+            let problem = PlacementProblem {
+                width_nm: 10_000_000,
+                height_nm: 10_000_000,
+                grid_nm: 500_000,
+                components: vec![u1.clone()],
+                connections: vec![],
+                constraints: vec![constraint],
+            };
+            let error =
+                evaluate(&problem, &problem.components, &ScoreWeights::default()).unwrap_err();
+            assert!(error.contains("unknown anchor"), "{error}");
+        }
     }
 
     #[test]

@@ -18,6 +18,26 @@ for variable in "${required_variables[@]}"; do
 done
 
 action_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+native_kicad_drc_mode="${PCBEX_NATIVE_KICAD_DRC_MODE:-run}"
+native_kicad_drc_retained_report="${PCBEX_NATIVE_KICAD_DRC_REPORT:-}"
+case "$native_kicad_drc_mode" in
+  run)
+    if [[ -n "$native_kicad_drc_retained_report" ]]; then
+      echo "report must be empty when mode is run" >&2
+      exit 2
+    fi
+    ;;
+  verify)
+    if [[ -z "$native_kicad_drc_retained_report" ]]; then
+      echo "report must not be empty when mode is verify" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "mode must be run or verify" >&2
+    exit 2
+    ;;
+esac
 python3 "$action_script_dir/ci_runtime.py" validate-input \
   "--path=$PCBEX_NATIVE_KICAD_DRC_BOARD"
 if [[ -n "${PCBEX_NATIVE_KICAD_DRC_PROJECT:-}" ]]; then
@@ -27,6 +47,10 @@ fi
 if [[ -n "${PCBEX_NATIVE_KICAD_DRC_RULES_FILE:-}" ]]; then
   python3 "$action_script_dir/ci_runtime.py" validate-input \
     "--path=$PCBEX_NATIVE_KICAD_DRC_RULES_FILE"
+fi
+if [[ "$native_kicad_drc_mode" == "verify" ]]; then
+  python3 "$action_script_dir/ci_runtime.py" validate-input \
+    "--path=$native_kicad_drc_retained_report"
 fi
 PYTHONPATH="$action_script_dir" python3 - "$PCBEX_OUTPUT_DIR" <<'PY'
 import sys
@@ -107,16 +131,26 @@ if [[ -e "$native_kicad_drc_report_candidate" ||
   exit 2
 fi
 
-native_kicad_drc_arguments=(
-  run-native-kicad-drc
-  "--output=$native_kicad_drc_report_candidate"
-  "--kicad-cli=$PCBEX_NATIVE_KICAD_DRC_KICAD_CLI"
-  --mcp-echo-report-summary
-)
+if [[ "$native_kicad_drc_mode" == "run" ]]; then
+  native_kicad_drc_arguments=(
+    run-native-kicad-drc
+    "--output=$native_kicad_drc_report_candidate"
+    "--kicad-cli=$PCBEX_NATIVE_KICAD_DRC_KICAD_CLI"
+    --mcp-echo-report-summary
+  )
+  native_kicad_drc_summary_report="$native_kicad_drc_report_candidate"
+else
+  native_kicad_drc_arguments=(
+    verify-native-kicad-drc-report
+    "--kicad-cli=$PCBEX_NATIVE_KICAD_DRC_KICAD_CLI"
+    --mcp-echo-report-summary
+  )
+  native_kicad_drc_summary_report="$native_kicad_drc_retained_report"
+fi
 native_kicad_drc_summary_arguments=(
   --verify
   "--board=$PCBEX_NATIVE_KICAD_DRC_BOARD"
-  "--report=$native_kicad_drc_report_candidate"
+  "--report=$native_kicad_drc_summary_report"
 )
 if [[ -n "$native_kicad_drc_project" ]]; then
   native_kicad_drc_arguments+=("--project=$native_kicad_drc_project")
@@ -126,9 +160,13 @@ if [[ -n "$native_kicad_drc_rules_file" ]]; then
   native_kicad_drc_arguments+=("--rules-file=$native_kicad_drc_rules_file")
   native_kicad_drc_summary_arguments+=("--rules-file=$native_kicad_drc_rules_file")
 fi
-# Keep the board after `--`: a caller-controlled basename can never become an
-# option to either clap or KiCad, even when it begins with a dash.
-native_kicad_drc_arguments+=(-- "$PCBEX_NATIVE_KICAD_DRC_BOARD")
+# Keep caller-controlled paths after `--`: a basename can never become an
+# option to clap or KiCad, even when it begins with a dash.
+if [[ "$native_kicad_drc_mode" == "run" ]]; then
+  native_kicad_drc_arguments+=(-- "$PCBEX_NATIVE_KICAD_DRC_BOARD")
+else
+  native_kicad_drc_arguments+=(-- "$PCBEX_NATIVE_KICAD_DRC_BOARD" "$native_kicad_drc_retained_report")
+fi
 
 native_kicad_drc_summary_json=""
 native_kicad_drc_rc=0
@@ -166,10 +204,7 @@ run_sha256=""
 report_bytes=""
 report_sha256=""
 
-if ((native_kicad_drc_rc == 0)) &&
-  [[ -f "$native_kicad_drc_report_candidate" &&
-    ! -L "$native_kicad_drc_report_candidate" &&
-    -n "$native_kicad_drc_summary_json" ]]; then
+if ((native_kicad_drc_rc == 0)) && [[ -n "$native_kicad_drc_summary_json" ]]; then
   summary_values=""
   if summary_values="$(
     python3 - "$native_kicad_drc_summary_json" <<'PY'
@@ -276,7 +311,85 @@ PY
     native_kicad_drc_rc=2
   fi
   if ((native_kicad_drc_rc == 0)); then
-    native_kicad_drc_report="$native_kicad_drc_report_candidate"
+    if [[ "$native_kicad_drc_mode" == "verify" ]]; then
+      if ! PYTHONPATH="$action_script_dir" python3 - \
+        "$native_kicad_drc_retained_report" \
+        "$native_kicad_drc_report_candidate" \
+        "$report_bytes" \
+        "$report_sha256" <<'PY'
+import hashlib
+import sys
+
+from ci_runtime import ExecutionBoundaryError, atomic_write_no_clobber, read_bytes
+
+REPORT_MAX_BYTES = 32 * 1024 * 1024
+
+source, destination, expected_bytes, expected_sha256 = sys.argv[1:]
+try:
+    expected_size = int(expected_bytes)
+    # Read the authenticated source twice immediately before publication. A
+    # source mutation is therefore rejected instead of copied into evidence.
+    first = read_bytes(source, max_bytes=REPORT_MAX_BYTES)
+    second = read_bytes(source, max_bytes=REPORT_MAX_BYTES)
+    if first != second:
+        raise ExecutionBoundaryError("retained report changed between bounded reads")
+    if len(first) != expected_size or hashlib.sha256(first).hexdigest() != expected_sha256:
+        raise ExecutionBoundaryError("retained report no longer matches authenticated summary")
+    # Publish the exact authenticated bytes through the bounded no-clobber
+    # primitive; links, aliases, and creator races fail closed.
+    atomic_write_no_clobber(destination, first, max_bytes=REPORT_MAX_BYTES)
+except (ExecutionBoundaryError, OSError, TypeError, ValueError) as error:
+    print(f"could not publish authenticated retained report: {error}", file=sys.stderr)
+    raise SystemExit(2)
+PY
+      then
+        native_kicad_drc_rc=2
+      fi
+      if ((native_kicad_drc_rc == 0)); then
+        native_kicad_drc_copy_summary_arguments=(
+          --verify
+          "--board=$PCBEX_NATIVE_KICAD_DRC_BOARD"
+          "--report=$native_kicad_drc_report_candidate"
+        )
+        if [[ -n "$native_kicad_drc_project" ]]; then
+          native_kicad_drc_copy_summary_arguments+=("--project=$native_kicad_drc_project")
+        fi
+        if [[ -n "$native_kicad_drc_rules_file" ]]; then
+          native_kicad_drc_copy_summary_arguments+=("--rules-file=$native_kicad_drc_rules_file")
+        fi
+        native_kicad_drc_copy_summary_json=""
+        if native_kicad_drc_copy_summary_json="$({
+          printf '%s\n' "$native_kicad_drc_summary_json" |
+            python3 "$action_script_dir/native_kicad_drc_summary.py" \
+              "${native_kicad_drc_copy_summary_arguments[@]}"
+        })"; then
+          if ! python3 - "$native_kicad_drc_summary_json" "$native_kicad_drc_copy_summary_json" <<'PY'
+import json
+import sys
+
+try:
+    original = json.loads(sys.argv[1])
+    copied = json.loads(sys.argv[2])
+except (IndexError, json.JSONDecodeError, TypeError, ValueError):
+    raise SystemExit(2)
+if type(original) is not dict or type(copied) is not dict or original != copied:
+    raise SystemExit(2)
+PY
+          then
+            native_kicad_drc_rc=2
+          fi
+        else
+          native_kicad_drc_rc=2
+        fi
+      fi
+    fi
+    if ((native_kicad_drc_rc == 0)) &&
+      [[ -f "$native_kicad_drc_report_candidate" &&
+        ! -L "$native_kicad_drc_report_candidate" ]]; then
+      native_kicad_drc_report="$native_kicad_drc_report_candidate"
+    else
+      native_kicad_drc_rc=2
+    fi
   fi
 else
   native_kicad_drc_rc=2

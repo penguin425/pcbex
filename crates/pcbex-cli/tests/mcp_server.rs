@@ -3,10 +3,13 @@ use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{ChildStdin, ChildStdout, Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 fn send(stdin: &mut ChildStdin, message: Value) {
     serde_json::to_writer(&mut *stdin, &message).unwrap();
@@ -48,6 +51,60 @@ fn temporary_directory(name: &str) -> PathBuf {
         .expect("clock must follow Unix epoch")
         .as_nanos();
     std::env::temp_dir().join(format!("pcbex-{name}-{}-{unique}", std::process::id()))
+}
+
+#[cfg(unix)]
+fn fake_native_kicad_drc_cli(directory: &Path, name: &str, with_finding: bool) -> PathBuf {
+    const DRC_SCHEMA: &str = "https://schemas.kicad.org/drc.v1.json";
+    let path = directory.join(name);
+    let status = if with_finding { 5 } else { 0 };
+    let violations = if with_finding {
+        r#"[{"description":"bad","items":[{"description":"pad","pos":{"x":1.0,"y":2.0},"uuid":"00000000-0000-0000-0000-000000000001"}],"severity":"error","type":"clearance"}]"#
+    } else {
+        "[]"
+    };
+    let report = format!(
+        r#"{{"$schema":"{DRC_SCHEMA}","coordinate_units":"mm","date":"now","included_severities":["error","warning"],"kicad_version":"10.0.5","schematic_parity":[],"source":"input.kicad_pcb","unconnected_items":[],"violations":{violations}}}"#
+    );
+    let script = format!(
+        "#!/bin/sh\nout=''\ninput=''\nwhile [ $# -gt 0 ]; do\n  if [ \"$1\" = \"--output\" ]; then out=$2; shift 2; else input=$1; shift; fi\ndone\nprintf '%s' '{report}' > \"$out\"\nexit {status}\n"
+    );
+    fs::write(&path, script).unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn fake_sleeping_native_kicad_drc_cli(directory: &Path) -> PathBuf {
+    let path = directory.join("fake-drc-sleeping");
+    fs::write(
+        &path,
+        "#!/bin/sh\nsleep 600 &\nsleep_pid=$!\nprintf '%s %s\\n' \"$$\" \"$sleep_pid\" > \"$PCBEX_TEST_KICAD_PID_FILE\"\nwait \"$sleep_pid\"\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o700);
+    fs::set_permissions(&path, permissions).unwrap();
+    path
+}
+
+#[cfg(unix)]
+fn unix_process_exists(pid: i32) -> bool {
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    unsafe { kill(pid, 0) == 0 }
+}
+
+#[cfg(unix)]
+fn kill_unix_process_group(pid: i32) {
+    unsafe extern "C" {
+        fn kill(pid: i32, signal: i32) -> i32;
+    }
+    const SIGKILL: i32 = 9;
+    let _ = unsafe { kill(-pid, SIGKILL) };
 }
 
 const HANDOFF_CIRCUIT_SPEC: &str = r#"{
@@ -298,6 +355,25 @@ fn stdio_server_advertises_native_kicad_drc_contract_and_rejects_bad_arguments()
         "string"
     );
 
+    let verifier = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|tool| tool["name"] == "verify_native_kicad_drc_report")
+        .expect("native DRC replay MCP tool is advertised");
+    assert_eq!(verifier["inputSchema"]["additionalProperties"], false);
+    assert_eq!(
+        verifier["inputSchema"]["required"],
+        json!(["input", "report"])
+    );
+    assert_eq!(
+        verifier["inputSchema"]["properties"]["report"]["minLength"],
+        1
+    );
+    assert_eq!(verifier["execution"]["taskSupport"], "optional");
+    assert_eq!(verifier["annotations"]["readOnlyHint"], true);
+    assert_eq!(verifier["annotations"]["destructiveHint"], false);
+
     send(
         &mut stdin,
         json!({
@@ -317,6 +393,27 @@ fn stdio_server_advertises_native_kicad_drc_contract_and_rejects_bad_arguments()
             .as_str()
             .unwrap()
             .contains("project")
+    );
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "replay-wrong-type",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_drc_report",
+                "arguments": {"input": "board.kicad_pcb", "report": 4}
+            }
+        }),
+    );
+    let replay_wrong_type = receive(&mut stdout);
+    assert_eq!(replay_wrong_type["error"]["code"], -32602);
+    assert!(
+        replay_wrong_type["error"]["data"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("report")
     );
 
     send(
@@ -350,6 +447,284 @@ fn stdio_server_advertises_native_kicad_drc_contract_and_rejects_bad_arguments()
         "MCP server stderr: {}",
         String::from_utf8_lossy(&stderr_bytes)
     );
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_server_verifies_native_drc_replay_and_preserves_rejected_summary() {
+    let output = temporary_directory("mcp-native-drc-replay");
+    fs::create_dir_all(&output).unwrap();
+    let rejected_cli = fake_native_kicad_drc_cli(&output, "fake-drc-rejected", true);
+    let approved_cli = fake_native_kicad_drc_cli(&output, "fake-drc-approved", false);
+    let board = output.join("-board.kicad_pcb");
+    let report = output.join("-retained.json");
+    fs::write(&board, b"board").unwrap();
+
+    // Seed a canonical rejected report directly through the public CLI.  The
+    // MCP replay below must verify this retained report without replacing it.
+    let generated = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .current_dir(&output)
+        .args([
+            "run-native-kicad-drc",
+            "--output=-retained.json",
+            "--kicad-cli=./fake-drc-rejected",
+            "--",
+            "-board.kicad_pcb",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "native DRC seed failed: {}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let retained = fs::read(&report).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .current_dir(&output)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    let initialized = initialize(
+        &mut stdin,
+        &mut stdout,
+        json!("initialize-native-drc-replay"),
+    );
+    assert_eq!(initialized["result"]["protocolVersion"], "2025-11-25");
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "replay-rejected",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_drc_report",
+                "arguments": {
+                    "input": "-board.kicad_pcb",
+                    "report": "-retained.json",
+                    "kicad_cli": "./fake-drc-rejected",
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let rejected = receive(&mut stdout);
+    assert_eq!(rejected["id"], "replay-rejected");
+    assert_eq!(rejected["result"]["isError"], true);
+    assert_eq!(rejected["result"]["structuredContent"]["ok"], false);
+    let summary = &rejected["result"]["structuredContent"]["report_summary"];
+    const SUMMARY_FIELDS: [&str; 17] = [
+        "schema_version",
+        "approved",
+        "violation_count",
+        "unconnected_item_count",
+        "schematic_parity_count",
+        "error_count",
+        "warning_count",
+        "ignored_check_count",
+        "board_bytes",
+        "board_sha256",
+        "project_bytes",
+        "project_sha256",
+        "rules_file_bytes",
+        "rules_file_sha256",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+    ];
+    assert!(summary.is_object());
+    assert_eq!(summary.as_object().unwrap().len(), SUMMARY_FIELDS.len());
+    for field in SUMMARY_FIELDS {
+        assert!(
+            summary.get(field).is_some(),
+            "missing summary field {field}"
+        );
+    }
+    assert_eq!(summary["approved"], false);
+    assert_eq!(summary["error_count"], 1);
+    assert_eq!(summary["report_bytes"], retained.len());
+    let mut retained_hasher = Sha256::new();
+    retained_hasher.update(&retained);
+    assert_eq!(
+        summary["report_sha256"],
+        hex::encode(retained_hasher.finalize())
+    );
+    assert_eq!(fs::read(&report).unwrap(), retained);
+
+    // A fresh run with a different native result must fail closed: no summary
+    // is trusted, and the retained rejected report remains byte-for-byte
+    // unchanged.
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "replay-mismatch",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_drc_report",
+                "arguments": {
+                    "input": "-board.kicad_pcb",
+                    "report": "-retained.json",
+                    "kicad_cli": "./fake-drc-approved"
+                }
+            }
+        }),
+    );
+    let mismatch = receive(&mut stdout);
+    assert_eq!(mismatch["id"], "replay-mismatch");
+    assert_eq!(mismatch["result"]["isError"], true);
+    assert_eq!(mismatch["result"]["structuredContent"]["ok"], false);
+    assert!(mismatch["result"]["structuredContent"]["report_summary"].is_null());
+    assert_eq!(fs::read(&report).unwrap(), retained);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert!(rejected_cli.is_file());
+    assert!(approved_cli.is_file());
+    fs::remove_dir_all(output).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn stdio_server_cancels_native_drc_replay_without_orphaning_kicad() {
+    let output = temporary_directory("mcp-native-drc-replay-cancel");
+    fs::create_dir_all(&output).unwrap();
+    let approved_cli = fake_native_kicad_drc_cli(&output, "fake-drc-approved", false);
+    let sleeping_cli = fake_sleeping_native_kicad_drc_cli(&output);
+    let board = output.join("board.kicad_pcb");
+    let report = output.join("retained.json");
+    let pid_file = output.join("kicad.pid");
+    fs::write(&board, b"board").unwrap();
+
+    let generated = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .current_dir(&output)
+        .args([
+            "run-native-kicad-drc",
+            "--output=retained.json",
+            "--kicad-cli=./fake-drc-approved",
+            "--",
+            "board.kicad_pcb",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        generated.status.success(),
+        "native DRC seed failed: {}",
+        String::from_utf8_lossy(&generated.stderr)
+    );
+    let retained = fs::read(&report).unwrap();
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_pcbex"))
+        .arg("mcp-server")
+        .current_dir(&output)
+        .env("PCBEX_TEST_KICAD_PID_FILE", &pid_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize(&mut stdin, &mut stdout, json!("initialize-replay-cancel"));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "create-replay-task",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_native_kicad_drc_report",
+                "arguments": {
+                    "input": "board.kicad_pcb",
+                    "report": "retained.json",
+                    "kicad_cli": "./fake-drc-sleeping"
+                },
+                "task": {"ttl": 60_000}
+            }
+        }),
+    );
+    let created = receive(&mut stdout);
+    let task_id = created["result"]["task"]["taskId"]
+        .as_str()
+        .expect("replay task id")
+        .to_string();
+    assert_eq!(created["result"]["task"]["status"], "working");
+
+    let pid_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !pid_file.is_file() && std::time::Instant::now() < pid_deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(pid_file.is_file(), "sleeping KiCad child did not start");
+    let pids = fs::read_to_string(&pid_file)
+        .unwrap()
+        .split_whitespace()
+        .map(|value| value.parse::<i32>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(pids.len(), 2, "fixture must record shell and sleep PIDs");
+    assert!(pids.iter().all(|pid| unix_process_exists(*pid)));
+
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "cancel-replay-task",
+            "method": "tasks/cancel",
+            "params": {"taskId": task_id}
+        }),
+    );
+    let cancelled = receive(&mut stdout);
+    assert_eq!(cancelled["result"]["status"], "cancelled");
+
+    let exit_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while pids.iter().any(|pid| unix_process_exists(*pid))
+        && std::time::Instant::now() < exit_deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let orphaned = pids
+        .iter()
+        .copied()
+        .filter(|pid| unix_process_exists(*pid))
+        .collect::<Vec<_>>();
+    if !orphaned.is_empty() {
+        // Keep a failing regression from leaking the deliberately long-lived
+        // fixture into the test host.
+        kill_unix_process_group(pids[0]);
+    }
+    assert!(
+        orphaned.is_empty(),
+        "cancelled replay left KiCad processes {orphaned:?} running"
+    );
+    assert_eq!(fs::read(&report).unwrap(), retained);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+    assert!(approved_cli.is_file());
+    assert!(sleeping_cli.is_file());
     fs::remove_dir_all(output).unwrap();
 }
 
