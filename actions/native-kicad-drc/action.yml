@@ -1,5 +1,5 @@
 name: pcbex native KiCad PCB DRC
-description: Run authenticated native KiCad PCB design-rules checking with retained evidence.
+description: Run or freshly replay authenticated native KiCad PCB design-rules evidence.
 author: pcbex contributors
 
 branding:
@@ -7,6 +7,10 @@ branding:
   color: green
 
 inputs:
+  mode:
+    description: "Native DRC evidence mode: run a fresh KiCad check or verify a retained report by replaying KiCad."
+    required: false
+    default: run
   board:
     description: Caller-workspace-relative KiCad PCB board to verify.
     required: true
@@ -16,6 +20,10 @@ inputs:
     default: ""
   rules-file:
     description: Optional caller-workspace-relative KiCad DRC rules file; same-stem .kicad_dru is auto-discovered when omitted.
+    required: false
+    default: ""
+  report:
+    description: Caller-workspace-relative retained normalized native DRC report; required only when mode is verify.
     required: false
     default: ""
   kicad-cli:
@@ -45,13 +53,13 @@ inputs:
 
 outputs:
   status:
-    description: Verified runner status, either ok or error.
+    description: Verified run/replay status, either ok or error.
     value: ${{ steps.native-drc.outputs.status }}
   artifact-dir:
     description: Bounded caller-workspace-relative evidence directory.
     value: ${{ steps.native-drc.outputs.artifact-dir }}
   native-kicad-drc-report:
-    description: Fixed retained normalized native KiCad PCB DRC report path.
+    description: Fixed generated or freshly re-authenticated normalized native KiCad PCB DRC report path.
     value: ${{ steps.native-drc.outputs.native-kicad-drc-report }}
   schema-version:
     description: Native KiCad PCB DRC report schema version.
@@ -112,9 +120,11 @@ runs:
       id: preflight
       shell: bash
       env:
+        PCBEX_MODE: ${{ inputs.mode }}
         PCBEX_BOARD: ${{ inputs.board }}
         PCBEX_PROJECT: ${{ inputs.project }}
         PCBEX_RULES_FILE: ${{ inputs.rules-file }}
+        PCBEX_REPORT: ${{ inputs.report }}
         PCBEX_KICAD_CLI: ${{ inputs.kicad-cli }}
         PCBEX_REQUIRE_APPROVED: ${{ inputs.require-approved }}
         PCBEX_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
@@ -126,6 +136,18 @@ runs:
         repository_root="$(cd -- "$GITHUB_ACTION_PATH/../.." && pwd -P)"
         if [[ -z "$PCBEX_BOARD" ]]; then
           echo "board must not be empty" >&2
+          exit 2
+        fi
+        case "$PCBEX_MODE" in
+          run|verify) ;;
+          *) echo "mode must be run or verify" >&2; exit 2 ;;
+        esac
+        if [[ "$PCBEX_MODE" == "run" && -n "$PCBEX_REPORT" ]]; then
+          echo "report must be empty when mode is run" >&2
+          exit 2
+        fi
+        if [[ "$PCBEX_MODE" == "verify" && -z "$PCBEX_REPORT" ]]; then
+          echo "report must not be empty when mode is verify" >&2
           exit 2
         fi
         if [[ -z "$PCBEX_KICAD_CLI" ]]; then
@@ -208,6 +230,10 @@ runs:
           python3 "$repository_root/scripts/ci_runtime.py" validate-input \
             "--path=$resolved_rules"
         fi
+        if [[ "$PCBEX_MODE" == "verify" ]]; then
+          python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+            "--path=$PCBEX_REPORT"
+        fi
         python3 "$repository_root/scripts/ci_runtime.py" validate-output \
           "--output-root=$PCBEX_OUTPUT_DIR"
         printf 'project=%s\n' "$resolved_project" >> "$GITHUB_OUTPUT"
@@ -256,12 +282,14 @@ runs:
         printf 'binary=%s\n' "$binary" >> "$GITHUB_OUTPUT"
         printf 'repository-root=%s\n' "$repository_root" >> "$GITHUB_OUTPUT"
 
-    - name: Run native KiCad PCB DRC
+    - name: Run or replay native KiCad PCB DRC
       id: native-drc
       shell: bash
       env:
         PCBEX_BINARY: ${{ steps.build.outputs.binary }}
         PCBEX_NATIVE_KICAD_DRC_BOARD: ${{ inputs.board }}
+        PCBEX_NATIVE_KICAD_DRC_MODE: ${{ inputs.mode }}
+        PCBEX_NATIVE_KICAD_DRC_REPORT: ${{ inputs.report }}
         PCBEX_NATIVE_KICAD_DRC_PROJECT: ${{ steps.preflight.outputs.project }}
         PCBEX_NATIVE_KICAD_DRC_RULES_FILE: ${{ steps.preflight.outputs.rules-file }}
         PCBEX_NATIVE_KICAD_DRC_KICAD_CLI: ${{ inputs.kicad-cli }}

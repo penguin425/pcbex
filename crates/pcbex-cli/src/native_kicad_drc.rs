@@ -919,7 +919,6 @@ fn validate_report(report: &NativeKicadDrcReport) -> Result<()> {
 /// `decode_native_kicad_drc_report` is also used by CLI/MCP consumers which
 /// receive a retained report as bytes and must not rely on a shallow JSON
 /// value inspection.
-#[allow(dead_code)]
 pub(crate) fn verify_native_kicad_drc_report(
     input: &Path,
     retained_report_path: &Path,
@@ -941,13 +940,19 @@ pub(crate) fn verify_native_kicad_drc_report(
     let (resolved_project, resolved_rules) =
         resolve_native_kicad_drc_companions(input, project, rules_file)?;
     let (source_before, source_identity) = snapshot(input, "board")?;
-    let project_identity = match resolved_project.as_deref() {
-        Some(path) => Some(snapshot(path, "project")?.1),
-        None => None,
+    let (project_before, project_identity) = match resolved_project.as_deref() {
+        Some(path) => {
+            let (bytes, identity) = snapshot(path, "project")?;
+            (Some(bytes), Some(identity))
+        }
+        None => (None, None),
     };
-    let rules_identity = match resolved_rules.as_deref() {
-        Some(path) => Some(snapshot(path, "rules file")?.1),
-        None => None,
+    let (rules_before, rules_identity) = match resolved_rules.as_deref() {
+        Some(path) => {
+            let (bytes, identity) = snapshot(path, "rules file")?;
+            (Some(bytes), Some(identity))
+        }
+        None => (None, None),
     };
     if retained.source != source_identity
         || retained.project != project_identity
@@ -961,6 +966,24 @@ pub(crate) fn verify_native_kicad_drc_report(
         .context("re-reading generated KiCad PCB board")?;
     if source_after != source_before {
         bail!("generated KiCad PCB board changed during native DRC verification")
+    }
+    let (resolved_project_after, resolved_rules_after) =
+        resolve_native_kicad_drc_companions(input, project, rules_file)?;
+    if resolved_project_after != resolved_project || resolved_rules_after != resolved_rules {
+        bail!("native KiCad PCB DRC companion resolution changed during verification")
+    }
+    if let Some(path) = resolved_project.as_deref() {
+        let (project_after, project_identity_after) = snapshot(path, "project")?;
+        if Some(project_after) != project_before || Some(project_identity_after) != project_identity
+        {
+            bail!("generated KiCad PCB project changed during native DRC verification")
+        }
+    }
+    if let Some(path) = resolved_rules.as_deref() {
+        let (rules_after, rules_identity_after) = snapshot(path, "rules file")?;
+        if Some(rules_after) != rules_before || Some(rules_identity_after) != rules_identity {
+            bail!("generated KiCad PCB rules file changed during native DRC verification")
+        }
     }
     let report_bytes_after =
         crate::bounded_io::read_with_limit(retained_report_path, MAX_REPORT_BYTES)
@@ -1006,6 +1029,46 @@ pub(crate) fn render_native_kicad_drc_report(report: &NativeKicadDrcReport) -> R
         bail!("native KiCad PCB DRC report exceeds {MAX_REPORT_BYTES} bytes")
     }
     Ok(bytes)
+}
+
+/// Build the fixed compact summary used by CLI, MCP, and Action bridges.
+/// `rendered` must be the canonical bytes returned by
+/// [`render_native_kicad_drc_report`] for `report`.
+pub(crate) fn native_kicad_drc_report_summary(
+    report: &NativeKicadDrcReport,
+    rendered: &[u8],
+) -> Value {
+    json!({
+        "schema_version": report.schema_version,
+        "approved": report.approved,
+        "violation_count": report.violation_count,
+        "unconnected_item_count": report.unconnected_item_count,
+        "schematic_parity_count": report.schematic_parity_count,
+        "error_count": report.error_count,
+        "warning_count": report.warning_count,
+        "ignored_check_count": report.ignored_checks.len(),
+        "board_bytes": report.source.bytes,
+        "board_sha256": report.source.sha256,
+        "project_bytes": report.project.as_ref().map_or_else(
+            || Value::String(String::new()),
+            |identity| Value::from(identity.bytes),
+        ),
+        "project_sha256": report.project.as_ref().map_or_else(
+            || Value::String(String::new()),
+            |identity| Value::String(identity.sha256.clone()),
+        ),
+        "rules_file_bytes": report.rules_file.as_ref().map_or_else(
+            || Value::String(String::new()),
+            |identity| Value::from(identity.bytes),
+        ),
+        "rules_file_sha256": report.rules_file.as_ref().map_or_else(
+            || Value::String(String::new()),
+            |identity| Value::String(identity.sha256.clone()),
+        ),
+        "run_sha256": report.run_sha256,
+        "report_bytes": rendered.len(),
+        "report_sha256": hex::encode(Sha256::digest(rendered)),
+    })
 }
 
 /// Return the manually closed JSON schema for the native KiCad PCB DRC report.

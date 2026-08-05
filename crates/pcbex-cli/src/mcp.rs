@@ -463,6 +463,7 @@ impl McpServer {
                     | "run_deterministic_pipeline"
                     | "run_native_kicad_erc"
                     | "run_native_kicad_drc"
+                    | "verify_native_kicad_drc_report"
             )
         ) {
             return error_response(
@@ -1085,6 +1086,27 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
             }),
             false,
             true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "verify_native_kicad_drc_report",
+            "Verify native KiCad PCB DRC report",
+            "Re-run KiCad's native PCB design-rules checker and verify a retained, digest-bound report without modifying it; rejected evidence remains valid unless approval is required.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "report"],
+                "properties": {
+                    "input": {"type": "string", "minLength": 1},
+                    "report": {"type": "string", "minLength": 1},
+                    "project": {"type": "string", "minLength": 1},
+                    "rules_file": {"type": "string", "minLength": 1},
+                    "kicad_cli": {"type": "string", "minLength": 1},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            true,
+            false,
             tasks_supported.then_some("optional"),
         ),
         tool(
@@ -4794,6 +4816,9 @@ fn call_tool(
         }
         "run_native_kicad_erc" => run_native_kicad_erc_tool(arguments, cancellation)?,
         "run_native_kicad_drc" => run_native_kicad_drc_tool(arguments, cancellation)?,
+        "verify_native_kicad_drc_report" => {
+            verify_native_kicad_drc_report_tool(arguments, cancellation)?
+        }
         "compare_analysis" => compare_analysis(arguments, cancellation)?,
         "record_manufacturing_feedback" => record_manufacturing_feedback(arguments, cancellation)?,
         "compare_manufacturing_feedback" => {
@@ -6010,6 +6035,103 @@ fn run_native_kicad_drc_tool(
     Ok(execution_result(
         execution,
         json!({"input": input, "output": output, "report_summary": report_summary}),
+    ))
+}
+
+fn verify_native_kicad_drc_report_tool(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "input",
+            "report",
+            "project",
+            "rules_file",
+            "kicad_cli",
+            "require_approved",
+        ],
+    )?;
+    let input = required_string(&arguments, "input")?;
+    let report = required_string(&arguments, "report")?;
+    let project = optional_string(&arguments, "project")?;
+    let rules_file = optional_string(&arguments, "rules_file")?;
+    let kicad_cli = optional_string(&arguments, "kicad_cli")?;
+    let require_approved = match arguments.get("require_approved") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(json!({"detail": "require_approved must be a boolean"})),
+    };
+
+    // Run replay in the MCP worker itself so the task cancellation token is
+    // passed directly to the bounded KiCad child.  Spawning another pcbex
+    // bridge here would put KiCad in a nested Unix process group, allowing it
+    // to outlive cancellation of the outer bridge process.
+    let verified = crate::native_kicad_drc::verify_native_kicad_drc_report(
+        Path::new(&input),
+        Path::new(&report),
+        project.as_deref().map(Path::new),
+        rules_file.as_deref().map(Path::new),
+        std::ffi::OsStr::new(kicad_cli.as_deref().unwrap_or("kicad-cli")),
+        cancellation,
+    );
+    let (execution, report_summary) = match verified {
+        Ok(verified) => {
+            let rendered = crate::native_kicad_drc::render_native_kicad_drc_report(&verified)
+                .expect("a verified native KiCad DRC report remains renderable");
+            let summary =
+                crate::native_kicad_drc::native_kicad_drc_report_summary(&verified, &rendered);
+            let mut stdout =
+                serde_json::to_vec(&summary).expect("native KiCad DRC summary always serializes");
+            stdout.push(b'\n');
+            let success = !require_approved || verified.approved;
+            let execution = Execution {
+                success,
+                exit_code: Some(if success { 0 } else { 1 }),
+                stdout,
+                stderr: if success {
+                    String::new()
+                } else {
+                    "native KiCad PCB DRC rejected".to_string()
+                },
+            };
+            // Re-authenticate the retained bytes and current source identities
+            // after replay before exposing the compact summary.
+            let report_summary = trusted_native_kicad_drc_summary(
+                &execution,
+                Path::new(&report),
+                Path::new(&input),
+                project.as_deref().map(Path::new),
+                rules_file.as_deref().map(Path::new),
+            );
+            let execution = require_retained_json(
+                execution,
+                &report_summary,
+                "native KiCad DRC verification report summary",
+            );
+            (execution, report_summary)
+        }
+        Err(error) => {
+            let message = error.to_string();
+            (
+                Execution {
+                    success: false,
+                    exit_code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: bounded_process_message(message.as_bytes()),
+                },
+                Value::Null,
+            )
+        }
+    };
+    Ok(execution_result(
+        execution,
+        json!({
+            "input": input,
+            "report": report,
+            "report_summary": report_summary
+        }),
     ))
 }
 
@@ -14268,7 +14390,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 149);
+        assert_eq!(tools.len(), 150);
         let named = |name: &str| {
             tools
                 .iter()
@@ -14281,6 +14403,26 @@ mod tests {
         );
         assert_eq!(
             named("run_native_kicad_drc")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("verify_native_kicad_drc_report")["inputSchema"]["required"],
+            json!(["input", "report"])
+        );
+        assert_eq!(
+            named("verify_native_kicad_drc_report")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("verify_native_kicad_drc_report")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("verify_native_kicad_drc_report")["annotations"]["readOnlyHint"],
+            true
+        );
+        assert_eq!(
+            named("verify_native_kicad_drc_report")["annotations"]["destructiveHint"],
             false
         );
         assert_eq!(

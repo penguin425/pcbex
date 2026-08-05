@@ -141,6 +141,7 @@ auditable release.
 | v1.427.0 | Standalone native KiCad ERC Action gate | Run error-only or warning-policy native schematic ERC from the root Action without AI or deterministic-pipeline inputs, authenticate retained report/source/policy identities, and publish rejection evidence before optional approval enforcement |
 | v1.428.0 | Boardless native KiCad ERC Action | Provide a focused public composite Action that runs authenticated native schematic ERC without a board, preserves the root Action contract, publishes the same twelve identities, and retains bounded rejection evidence before its final approval gate |
 | v1.429.0 | Native KiCad PCB DRC evidence gate | Run canonical, digest-bound `drc.v1` PCB DRC evidence through CLI, MCP, and focused/root Actions with private staging, real KiCad 10 reproducibility coverage, strict error/warning approval, and retained rejected evidence |
+| v1.430.0 | Native KiCad PCB DRC fresh replay | Re-run exact retained `drc.v1` evidence through read-only CLI/MCP and focused Action verify mode, while making anchor-qualified board-edge and region placement constraints panic-free |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -328,3 +329,20 @@ and rejected-evidence retention are part of the contract. Native `drc.rpt`,
 the existing internal DRC, native ERC, AI approval, and the broader
 pipeline/manufacturing boundaries remain explicit later integrations rather
 than being connected automatically by this release.
+
+The v1.430.0 milestone adds a fresh-replay boundary for retained native PCB
+DRC evidence. `verify-native-kicad-drc-report` snapshots the exact board,
+optional project/rules companions, and canonical retained report, runs the
+same fixed bounded KiCad invocation in private staging, and requires the newly
+normalized bytes to match the retained bytes exactly. The verifier never
+rewrites its retained input. MCP exposes the same read-only, task-compatible
+operation with the existing 17-field digest-bound compact summary and passes
+task cancellation directly to the bounded KiCad process group. The focused
+native DRC Action adds a backward-compatible `mode: verify`; after successful
+replay it publishes only an independently re-authenticated, atomic no-clobber
+copy under the fresh bounded artifact directory so existing outputs and the
+final approval gate retain their contract. The root Action remains run-only.
+This release also removes the panic path for valid anchor-qualified
+board-edge and region placement constraints: board-edge distance uses the
+transformed anchor, while region containment continues to apply to the owning
+component's complete body.

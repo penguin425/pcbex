@@ -176,6 +176,33 @@ jobs:
           assert len(report["run_sha256"]) == 64
           assert all(c in "0123456789abcdef" for c in report["run_sha256"])
           PY
+      - name: Replay approved native PCB DRC evidence
+        id: native-drc-approved-replay
+        uses: ./actions/native-kicad-drc
+        with:
+          mode: verify
+          board: build/kicad-e2e/simple.routed.kicad_pcb
+          report: ${{ steps.native-drc-approved.outputs.native-kicad-drc-report }}
+          require-approved: "true"
+          output-dir: build/native-drc-approved-replay
+          upload-artifact: "false"
+      - name: Verify replayed approved native PCB DRC evidence
+        env:
+          ACTION_OUTCOME: ${{ steps.native-drc-approved-replay.outcome }}
+          SOURCE_REPORT: ${{ steps.native-drc-approved.outputs.native-kicad-drc-report }}
+          REPORT: ${{ steps.native-drc-approved-replay.outputs.native-kicad-drc-report }}
+          REPORT_SHA256: ${{ steps.native-drc-approved-replay.outputs.report-sha256 }}
+          SOURCE_RUN_SHA256: ${{ steps.native-drc-approved.outputs.run-sha256 }}
+          RUN_SHA256: ${{ steps.native-drc-approved-replay.outputs.run-sha256 }}
+          APPROVED: ${{ steps.native-drc-approved-replay.outputs.approved }}
+        run: |
+          set -euo pipefail
+          test "$ACTION_OUTCOME" = success
+          test "$APPROVED" = true
+          test -s "$REPORT"
+          cmp -- "$SOURCE_REPORT" "$REPORT"
+          test "$REPORT_SHA256" = "$(sha256sum "$REPORT" | cut -d ' ' -f 1)"
+          test "$RUN_SHA256" = "$SOURCE_RUN_SHA256"
       - name: Exercise rejected native PCB DRC Action
         id: native-drc-rejected
         continue-on-error: true
@@ -236,6 +263,34 @@ jobs:
           assert len(report["run_sha256"]) == 64
           assert all(c in "0123456789abcdef" for c in report["run_sha256"])
           PY
+      - name: Replay rejected native PCB DRC evidence
+        id: native-drc-rejected-replay
+        continue-on-error: true
+        uses: ./actions/native-kicad-drc
+        with:
+          mode: verify
+          board: examples/simple.kicad_pcb
+          report: ${{ steps.native-drc-rejected.outputs.native-kicad-drc-report }}
+          require-approved: "true"
+          output-dir: build/native-drc-rejected-replay
+          upload-artifact: "false"
+      - name: Verify replayed rejected native PCB DRC evidence
+        env:
+          ACTION_OUTCOME: ${{ steps.native-drc-rejected-replay.outcome }}
+          SOURCE_REPORT: ${{ steps.native-drc-rejected.outputs.native-kicad-drc-report }}
+          REPORT: ${{ steps.native-drc-rejected-replay.outputs.native-kicad-drc-report }}
+          REPORT_SHA256: ${{ steps.native-drc-rejected-replay.outputs.report-sha256 }}
+          SOURCE_RUN_SHA256: ${{ steps.native-drc-rejected.outputs.run-sha256 }}
+          RUN_SHA256: ${{ steps.native-drc-rejected-replay.outputs.run-sha256 }}
+          APPROVED: ${{ steps.native-drc-rejected-replay.outputs.approved }}
+        run: |
+          set -euo pipefail
+          test "$ACTION_OUTCOME" = failure
+          test "$APPROVED" = false
+          test -s "$REPORT"
+          cmp -- "$SOURCE_REPORT" "$REPORT"
+          test "$REPORT_SHA256" = "$(sha256sum "$REPORT" | cut -d ' ' -f 1)"
+          test "$RUN_SHA256" = "$SOURCE_RUN_SHA256"
       - name: Upload routed boards and DRC reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

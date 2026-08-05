@@ -6,8 +6,10 @@ boundary for KiCad's native PCB design-rules checker. It turns one exact
 invocation into a bounded normalized JSON report that can be authenticated and
 reproduced in CI. Real KiCad 10 E2E covers byte-identical reruns; KiCad 9's
 schema shape (which omits `ignored_checks`) has a dedicated compatibility test.
-The boundary is available in release `v1.429.0` through the Rust CLI, the MCP
-server, the focused composite Action, and an opt-in path in the root Action.
+The generation boundary is available from release `v1.429.0` through the Rust
+CLI, MCP server, focused composite Action, and an opt-in path in the root
+Action. Release `v1.430.0` adds read-only fresh replay through CLI/MCP and a
+backward-compatible verify mode in the focused Action.
 
 ## Scope
 
@@ -19,7 +21,9 @@ The gate is intentionally narrow:
 - normalize the report into stable categories and integer-nanometre positions;
 - retain source, companion, run, and normalized-report identities;
 - make a zero-error/zero-warning decision and retain rejected evidence before
-  an optional required-approval failure.
+  an optional required-approval failure; and
+- re-run the fixed invocation against retained canonical evidence and require
+  the fresh normalized bytes to match exactly without rewriting the input.
 
 It does not edit a board, refill zones, save a board, repair findings, or
 discover manufacturing policy. It does not automatically connect native
@@ -58,6 +62,22 @@ pcbex run-native-kicad-drc hardware/controller.kicad_pcb \
   --kicad-cli kicad-cli \
   --output build/native-kicad-drc.json
 ```
+
+Freshly replay an existing report. This command is read-only: it snapshots the
+retained report and every selected source, reruns the same bounded KiCad
+invocation, rechecks the sources and retained bytes after the child exits, and
+requires the fresh canonical bytes to be byte-identical.
+
+```sh
+pcbex verify-native-kicad-drc-report \
+  hardware/controller.kicad_pcb build/native-kicad-drc.json \
+  --project hardware/controller.kicad_pro \
+  --rules-file hardware/controller.kicad_dru \
+  --require-approved
+```
+
+A valid rejected report verifies successfully unless `--require-approved` is
+set. Neither outcome modifies, replaces, or copies the retained CLI input.
 
 `--require-approved` changes only the outer process result after the report has
 been written. A valid report is retained even when the gate rejects it. The
@@ -167,7 +187,7 @@ only and do not by themselves fail v1, so review them explicitly.
 
 ## MCP
 
-The MCP server exposes the same runner as `run_native_kicad_drc`. Its arguments
+The MCP server exposes the runner as `run_native_kicad_drc`. Its arguments
 are the CLI inputs expressed as JSON (`input`, `output`, optional `project`,
 optional `rules_file`, `kicad_cli`, and `require_approved`). The subprocess
 bridge returns a compact, digest-bound summary rather than embedding the full
@@ -177,6 +197,16 @@ linked, malformed, aliased, or digest-mismatched evidence. Optional MCP Tasks
 use the same allow-list and cancellation/resource limits as the existing
 bounded tools.
 
+`verify_native_kicad_drc_report` accepts `input` and `report`, plus the same
+optional companion, executable, and approval arguments. It is advertised as a
+read-only, non-destructive, task-compatible tool. It returns the same exact
+17-field compact summary only after fresh replay succeeds; a required-approval
+failure can therefore retain an authenticated rejected summary without
+embedding the full report in the MCP frame. Task execution invokes replay in
+the MCP worker and passes cancellation directly to the bounded KiCad
+supervisor, so cancelling the task terminates KiCad's process group instead of
+leaving nested native work behind.
+
 ## GitHub Actions
 
 For a board-focused repository, the focused Action can be used directly. It
@@ -185,7 +215,7 @@ literal, caller-relative directory:
 
 ```yaml
 - id: native-drc
-  uses: penguin425/pcbex/actions/native-kicad-drc@v1.429.0
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.430.0
   with:
     board: hardware/controller.kicad_pcb
     # project: hardware/controller.kicad_pro
@@ -193,8 +223,29 @@ literal, caller-relative directory:
     require-approved: "true"
 ```
 
-The focused Action also accepts `kicad-cli`, `output-dir`, `upload-artifact`,
-`artifact-name`, and `retention-days`. A valid run retains
+`mode` defaults to `run`, preserving the v1.429 contract. Verify a previously
+retained report with the same Action by selecting `verify` and a fresh output
+directory:
+
+```yaml
+- id: native-drc-replay
+  uses: penguin425/pcbex/actions/native-kicad-drc@v1.430.0
+  with:
+    mode: verify
+    board: hardware/controller.kicad_pcb
+    report: retained/native-kicad-drc.json
+    output-dir: build/native-drc-replay
+    require-approved: "true"
+```
+
+Run mode rejects a non-empty `report`; verify mode requires it. Verify mode
+first authenticates the original retained report against a fresh KiCad run,
+then bounded-stable-reads it into a new atomic no-clobber
+`${output-dir}/native-kicad-drc.json` and authenticates that copy again before
+the existing scan, artifact upload, outputs, and final approval gate run.
+
+The focused Action also accepts `mode`, `report`, `kicad-cli`, `output-dir`,
+`upload-artifact`, `artifact-name`, and `retention-days`. A valid run retains
 `${output-dir}/native-kicad-drc.json` and publishes the verified report path,
 schema-version metadata,
 approval/count, ignored-check, board/project/rules/report byte/SHA, and run
@@ -208,7 +259,8 @@ upload can be explicitly disabled without changing report validation.
 The output directory is scanned for bounded regular files before upload;
 literal path components cannot become artifact globs.
 
-The root `penguin425/pcbex` Action keeps its existing required `board` input.
+The root `penguin425/pcbex` Action keeps its existing required `board` input
+and run-only native DRC path.
 Set `native-kicad-drc-enabled: "true"` to opt into the same evidence gate, and
 use `native-kicad-drc-kicad-cli` and `native-kicad-drc-require-approved` for the
 corresponding controls. Requiring approval while leaving the gate disabled is
@@ -222,7 +274,8 @@ private fixed-basename staging directory, and performs a fresh bounded read
 before publication. The CLI/MCP input boundary requires bounded regular files,
 rejects symlinks and aliases, and refuses an existing or aliased output. It
 does not impose a workspace-relative rule on CLI paths. The focused Action
-confines board/companion inputs to caller-workspace-relative regular files;
+confines board, retained-report, and companion inputs to
+caller-workspace-relative regular files;
 the root Action retains its existing board-path semantics, including absolute
 paths. The focused Action requires portable literal output
 components. The root Action preserves spaces in its existing relative
@@ -235,7 +288,9 @@ The 32 MiB raw-report limit is enforced when the trusted KiCad child exits and
 the report is read; it is not a filesystem quota against an untrusted
 executable. Atomic publication happens only after canonical validation;
 rejected reports are preserved, but malformed or unsafe evidence is never
-accepted as a report.
+accepted as a report. Focused-Action replay never uploads the arbitrary input
+report directory: only the independently re-authenticated copy under the new
+bounded output tree is eligible for publication.
 
 The hashes establish reproducibility and artifact identity, not trust in the
 KiCad executable or in the board's design intent. CI must pin or otherwise

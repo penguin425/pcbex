@@ -180,6 +180,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "run-native-kicad-erc",
         "native-kicad-drc-report-schema",
         "run-native-kicad-drc",
+        "verify-native-kicad-drc-report",
         "run-deterministic-pipeline",
         "pipeline-schema",
         "pipeline-verify",
