@@ -689,6 +689,11 @@
     {
       "id": "standalone-native-kicad-erc-fresh-replay",
       "release": "v1.432.0",
+      "status": "released"
+    },
+    {
+      "id": "closed-deterministic-pipeline-intent-compiler",
+      "release": "v1.433.0",
       "status": "current"
     }
   ]

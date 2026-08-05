@@ -144,6 +144,7 @@ auditable release.
 | v1.430.0 | Native KiCad PCB DRC fresh replay | Re-run exact retained `drc.v1` evidence through read-only CLI/MCP and focused Action verify mode, while making anchor-qualified board-edge and region placement constraints panic-free |
 | v1.431.0 | MCP native KiCad task cancellation propagation | Run `run_native_kicad_drc` and `run_native_kicad_erc` directly in the MCP worker, with Unix Task cancellation reaching the KiCad process-group leader and descendants; preserve MCP responses and publish no incomplete report while leaving CLI and Action behavior unchanged |
 | v1.432.0 | Standalone native KiCad ERC fresh replay | Expose read-only fresh replay for standalone native KiCad schematic ERC v1/v2 through CLI, MCP, and focused Action; retain rejected evidence before optional approval gates, propagate Task cancellation, stable-read the original schematic, and preserve AI/run contracts |
+| v1.433.0 | Closed deterministic pipeline intent compiler | Compile a closed intent with explicit output-plan-parent-relative role paths into a canonical digest-bound deterministic pipeline plan, computing bytes/SHA identities without LLM, network, or path discovery; keep the existing runner as final authority and defer MCP/Action compiler parity |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -370,3 +371,19 @@ retained report, and keeps valid rejected evidence available before an
 optional `require-approved` gate. MCP Tasks propagate cancellation to the
 bounded KiCad process group. Existing native run outputs, AI request/binding
 schemas, and prepare/sign/verify/quorum contracts remain unchanged.
+
+The v1.433.0 milestone adds a closed intent-to-plan compiler for the
+deterministic pipeline. A CLI compiler accepts one closed intent and explicit
+paths for every required role, with optional roles represented by explicit
+paths or `null`; every role path is relative to the generated output plan's
+canonical parent, so the intent file may live elsewhere but every role source
+must remain a descendant of that output parent; `..` rebasing is rejected. It
+rejects unsafe or linked paths, stable-reads each bounded source, computes the
+exact descriptor bytes and SHA-256 identities, and emits canonical existing
+plan-schema-v1 JSON through a no-clobber output boundary.
+The compiler performs no LLM call, network access, or path discovery and does
+not run a gate or grant approval. `run-deterministic-pipeline` reopens and
+revalidates the compiled plan and remains authoritative for snapshots,
+board-binding, `pipeline-verify`, reports, and optional approval failure.
+MCP and composite-Action parity for compilation are intentionally deferred;
+their existing runner contracts are unchanged.

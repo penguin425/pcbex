@@ -34,20 +34,20 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 
-const PLAN_SCHEMA_VERSION: u32 = 1;
+pub(crate) const PLAN_SCHEMA_VERSION: u32 = 1;
 const REPORT_SCHEMA_VERSION: u32 = 1;
-const MAX_PLAN_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_PLAN_PATH_CHARS: usize = 4096;
+pub(crate) const MAX_PLAN_BYTES: u64 = 4 * 1024 * 1024;
+pub(crate) const MAX_PLAN_PATH_CHARS: usize = 4096;
 const MAX_INPUT_EVIDENCE: usize = 64;
 const MAX_FAILURES: usize = 128;
 const MAX_FAILURE_CHARS: usize = 4096;
 // The CLI appends one newline before publishing through the shared 128 MiB
 // output boundary, so reserve that final byte here.
 pub(crate) const MAX_REPORT_BYTES: usize = 128 * 1024 * 1024 - 1;
-const MAX_TOTAL_INPUT_BYTES: u64 = 512 * 1024 * 1024;
+pub(crate) const MAX_TOTAL_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 const PLAN_HASH_DOMAIN: &[u8] = b"pcbex:deterministic-pipeline-plan:v1\0";
 const RUN_HASH_DOMAIN: &[u8] = b"pcbex:deterministic-pipeline-runner:v1\0";
-const PORTABLE_PLAN_PATH_PATTERN: &str = r#"^(?!/)(?!.*//)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\.|/|$))(?!.*[ .](?:/|$))(?:[^\\/:*?<>"|\u0000-\u001F\u007F]{1,255}/)*[^\\/:*?<>"|\u0000-\u001F\u007F]{1,255}$"#;
+pub(crate) const PORTABLE_PLAN_PATH_PATTERN: &str = r#"^(?!/)(?!.*//)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\.|/|$))(?!.*[ .](?:/|$))(?:[^\\/:*?<>"|\u0000-\u001F\u007F]{1,255}/)*[^\\/:*?<>"|\u0000-\u001F\u007F]{1,255}$"#;
 
 const MAX_POLICY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_REVIEW_BYTES: u64 = 64 * 1024 * 1024;
@@ -56,7 +56,7 @@ const MAX_FACTORY_RECEIPT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FIRMWARE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CIRCUIT_SPEC_BYTES: u64 = pcbex_kicad::CIRCUIT_SPEC_V2_MAX_BYTES;
 
-const ROLE_ORDER: [&str; 16] = [
+pub(crate) const ROLE_ORDER: [&str; 16] = [
     "circuit_spec",
     "schematic",
     "electrical_policy",
@@ -533,7 +533,7 @@ pub(crate) fn load_deterministic_pipeline_plan(path: &Path) -> Result<Determinis
     })
 }
 
-fn reject_duplicate_json_keys(source: &[u8]) -> Result<()> {
+pub(crate) fn reject_duplicate_json_keys(source: &[u8]) -> Result<()> {
     let mut deserializer = serde_json::Deserializer::from_slice(source);
     deserializer
         .deserialize_any(DuplicateJsonValue)
@@ -675,7 +675,7 @@ fn resolve_descriptor(
     })
 }
 
-fn validate_relative_path(value: &str, role: &str) -> Result<()> {
+pub(crate) fn validate_relative_path(value: &str, role: &str) -> Result<()> {
     if value.is_empty() || value.chars().count() > MAX_PLAN_PATH_CHARS {
         bail!("{role} descriptor path is empty or too long");
     }
@@ -1249,7 +1249,7 @@ fn read_expected(
     })
 }
 
-fn descriptor_limit(role: &str) -> u64 {
+pub(crate) fn descriptor_limit(role: &str) -> u64 {
     match role {
         "circuit_spec" => MAX_CIRCUIT_SPEC_BYTES,
         "schematic" => CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES,
@@ -1419,7 +1419,7 @@ fn scan_firmware_entries(parent: &Path) -> Result<Vec<String>, String> {
     Ok(actual)
 }
 
-fn reject_symlink_components(path: &Path, role: &str) -> Result<(), String> {
+pub(crate) fn reject_symlink_components(path: &Path, role: &str) -> Result<(), String> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
