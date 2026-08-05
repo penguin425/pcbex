@@ -103,6 +103,21 @@ legacy plan mode and is empty only in analysis-only mode. Existing runner
 outputs remain unchanged. The compiler adds no LLM, network,
 discovery, gate, approval, design mutation, or manufacturing operation.
 
+Version 1.436.0 also preflights the explicit firmware role before the plan is
+published. Its path must be `manifest.json`; the parent is an exact eight-entry
+directory containing that manifest and the seven fixed v2 source artifacts.
+The bounded compiler read rejects symbolic links, special files, unsafe names, missing
+or extra entries, malformed or duplicate manifest fields, and every
+manifest-to-source byte-count or lowercase SHA-256 mismatch. A second
+directory scan follows each source snapshot, and a final complete snapshot is
+compared after every explicit role is confirmed; any observed replacement,
+removal, or addition fails closed. The plan remains schema v1 with only the `firmware_manifest`
+descriptor; no source descriptors or artifact hashes are emitted into it.
+This is not a build or approval step: the compiler does not run firmware
+commands, evaluate build evidence, bind the canonical schematic, or call an
+LLM/network. The runner and pipeline gate repeat the exact-eight checks and
+remain final authority.
+
 A composite action cannot set `timeout-minutes` on its caller's job. Its three
 supervised commands remain individually finite (10, 30, and 40 minutes), but
 artifact and SARIF service actions are governed by the calling job. Public

@@ -23,6 +23,63 @@ fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
+const FIRMWARE_ARTIFACTS: [&str; 7] = [
+    "pinout.h",
+    "firmware.h",
+    "firmware.c",
+    "firmware_smoke_test.c",
+    "firmware.cpp",
+    "firmware_cpp_smoke_test.cpp",
+    "host.py",
+];
+
+fn skipped_build(command: &str) -> Value {
+    json!({
+        "attempted": false,
+        "passed": false,
+        "command": [command],
+        "exit_code": null,
+        "smoke": {
+            "attempted": false,
+            "passed": false,
+            "command": ["smoke"],
+            "exit_code": null
+        }
+    })
+}
+
+fn write_firmware_bundle(root: &Path) {
+    let firmware = root.join("firmware");
+    fs::create_dir_all(&firmware).unwrap();
+    let artifacts = FIRMWARE_ARTIFACTS
+        .iter()
+        .map(|name| {
+            let bytes = name.as_bytes();
+            fs::write(firmware.join(name), bytes).unwrap();
+            json!({
+                "path": name,
+                "bytes": bytes.len(),
+                "sha256": sha256(bytes)
+            })
+        })
+        .collect::<Vec<_>>();
+    let manifest = json!({
+        "schema_version": 2,
+        "engine": "pcbex",
+        "engine_version": env!("CARGO_PKG_VERSION"),
+        "schematic_sha256": "a".repeat(64),
+        "artifacts": artifacts,
+        "c_build": skipped_build("cc"),
+        "cpp_build": skipped_build("c++"),
+        "python_check": skipped_build("python3")
+    });
+    fs::write(
+        firmware.join("manifest.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+}
+
 fn write_fixture(root: &Path) {
     for (relative, bytes) in [
         ("circuit.json", b"circuit".as_slice()),
@@ -33,23 +90,12 @@ fn write_fixture(root: &Path) {
         ("analysis/checks.json", b"checks".as_slice()),
         ("analysis/quality.json", b"quality".as_slice()),
         ("manufacturing.zip", b"package".as_slice()),
-        ("firmware/manifest.json", b"firmware manifest".as_slice()),
     ] {
         let path = root.join(relative);
         fs::create_dir_all(path.parent().expect("fixture parent")).unwrap();
         fs::write(path, bytes).unwrap();
     }
-    for name in [
-        "pinout.h",
-        "firmware.h",
-        "firmware.c",
-        "firmware_smoke_test.c",
-        "firmware.cpp",
-        "firmware_cpp_smoke_test.cpp",
-        "host.py",
-    ] {
-        fs::write(root.join("firmware").join(name), name.as_bytes()).unwrap();
-    }
+    write_firmware_bundle(root);
 }
 
 fn intent_json() -> Value {
@@ -104,6 +150,37 @@ fn assert_failed_without_output(output: &Output, path: &Path, context: &str) {
         "{context} unexpectedly published {}",
         path.display()
     );
+}
+
+fn assert_bundle_rejected<F>(name: &str, mutate: F)
+where
+    F: FnOnce(&Path, &mut Value),
+{
+    let root = temporary_directory(name);
+    fs::create_dir_all(&root).unwrap();
+    write_fixture(&root);
+    let mut intent_value = intent_json();
+    mutate(&root, &mut intent_value);
+    let intent = write_intent(&root, &intent_value);
+    let output = root.join(format!("{name}.json"));
+    assert_failed_without_output(&compile(&intent, &output), &output, name);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn firmware_manifest_path(root: &Path) -> PathBuf {
+    root.join("firmware/manifest.json")
+}
+
+fn read_firmware_manifest(root: &Path) -> Value {
+    serde_json::from_slice(&fs::read(firmware_manifest_path(root)).unwrap()).unwrap()
+}
+
+fn write_firmware_manifest(root: &Path, manifest: &Value) {
+    fs::write(
+        firmware_manifest_path(root),
+        serde_json::to_vec(manifest).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -196,6 +273,100 @@ fn compiler_handles_optional_null_and_factory_requirement() {
     assert_eq!(plan["electrical_policy"]["path"], "policy.json");
     assert_eq!(plan["factory_receipt"]["path"], "receipt.json");
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compiler_rejects_invalid_exact_eight_firmware_bundles_without_output() {
+    assert_bundle_rejected("firmware-malformed-manifest", |root, _| {
+        fs::write(firmware_manifest_path(root), b"not-json").unwrap();
+    });
+
+    assert_bundle_rejected("firmware-unknown-manifest-key", |root, _| {
+        let mut manifest = read_firmware_manifest(root);
+        manifest["unknown"] = Value::Bool(true);
+        write_firmware_manifest(root, &manifest);
+    });
+
+    assert_bundle_rejected("firmware-duplicate-manifest-key", |root, _| {
+        let source = String::from_utf8(fs::read(firmware_manifest_path(root)).unwrap()).unwrap();
+        let duplicate = source.replacen(
+            "\"schema_version\":2",
+            "\"schema_version\":2,\"schema_version\":2",
+            1,
+        );
+        fs::write(firmware_manifest_path(root), duplicate).unwrap();
+    });
+
+    assert_bundle_rejected("firmware-wrong-schema", |root, _| {
+        let mut manifest = read_firmware_manifest(root);
+        manifest["schema_version"] = json!(1);
+        write_firmware_manifest(root, &manifest);
+    });
+
+    assert_bundle_rejected("firmware-wrong-artifact-order", |root, _| {
+        let mut manifest = read_firmware_manifest(root);
+        manifest["artifacts"][0]["path"] = json!("firmware.h");
+        write_firmware_manifest(root, &manifest);
+    });
+
+    assert_bundle_rejected("firmware-artifact-bytes-mismatch", |root, _| {
+        let mut manifest = read_firmware_manifest(root);
+        manifest["artifacts"][0]["bytes"] = json!(999);
+        write_firmware_manifest(root, &manifest);
+    });
+
+    assert_bundle_rejected("firmware-artifact-sha-mismatch", |root, _| {
+        let mut manifest = read_firmware_manifest(root);
+        manifest["artifacts"][0]["sha256"] = json!("b".repeat(64));
+        write_firmware_manifest(root, &manifest);
+    });
+
+    assert_bundle_rejected("firmware-missing-artifact", |root, _| {
+        fs::remove_file(root.join("firmware/host.py")).unwrap();
+    });
+
+    assert_bundle_rejected("firmware-extra-artifact", |root, _| {
+        fs::write(root.join("firmware/unexpected.bin"), b"unexpected").unwrap();
+    });
+
+    assert_bundle_rejected("firmware-directory-artifact", |root, _| {
+        let path = root.join("firmware/host.py");
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+    });
+
+    assert_bundle_rejected("firmware-empty-artifact", |root, _| {
+        fs::write(root.join("firmware/host.py"), b"").unwrap();
+    });
+
+    assert_bundle_rejected("firmware-wrong-manifest-basename", |root, intent| {
+        fs::rename(
+            firmware_manifest_path(root),
+            root.join("firmware/metadata.json"),
+        )
+        .unwrap();
+        intent["firmware_manifest"] = json!("firmware/metadata.json");
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn compiler_rejects_symlink_and_non_utf8_firmware_entries_without_output() {
+    use std::os::unix::ffi::OsStringExt;
+    use std::os::unix::fs::symlink;
+
+    assert_bundle_rejected("firmware-symlink-artifact", |root, _| {
+        let target = root.join("firmware-target.bin");
+        fs::write(&target, b"target").unwrap();
+        let artifact = root.join("firmware/pinout.h");
+        fs::remove_file(&artifact).unwrap();
+        symlink(target, artifact).unwrap();
+    });
+
+    assert_bundle_rejected("firmware-non-utf8-entry", |root, _| {
+        let name = std::ffi::OsString::from_vec(vec![0xff, b'.', b'b', b'i', b'n']);
+        fs::write(root.join("firmware").join(name), b"unexpected").unwrap();
+    });
 }
 
 #[test]

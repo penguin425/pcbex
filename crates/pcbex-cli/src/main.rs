@@ -5729,8 +5729,9 @@ fn run_cli() -> Result<()> {
             mcp_echo_plan_summary,
         } => {
             // The compiler performs all bounded intent parsing, role-path
-            // validation, stable reads, digest calculation, and plan/output
-            // alias checks before this CLI creates any temporary output.
+            // validation, exact-eight firmware bundle preflight, stable
+            // reads, digest calculation, and plan/output alias checks before
+            // this CLI creates any temporary output.
             let compiled = compile_deterministic_pipeline_plan(&intent, &output)?;
             // The CLI owns only the final no-clobber atomic publication of the
             // canonical bytes returned by the compiler. Recheck the

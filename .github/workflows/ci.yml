@@ -620,8 +620,9 @@ jobs:
           smoke_dir=build/deterministic-pipeline
           mkdir -p "$smoke_dir/firmware"
 
-          # Keep every input deliberately small and invalid.  The root Action
-          # must retain a rejected report while exercising the real runner.
+          # Keep inputs deliberately small. The firmware bundle must satisfy
+          # compiler admission, while the hardware evidence stays invalid so
+          # the root Action retains a rejected report through the real runner.
           printf '%s\n' '{}' > "$smoke_dir/circuit.json"
           printf '%s\n' 'not a KiCad schematic' > "$smoke_dir/design.kicad_sch"
           printf '%s\n' '{}' > "$smoke_dir/review.json"
@@ -630,10 +631,37 @@ jobs:
           printf '%s\n' '{}' > "$smoke_dir/analysis-checks.json"
           printf '%s\n' '{}' > "$smoke_dir/quality.json"
           printf '%s\n' 'not a manufacturing package' > "$smoke_dir/package.bin"
-          printf '%s\n' '{}' > "$smoke_dir/firmware/manifest.json"
           for artifact in pinout.h firmware.h firmware.c firmware_smoke_test.c firmware.cpp firmware_cpp_smoke_test.cpp host.py; do
             printf '%s\n' 'invalid fixture' > "$smoke_dir/firmware/$artifact"
           done
+          firmware_artifacts="$({
+            for artifact in pinout.h firmware.h firmware.c firmware_smoke_test.c firmware.cpp firmware_cpp_smoke_test.cpp host.py; do
+              bytes="$(wc -c < "$smoke_dir/firmware/$artifact" | tr -d ' ')"
+              sha="$(sha256sum "$smoke_dir/firmware/$artifact" | cut -d' ' -f1)"
+              jq -n --arg path "$artifact" --argjson bytes "$bytes" --arg sha256 "$sha" \
+                '{path: $path, bytes: $bytes, sha256: $sha256}'
+            done
+          } | jq -s '.')"
+          jq -n --argjson artifacts "$firmware_artifacts" \
+            '{
+              schema_version: 2,
+              engine: "pcbex",
+              engine_version: "1.436.0-ci",
+              schematic_sha256: ("0" * 64),
+              artifacts: $artifacts,
+              c_build: {
+                attempted: false, passed: false, command: ["cc"], exit_code: null,
+                smoke: {attempted: false, passed: false, command: ["smoke"], exit_code: null}
+              },
+              cpp_build: {
+                attempted: false, passed: false, command: ["c++"], exit_code: null,
+                smoke: {attempted: false, passed: false, command: ["smoke"], exit_code: null}
+              },
+              python_check: {
+                attempted: false, passed: false, command: ["python3"], exit_code: null,
+                smoke: {attempted: false, passed: false, command: ["smoke"], exit_code: null}
+              }
+            }' > "$smoke_dir/firmware/manifest.json"
 
           descriptor() {
             local path="$1"

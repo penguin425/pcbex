@@ -3448,6 +3448,27 @@ approval decision, or manufacturing action. Existing callers that leave both
 new inputs empty retain analysis-only behavior; callers using only
 `deterministic-pipeline-plan` retain the v1.419 runner contract unchanged.
 
+Version 1.436.0 adds an exact firmware-bundle preflight to the intent
+compiler. The plan schema remains v1 and carries only the existing
+`firmware_manifest` descriptor; the seven firmware source siblings are not
+added as plan roles or published hashes. Before the plan is published, the
+compiler stable-reads `manifest.json` and requires its parent directory to
+contain exactly eight regular, non-symlink entries: that manifest and the seven
+fixed v2 source artifact names. It rejects symbolic links, special files, unsafe names,
+missing or extra entries, malformed manifests, and any bounded byte-count or
+lowercase SHA-256 mismatch between the manifest and each source. Each snapshot
+rescans the directory after reading it, and the compiler compares a second
+complete snapshot after confirming every explicit role, so any observed entry
+or content change fails closed.
+
+This preflight verifies bundle structure and identities only. The compiler
+does not execute firmware builds or smoke tests, approve build evidence, bind
+the canonical schematic, invoke an LLM or network service, or change the
+existing plan schema. The deterministic runner and `pipeline-verify` reopen
+the original bundle and repeat the exact-eight and artifact checks; they remain
+the final authorities for staging, schematic binding, build evidence, gates,
+reports, and approval.
+
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set
 `deterministic-pipeline-require-approved: "true"` for a final fail gate. The

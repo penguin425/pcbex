@@ -231,6 +231,19 @@ struct Snapshot {
     evidence: DeterministicPipelineInputEvidence,
 }
 
+/// Stable identities captured while enforcing the runner's exact-eight
+/// firmware bundle boundary.
+///
+/// The manifest bytes are retained so the intent compiler can validate the
+/// closed v2 manifest without reopening an untrusted path. Artifact paths are
+/// deliberately represented only by the fixed names selected by the runner,
+/// never by manifest-provided strings.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DeterministicFirmwareBundleSnapshot {
+    pub(crate) manifest_bytes: Vec<u8>,
+    pub(crate) entries: BTreeMap<String, ExactArtifactIdentity>,
+}
+
 #[derive(Clone, Debug)]
 struct FailureCollector {
     failures: Vec<String>,
@@ -1388,6 +1401,52 @@ fn prescan_firmware_bundle(
         Err(error) => failures.push(format!("firmware_manifest: {error}")),
     }
     Some(snapshots)
+}
+
+/// Apply the runner's exact-eight firmware bundle prescan as a strict
+/// compiler preflight and return only stable byte identities.
+///
+/// The normal runner intentionally retains input failures in its report. The
+/// compiler has no report boundary, so the same failures are surfaced as an
+/// ordinary error before a plan can be published.
+pub(crate) fn preflight_deterministic_firmware_bundle(
+    plan: &DeterministicPipelinePlan,
+) -> Result<DeterministicFirmwareBundleSnapshot> {
+    let mut failures = FailureCollector::new();
+    let snapshots = prescan_firmware_bundle(plan, &mut failures);
+    let failures = failures.finish()?;
+    if let Some(failure) = failures.first() {
+        bail!("deterministic firmware bundle preflight failed: {failure}")
+    }
+    let snapshots = snapshots.ok_or_else(|| {
+        anyhow!("deterministic firmware bundle preflight did not produce a stable snapshot")
+    })?;
+    if snapshots.len() != FIRMWARE_ARTIFACTS.len() + 1 {
+        bail!("deterministic firmware bundle preflight did not capture exactly eight files")
+    }
+    let manifest_bytes = snapshots
+        .get("manifest.json")
+        .ok_or_else(|| {
+            anyhow!("deterministic firmware bundle preflight did not capture manifest.json")
+        })?
+        .bytes
+        .clone();
+    let entries = snapshots
+        .into_iter()
+        .map(|(name, snapshot)| {
+            (
+                name,
+                ExactArtifactIdentity {
+                    bytes: snapshot.evidence.bytes,
+                    sha256: snapshot.evidence.sha256,
+                },
+            )
+        })
+        .collect();
+    Ok(DeterministicFirmwareBundleSnapshot {
+        manifest_bytes,
+        entries,
+    })
 }
 
 fn scan_firmware_entries(parent: &Path) -> Result<Vec<String>, String> {

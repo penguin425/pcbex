@@ -704,6 +704,11 @@
     {
       "id": "composite-action-deterministic-pipeline-intent-compiler-parity",
       "release": "v1.435.0",
+      "status": "released"
+    },
+    {
+      "id": "deterministic-pipeline-firmware-bundle-compiler-preflight",
+      "release": "v1.436.0",
       "status": "current"
     }
   ]
