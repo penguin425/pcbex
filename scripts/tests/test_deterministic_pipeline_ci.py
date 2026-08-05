@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import os
 from pathlib import Path
 import sys
@@ -163,6 +164,32 @@ class DeterministicPipelineCiTests(unittest.TestCase):
                         engine_version="1.438.0",
                     )
             self.assertFalse(destination.exists())
+
+    def test_manufacturing_package_uses_production_csv_headers_and_counts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            board = root / "design.kicad_pcb"
+            board.write_bytes(b"(kicad_pcb)")
+            destination = root / "manufacturing.zip"
+            fixture._write_manufacturing_package(
+                destination,
+                board,
+                engine_version="1.439.0",
+            )
+            with zipfile.ZipFile(destination) as archive:
+                self.assertEqual(
+                    archive.read("bom.csv"),
+                    b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n",
+                )
+                self.assertEqual(
+                    archive.read("cpl.csv"),
+                    b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n",
+                )
+                manifest = json.loads(archive.read("manifest.json"))
+            self.assertEqual(
+                manifest["parts"],
+                {"total": 0, "bom": 0, "placement": 0, "dnp": 0},
+            )
 
     def test_rejected_case_is_manufacturing_only(self):
         detail = (

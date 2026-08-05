@@ -12,6 +12,7 @@ use crate::manufacturing_limits::{
     validate_manufacturing_basename,
 };
 use crate::physical_profile::{PhysicalProfileBinding, validate_physical_profile_binding};
+use pcbex_kicad::MAX_MANUFACTURING_PARTS;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -40,6 +41,10 @@ const MAX_FACTORY_FINDING_CODE_CHARS: usize = 256;
 const MAX_FACTORY_FINDING_MESSAGE_CHARS: usize = 4096;
 const FACTORY_REPAIR_PROCESS_STDOUT_LIMIT_BYTES: usize = 1024 * 1024;
 const FACTORY_REPAIR_PROCESS_STDERR_LIMIT_BYTES: usize = 1024 * 1024;
+// Keep the parser bound aligned with the existing per-entry quota.  In
+// particular, one grouped BOM row may legitimately contain many designators
+// and can therefore be larger than a conventional line-size limit.
+const MAX_CSV_RECORD_BYTES: usize = MAX_PACKAGE_BYTES as usize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -1291,6 +1296,11 @@ fn validate_manufacturing_package_with_expanded_limit(
     {
         return Err("factory package manifest.json contains invalid part counts".into());
     }
+    if manifest.parts.total > MAX_MANUFACTURING_PARTS as u64 {
+        return Err(format!(
+            "factory package manifest.json total part count exceeds {MAX_MANUFACTURING_PARTS}"
+        ));
+    }
     if manifest.archive != "manufacturing.zip" {
         return Err(
             "factory package manifest.json must name manufacturing.zip as its archive".into(),
@@ -1304,6 +1314,8 @@ fn validate_manufacturing_package_with_expanded_limit(
         input_sha256: manifest.input.sha256.clone(),
         physical_profile,
     };
+    let expected_bom_quantity = manifest.parts.bom;
+    let expected_placement_rows = manifest.parts.placement;
     let mut provenance_paths = BTreeSet::from([manifest.input.path.clone()]);
     let mut provenance_portable_paths =
         BTreeSet::from([portable_manufacturing_name_key(&manifest.input.path)]);
@@ -1407,6 +1419,8 @@ fn validate_manufacturing_package_with_expanded_limit(
         ));
     }
     validate_gerber_job(package, &gerber_job, &expected)?;
+    validate_bom_csv(package, expected_bom_quantity)?;
+    validate_cpl_csv(package, expected_placement_rows)?;
     Ok(identity)
 }
 
@@ -1455,6 +1469,475 @@ fn validate_required_manufacturing_artifacts(
         ));
     }
     Ok(gerber_jobs[0].clone())
+}
+
+fn validate_bom_csv(package: &[u8], expected_quantity: u64) -> Result<(), String> {
+    let mut quantity = 0_u64;
+    let mut records = 0_u64;
+    let mut header_seen = false;
+    validate_zip_csv(package, "bom.csv", 7, |index, fields, quoted| {
+        if index == 0 {
+            header_seen = true;
+            validate_csv_header(
+                &fields,
+                quoted,
+                &[
+                    "Comment",
+                    "Designator",
+                    "Footprint",
+                    "Quantity",
+                    "MPN",
+                    "Layer",
+                    "Type",
+                ],
+                "BOM",
+            )?;
+            return Ok(());
+        }
+        records = records
+            .checked_add(1)
+            .ok_or_else(|| "factory BOM row count overflow".to_string())?;
+        let comment = csv_text(&fields[0], "BOM Comment")?;
+        validate_bom_text(comment, "BOM Comment", true)?;
+        let designator = csv_text(&fields[1], "BOM Designator")?;
+        validate_bom_text(designator, "BOM Designator", true)?;
+        let footprint = csv_text(&fields[2], "BOM Footprint")?;
+        validate_bom_text(footprint, "BOM Footprint", true)?;
+        let row_quantity = parse_positive_quantity(&fields[3])?;
+        quantity = quantity
+            .checked_add(row_quantity)
+            .ok_or_else(|| "factory BOM quantity overflow".to_string())?;
+        let mpn = csv_text(&fields[4], "BOM MPN")?;
+        if !mpn.is_empty() {
+            validate_bom_text(mpn, "BOM MPN", false)?;
+        }
+        if fields[5].as_slice() != b"F" && fields[5].as_slice() != b"B" {
+            return Err("factory BOM Layer must be exactly F or B".into());
+        }
+        if fields[6].as_slice() != b"SMD" && fields[6].as_slice() != b"THT" {
+            return Err("factory BOM Type must be exactly SMD or THT".into());
+        }
+        Ok(())
+    })?;
+    if !header_seen {
+        return Err("factory bom.csv CSV must contain its exact header".into());
+    }
+    if records == 0 && expected_quantity != 0 {
+        return Err(format!(
+            "factory bom.csv quantity {expected_quantity} does not match the empty BOM"
+        ));
+    }
+    if quantity != expected_quantity {
+        return Err(format!(
+            "factory bom.csv quantity {quantity} does not match manifest.parts.bom {expected_quantity}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_cpl_csv(package: &[u8], expected_rows: u64) -> Result<(), String> {
+    let mut rows = 0_u64;
+    let mut designators = BTreeSet::new();
+    let mut header_seen = false;
+    validate_zip_csv(package, "cpl.csv", 5, |index, fields, quoted| {
+        if index == 0 {
+            header_seen = true;
+            validate_csv_header(
+                &fields,
+                quoted,
+                &[
+                    "Designator",
+                    "Mid X (mm)",
+                    "Mid Y (mm)",
+                    "Rotation",
+                    "Layer",
+                ],
+                "CPL",
+            )?;
+            return Ok(());
+        }
+        rows = rows
+            .checked_add(1)
+            .ok_or_else(|| "factory CPL row count overflow".to_string())?;
+        let designator = csv_text(&fields[0], "CPL Designator")?;
+        validate_bom_text(designator, "CPL Designator", true)?;
+        if !designators.insert(designator.to_string()) {
+            return Err(format!(
+                "factory CPL contains duplicate Designator {designator:?}"
+            ));
+        }
+        parse_scaled_decimal(&fields[1], 1_000_000, 6, "CPL Mid X (mm)")?;
+        parse_scaled_decimal(&fields[2], 1_000_000, 6, "CPL Mid Y (mm)")?;
+        parse_scaled_decimal(&fields[3], 1_000, 3, "CPL Rotation")?;
+        if fields[4].as_slice() != b"F" && fields[4].as_slice() != b"B" {
+            return Err("factory CPL Layer must be exactly F or B".into());
+        }
+        Ok(())
+    })?;
+    if !header_seen {
+        return Err("factory cpl.csv CSV must contain its exact header".into());
+    }
+    if rows != expected_rows {
+        return Err(format!(
+            "factory cpl.csv row count {rows} does not match manifest.parts.placement {expected_rows}"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_csv_header(
+    fields: &[Vec<u8>],
+    quoted: bool,
+    expected: &[&str],
+    kind: &str,
+) -> Result<(), String> {
+    if quoted
+        || fields.len() != expected.len()
+        || fields
+            .iter()
+            .zip(expected)
+            .any(|(actual, expected)| actual.as_slice() != expected.as_bytes())
+    {
+        return Err(format!(
+            "factory {kind} CSV header must be exactly {}",
+            expected.join(",")
+        ));
+    }
+    Ok(())
+}
+
+fn csv_text<'a>(bytes: &'a [u8], field: &str) -> Result<&'a str, String> {
+    std::str::from_utf8(bytes).map_err(|_| format!("factory {field} contains invalid UTF-8"))
+}
+
+fn validate_bom_text(value: &str, field: &str, require_nonempty: bool) -> Result<(), String> {
+    if require_nonempty && value.is_empty() {
+        return Err(format!("factory {field} must be nonempty"));
+    }
+    if value.contains('\0') {
+        return Err(format!(
+            "factory {field} contains unsafe control characters"
+        ));
+    }
+    Ok(())
+}
+
+fn parse_positive_quantity(bytes: &[u8]) -> Result<u64, String> {
+    if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+        return Err("factory BOM Quantity must be a positive checked integer".into());
+    }
+    let quantity = std::str::from_utf8(bytes)
+        .map_err(|_| "factory BOM Quantity must be a positive checked integer".to_string())?
+        .parse::<u64>()
+        .map_err(|_| "factory BOM Quantity must be a positive checked integer".to_string())?;
+    if quantity == 0 {
+        return Err("factory BOM Quantity must be a positive checked integer".into());
+    }
+    Ok(quantity)
+}
+
+fn parse_scaled_decimal(
+    bytes: &[u8],
+    scale: u128,
+    precision: usize,
+    field: &str,
+) -> Result<i64, String> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| format!("factory {field} must be a finite decimal"))?;
+    let (negative, unsigned) = match text.strip_prefix('-') {
+        Some(value) => (true, value),
+        None => (false, text),
+    };
+    if unsigned.is_empty()
+        || unsigned.starts_with('+')
+        || unsigned.contains(['e', 'E'])
+        || unsigned.ends_with('.')
+    {
+        return Err(format!("factory {field} must be a finite decimal"));
+    }
+    let mut pieces = unsigned.split('.');
+    let whole = pieces.next().unwrap_or_default();
+    let fraction = pieces.next().unwrap_or_default();
+    if pieces.next().is_some()
+        || whole.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || fraction.len() > precision
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(format!("factory {field} must be a finite decimal"));
+    }
+    let whole = whole
+        .parse::<u128>()
+        .map_err(|_| format!("factory {field} is outside the checked range"))?;
+    let whole = whole
+        .checked_mul(scale)
+        .ok_or_else(|| format!("factory {field} is outside the checked range"))?;
+    let fraction_value = if fraction.is_empty() {
+        0
+    } else {
+        fraction
+            .parse::<u128>()
+            .map_err(|_| format!("factory {field} must be a finite decimal"))?
+            .checked_mul(10_u128.pow((precision - fraction.len()) as u32))
+            .ok_or_else(|| format!("factory {field} is outside the checked range"))?
+    };
+    let magnitude = whole
+        .checked_add(fraction_value)
+        .ok_or_else(|| format!("factory {field} is outside the checked range"))?;
+    let maximum = if negative {
+        (i64::MAX as u128) + 1
+    } else {
+        i64::MAX as u128
+    };
+    if magnitude > maximum {
+        return Err(format!("factory {field} is outside the checked range"));
+    }
+    if negative {
+        if magnitude == (i64::MAX as u128) + 1 {
+            Ok(i64::MIN)
+        } else {
+            Ok(-(magnitude as i64))
+        }
+    } else {
+        Ok(magnitude as i64)
+    }
+}
+
+fn validate_zip_csv(
+    package: &[u8],
+    name: &str,
+    expected_fields: usize,
+    mut on_record: impl FnMut(usize, Vec<Vec<u8>>, bool) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut archive = ZipArchive::new(Cursor::new(package))
+        .map_err(|error| format!("reopening factory package ZIP archive: {error}"))?;
+    let mut entry = archive
+        .by_name(name)
+        .map_err(|_| format!("factory package is missing {name}"))?;
+    if !entry.is_file() {
+        return Err(format!(
+            "factory package CSV entry {name} must be a regular file"
+        ));
+    }
+    if entry.size() > MAX_PACKAGE_BYTES {
+        return Err(format!(
+            "factory package CSV entry {name} exceeds size limit"
+        ));
+    }
+    parse_csv_reader(&mut entry, name, expected_fields, &mut on_record)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CsvState {
+    FieldStart,
+    Unquoted,
+    Quoted,
+    AfterQuote,
+    RecordCr,
+}
+
+fn parse_csv_reader<R: Read, F: FnMut(usize, Vec<Vec<u8>>, bool) -> Result<(), String>>(
+    reader: &mut R,
+    name: &str,
+    expected_fields: usize,
+    callback: &mut F,
+) -> Result<(), String> {
+    if expected_fields == 0 {
+        return Err(format!("factory {name} CSV field count is invalid"));
+    }
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut fields = Vec::<Vec<u8>>::new();
+    let mut field = Vec::<u8>::new();
+    let mut state = CsvState::FieldStart;
+    let mut record_quoted = false;
+    let mut record_started = false;
+    let mut record_bytes = 0_usize;
+    let mut record_index = 0_usize;
+
+    let mut finish_record = |fields: &mut Vec<Vec<u8>>,
+                             field: &mut Vec<u8>,
+                             record_quoted: &mut bool,
+                             record_started: &mut bool,
+                             record_bytes: &mut usize,
+                             record_index: &mut usize|
+     -> Result<(), String> {
+        fields.push(std::mem::take(field));
+        if fields.len() != expected_fields {
+            return Err(format!(
+                "factory {name} CSV record {} has {} fields; expected {expected_fields}",
+                *record_index + 1,
+                fields.len()
+            ));
+        }
+        if *record_index > MAX_MANUFACTURING_PARTS {
+            return Err(format!(
+                "factory {name} CSV contains more than {MAX_MANUFACTURING_PARTS} data rows"
+            ));
+        }
+        callback(*record_index, std::mem::take(fields), *record_quoted)
+            .map_err(|error| format!("factory package CSV entry {name}: {error}"))?;
+        *record_index += 1;
+        *record_quoted = false;
+        *record_started = false;
+        *record_bytes = 0;
+        Ok(())
+    };
+
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| format!("reading factory package CSV entry {name}: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        for &byte in &buffer[..read] {
+            record_bytes = record_bytes
+                .checked_add(1)
+                .ok_or_else(|| format!("factory {name} CSV record byte count overflow"))?;
+            if record_bytes > MAX_CSV_RECORD_BYTES {
+                return Err(format!(
+                    "factory {name} CSV record exceeds {MAX_CSV_RECORD_BYTES} bytes"
+                ));
+            }
+            if byte == 0 {
+                return Err(format!("factory {name} CSV contains NUL"));
+            }
+            if state == CsvState::RecordCr {
+                if byte != b'\n' {
+                    return Err(format!("factory {name} CSV CR must be followed by LF"));
+                }
+                finish_record(
+                    &mut fields,
+                    &mut field,
+                    &mut record_quoted,
+                    &mut record_started,
+                    &mut record_bytes,
+                    &mut record_index,
+                )?;
+                state = CsvState::FieldStart;
+                continue;
+            }
+            match state {
+                CsvState::FieldStart => match byte {
+                    b'"' => {
+                        state = CsvState::Quoted;
+                        record_quoted = true;
+                        record_started = true;
+                    }
+                    b',' => {
+                        if fields.len() >= expected_fields {
+                            return Err(format!("factory {name} CSV record has too many fields"));
+                        }
+                        fields.push(std::mem::take(&mut field));
+                        record_started = true;
+                    }
+                    b'\n' => {
+                        finish_record(
+                            &mut fields,
+                            &mut field,
+                            &mut record_quoted,
+                            &mut record_started,
+                            &mut record_bytes,
+                            &mut record_index,
+                        )?;
+                        state = CsvState::FieldStart;
+                    }
+                    b'\r' => state = CsvState::RecordCr,
+                    _ => {
+                        field.push(byte);
+                        state = CsvState::Unquoted;
+                        record_started = true;
+                    }
+                },
+                CsvState::Unquoted => match byte {
+                    b',' => {
+                        if fields.len() >= expected_fields {
+                            return Err(format!("factory {name} CSV record has too many fields"));
+                        }
+                        fields.push(std::mem::take(&mut field));
+                        state = CsvState::FieldStart;
+                    }
+                    b'\n' => {
+                        finish_record(
+                            &mut fields,
+                            &mut field,
+                            &mut record_quoted,
+                            &mut record_started,
+                            &mut record_bytes,
+                            &mut record_index,
+                        )?;
+                        state = CsvState::FieldStart;
+                    }
+                    b'\r' => state = CsvState::RecordCr,
+                    b'"' => {
+                        return Err(format!("factory {name} CSV contains an unescaped quote"));
+                    }
+                    _ => field.push(byte),
+                },
+                CsvState::Quoted => match byte {
+                    b'"' => state = CsvState::AfterQuote,
+                    _ => field.push(byte),
+                },
+                CsvState::AfterQuote => match byte {
+                    b'"' => {
+                        field.push(byte);
+                        state = CsvState::Quoted;
+                    }
+                    b',' => {
+                        if fields.len() >= expected_fields {
+                            return Err(format!("factory {name} CSV record has too many fields"));
+                        }
+                        fields.push(std::mem::take(&mut field));
+                        state = CsvState::FieldStart;
+                    }
+                    b'\n' => {
+                        finish_record(
+                            &mut fields,
+                            &mut field,
+                            &mut record_quoted,
+                            &mut record_started,
+                            &mut record_bytes,
+                            &mut record_index,
+                        )?;
+                        state = CsvState::FieldStart;
+                    }
+                    b'\r' => state = CsvState::RecordCr,
+                    _ => {
+                        return Err(format!("factory {name} CSV has data after a closing quote"));
+                    }
+                },
+                CsvState::RecordCr => unreachable!(),
+            }
+        }
+    }
+
+    match state {
+        CsvState::Quoted => Err(format!(
+            "factory {name} CSV has an unterminated quoted field"
+        )),
+        CsvState::RecordCr => Err(format!("factory {name} CSV CR must be followed by LF")),
+        CsvState::AfterQuote | CsvState::Unquoted => finish_record(
+            &mut fields,
+            &mut field,
+            &mut record_quoted,
+            &mut record_started,
+            &mut record_bytes,
+            &mut record_index,
+        ),
+        CsvState::FieldStart => {
+            if record_started || !fields.is_empty() {
+                finish_record(
+                    &mut fields,
+                    &mut field,
+                    &mut record_quoted,
+                    &mut record_started,
+                    &mut record_bytes,
+                    &mut record_index,
+                )?;
+            }
+            Ok(())
+        }
+    }
 }
 
 fn validate_manifest_path_domains(
@@ -2123,6 +2606,24 @@ mod tests {
 
     type ReceivedRequests = Arc<Mutex<Vec<Vec<u8>>>>;
 
+    struct TestManufacturingCsv {
+        bom: Vec<u8>,
+        cpl: Vec<u8>,
+        bom_quantity: u64,
+        placement_rows: u64,
+    }
+
+    impl TestManufacturingCsv {
+        fn empty() -> Self {
+            Self {
+                bom: b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n".to_vec(),
+                cpl: b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n".to_vec(),
+                bom_quantity: 0,
+                placement_rows: 0,
+            }
+        }
+    }
+
     fn manufacturing_package() -> Vec<u8> {
         manufacturing_package_with_front_copper(b"front-copper".to_vec(), CompressionMethod::Stored)
     }
@@ -2140,6 +2641,48 @@ mod tests {
         schema_version: u32,
         physical_profile: Option<&PhysicalProfileBinding>,
     ) -> Vec<u8> {
+        manufacturing_package_with_profile_and_csv(
+            front_copper,
+            compression_method,
+            schema_version,
+            physical_profile,
+            TestManufacturingCsv::empty(),
+        )
+    }
+
+    fn manufacturing_package_with_csv(
+        bom: Vec<u8>,
+        cpl: Vec<u8>,
+        bom_quantity: u64,
+        placement_rows: u64,
+    ) -> Vec<u8> {
+        manufacturing_package_with_profile_and_csv(
+            b"front-copper".to_vec(),
+            CompressionMethod::Stored,
+            1,
+            None,
+            TestManufacturingCsv {
+                bom,
+                cpl,
+                bom_quantity,
+                placement_rows,
+            },
+        )
+    }
+
+    fn manufacturing_package_with_profile_and_csv(
+        front_copper: Vec<u8>,
+        compression_method: CompressionMethod,
+        schema_version: u32,
+        physical_profile: Option<&PhysicalProfileBinding>,
+        csv: TestManufacturingCsv,
+    ) -> Vec<u8> {
+        let TestManufacturingCsv {
+            bom,
+            cpl,
+            bom_quantity,
+            placement_rows,
+        } = csv;
         let board = b"board-bytes";
         let job = serde_json::to_vec(&json!({
             "GeneralSpecs": {"LayerNumber": 2},
@@ -2165,8 +2708,8 @@ mod tests {
             ("board-job.gbrjob", job),
             ("board.drl", b"drill".to_vec()),
             ("drc.rpt", b"DRC clean".to_vec()),
-            ("bom.csv", b"Comment,Designator\n".to_vec()),
-            ("cpl.csv", b"Designator,Mid X (mm)\n".to_vec()),
+            ("bom.csv", bom),
+            ("cpl.csv", cpl),
         ];
         let mut manifest = json!({
             "schema_version": schema_version,
@@ -2179,7 +2722,7 @@ mod tests {
                 "sha256": sha256(board)
             },
             "project_inputs": [],
-            "parts": {"total": 0, "bom": 0, "placement": 0, "dnp": 0},
+            "parts": {"total": bom_quantity.max(placement_rows), "bom": bom_quantity, "placement": placement_rows, "dnp": 0},
             "artifacts": artifacts.iter().map(|(path, bytes)| json!({
                 "path": path,
                 "bytes": bytes.len(),
@@ -2897,6 +3440,173 @@ mod tests {
         };
         package[index] ^= 1;
         assert!(validate_manufacturing_package(&package).is_err());
+    }
+
+    #[test]
+    fn validates_bom_and_cpl_csv_escaping_crlf_and_unicode() {
+        let bom = concat!(
+            "Comment,Designator,Footprint,Quantity,MPN,Layer,Type\r\n",
+            "\"Res,\"\"value\"\"\r\nnext\",\"Rα,Rβ\",\"Foot,\"\"print\",2,\"MPN\r\nX\",F,SMD\r\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let cpl = concat!(
+            "Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n",
+            "\"Rα,Rβ\",-9223372036854.775808,9223372036854.775807,-1.000,F\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let package = manufacturing_package_with_csv(bom, cpl, 2, 1);
+        validate_manufacturing_package(&package).unwrap();
+    }
+
+    #[test]
+    fn validates_quoted_lone_line_breaks_controls_and_eof() {
+        let bom = concat!(
+            "Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n",
+            "\"line one\rline two\nline three\",R\t1,\"Foot\rprint\",1,\"MPN\nvalue\",B,THT\n"
+        )
+        .as_bytes()
+        .to_vec();
+        let cpl = concat!(
+            "Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\r\n",
+            "R\t1,0.000000,-0.000001,0,B"
+        )
+        .as_bytes()
+        .to_vec();
+        let package = manufacturing_package_with_csv(bom, cpl, 1, 1);
+        validate_manufacturing_package(&package).unwrap();
+    }
+
+    #[test]
+    fn rejects_bom_cpl_csv_semantic_and_syntax_violations() {
+        let bom_header = "Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n";
+        let cpl_header = "Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n";
+        let valid_bom = |quantity: &str, layer: &str, kind: &str| {
+            format!("{bom_header}R1,R1,Footprint,{quantity},C123,{layer},{kind}\n").into_bytes()
+        };
+        let valid_cpl = |designator: &str, x: &str, y: &str, rotation: &str, layer: &str| {
+            format!("{cpl_header}{designator},{x},{y},{rotation},{layer}\n").into_bytes()
+        };
+
+        for (bom, expected) in [
+            (valid_bom("0", "F", "SMD"), "Quantity"),
+            (valid_bom("18446744073709551616", "F", "SMD"), "Quantity"),
+            (valid_bom("1", "X", "SMD"), "Layer"),
+            (valid_bom("1", "F", "OTHER"), "Type"),
+        ] {
+            let package = manufacturing_package_with_csv(bom, cpl_header.as_bytes().to_vec(), 1, 0);
+            let error = validate_manufacturing_package(&package).unwrap_err();
+            assert!(
+                error.contains("bom.csv") && error.contains(expected),
+                "{error}"
+            );
+        }
+
+        let package = manufacturing_package_with_csv(
+            valid_bom("2", "F", "SMD"),
+            valid_cpl("R1", "1e0", "2", "0", "F"),
+            2,
+            1,
+        );
+        let error = validate_manufacturing_package(&package).unwrap_err();
+        assert!(
+            error.contains("cpl.csv") && error.contains("finite decimal"),
+            "{error}"
+        );
+
+        let package = manufacturing_package_with_csv(
+            valid_bom("1", "F", "SMD"),
+            format!("{cpl_header}R1,1,2,0,F\nR1,3,4,0,F\n").into_bytes(),
+            1,
+            2,
+        );
+        let error = validate_manufacturing_package(&package).unwrap_err();
+        assert!(
+            error.contains("cpl.csv") && error.contains("duplicate"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_csv_malformed_quotes_headers_and_counts() {
+        let cpl_header = "Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\n";
+        let malformed_bom =
+            b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n\"V,R1,F,1,M,F,SMD\n";
+        let package = manufacturing_package_with_csv(
+            malformed_bom.to_vec(),
+            cpl_header.as_bytes().to_vec(),
+            1,
+            0,
+        );
+        let error = validate_manufacturing_package(&package).unwrap_err();
+        assert!(
+            error.contains("bom.csv") && error.contains("unterminated"),
+            "{error}"
+        );
+
+        let package = manufacturing_package_with_csv(
+            b"Comment,Designator,Footprint,Quantity,MPN,Layer\n".to_vec(),
+            cpl_header.as_bytes().to_vec(),
+            0,
+            0,
+        );
+        let error = validate_manufacturing_package(&package).unwrap_err();
+        assert!(
+            error.contains("bom.csv") && error.contains("fields"),
+            "{error}"
+        );
+
+        let bom = b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\nR1,R1,F,1,,F,SMD\n";
+        let cpl =
+            b"Designator,Mid X (mm),Mid Y (mm),Rotation,Layer\nR1,9223372036854.775808,0,0,F\n";
+        let package = manufacturing_package_with_csv(bom.to_vec(), cpl.to_vec(), 1, 1);
+        let error = validate_manufacturing_package(&package).unwrap_err();
+        assert!(
+            error.contains("cpl.csv") && error.contains("checked range"),
+            "{error}"
+        );
+
+        for (comment, expected) in [
+            (b"bad\0value".as_slice(), "NUL"),
+            (b"bad\xffvalue".as_slice(), "invalid UTF-8"),
+        ] {
+            let mut bom = b"Comment,Designator,Footprint,Quantity,MPN,Layer,Type\n".to_vec();
+            bom.extend_from_slice(comment);
+            bom.extend_from_slice(b",R1,F,1,,F,SMD\n");
+            let package = manufacturing_package_with_csv(bom, cpl_header.as_bytes().to_vec(), 1, 0);
+            let error = validate_manufacturing_package(&package).unwrap_err();
+            assert!(
+                error.contains("bom.csv") && error.contains(expected),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn csv_parser_enforces_the_exact_data_row_limit() {
+        let mut csv = Vec::with_capacity((MAX_MANUFACTURING_PARTS + 2) * 2);
+        csv.extend_from_slice(b"H\n");
+        for _ in 0..MAX_MANUFACTURING_PARTS {
+            csv.extend_from_slice(b"x\n");
+        }
+        let mut records = 0_usize;
+        parse_csv_reader(&mut Cursor::new(&csv), "limit.csv", 1, &mut |_, _, _| {
+            records += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(records, MAX_MANUFACTURING_PARTS + 1);
+
+        csv.extend_from_slice(b"x\n");
+        let error = parse_csv_reader(
+            &mut Cursor::new(&csv),
+            "limit.csv",
+            1,
+            &mut |_, _, _| Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.contains("more than 100000 data rows"), "{error}");
     }
 
     #[test]

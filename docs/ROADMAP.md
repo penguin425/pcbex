@@ -150,6 +150,7 @@ auditable release.
 | v1.436.0 | Deterministic firmware-bundle compiler preflight | Stable-preflight an exact eight-entry firmware bundle (manifest plus seven fixed source artifacts) before publishing a plan, validating strict manifest/artifact bytes, hashes, and link/extra rejection while keeping the v1 plan, runner, and pipeline authorities unchanged |
 | v1.437.0 | Deterministic firmware-bundle gate re-snapshot | Reopen every exact-eight firmware entry and compare complete bytes/SHA-256 snapshots immediately before and after the deterministic pipeline gate, retaining a rejected report for observed bundle mutation while preserving plan schema v1 and manifest v2 |
 | v1.438.0 | Deterministic pipeline required CI check | Run the real Rust deterministic-pipeline binary on every normal PR and push, retain accepted and rejected reports, authenticate compiler source/report bindings, and publish bounded scalar Job Summary and scanned artifacts without changing schema v1 |
+| v1.439.0 | Semantic BOM/CPL package validation | Enforce one shared bounded RFC 4180 CSV validator for exact manufacturing headers, BOM quantity/type/layer/count semantics, and unique finite checked-decimal CPL references/layer/counts across fabrication, factory submission/repair, and pipeline verification without changing schema versions or adding a Gerber semantic parser |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -471,7 +472,7 @@ manifest remains v2. Regular hardlinks are allowed and are bound by the bytes
 and SHA-256 read from the named paths; this release does not pin inodes or
 claim a race-free filesystem boundary.
 
-The v1.438.0 milestone promotes the closed deterministic pipeline to an
+The released v1.438.0 milestone promotes the closed deterministic pipeline to an
 independent `Deterministic Pipeline` GitHub Actions job on normal pull requests
 and pushes. The job builds and invokes the real Rust binary against a closed
 compiler fixture, verifies the accepted circuit/schematic/board chain and the
@@ -496,3 +497,18 @@ a pull request is not an authorization boundary against a malicious write
 collaborator; repository permissions and protected-branch policy remain
 necessary. The check does not discover files, invoke an LLM or network service,
 mutate a design, submit to a factory, or place an order.
+
+The current v1.439.0 milestone makes manufacturing CSV semantics a single shared,
+fail-closed boundary. The package writer and every consumer use a bounded RFC
+4180 reader that accepts quoted commas, doubled quotes, and embedded newlines
+only within the resource contract. BOM and CPL headers are exact and closed;
+BOM quantities, `SMD`/`THT` types, `F`/`B` layers, and aggregate counts are
+checked, while CPL references are non-empty and unique and its X/Y/rotation
+values are finite checked decimals with valid layers and bounded counts. No
+vendor-specific CPL origin/axis/rotation transform is performed, and the gate
+does not require CPL designators to be a BOM subset or impose a canonical
+BOM/CPL row order. `factory-submit`, each feedback-loop candidate, local and
+factory-bound `pipeline-verify`, and deterministic-pipeline verification all
+inherit this validator before accepting manufacturing evidence. Manifest,
+receipt, plan, and report schema versions remain unchanged; Gerber validation
+remains structural and does not gain a semantic parser in this release.
