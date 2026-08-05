@@ -72,6 +72,37 @@ causes the final Action step to fail. No implicit input discovery or alternate
 report destination is allowed, and stale, linked, malformed, or substituted
 reports fail closed.
 
+The root Action also supports the closed compiler through the paired
+`deterministic-pipeline-intent` and `deterministic-pipeline-plan-output`
+inputs. Both are workspace-relative and must be supplied together. They are
+mutually exclusive with `deterministic-pipeline-plan`; a partial pair or mixed
+legacy/new selection fails before analysis. The compiler runs before analysis
+under the same bounded shell-free process policy, publishes only through a
+new-file/no-clobber destination, and passes its effective plan to the
+unchanged deterministic runner. The plan-output parent is the canonical base
+for every explicit role path in the intent, even when the intent file lives in
+another directory. Only descendants of that parent are allowed; absolute,
+traversal, linked, aliased, special, duplicate, stale, or concurrently changed
+sources fail closed.
+
+The compiler bridge authenticates exactly five bounded scalar values before
+the runner starts: schema version, intent source bytes, intent source
+SHA-256, plan source bytes, and plan source SHA-256. Plan source bytes include
+the canonical JSON final newline. After runner EOF, the bridge stable-reads
+the current intent and effective plan again and requires the report's raw plan
+source identity to match the compiler metadata, so a post-compilation
+substitution fails closed before attribution. It exposes only
+`deterministic-pipeline-effective-plan`,
+`deterministic-pipeline-intent-source-bytes`,
+`deterministic-pipeline-intent-source-sha256`,
+`deterministic-pipeline-plan-source-bytes`, and
+`deterministic-pipeline-plan-source-sha256`; plan and role bodies never enter
+Action metadata. The four source-identity values are empty outside compiler
+mode; `deterministic-pipeline-effective-plan` is the legacy plan path in
+legacy plan mode and is empty only in analysis-only mode. Existing runner
+outputs remain unchanged. The compiler adds no LLM, network,
+discovery, gate, approval, design mutation, or manufacturing operation.
+
 A composite action cannot set `timeout-minutes` on its caller's job. Its three
 supervised commands remain individually finite (10, 30, and 40 minutes), but
 artifact and SARIF service actions are governed by the calling job. Public

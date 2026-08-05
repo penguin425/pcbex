@@ -3385,7 +3385,7 @@ runner binds the raw output bytes (including that newline) as
 authorization descriptors; `run-deterministic-pipeline` reopens the plan and
 remains the final authority for source identities, board binding, pipeline
 gates, report retention, and optional approval failure. Composite-Action
-parity for intent compilation remains a later boundary.
+parity for intent compilation was deferred to v1.435.0 below.
 
 Version 1.434.0 exposes the same compiler as the closed MCP tool
 `compile_deterministic_pipeline_plan`. It requires only `intent` and `output`,
@@ -3399,6 +3399,54 @@ terminates the child and never turns an incomplete output into trusted
 evidence. This parity adds no LLM, network, discovery, gate, approval, design
 mutation, or manufacturing behavior; use `run_deterministic_pipeline` as the
 separate final-authority step.
+
+Version 1.435.0 adds composite-Action parity for the closed intent compiler.
+The root Action accepts the optional workspace-relative inputs
+`deterministic-pipeline-intent` and `deterministic-pipeline-plan-output` as a
+pair. They are mutually exclusive with the legacy
+`deterministic-pipeline-plan` input; setting only one of the two new inputs is
+rejected before analysis. With the new pair, the Action invokes the bounded
+shell-free compiler before analysis, refuses an existing, aliased, linked, or
+otherwise unsafe output, and passes the newly published plan to the unchanged
+`run-deterministic-pipeline` runner. The compiler and runner therefore retain
+the same final authority, source limits, firmware-directory contract, and
+report/no-clobber behavior as the CLI and MCP paths.
+
+Intent role paths keep the compiler's portable forward-slash contract: every
+required role is explicit and every optional role is a path or `null`; paths
+are resolved relative to the canonical parent directory of
+`deterministic-pipeline-plan-output`, not relative to the intent file, and each
+source must be a descendant of that parent. Absolute paths, `..` rebasing,
+links, non-regular files, duplicate roles, stale changes, and source races are
+rejected fail-closed. Before trusting the compiler, the Action stable-reads
+the intent and retained plan and authenticates exactly five scalar fields:
+schema version, intent source bytes, intent source SHA-256, plan source bytes,
+and plan source SHA-256. The plan bytes include the canonical compact JSON and
+its one trailing newline. Neither plan nor source contents are copied into
+Action metadata. After the runner reaches EOF, the Action stable-reads the
+current intent and effective plan again, requires both identities to remain
+equal to the compiler metadata, and requires the retained report's raw plan
+source identity to match that same compiled plan. Replacing either file after
+compilation therefore fails closed before any runner result is attributed.
+
+The Action publishes the following metadata outputs in addition to the
+existing deterministic-pipeline runner outputs:
+
+- `deterministic-pipeline-effective-plan` (the legacy plan path or the newly
+  compiled plan path);
+- `deterministic-pipeline-intent-source-bytes`;
+- `deterministic-pipeline-intent-source-sha256`;
+- `deterministic-pipeline-plan-source-bytes`; and
+- `deterministic-pipeline-plan-source-sha256`.
+
+The four source-identity values are empty when the compiler is not selected;
+`deterministic-pipeline-effective-plan` remains the legacy plan path in legacy
+plan mode and is empty only in analysis-only mode. In analysis-only mode all
+deterministic-pipeline outputs remain empty. The compiler does not
+add an LLM call, network request, path discovery, design mutation, gate,
+approval decision, or manufacturing action. Existing callers that leave both
+new inputs empty retain analysis-only behavior; callers using only
+`deterministic-pipeline-plan` retain the v1.419 runner contract unchanged.
 
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set

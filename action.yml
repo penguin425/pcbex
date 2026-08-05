@@ -78,6 +78,14 @@ inputs:
     description: Optional workspace-relative closed deterministic pipeline plan; empty disables the deterministic pipeline runner.
     required: false
     default: ""
+  deterministic-pipeline-intent:
+    description: Optional workspace-relative closed deterministic pipeline intent; requires deterministic-pipeline-plan-output and is mutually exclusive with deterministic-pipeline-plan.
+    required: false
+    default: ""
+  deterministic-pipeline-plan-output:
+    description: Explicit workspace-relative destination for a compiled deterministic pipeline plan; requires deterministic-pipeline-intent and must not already exist.
+    required: false
+    default: ""
   deterministic-pipeline-require-approved:
     description: Require the deterministic pipeline plan to produce an approved report after retaining and verifying its evidence.
     required: false
@@ -1258,6 +1266,21 @@ outputs:
   deterministic-pipeline-report-sha256:
     description: Verified retained deterministic pipeline report SHA-256.
     value: ${{ steps.analyze.outputs.deterministic-pipeline-report-sha256 }}
+  deterministic-pipeline-effective-plan:
+    description: Effective deterministic pipeline plan path, either the legacy input or the newly compiled plan.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-effective-plan }}
+  deterministic-pipeline-intent-source-bytes:
+    description: Exact byte count of the compiler intent source; empty outside compiler mode.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-intent-source-bytes }}
+  deterministic-pipeline-intent-source-sha256:
+    description: Exact SHA-256 of the compiler intent source; empty outside compiler mode.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-intent-source-sha256 }}
+  deterministic-pipeline-plan-source-bytes:
+    description: Exact byte count of the compiled plan source; empty outside compiler mode.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-plan-source-bytes }}
+  deterministic-pipeline-plan-source-sha256:
+    description: Exact SHA-256 of the compiled plan source; empty outside compiler mode.
+    value: ${{ steps.analyze.outputs.deterministic-pipeline-plan-source-sha256 }}
   current-sarif:
     description: SARIF report for the current board.
     value: ${{ steps.analyze.outputs.current-sarif }}
@@ -1679,6 +1702,8 @@ runs:
         PCBEX_PHYSICAL_PROFILE: ${{ inputs.physical-profile }}
         PCBEX_PIPELINE_VERIFY: ${{ inputs.pipeline-verify }}
         PCBEX_DETERMINISTIC_PIPELINE_PLAN: ${{ inputs.deterministic-pipeline-plan }}
+        PCBEX_DETERMINISTIC_PIPELINE_INTENT: ${{ inputs.deterministic-pipeline-intent }}
+        PCBEX_DETERMINISTIC_PIPELINE_PLAN_OUTPUT: ${{ inputs.deterministic-pipeline-plan-output }}
         PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED: ${{ inputs.deterministic-pipeline-require-approved }}
         PCBEX_PIPELINE_ELECTRICAL_POLICY: ${{ inputs.pipeline-electrical-policy }}
         PCBEX_PIPELINE_ELECTRICAL_REVIEW: ${{ inputs.pipeline-electrical-review }}
@@ -1967,6 +1992,7 @@ runs:
         PCBEX_PIPELINE_VERIFY: ${{ inputs.pipeline-verify }}
         PCBEX_PIPELINE_PASSED: ${{ steps.analyze.outputs.pipeline-passed }}
         PCBEX_DETERMINISTIC_PIPELINE_PLAN: ${{ inputs.deterministic-pipeline-plan }}
+        PCBEX_DETERMINISTIC_PIPELINE_EFFECTIVE_PLAN: ${{ steps.analyze.outputs.deterministic-pipeline-effective-plan }}
         PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED: ${{ inputs.deterministic-pipeline-require-approved }}
         PCBEX_DETERMINISTIC_PIPELINE_APPROVED: ${{ steps.analyze.outputs.deterministic-pipeline-approved }}
         PCBEX_DETERMINISTIC_PIPELINE_REPORT: ${{ steps.analyze.outputs.deterministic-pipeline-report }}
@@ -2058,7 +2084,7 @@ runs:
           echo "::error::pcbex pipeline verification is absent or did not pass"
           exit 1
         fi
-        if [[ -n "$PCBEX_DETERMINISTIC_PIPELINE_PLAN" &&
+        if [[ -n "$PCBEX_DETERMINISTIC_PIPELINE_EFFECTIVE_PLAN" &&
           "$PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED" == "true" &&
           ( "$PCBEX_DETERMINISTIC_PIPELINE_APPROVED" != "true" ||
             -z "$PCBEX_DETERMINISTIC_PIPELINE_REPORT" ) ]]; then
