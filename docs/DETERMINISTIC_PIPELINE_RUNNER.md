@@ -193,6 +193,24 @@ binding, build evidence, reports, gates, and approval. The historical firmware
 generator contract still describes seven source artifacts; “exact eight” here
 means that manifest plus those seven sources as one input directory.
 
+## Firmware-bundle gate re-snapshot (v1.437.0)
+
+The runner now hardens the firmware bundle's gate-time substitution window
+without changing the plan or manifest contracts. After the initial exact-eight
+preflight and private staging, it reopens `manifest.json` and all seven fixed
+v2 artifacts immediately before entering the deterministic pipeline gate and
+records each entry's complete bytes and SHA-256. When the gate returns, it
+reopens the same eight paths and requires an identical complete byte/SHA-256
+snapshot. Any added, removed, replaced, or content-mutated entry observed by
+those snapshots therefore makes the run rejected; a valid rejected report is
+retained before an optional `--require-approved` failure.
+
+Plan schema v1 and firmware manifest v2 remain unchanged, and the runner still
+does not execute firmware builds or grant firmware approval. Regular hardlinks
+are accepted and remain content-bound by the bytes and SHA-256 read through
+each named path. The boundary does not pin inodes or claim to be race-free
+against an adversarial filesystem.
+
 ## MCP parity
 
 The MCP server exposes `run_deterministic_pipeline` with the same explicit

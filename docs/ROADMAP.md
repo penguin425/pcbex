@@ -148,6 +148,7 @@ auditable release.
 | v1.434.0 | MCP deterministic pipeline intent compiler parity | Expose the closed intent compiler synchronously and through optional MCP Tasks, authenticate retained plan and intent identities through a strict bounded child summary, and keep the runner and composite Action contracts unchanged |
 | v1.435.0 | Composite-Action deterministic pipeline intent compiler parity | Accept an explicit intent/output pair, compile before analysis, authenticate exact intent/plan bytes and SHA identities, reuse the effective plan with the unchanged runner, and publish bounded metadata while preserving legacy plan and analysis-only behavior |
 | v1.436.0 | Deterministic firmware-bundle compiler preflight | Stable-preflight an exact eight-entry firmware bundle (manifest plus seven fixed source artifacts) before publishing a plan, validating strict manifest/artifact bytes, hashes, and link/extra rejection while keeping the v1 plan, runner, and pipeline authorities unchanged |
+| v1.437.0 | Deterministic firmware-bundle gate re-snapshot | Reopen every exact-eight firmware entry and compare complete bytes/SHA-256 snapshots immediately before and after the deterministic pipeline gate, retaining a rejected report for observed bundle mutation while preserving plan schema v1 and manifest v2 |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -455,3 +456,15 @@ deterministic runner and `pipeline-verify` reopen the original bundle, repeat
 their own exact-eight checks and artifact verification, and remain the final
 authorities for staging, schematic binding, build evidence, gates, reports,
 and approval.
+
+The v1.437.0 milestone hardens the runner's remaining firmware TOCTOU window
+around the deterministic pipeline gate. After the initial exact-eight input
+preflight and staging checks, the runner takes a complete byte/SHA-256 snapshot
+of `manifest.json` and all seven fixed v2 artifacts immediately before the
+gate, then takes the same complete snapshot after the gate returns. Any added,
+removed, replaced, or content-mutated entry observed by those snapshots causes
+the run to be rejected; a well-formed rejected report remains retained before
+an optional approval failure. The plan remains schema v1 and the firmware
+manifest remains v2. Regular hardlinks are allowed and are bound by the bytes
+and SHA-256 read from the named paths; this release does not pin inodes or
+claim a race-free filesystem boundary.

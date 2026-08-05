@@ -3469,6 +3469,17 @@ the original bundle and repeat the exact-eight and artifact checks; they remain
 the final authorities for staging, schematic binding, build evidence, gates,
 reports, and approval.
 
+Version 1.437.0 extends the runner's firmware boundary around the deterministic
+pipeline gate. After the initial exact-eight preflight and staging, the runner
+reopens `manifest.json` and all seven fixed v2 artifacts immediately before the
+gate, records complete bytes and SHA-256 identities, and repeats that full
+snapshot after the gate returns. Any added, removed, replaced, or
+content-mutated entry observed by those snapshots makes the run rejected; the
+valid rejected report is retained before an optional approval failure. Plan
+schema v1 and firmware manifest v2 are unchanged. Regular hardlinks remain
+allowed and are content-bound by the bytes and SHA-256 read through each named
+path; the runner does not pin inodes or claim a race-free filesystem boundary.
+
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set
 `deterministic-pipeline-require-approved: "true"` for a final fail gate. The
