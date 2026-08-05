@@ -42,6 +42,54 @@ firmware bundle directory: that directory is an exact eight-file input contract,
 and a report or atomic output reservation inside it would become an unauthorized
 ninth entry.
 
+## Closed intent compiler (v1.433.0)
+
+Version 1.433.0 adds a CLI-only compiler from a closed pipeline intent to the
+existing digest-bound plan. Emit the compiler's closed intent schema and
+compile one intent with explicit role paths:
+
+```sh
+pcbex deterministic-pipeline-intent-schema \
+  --output deterministic-pipeline-intent.schema.json
+
+pcbex compile-deterministic-pipeline-plan \
+  config/pipeline-intent.json \
+  --output pipeline-plan.json
+```
+
+The intent is a closed object carrying its schema/`require_factory` decision
+and one explicit path field per runner role; for example, required fields name
+`hardware/circuit-spec-v2.json`, `hardware/controller.kicad_sch`,
+`build/electrical-review.json`, `hardware/controller.kicad_pcb`,
+`build/analysis-manifest.json`, `build/analysis-checks.json`, `build/quality.json`,
+`build/manufacturing.zip`, and `firmware/manifest.json` for this example.
+Those role values are portable forward-slash paths resolved from the generated
+output plan's canonical parent (the repository root here), not from `config/`,
+where the intent lives; the intent may be elsewhere, but every role source must
+be a descendant of the output parent. `..` rebasing is rejected by the portable
+path contract. Optional role fields are explicit paths or `null`. The intent
+contains no model prompt, free-form path list, or implicit role discovery. The
+compiler rejects absolute/traversal/link/non-regular paths, stable-reads each
+bounded source, and computes the descriptor's exact byte count and lowercase
+SHA-256 itself. Caller-provided bytes or digests are not trusted.
+The output plan is compact canonical JSON followed by exactly one trailing
+newline, in the existing plan-schema-v1 shape, and is published only through
+the bounded no-clobber output boundary. The runner's `plan_source_sha256`
+binds those raw output bytes (including that newline), while its separate
+`plan_sha256` binds the semantic plan object with a domain-separated digest.
+This preserves the distinction between exact source bytes and semantic plan
+identity.
+
+Compilation performs no LLM call, network request, path discovery, child gate,
+design mutation, or manufacturing action. It only materializes authorization
+descriptors. `run-deterministic-pipeline` remains the final authority: it
+reopens and revalidates the compiled plan, snapshots every authorized source,
+runs the existing circuit/KiCad board-binding and `pipeline-verify` gates, and
+retains the aggregate report before an optional approval failure. A compiled
+plan cannot bypass those checks or manufacture approval. MCP and composite
+Action parity for intent compilation are intentionally later work; callers
+must invoke this CLI compiler and pass its output plan to the existing runner.
+
 ## MCP parity
 
 The MCP server exposes `run_deterministic_pipeline` with the same explicit

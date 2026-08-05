@@ -167,6 +167,7 @@ mod anchored_io;
 mod bounded_io;
 mod bounded_process;
 mod canary_completion;
+mod deterministic_pipeline_compiler;
 mod deterministic_pipeline_runner;
 mod factory;
 mod firmware;
@@ -212,6 +213,9 @@ use canary_completion::{
     CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
     parse_signed_canary_decision, render_canary_completion_summary, sign_canary_completion,
     signed_canary_decision_json_schema, verify_canary_completion,
+};
+use deterministic_pipeline_compiler::{
+    compile_deterministic_pipeline_plan, deterministic_pipeline_intent_schema,
 };
 use deterministic_pipeline_runner::{
     deterministic_pipeline_plan_schema, deterministic_pipeline_report_schema,
@@ -819,6 +823,11 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed deterministic pipeline intent JSON Schema.
+    DeterministicPipelineIntentSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed deterministic pipeline runner report JSON Schema.
     DeterministicPipelineReportSchema {
         #[arg(short, long)]
@@ -941,6 +950,14 @@ enum Command {
         /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
         #[arg(long, hide = true)]
         mcp_echo_report_summary: bool,
+    },
+    /// Compile one closed deterministic pipeline intent into a canonical plan.
+    CompileDeterministicPipelinePlan {
+        /// Closed intent containing explicit paths for every pipeline role.
+        intent: PathBuf,
+        /// New canonical plan path; existing, aliased, or symlinked destinations are refused.
+        #[arg(short, long)]
+        output: PathBuf,
     },
     /// Print the deterministic full hardware pipeline gate JSON Schema.
     PipelineSchema {
@@ -5393,6 +5410,13 @@ fn run_cli() -> Result<()> {
                 "deterministic pipeline plan schema output",
             )?;
         }
+        Command::DeterministicPipelineIntentSchema { output } => {
+            write_closed_schema(
+                &deterministic_pipeline_intent_schema(),
+                output.as_deref(),
+                "deterministic pipeline intent schema output",
+            )?;
+        }
         Command::DeterministicPipelineReportSchema { output } => {
             write_closed_schema(
                 &deterministic_pipeline_report_schema(),
@@ -5695,6 +5719,25 @@ fn run_cli() -> Result<()> {
             if require_approved && !report.approved {
                 bail!("deterministic hardware pipeline rejected");
             }
+        }
+        Command::CompileDeterministicPipelinePlan { intent, output } => {
+            // The compiler performs all bounded intent parsing, role-path
+            // validation, stable reads, digest calculation, and plan/output
+            // alias checks before this CLI creates any temporary output.
+            let compiled = compile_deterministic_pipeline_plan(&intent, &output)?;
+            // The CLI owns only the final no-clobber atomic publication of the
+            // canonical bytes returned by the compiler. Recheck the
+            // destination and intent alias immediately before publication.
+            let prepared = prepare_pipeline_output(&output, &[intent.as_path()])?;
+            persist_atomic_new_file_bytes(prepared, &output, &compiled.plan_bytes)?;
+            eprintln!(
+                "compiled deterministic pipeline plan: intent={} ({} bytes, sha256={}), plan={} ({} bytes)",
+                intent.display(),
+                compiled.intent_source_bytes,
+                compiled.intent_source_sha256,
+                output.display(),
+                compiled.plan_bytes.len()
+            );
         }
         Command::PipelineSchema { factory, output } => {
             let schema = if factory {

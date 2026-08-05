@@ -3355,6 +3355,39 @@ are unchanged. See
 [`docs/DETERMINISTIC_PIPELINE_RUNNER.md`](docs/DETERMINISTIC_PIPELINE_RUNNER.md)
 for the complete plan, report, resource, and failure contract.
 
+Version 1.433.0 adds a closed intent-to-plan compiler as a CLI-only boundary.
+Emit its schema and compile a plan by naming every role path explicitly:
+
+```sh
+pcbex deterministic-pipeline-intent-schema \
+  --output deterministic-pipeline-intent.schema.json
+pcbex compile-deterministic-pipeline-plan \
+  config/pipeline-intent.json \
+  --output pipeline-plan.json
+```
+
+The closed intent carries its schema/`require_factory` decision and one
+explicit path field per required or optional runner role, but no LLM prompt,
+network input, or free-form path list. The compiler performs no path discovery:
+required roles are paths and optional roles are paths or explicit `null`.
+Every role path is portable forward-slash and relative to the generated plan's
+canonical parent (the repository root in this example), so values such as
+`hardware/controller.kicad_sch` remain correct even though the intent is stored
+under `config/`; the intent may be elsewhere, but every role source must be a
+descendant of the output parent and `..` rebasing is rejected. It computes each
+descriptor's bounded bytes and SHA-256 from stable reads rather than trusting
+caller-supplied identities. It emits
+canonical existing plan-schema-v1 JSON through the no-clobber output boundary.
+The emitted bytes are compact JSON plus exactly one trailing newline. The
+runner binds the raw output bytes (including that newline) as
+`plan_source_sha256` and separately binds the semantic plan object as
+`plan_sha256` with a domain-separated digest. Compilation only creates
+authorization descriptors; `run-deterministic-pipeline` reopens the plan and
+remains the final authority for source identities, board binding, pipeline
+gates, report retention, and optional approval failure. MCP and Action parity
+for intent compilation is intentionally a later boundary; pass the compiled
+plan to the existing runner from those integrations.
+
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set
 `deterministic-pipeline-require-approved: "true"` for a final fail gate. The

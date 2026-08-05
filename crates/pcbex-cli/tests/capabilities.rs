@@ -174,6 +174,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "factory-feedback-loop-schema",
         "factory-submit",
         "factory-feedback-loop",
+        "deterministic-pipeline-intent-schema",
+        "compile-deterministic-pipeline-plan",
         "deterministic-pipeline-plan-schema",
         "deterministic-pipeline-report-schema",
         "native-kicad-erc-report-schema",
