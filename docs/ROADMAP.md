@@ -142,6 +142,7 @@ auditable release.
 | v1.428.0 | Boardless native KiCad ERC Action | Provide a focused public composite Action that runs authenticated native schematic ERC without a board, preserves the root Action contract, publishes the same twelve identities, and retains bounded rejection evidence before its final approval gate |
 | v1.429.0 | Native KiCad PCB DRC evidence gate | Run canonical, digest-bound `drc.v1` PCB DRC evidence through CLI, MCP, and focused/root Actions with private staging, real KiCad 10 reproducibility coverage, strict error/warning approval, and retained rejected evidence |
 | v1.430.0 | Native KiCad PCB DRC fresh replay | Re-run exact retained `drc.v1` evidence through read-only CLI/MCP and focused Action verify mode, while making anchor-qualified board-edge and region placement constraints panic-free |
+| v1.431.0 | MCP native KiCad task cancellation propagation | Run `run_native_kicad_drc` and `run_native_kicad_erc` directly in the MCP worker, with Unix Task cancellation reaching the KiCad process-group leader and descendants; preserve MCP responses and publish no incomplete report while leaving CLI and Action behavior unchanged |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -290,7 +291,7 @@ evidence fails closed. The root Action continues to require a board, and the
 standalone report is not automatically connected to the separate AI review
 artifact flow.
 
-The current v1.428.0 milestone adds a focused public Action at
+The v1.428.0 milestone adds a focused public Action at
 `actions/native-kicad-erc` for schematic-only repositories. It accepts one
 required schematic plus an optional closed warning policy and never requests
 or analyzes a board. The dedicated runner reuses the existing bounded process,
@@ -346,3 +347,14 @@ This release also removes the panic path for valid anchor-qualified
 board-edge and region placement constraints: board-edge distance uses the
 transformed anchor, while region containment continues to apply to the owning
 component's complete body.
+
+The v1.431.0 milestone hardens native KiCad execution for MCP Tasks.
+`run_native_kicad_drc` and `run_native_kicad_erc` invoke their Rust runners
+directly for synchronous and Task MCP calls instead of routing through a
+shell-free child CLI. Task calls pass cancellation into the bounded supervisor
+and, on Unix, terminate the KiCad process-group leader and its descendants
+together. Output publication remains atomic and occurs only after a complete
+normalized report has been validated, so a cancelled or interrupted run never
+exposes an incomplete report. MCP responses, CLI commands, and composite
+Actions keep their existing external contracts; this release changes the MCP
+implementation path.
