@@ -111,7 +111,11 @@ When a v1 report is supplied to `prepare-ai-review` together with the
 deterministic plan and retained report, the request becomes schema v3 with an
 artifact binding schema v2. Signing, verification, quorum, MCP, the Python
 adapter, and the composite Action accept the same opt-in native evidence; the
-legacy v1 unbound and v2 deterministic-only flows remain unchanged.
+legacy schema-v1 artifact-free and schema-v2 deterministic-only flows remain
+unchanged. Version 1.442.0's live
+`--schematic` signing path is separate: it semantically binds a schema-v1
+request to the supplied source and freshly recomputes the electrical review,
+without adding an artifact path or changing any wire schema.
 
 Supplying a v2 report plus
 `--native-kicad-erc-warning-policy examples/native-kicad-warning-policy.json`

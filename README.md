@@ -2466,7 +2466,9 @@ Only after that gate succeeds, the Action exposes
 `ai-review-artifacts-verified`, generated-schematic byte/SHA outputs, raw plan
 source byte/SHA outputs, normalized `ai-review-pipeline-plan-sha256`, retained
 report byte/SHA outputs, and `ai-review-pipeline-run-sha256`. Omitting the
-generated schematic preserves request-schema-v1 behavior.
+generated schematic preserves request-schema-v1 behavior for this artifact
+flow; live schematic binding remains an explicit focused-Action, CLI, or MCP
+choice.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
@@ -3538,7 +3540,8 @@ no new semantic parser.
 The released Version 1.440.0 adds a focused, boardless AI schematic approval Action. It
 does not call an AI provider or accept API/signing secrets. Instead, it binds a
 live `.kicad_sch` to an existing schema-v1 review request through the imported
-semantic IR, freshly recomputes the request's electrical review, and then
+semantic IR without adding an artifact-path binding, freshly recomputes the
+request's electrical review, and then
 re-verifies the caller-supplied signed approval/response pairs against the
 trusted keys and reviewer/provider/model thresholds in an organization policy
 pack. Formatting-only schematic changes remain compatible; a semantic edit or
@@ -3571,15 +3574,17 @@ source-substituted, or otherwise invalid candidates are not published by the
 normal Action flow. Run it in an isolated runner/workspace: the bounded checks
 detect observed replacements, but local verification and the artifact-service
 upload cannot be one atomic filesystem transaction in a composite Action.
-It is limited to schema-v1 requests; schema-v2 through v4 artifact-bound
-workflows remain available through the root Action and CLI. See
+It is limited to schema-v1 requests without artifact-path bindings;
+schema-v2 through v4 artifact-bound workflows remain available through the
+root Action and CLI. See
 [`docs/AI_SCHEMATIC_APPROVAL_ACTION.md`](docs/AI_SCHEMATIC_APPROVAL_ACTION.md).
 
-Version 1.441.0 extends schema-v1 live schematic binding to single approval
-verification and MCP. Pass `--schematic` to `verify-ai-approval` alongside the
-request, response, and signed approval; the command imports the bounded KiCad
-schematic and freshly recomputes the electrical review before accepting the
-signature. The MCP `verify_schematic_approval` and
+The released Version 1.441.0 extends schema-v1 live schematic binding to
+single approval verification and MCP. Pass `--schematic` to
+`verify-ai-approval` alongside the request, response, and signed approval; the
+command imports the bounded KiCad schematic and freshly recomputes the
+electrical review before accepting the signature. The MCP
+`verify_schematic_approval` and
 `verify_schematic_approval_quorum` tools expose the same literal schematic
 path, with generated/native artifact modes remaining mutually exclusive.
 Formatting-equivalent source changes are accepted through the semantic IR,
@@ -3595,6 +3600,33 @@ pcbex verify-ai-approval \
   --schematic hardware/controller.kicad_sch \
   --public-key build/reviewer.pub
 ```
+
+Version 1.442.0 completes live signing parity for schema-v1 requests. Pass
+`--schematic` to `sign-ai-review`, or supply `schematic` to the MCP
+`sign_schematic_approval` tool. Each signing path imports the bounded live
+KiCad schematic, compares semantic IR, and freshly recomputes the deterministic
+electrical review before reading the private key or creating an
+approval.
+Formatting-only source changes remain accepted; semantic substitution and
+fresh-review mismatches fail closed. The live source is not an artifact-path
+binding, and request, response, and signed-approval wire schemas are unchanged;
+schema-v2 through v4 continue to require their generated/native artifact paths
+and cannot be mixed with `--schematic`.
+
+```sh
+pcbex sign-ai-review \
+  build/ai-review-request.json build/reviewer.response.json \
+  --schematic hardware/controller.kicad_sch \
+  --private-key .secrets/schematic-approval.key \
+  --signer-id production-ci --output build/reviewer.approval.json \
+  --require-approved
+```
+
+Run this signing boundary in an isolated workspace. Bounded reads detect
+replacements observed around semantic/review verification, but verification,
+private-key access, and output publication are not one atomic filesystem
+transaction and no race-free filesystem boundary is claimed. This release
+does not add output or session hardening.
 
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set
@@ -4007,9 +4039,10 @@ byte-for-byte. The request's raw electrical-review digest and recomputed
 electrical result must also match the plan and circuit handoff. This rejects
 stale, changed, or independently valid but mixed artifacts; a byte-identical
 copy at another path remains valid.
-Schema-v1 requests remain supported without these flags and reject them when
-supplied. Request schema v2 is distinct from the existing session-bound signed
-approval envelope schema v2. See
+Schema-v1 requests remain supported without these artifact flags and reject
+those artifact paths when supplied; use the separate live `--schematic` path
+for semantic/fresh electrical-review binding. Request schema v2 is distinct
+from the existing session-bound signed approval envelope schema v2. See
 [`docs/AI_REVIEW_ARTIFACT_BINDING.md`](docs/AI_REVIEW_ARTIFACT_BINDING.md).
 
 With an organization policy pack, review requirements and the simulation gate
@@ -4959,6 +4992,10 @@ remains v1. The MCP server exposes `route_schematic_reviewers`,
 `verify_schematic_approval_quorum`, plus signed human escalation and approval
 transparency-log tools; signing, appending, and report writes are marked as
 destructive actions so MCP hosts can retain their user-approval boundary. The
+schema-v1 `sign_schematic_approval` path accepts one literal `schematic` live
+source and performs the semantic/fresh electrical-review checks before
+reading the private key; its `schematic` input is mutually exclusive with the
+schema-v2 through v4 artifact paths, which remain artifact-only. The
 GitHub Action accepts `ai-review-session`
 alongside its quorum inputs, optionally verifies `human-escalation-files`, and
 publishes `schematic-approval-met` as the AI-or-governed-human result. The

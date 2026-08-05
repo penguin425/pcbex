@@ -182,6 +182,28 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
         format!("{}\n\n", fs::read_to_string(&schematic).unwrap()),
     )
     .unwrap();
+    let live_approval = directory.join("live-approval.json");
+    assert!(
+        run(&[
+            "sign-ai-review",
+            path(&request),
+            path(&response),
+            "--schematic",
+            path(&equivalent_schematic),
+            "--private-key",
+            path(&private_key),
+            "--signer-id",
+            "ci-production",
+            "--output",
+            path(&live_approval),
+            "--require-approved",
+        ])
+        .status
+        .success()
+    );
+    let live_approval_value: Value =
+        serde_json::from_slice(&fs::read(&live_approval).unwrap()).unwrap();
+    assert_eq!(live_approval_value["approved"], true);
     assert!(
         run(&[
             "verify-ai-approval",
@@ -221,6 +243,28 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
         String::from_utf8_lossy(&mutated_verification.stderr)
             .contains("live schematic semantic document does not match")
     );
+
+    let missing_private_key = directory.join("missing-live-private.key");
+    let rejected_live_approval = directory.join("rejected-live-approval.json");
+    let rejected_live_sign = run(&[
+        "sign-ai-review",
+        path(&request),
+        path(&response),
+        "--schematic",
+        path(&mutated_schematic),
+        "--private-key",
+        path(&missing_private_key),
+        "--signer-id",
+        "ci-production",
+        "--output",
+        path(&rejected_live_approval),
+    ]);
+    assert!(!rejected_live_sign.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_live_sign.stderr)
+            .contains("live schematic semantic document does not match")
+    );
+    assert!(!rejected_live_approval.exists());
 
     let request_model: AiReviewRequest =
         serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
@@ -266,6 +310,23 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
     ]);
     assert!(!schema_v2_verification.status.success());
     assert!(String::from_utf8_lossy(&schema_v2_verification.stderr).contains("schema version 1"));
+    let schema_v2_live_approval = directory.join("schema-v2-live-approval.json");
+    let schema_v2_live_sign = run(&[
+        "sign-ai-review",
+        path(&schema_v2_request_path),
+        path(&response),
+        "--schematic",
+        path(&schematic),
+        "--private-key",
+        path(&private_key),
+        "--signer-id",
+        "ci-production",
+        "--output",
+        path(&schema_v2_live_approval),
+    ]);
+    assert!(!schema_v2_live_sign.status.success());
+    assert!(String::from_utf8_lossy(&schema_v2_live_sign.stderr).contains("schema version 1"));
+    assert!(!schema_v2_live_approval.exists());
 
     let conflicting_live_artifacts = run(&[
         "verify-ai-approval",
@@ -287,6 +348,27 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
     assert!(
         String::from_utf8_lossy(&conflicting_live_artifacts.stderr).contains("cannot be used with")
     );
+    let conflicting_live_sign = run(&[
+        "sign-ai-review",
+        path(&request),
+        path(&response),
+        "--schematic",
+        path(&schematic),
+        "--generated-schematic",
+        path(&schematic),
+        "--deterministic-pipeline-plan",
+        "missing-plan.json",
+        "--deterministic-pipeline-report",
+        "missing-report.json",
+        "--private-key",
+        path(&private_key),
+        "--signer-id",
+        "ci-production",
+        "--output",
+        path(&directory.join("conflicting-live-sign.json")),
+    ]);
+    assert!(!conflicting_live_sign.status.success());
+    assert!(String::from_utf8_lossy(&conflicting_live_sign.stderr).contains("cannot be used with"));
 
     let session = directory.join("review-session.json");
     let session_value: Value = serde_json::from_slice(&fs::read(&session).unwrap()).unwrap();
@@ -309,6 +391,8 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
             "ci-production",
             "--session",
             path(&session),
+            "--schematic",
+            path(&equivalent_schematic),
             "--output",
             path(&session_approval),
             "--require-approved",

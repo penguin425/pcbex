@@ -3461,6 +3461,20 @@ enum Command {
     SignAiReview {
         request: PathBuf,
         response: PathBuf,
+        /// Live KiCad schematic semantically bound to a schema-v1 request.
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with_all = [
+                "generated_schematic",
+                "deterministic_pipeline_plan",
+                "deterministic_pipeline_report",
+                "native_kicad_erc_report",
+                "native_kicad_erc_warning_policy",
+                "kicad_cli"
+            ]
+        )]
+        schematic: Option<PathBuf>,
         /// Generated schematic whose exact bytes are bound by a v2 request.
         #[arg(
             long,
@@ -11846,6 +11860,7 @@ fn run_cli() -> Result<()> {
         Command::SignAiReview {
             request,
             response,
+            schematic,
             generated_schematic,
             deterministic_pipeline_plan,
             deterministic_pipeline_report,
@@ -11859,6 +11874,7 @@ fn run_cli() -> Result<()> {
             require_approved,
         } => {
             let (request, _) = read_described_json::<AiReviewRequest>(&request)?;
+            verify_live_ai_review_schematic(&request, schematic.as_deref())?;
             verify_bound_ai_review_artifacts(
                 &request,
                 generated_schematic.as_deref(),

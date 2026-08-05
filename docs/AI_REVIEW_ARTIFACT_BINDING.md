@@ -4,9 +4,12 @@ Version 1.425 adds an opt-in AI review request schema v3 that can bind an
 approval to one exact generated KiCad schematic, one exact successful
 deterministic-pipeline execution, and one exact normalized native KiCad ERC
 run. Version 1.426 adds request schema v4 for native ERC warning-policy
-evidence. Request schema v1 remains the unbound default; schema v2 remains
-backward-compatible when native ERC evidence is not supplied, and schema v3
-retains its error-only meaning.
+evidence. Version 1.442.0 adds live signing parity: `sign-ai-review
+--schematic` and MCP `sign_schematic_approval` accept one bounded live
+schematic for schema-v1 semantic/fresh electrical-review verification
+before the private key is read. Request schema v1 remains unbound to artifact
+paths; schema v2 remains backward-compatible when native ERC evidence is not
+supplied, and schema v3 retains its error-only meaning.
 
 ## Bound identities
 
@@ -198,12 +201,34 @@ For schema-v4, also append:
 
 `verify-ai-quorum` accepts the same three flags, plus the native report and
 optional executable override for schema v3, and performs live revalidation
-once before checking any candidate signatures or thresholds.
-Schema-v1 requests reject these paths so callers cannot accidentally claim a
-binding that the request does not contain. Schema-v2 requests reject omitted
-or partial paths. Schema-v3 requests reject an omitted native report or
-incomplete base artifact set and reject a report whose source identity or
-normalized run digest differs from the request.
+once before checking any candidate signatures or thresholds. For schema-v1,
+the separate `--schematic` path is a live semantic binding: signing and
+verification import the bounded source and freshly recompute the deterministic
+electrical review before accepting the response or signature. It does
+not add a filesystem path or artifact identity to the request, and is mutually
+exclusive with generated/native artifact paths. Schema-v1 requests reject
+those artifact paths so callers cannot accidentally claim a binding that the
+request does not contain. Schema-v2 requests reject omitted or partial paths.
+Schema-v3 requests reject an omitted native report or incomplete base artifact
+set and reject a report whose source identity or normalized run digest differs
+from the request.
+
+Live schema-v1 signing is available from the CLI and MCP:
+
+```sh
+pcbex sign-ai-review ai-review-request.json ai-review-response.json \
+  --schematic hardware/controller.kicad_sch \
+  --private-key .secrets/schematic-approval.key \
+  --signer-id production-ci \
+  --output signed-approval.json --require-approved
+```
+
+The equivalent MCP `sign_schematic_approval` call forwards `schematic` and
+the same request/response/key/signer/output fields. Run this signing boundary
+in an isolated workspace. Bounded reads can reject replacements observed
+around verification, but verification, private-key access, and output
+publication are not one atomic filesystem transaction and this flow does not
+claim a race-free filesystem boundary.
 
 Artifact binding prevents an approval from being presented beside a different
 schematic or pipeline run. A review session remains necessary when a caller
@@ -214,9 +239,11 @@ artifacts.
 
 The existing MCP prepare, sign, verify, and quorum tools expose the optional
 schematic/pipeline paths, the `native_kicad_erc_report`/`kicad_cli` pair, and
-for schema v4 `native_kicad_erc_warning_policy`. Their tools remain synchronous and
-forbid MCP Tasks because they handle review outputs, signing keys, or quorum
-reports. The Python review adapter accepts request schemas v1 through v4,
+for schema v4 `native_kicad_erc_warning_policy`. The signing tool accepts a
+schema-v1 `schematic` live path or the mutually exclusive schema-v2 through v4
+artifact path group. Their tools remain synchronous and forbid MCP Tasks
+because they handle review outputs, signing keys, or quorum reports. The
+Python review adapter accepts request schemas v1 through v4,
 treats artifact identities as untrusted evidence rather than instructions, and
 continues to require response schema v1.
 

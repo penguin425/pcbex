@@ -345,8 +345,11 @@ the executable and its dynamic dependencies. Protected CI should provision a
 trusted KiCad installation and must not select an executable from
 pull-request-controlled content.
 
-Legacy request schema v1 remains unbound. Schema v2 continues to bind only
-the generated schematic and deterministic pipeline artifacts; it must not be
+Legacy request schema v1 remains unbound to artifact paths. The v1.442.0 live
+signing boundary accepts a separate `--schematic` source for semantic and
+fresh electrical-review verification, but does not add that path to the
+request or native artifact binding. Schema v2 continues to bind only the
+generated schematic and deterministic pipeline artifacts; it must not be
 mixed with an artifact binding schema v2 or a native ERC field. Upgrade to
 schema v3 only after retaining and revalidating the native report.
 
