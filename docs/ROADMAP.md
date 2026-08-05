@@ -143,6 +143,7 @@ auditable release.
 | v1.429.0 | Native KiCad PCB DRC evidence gate | Run canonical, digest-bound `drc.v1` PCB DRC evidence through CLI, MCP, and focused/root Actions with private staging, real KiCad 10 reproducibility coverage, strict error/warning approval, and retained rejected evidence |
 | v1.430.0 | Native KiCad PCB DRC fresh replay | Re-run exact retained `drc.v1` evidence through read-only CLI/MCP and focused Action verify mode, while making anchor-qualified board-edge and region placement constraints panic-free |
 | v1.431.0 | MCP native KiCad task cancellation propagation | Run `run_native_kicad_drc` and `run_native_kicad_erc` directly in the MCP worker, with Unix Task cancellation reaching the KiCad process-group leader and descendants; preserve MCP responses and publish no incomplete report while leaving CLI and Action behavior unchanged |
+| v1.432.0 | Standalone native KiCad ERC fresh replay | Expose read-only fresh replay for standalone native KiCad schematic ERC v1/v2 through CLI, MCP, and focused Action; retain rejected evidence before optional approval gates, propagate Task cancellation, stable-read the original schematic, and preserve AI/run contracts |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -358,3 +359,14 @@ normalized report has been validated, so a cancelled or interrupted run never
 exposes an incomplete report. MCP responses, CLI commands, and composite
 Actions keep their existing external contracts; this release changes the MCP
 implementation path.
+
+The v1.432.0 milestone adds a standalone native KiCad schematic ERC fresh-
+replay boundary. The CLI command `verify-native-kicad-erc-report`, MCP tool
+`verify_native_kicad_erc_report`, and focused Action `mode: verify` replay both
+closed report schema v1 (error-only) and schema v2 (warning-policy) without
+modifying the retained input. Each replay stable-reads the original schematic
+before and after the bounded KiCad run, compares the canonical bytes with the
+retained report, and keeps valid rejected evidence available before an
+optional `require-approved` gate. MCP Tasks propagate cancellation to the
+bounded KiCad process group. Existing native run outputs, AI request/binding
+schemas, and prepare/sign/verify/quorum contracts remain unchanged.

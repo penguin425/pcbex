@@ -684,6 +684,11 @@
     {
       "id": "mcp-native-kicad-task-cancellation-propagation",
       "release": "v1.431.0",
+      "status": "released"
+    },
+    {
+      "id": "standalone-native-kicad-erc-fresh-replay",
+      "release": "v1.432.0",
       "status": "current"
     }
   ]

@@ -463,6 +463,7 @@ impl McpServer {
                     | "run_deterministic_pipeline"
                     | "run_native_kicad_erc"
                     | "run_native_kicad_drc"
+                    | "verify_native_kicad_erc_report"
                     | "verify_native_kicad_drc_report"
             )
         ) {
@@ -1101,6 +1102,26 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "report": {"type": "string", "minLength": 1},
                     "project": {"type": "string", "minLength": 1},
                     "rules_file": {"type": "string", "minLength": 1},
+                    "kicad_cli": {"type": "string", "minLength": 1},
+                    "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            true,
+            false,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "verify_native_kicad_erc_report",
+            "Verify native KiCad ERC report",
+            "Re-run KiCad's native electrical rules checker and verify a retained, digest-bound schematic ERC report without modifying it; rejected evidence remains valid unless approval is required.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["input", "retained_report"],
+                "properties": {
+                    "input": {"type": "string", "minLength": 1},
+                    "retained_report": {"type": "string", "minLength": 1},
+                    "warning_policy": {"type": "string", "minLength": 1},
                     "kicad_cli": {"type": "string", "minLength": 1},
                     "require_approved": {"type": "boolean", "default": false}
                 }
@@ -4816,6 +4837,9 @@ fn call_tool(
         }
         "run_native_kicad_erc" => run_native_kicad_erc_tool(arguments, cancellation)?,
         "run_native_kicad_drc" => run_native_kicad_drc_tool(arguments, cancellation)?,
+        "verify_native_kicad_erc_report" => {
+            verify_native_kicad_erc_report_tool(arguments, cancellation)?
+        }
         "verify_native_kicad_drc_report" => {
             verify_native_kicad_drc_report_tool(arguments, cancellation)?
         }
@@ -6248,6 +6272,130 @@ fn ensure_native_kicad_not_cancelled(
     } else {
         Ok(())
     }
+}
+
+fn verify_native_kicad_erc_report_tool(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "input",
+            "retained_report",
+            "warning_policy",
+            "kicad_cli",
+            "require_approved",
+        ],
+    )?;
+    let input = required_string(&arguments, "input")?;
+    let retained_report = required_string(&arguments, "retained_report")?;
+    let warning_policy = optional_string(&arguments, "warning_policy")?;
+    let kicad_cli = optional_string(&arguments, "kicad_cli")?;
+    let require_approved = optional_bool(&arguments, "require_approved")?;
+    let input_path = Path::new(&input);
+    let retained_report_path = Path::new(&retained_report);
+    let kicad_cli = std::ffi::OsStr::new(kicad_cli.as_deref().unwrap_or("kicad-cli"));
+
+    // Replay is intentionally performed in this worker rather than by
+    // spawning another pcbex bridge.  The native replay API receives the MCP
+    // cancellation token directly, so cancelling a Task terminates KiCad's
+    // process group and cannot leave a nested child behind.
+    let replay = if let Some(warning_policy) = warning_policy.as_deref() {
+        crate::native_kicad_erc::replay_native_kicad_erc_report_with_warning_policy(
+            input_path,
+            retained_report_path,
+            Path::new(warning_policy),
+            kicad_cli,
+            cancellation,
+        )
+        .map(|report| {
+            let rendered =
+                crate::native_kicad_erc::render_native_kicad_erc_warning_report(&report)?;
+            let summary = crate::native_kicad_erc::native_kicad_erc_warning_report_summary(
+                &report, &rendered,
+            );
+            Ok::<_, anyhow::Error>((summary, report.approved))
+        })
+    } else {
+        crate::native_kicad_erc::replay_native_kicad_erc_report(
+            input_path,
+            retained_report_path,
+            kicad_cli,
+            cancellation,
+        )
+        .map(|report| {
+            let rendered = crate::native_kicad_erc::render_native_kicad_erc_report(&report)?;
+            let summary =
+                crate::native_kicad_erc::native_kicad_erc_report_summary(&report, &rendered);
+            Ok::<_, anyhow::Error>((summary, report.approved))
+        })
+    };
+
+    let (execution, report_summary) = match replay {
+        Ok(Ok((summary, approved))) => {
+            ensure_native_kicad_not_cancelled(cancellation)?;
+            let mut stdout = serde_json::to_vec(&summary)
+                .expect("native KiCad ERC replay summary always serializes");
+            stdout.push(b'\n');
+            let success = !require_approved || approved;
+            let mut stderr = if warning_policy.is_some() {
+                format!(
+                    "native KiCad ERC replay with warning policy: {}; report={}",
+                    if approved { "approved" } else { "rejected" },
+                    retained_report_path.display()
+                )
+            } else {
+                format!(
+                    "native KiCad ERC replay: {}; report={}",
+                    if approved { "approved" } else { "rejected" },
+                    retained_report_path.display()
+                )
+            };
+            if require_approved && !approved {
+                stderr.push_str(if warning_policy.is_some() {
+                    "\nError: native KiCad ERC warning policy rejected"
+                } else {
+                    "\nError: native KiCad ERC rejected"
+                });
+            }
+            let execution = Execution {
+                success,
+                exit_code: Some(if success { 0 } else { 1 }),
+                stdout,
+                stderr: bounded_process_message(stderr.as_bytes()),
+            };
+            ensure_native_kicad_not_cancelled(cancellation)?;
+            let report_summary = trusted_native_kicad_erc_summary(&execution, retained_report_path);
+            let execution = require_retained_json(
+                execution,
+                &report_summary,
+                "native KiCad ERC verification report summary",
+            );
+            (execution, report_summary)
+        }
+        Ok(Err(error)) | Err(error) => {
+            ensure_native_kicad_not_cancelled(cancellation)?;
+            (
+                Execution {
+                    success: false,
+                    exit_code: Some(1),
+                    stdout: Vec::new(),
+                    stderr: bounded_process_message(error.to_string().as_bytes()),
+                },
+                Value::Null,
+            )
+        }
+    };
+
+    Ok(execution_result(
+        execution,
+        json!({
+            "input": input,
+            "retained_report": retained_report,
+            "report_summary": report_summary
+        }),
+    ))
 }
 
 fn verify_native_kicad_drc_report_tool(
@@ -14602,7 +14750,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 150);
+        assert_eq!(tools.len(), 151);
         let named = |name: &str| {
             tools
                 .iter()
@@ -14635,6 +14783,26 @@ mod tests {
         );
         assert_eq!(
             named("verify_native_kicad_drc_report")["annotations"]["destructiveHint"],
+            false
+        );
+        assert_eq!(
+            named("verify_native_kicad_erc_report")["inputSchema"]["required"],
+            json!(["input", "retained_report"])
+        );
+        assert_eq!(
+            named("verify_native_kicad_erc_report")["inputSchema"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            named("verify_native_kicad_erc_report")["execution"]["taskSupport"],
+            "optional"
+        );
+        assert_eq!(
+            named("verify_native_kicad_erc_report")["annotations"]["readOnlyHint"],
+            true
+        );
+        assert_eq!(
+            named("verify_native_kicad_erc_report")["annotations"]["destructiveHint"],
             false
         );
         assert_eq!(

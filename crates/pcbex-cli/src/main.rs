@@ -247,9 +247,11 @@ use native_kicad_drc::{
     render_native_kicad_drc_report, run_native_kicad_drc, verify_native_kicad_drc_report,
 };
 use native_kicad_erc::{
-    native_kicad_erc_report_schema, native_kicad_erc_warning_policy_schema,
-    native_kicad_erc_warning_report_schema, render_native_kicad_erc_report,
-    render_native_kicad_erc_warning_report, run_native_kicad_erc,
+    native_kicad_erc_report_schema, native_kicad_erc_report_summary,
+    native_kicad_erc_warning_policy_schema, native_kicad_erc_warning_report_schema,
+    native_kicad_erc_warning_report_summary, render_native_kicad_erc_report,
+    render_native_kicad_erc_warning_report, replay_native_kicad_erc_report,
+    replay_native_kicad_erc_report_with_warning_policy, run_native_kicad_erc,
     run_native_kicad_erc_with_warning_policy, verify_native_kicad_erc_report,
     verify_native_kicad_erc_report_with_warning_policy,
 };
@@ -901,6 +903,25 @@ enum Command {
         #[arg(long, value_name = "PATH")]
         warning_policy: Option<PathBuf>,
         /// Fail after retaining the report when native ERC is not approved.
+        #[arg(long)]
+        require_approved: bool,
+        /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
+        #[arg(long, hide = true)]
+        mcp_echo_report_summary: bool,
+    },
+    /// Re-run native KiCad schematic ERC and verify a retained report without modifying it.
+    VerifyNativeKicadErcReport {
+        /// Exact `.kicad_sch` source to stage and check.
+        input: PathBuf,
+        /// Retained canonical normalized report to compare with a fresh run.
+        retained_report: PathBuf,
+        /// KiCad CLI executable or path. The command is invoked directly without a shell.
+        #[arg(long, default_value = "kicad-cli")]
+        kicad_cli: PathBuf,
+        /// Closed warning policy used to verify a schema-v2 report.
+        #[arg(long, value_name = "PATH")]
+        warning_policy: Option<PathBuf>,
+        /// Fail after successful replay verification when native ERC is not approved.
         #[arg(long)]
         require_approved: bool,
         /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
@@ -5520,19 +5541,7 @@ fn run_cli() -> Result<()> {
                 let rendered = render_native_kicad_erc_warning_report(&report)?;
                 persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
                 if mcp_echo_report_summary {
-                    let summary = serde_json::json!({
-                        "schema_version": report.schema_version,
-                        "approved": report.approved,
-                        "error_count": report.error_count,
-                        "warning_count": report.warning_count,
-                        "policy_failure_count": report.policy_failures.len(),
-                        "warning_policy_sha256": report.warning_policy.policy_sha256,
-                        "warning_policy_source_bytes": report.warning_policy.source.bytes,
-                        "warning_policy_source_sha256": report.warning_policy.source.sha256,
-                        "run_sha256": report.run_sha256,
-                        "report_bytes": rendered.len(),
-                        "report_sha256": hex::encode(Sha256::digest(&rendered)),
-                    });
+                    let summary = native_kicad_erc_warning_report_summary(&report, &rendered);
                     serde_json::to_writer(&mut io::stdout(), &summary)?;
                     io::stdout().write_all(b"\n")?;
                     io::stdout().flush()?;
@@ -5553,14 +5562,7 @@ fn run_cli() -> Result<()> {
                 let rendered = render_native_kicad_erc_report(&report)?;
                 persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
                 if mcp_echo_report_summary {
-                    let summary = serde_json::json!({
-                        "schema_version": report.schema_version,
-                        "approved": report.approved,
-                        "error_count": report.error_count,
-                        "run_sha256": report.run_sha256,
-                        "report_bytes": rendered.len(),
-                        "report_sha256": hex::encode(Sha256::digest(&rendered)),
-                    });
+                    let summary = native_kicad_erc_report_summary(&report, &rendered);
                     serde_json::to_writer(&mut io::stdout(), &summary)?;
                     io::stdout().write_all(b"\n")?;
                     io::stdout().flush()?;
@@ -5570,6 +5572,69 @@ fn run_cli() -> Result<()> {
                     if report.approved { "approved" } else { "rejected" },
                     report.error_count,
                     output.display()
+                );
+                if require_approved && !report.approved {
+                    bail!("native KiCad schematic ERC rejected");
+                }
+            }
+        }
+        Command::VerifyNativeKicadErcReport {
+            input,
+            retained_report,
+            kicad_cli,
+            warning_policy,
+            require_approved,
+            mcp_echo_report_summary,
+        } => {
+            // Verification is intentionally read-only: the retained report is
+            // decoded and compared in place, and no replacement/copy is ever
+            // published. Rejected evidence is valid unless approval is
+            // explicitly required by the caller.
+            if let Some(policy) = warning_policy.as_deref() {
+                let report = replay_native_kicad_erc_report_with_warning_policy(
+                    &input,
+                    &retained_report,
+                    policy,
+                    kicad_cli.as_os_str(),
+                    None,
+                )?;
+                let rendered = render_native_kicad_erc_warning_report(&report)?;
+                if mcp_echo_report_summary {
+                    let summary = native_kicad_erc_warning_report_summary(&report, &rendered);
+                    serde_json::to_writer(&mut io::stdout(), &summary)?;
+                    io::stdout().write_all(b"\n")?;
+                    io::stdout().flush()?;
+                }
+                eprintln!(
+                    "native KiCad ERC warning verification: {}; {} error(s), {} warning(s), {} policy failure(s); report={}",
+                    if report.approved { "approved" } else { "rejected" },
+                    report.error_count,
+                    report.warning_count,
+                    report.policy_failures.len(),
+                    retained_report.display()
+                );
+                if require_approved && !report.approved {
+                    bail!("native KiCad schematic ERC warning policy rejected");
+                }
+            } else {
+                let report = replay_native_kicad_erc_report(
+                    &input,
+                    &retained_report,
+                    kicad_cli.as_os_str(),
+                    None,
+                )?;
+                let rendered = render_native_kicad_erc_report(&report)?;
+                if mcp_echo_report_summary {
+                    let summary = native_kicad_erc_report_summary(&report, &rendered);
+                    serde_json::to_writer(&mut io::stdout(), &summary)?;
+                    io::stdout().write_all(b"\n")?;
+                    io::stdout().flush()?;
+                }
+                eprintln!(
+                    "native KiCad ERC verification: {}; {} error(s); report={}",
+                    if report.approved { "approved" } else { "rejected" },
+                    report.error_count,
+                    retained_report.display()
                 );
                 if require_approved && !report.approved {
                     bail!("native KiCad schematic ERC rejected");
