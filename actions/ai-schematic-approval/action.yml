@@ -1,0 +1,253 @@
+name: pcbex AI schematic approval quorum
+description: Verify a bounded, signature-backed AI schematic approval quorum without provider credentials or signing secrets.
+author: pcbex contributors
+
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  schematic:
+    description: Caller-workspace-relative KiCad schematic whose semantic IR must match the v1 review request.
+    required: true
+  request:
+    description: Caller-workspace-relative schema-v1 AI review request.
+    required: true
+  approval-files:
+    description: Newline-separated signed AI approval files, paired positionally with response-files.
+    required: true
+  response-files:
+    description: Newline-separated exact AI response files, paired positionally with approval-files.
+    required: true
+  policy-pack:
+    description: Caller-workspace-relative organization policy pack containing every trusted approval signer.
+    required: true
+  session:
+    description: Optional caller-workspace-relative time-bound AI review session.
+    required: false
+    default: ""
+  minimum-approvals:
+    description: Minimum independently signed approvals required (1 through 100).
+    required: false
+    default: "2"
+  minimum-distinct-providers:
+    description: Minimum distinct approved provider identities required (1 through 100).
+    required: false
+    default: "2"
+  minimum-distinct-models:
+    description: Minimum distinct approved model identities required (1 through 100).
+    required: false
+    default: "2"
+  require-quorum:
+    description: Fail after retaining verifier-produced, signature-checked evidence unless every quorum threshold passes.
+    required: false
+    default: "false"
+  output-dir:
+    description: Empty caller-relative literal directory for the bounded quorum evidence.
+    required: false
+    default: pcbex-ai-schematic-approval
+  upload-artifact:
+    description: Upload the bounded AI approval quorum evidence directory.
+    required: false
+    default: "true"
+  artifact-name:
+    description: GitHub Actions artifact name for retained AI approval quorum evidence.
+    required: false
+    default: pcbex-ai-schematic-approval
+  retention-days:
+    description: Artifact retention in days from 1 through 90.
+    required: false
+    default: "14"
+
+outputs:
+  status:
+    description: Verification status, either ok or error.
+    value: ${{ steps.ai-approval.outputs.status }}
+  artifact-dir:
+    description: Bounded caller-workspace-relative evidence directory, empty when verification or structural revalidation fails.
+    value: ${{ steps.ai-approval.outputs.artifact-dir }}
+  ai-approval-quorum:
+    description: Verifier-produced and structurally revalidated AI approval quorum report path.
+    value: ${{ steps.ai-approval.outputs.ai-approval-quorum }}
+  ai-approval-quorum-summary:
+    description: Canonical report-derived AI approval quorum Markdown summary path.
+    value: ${{ steps.ai-approval.outputs.ai-approval-quorum-summary }}
+  ai-approval-quorum-met:
+    description: Whether every configured AI approval quorum threshold passed.
+    value: ${{ steps.ai-approval.outputs.ai-approval-quorum-met }}
+  request-sha256:
+    description: Request digest checked by the local signed-quorum verifier.
+    value: ${{ steps.ai-approval.outputs.request-sha256 }}
+  schematic-ir-sha256:
+    description: Normalized schematic IR digest bound by the schema-v1 request.
+    value: ${{ steps.ai-approval.outputs.schematic-ir-sha256 }}
+  input-snapshot-sha256:
+    description: Ordered aggregate digest matched before and after verification and at the publication boundary.
+    value: ${{ steps.ai-approval.outputs.input-snapshot-sha256 }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate AI schematic approval Action inputs
+      id: preflight
+      shell: bash
+      env:
+        PCBEX_AI_SCHEMATIC: ${{ inputs.schematic }}
+        PCBEX_AI_REQUEST: ${{ inputs.request }}
+        PCBEX_AI_APPROVAL_FILES: ${{ inputs.approval-files }}
+        PCBEX_AI_RESPONSE_FILES: ${{ inputs.response-files }}
+        PCBEX_AI_POLICY_PACK: ${{ inputs.policy-pack }}
+        PCBEX_AI_SESSION: ${{ inputs.session }}
+        PCBEX_AI_MINIMUM_APPROVALS: ${{ inputs.minimum-approvals }}
+        PCBEX_AI_MINIMUM_DISTINCT_PROVIDERS: ${{ inputs.minimum-distinct-providers }}
+        PCBEX_AI_MINIMUM_DISTINCT_MODELS: ${{ inputs.minimum-distinct-models }}
+        PCBEX_AI_REQUIRE_QUORUM: ${{ inputs.require-quorum }}
+        PCBEX_AI_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_AI_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        PCBEX_AI_RETENTION_DAYS: ${{ inputs.retention-days }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        repository_root="$(cd -- "$GITHUB_ACTION_PATH/../.." && pwd -P)"
+        export PCBEX_REPOSITORY_ROOT="$repository_root"
+        bash "$repository_root/scripts/ai-schematic-approval-action.sh" --preflight
+
+    - name: Build pcbex
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+        repository_root="$(cd -- "$GITHUB_ACTION_PATH/../.." && pwd -P)"
+        python3 "$repository_root/scripts/ci_runtime.py" exec \
+          --timeout-seconds 300 \
+          --max-stdout-bytes 8388608 \
+          --max-stderr-bytes 8388608 \
+          -- rustup toolchain install stable --profile minimal
+        python3 "$repository_root/scripts/ci_runtime.py" exec \
+          --timeout-seconds 1200 \
+          --max-stdout-bytes 8388608 \
+          --max-stderr-bytes 8388608 \
+          -- cargo +stable build \
+            --manifest-path "$repository_root/Cargo.toml" \
+            --package pcbex \
+            --release \
+            --locked
+        target_directory="$(
+          python3 "$repository_root/scripts/ci_runtime.py" exec \
+            --timeout-seconds 60 \
+            --max-stdout-bytes 1048576 \
+            --max-stderr-bytes 1048576 \
+            -- cargo +stable metadata \
+              --manifest-path "$repository_root/Cargo.toml" \
+              --format-version 1 \
+              --no-deps |
+          python3 -c 'import json,sys; value=json.load(sys.stdin)["target_directory"]; valid=isinstance(value,str) and bool(value) and not any(ord(c)<32 or ord(c)==127 for c in value); sys.exit(2) if not valid else print(value,end="")'
+        )"
+        binary="$target_directory/release/pcbex"
+        if [[ ! -x "$binary" && -x "${binary}.exe" ]]; then
+          binary="${binary}.exe"
+        fi
+        if [[ ! -f "$binary" || ! -x "$binary" ]]; then
+          echo "built pcbex binary is unavailable" >&2
+          exit 2
+        fi
+        printf 'binary=%s\n' "$binary" >> "$GITHUB_OUTPUT"
+        printf 'repository-root=%s\n' "$repository_root" >> "$GITHUB_OUTPUT"
+
+    - name: Verify AI schematic approval quorum
+      id: ai-approval
+      shell: bash
+      env:
+        PCBEX_BINARY: ${{ steps.build.outputs.binary }}
+        PCBEX_REPOSITORY_ROOT: ${{ steps.build.outputs.repository-root }}
+        PCBEX_AI_SCHEMATIC: ${{ inputs.schematic }}
+        PCBEX_AI_REQUEST: ${{ inputs.request }}
+        PCBEX_AI_APPROVAL_FILES: ${{ inputs.approval-files }}
+        PCBEX_AI_RESPONSE_FILES: ${{ inputs.response-files }}
+        PCBEX_AI_POLICY_PACK: ${{ inputs.policy-pack }}
+        PCBEX_AI_SESSION: ${{ inputs.session }}
+        PCBEX_AI_MINIMUM_APPROVALS: ${{ inputs.minimum-approvals }}
+        PCBEX_AI_MINIMUM_DISTINCT_PROVIDERS: ${{ inputs.minimum-distinct-providers }}
+        PCBEX_AI_MINIMUM_DISTINCT_MODELS: ${{ inputs.minimum-distinct-models }}
+        PCBEX_AI_REQUIRE_QUORUM: ${{ inputs.require-quorum }}
+        PCBEX_AI_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_AI_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        PCBEX_AI_RETENTION_DAYS: ${{ inputs.retention-days }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: >-
+        python3 "$PCBEX_REPOSITORY_ROOT/scripts/ci_runtime.py" exec
+        --timeout-seconds 600
+        --max-stdout-bytes 1048576
+        --max-stderr-bytes 8388608
+        --output-root="$PCBEX_OUTPUT_DIR"
+        -- "$PCBEX_REPOSITORY_ROOT/scripts/ai-schematic-approval-action.sh"
+
+    - name: Validate bounded AI approval evidence
+      id: artifact-boundary
+      if: ${{ always() && steps.ai-approval.outcome == 'success' && steps.ai-approval.outputs.artifact-dir != '' }}
+      shell: bash
+      env:
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+        PCBEX_REPOSITORY_ROOT: ${{ steps.build.outputs.repository-root }}
+      run: |
+        python3 "$PCBEX_REPOSITORY_ROOT/scripts/ci_runtime.py" scan \
+          "--output-root=$PCBEX_OUTPUT_DIR" \
+          --max-entries 2 \
+          --max-depth 1 \
+          --max-file-bytes 16777216 \
+          --max-total-bytes 33554432
+        echo "safe=true" >> "$GITHUB_OUTPUT"
+
+    - name: Revalidate AI approval evidence before publication
+      id: publication-boundary
+      if: ${{ always() && steps.ai-approval.outcome == 'success' && steps.artifact-boundary.outputs.safe == 'true' && steps.ai-approval.outputs.artifact-dir != '' }}
+      shell: bash
+      env:
+        PCBEX_REPOSITORY_ROOT: ${{ steps.build.outputs.repository-root }}
+        PCBEX_AI_SCHEMATIC: ${{ inputs.schematic }}
+        PCBEX_AI_REQUEST: ${{ inputs.request }}
+        PCBEX_AI_APPROVAL_FILES: ${{ inputs.approval-files }}
+        PCBEX_AI_RESPONSE_FILES: ${{ inputs.response-files }}
+        PCBEX_AI_POLICY_PACK: ${{ inputs.policy-pack }}
+        PCBEX_AI_SESSION: ${{ inputs.session }}
+        PCBEX_AI_MINIMUM_APPROVALS: ${{ inputs.minimum-approvals }}
+        PCBEX_AI_MINIMUM_DISTINCT_PROVIDERS: ${{ inputs.minimum-distinct-providers }}
+        PCBEX_AI_MINIMUM_DISTINCT_MODELS: ${{ inputs.minimum-distinct-models }}
+        PCBEX_AI_REQUIRE_QUORUM: ${{ inputs.require-quorum }}
+        PCBEX_AI_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_AI_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        PCBEX_AI_RETENTION_DAYS: ${{ inputs.retention-days }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+        PCBEX_AI_REPORT: ${{ steps.ai-approval.outputs.ai-approval-quorum }}
+        PCBEX_AI_SUMMARY: ${{ steps.ai-approval.outputs.ai-approval-quorum-summary }}
+        PCBEX_EXPECTED_INPUT_SNAPSHOT: ${{ steps.ai-approval.outputs.input-snapshot-sha256 }}
+        PCBEX_EXPECTED_QUORUM_MET: ${{ steps.ai-approval.outputs.ai-approval-quorum-met }}
+      run: bash "$PCBEX_REPOSITORY_ROOT/scripts/ai-schematic-approval-action.sh" --revalidate
+
+    - name: Upload AI approval evidence
+      id: upload
+      if: ${{ always() && steps.ai-approval.outcome == 'success' && steps.publication-boundary.outputs.safe == 'true' && inputs.upload-artifact == 'true' && steps.ai-approval.outputs.artifact-dir != '' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.ai-approval.outputs.artifact-dir }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
+
+    - name: Enforce AI schematic approval gate
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PCBEX_PREFLIGHT_VALID: ${{ steps.preflight.outputs.valid }}
+        PCBEX_AI_OUTCOME: ${{ steps.ai-approval.outcome }}
+        PCBEX_AI_STATUS: ${{ steps.ai-approval.outputs.status }}
+        PCBEX_AI_REPORT: ${{ steps.ai-approval.outputs.ai-approval-quorum }}
+        PCBEX_AI_SUMMARY: ${{ steps.ai-approval.outputs.ai-approval-quorum-summary }}
+        PCBEX_AI_QUORUM_MET: ${{ steps.ai-approval.outputs.ai-approval-quorum-met }}
+        PCBEX_ARTIFACT_SAFE: ${{ steps.artifact-boundary.outputs.safe }}
+        PCBEX_PUBLICATION_SAFE: ${{ steps.publication-boundary.outputs.safe }}
+        PCBEX_PUBLICATION_QUORUM_MET: ${{ steps.publication-boundary.outputs.quorum-met }}
+        PCBEX_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        PCBEX_REQUIRE_QUORUM: ${{ inputs.require-quorum }}
+      run: "$GITHUB_ACTION_PATH/../../scripts/ai-schematic-approval-action-gate.sh"

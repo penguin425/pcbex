@@ -162,6 +162,26 @@ those properties still require protected default-branch verifier logic or
 equivalent CODEOWNERS/Ruleset controls. The job remains useful for ordinary PR
 feedback and fail-closed evidence retention.
 
+The focused boardless AI schematic approval Action supervises Rust toolchain
+setup for at most five minutes, its release build for twenty minutes, Cargo
+metadata for one minute, and local quorum verification for ten minutes. Those
+four child ceilings total 36 minutes. The caller still owns the aggregate job
+deadline and the artifact service steps; the repository smoke shares the
+existing 45-minute `hardware-ci-action` deadline and reuses its already-built
+workspace cache. Toolchain setup and the source build may use the runner's
+configured Rust/Cargo network, but the verifier accepts no provider endpoint,
+API credential, or signing secret and performs no provider request.
+
+That Action limits each source input to 32 MiB and the ordered set to 128 MiB,
+stable-snapshots it before and after verification, and repeats the snapshot at
+the publication boundary. Its closed report is capped at 16 MiB, its fixed
+numeric-only summary at 64 KiB, and the complete two-file artifact at 32 MiB.
+Publication revalidation also requires the current quorum decision to equal
+the verifier-step decision. These process/file checks assume an isolated
+runner workspace; they do not turn local verification and the GitHub artifact
+service upload into one atomic operation against a concurrent same-user
+writer.
+
 A composite action cannot set `timeout-minutes` on its caller's job. Its three
 supervised commands remain individually finite (10, 30, and 40 minutes), but
 artifact and SARIF service actions are governed by the calling job. Public

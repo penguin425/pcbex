@@ -507,6 +507,34 @@ pub fn build_ai_review_request(
     Ok(request)
 }
 
+/// Verify that a live schematic has the exact semantic identity and fresh
+/// electrical review bound into an unbound schema-v1 AI review request.
+///
+/// The source file itself is intentionally not compared byte-for-byte: the
+/// caller imports it into the deterministic schematic IR first, so harmless
+/// KiCad formatting/comments do not affect the binding while semantic edits
+/// fail closed before any quorum decision is evaluated.
+pub fn verify_ai_review_schematic_binding(
+    request: &AiReviewRequest,
+    live_schematic: &SchematicDocument,
+) -> Result<(), String> {
+    if request.schema_version != 1 || request.artifact_binding.is_some() {
+        return Err(
+            "--schematic live binding requires an AI review request schema version 1 without artifact binding"
+                .into(),
+        );
+    }
+    ai_review_request_sha256(request)?;
+    if &request.schematic != live_schematic {
+        return Err("live schematic semantic document does not match the AI review request".into());
+    }
+    let recomputed = check_schematic(live_schematic, &request.electrical_policy)?;
+    if recomputed != request.electrical_review {
+        return Err("live schematic electrical review does not match the AI review request".into());
+    }
+    Ok(())
+}
+
 /// Add an exact generated-schematic and deterministic-pipeline binding to a
 /// valid v1 request, producing a v2 request with a fresh body digest.
 ///
@@ -1726,6 +1754,21 @@ mod tests {
             },
             run_sha256: "4".repeat(64),
         }
+    }
+
+    #[test]
+    fn live_schematic_binding_requires_exact_semantic_ir_and_schema_v1() {
+        let request = approved_request();
+        assert!(verify_ai_review_schematic_binding(&request, &request.schematic).is_ok());
+
+        let mut mutated = request.schematic.clone();
+        mutated.symbols[0].value.push_str("-mutated");
+        let error = verify_ai_review_schematic_binding(&request, &mutated).unwrap_err();
+        assert!(error.contains("semantic document"), "{error}");
+
+        let bound = bind_ai_review_request(&request, artifact_binding()).unwrap();
+        let error = verify_ai_review_schematic_binding(&bound, &bound.schematic).unwrap_err();
+        assert!(error.contains("schema version 1"), "{error}");
     }
 
     #[test]

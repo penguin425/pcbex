@@ -151,6 +151,7 @@ auditable release.
 | v1.437.0 | Deterministic firmware-bundle gate re-snapshot | Reopen every exact-eight firmware entry and compare complete bytes/SHA-256 snapshots immediately before and after the deterministic pipeline gate, retaining a rejected report for observed bundle mutation while preserving plan schema v1 and manifest v2 |
 | v1.438.0 | Deterministic pipeline required CI check | Run the real Rust deterministic-pipeline binary on every normal PR and push, retain accepted and rejected reports, authenticate compiler source/report bindings, and publish bounded scalar Job Summary and scanned artifacts without changing schema v1 |
 | v1.439.0 | Semantic BOM/CPL package validation | Enforce one shared bounded RFC 4180 CSV validator for exact manufacturing headers, BOM quantity/type/layer/count semantics, and unique finite checked-decimal CPL references/layer/counts across fabrication, factory submission/repair, and pipeline verification without changing schema versions or adding a Gerber semantic parser |
+| v1.440.0 | Boardless AI schematic approval Action | Bind a live KiCad schematic to an existing schema-v1 AI review request, re-verify signed reviewer/provider/model quorum evidence without PCB, provider, or signing-secret inputs, and retain bounded JSON/Markdown evidence before the optional final quorum gate |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -498,7 +499,7 @@ collaborator; repository permissions and protected-branch policy remain
 necessary. The check does not discover files, invoke an LLM or network service,
 mutate a design, submit to a factory, or place an order.
 
-The current v1.439.0 milestone makes manufacturing CSV semantics a single shared,
+The released v1.439.0 milestone makes manufacturing CSV semantics a single shared,
 fail-closed boundary. The package writer and every consumer use a bounded RFC
 4180 reader that accepts quoted commas, doubled quotes, and embedded newlines
 only within the resource contract. BOM and CPL headers are exact and closed;
@@ -512,3 +513,15 @@ factory-bound `pipeline-verify`, and deterministic-pipeline verification all
 inherit this validator before accepting manufacturing evidence. Manifest,
 receipt, plan, and report schema versions remain unchanged; Gerber validation
 remains structural and does not gain a semantic parser in this release.
+
+The current v1.440.0 milestone exposes a focused public Action for boardless AI
+schematic approval verification. It semantically binds a live `.kicad_sch` to
+an unbound schema-v1 request, freshly recomputes the deterministic electrical
+review, and then applies the existing signature, trusted-key, reviewer,
+provider, model, and optional session quorum checks. The Action does not call
+an AI provider and has no board, provider-endpoint, API-key, or signing-
+private-key input. It retains bounded closed quorum JSON/Markdown before an
+optional final threshold gate, while
+source substitution or invalid approval evidence fails before publication.
+Schema-v2 through v4 generated-schematic/pipeline/native-ERC bindings remain on
+their existing CLI, MCP, and root-Action paths.
