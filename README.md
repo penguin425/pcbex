@@ -3355,7 +3355,7 @@ are unchanged. See
 [`docs/DETERMINISTIC_PIPELINE_RUNNER.md`](docs/DETERMINISTIC_PIPELINE_RUNNER.md)
 for the complete plan, report, resource, and failure contract.
 
-Version 1.433.0 adds a closed intent-to-plan compiler as a CLI-only boundary.
+Version 1.433.0 adds a closed intent-to-plan compiler as a CLI boundary.
 Emit its schema and compile a plan by naming every role path explicitly:
 
 ```sh
@@ -3384,9 +3384,21 @@ runner binds the raw output bytes (including that newline) as
 `plan_sha256` with a domain-separated digest. Compilation only creates
 authorization descriptors; `run-deterministic-pipeline` reopens the plan and
 remains the final authority for source identities, board binding, pipeline
-gates, report retention, and optional approval failure. MCP and Action parity
-for intent compilation is intentionally a later boundary; pass the compiled
-plan to the existing runner from those integrations.
+gates, report retention, and optional approval failure. Composite-Action
+parity for intent compilation remains a later boundary.
+
+Version 1.434.0 exposes the same compiler as the closed MCP tool
+`compile_deterministic_pipeline_plan`. It requires only `intent` and `output`,
+rejects stale output before starting the bounded shell-free child, and supports
+both synchronous calls and optional MCP Tasks. The response does not embed the
+plan or any role source. Instead, a compact identity summary reports the intent
+and retained plan paths, exact byte counts, and lowercase SHA-256 digests. The
+MCP bridge stable-reads both files and verifies those identities against the
+child's strict summary before returning success. Task cancellation or expiry
+terminates the child and never turns an incomplete output into trusted
+evidence. This parity adds no LLM, network, discovery, gate, approval, design
+mutation, or manufacturing behavior; use `run_deterministic_pipeline` as the
+separate final-authority step.
 
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set

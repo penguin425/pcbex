@@ -86,9 +86,33 @@ descriptors. `run-deterministic-pipeline` remains the final authority: it
 reopens and revalidates the compiled plan, snapshots every authorized source,
 runs the existing circuit/KiCad board-binding and `pipeline-verify` gates, and
 retains the aggregate report before an optional approval failure. A compiled
-plan cannot bypass those checks or manufacture approval. MCP and composite
-Action parity for intent compilation are intentionally later work; callers
-must invoke this CLI compiler and pass its output plan to the existing runner.
+plan cannot bypass those checks or manufacture approval. Composite-Action
+parity for intent compilation remains later work.
+
+## MCP intent compiler parity (v1.434.0)
+
+The MCP server exposes `compile_deterministic_pipeline_plan` with the same
+closed `intent` and `output` arguments. Protocol 2025-11-25 clients may request
+an optional Task and use the standard task lifecycle; older negotiated
+protocols execute the same operation synchronously. The wrapper rejects a
+pre-existing output before it starts the bounded shell-free child, while the
+compiler remains authoritative for intent parsing, source paths and limits,
+stable reads, alias rejection, and atomic no-clobber publication.
+
+The MCP response never embeds plan or role-source contents. It returns only a
+strict identity summary containing schema version plus the intent and retained
+plan paths, exact byte counts, and lowercase SHA-256 digests. The child echoes
+the five scalar identity fields after publication; the wrapper stable-reads the
+current intent and retained plan within their command-specific limits and
+matches their exact bytes and digests before trusting the summary. Unknown,
+missing, malformed, oversized, changed, or mismatched evidence fails closed.
+Task cancellation and expiry terminate the child through the existing bounded
+process path; they do not publish or authenticate an incomplete plan.
+
+The MCP tool adds no LLM, network, path discovery, gate, approval, design
+mutation, or manufacturing action. `run_deterministic_pipeline` remains a
+separate final-authority operation. Composite-Action compiler parity remains
+deferred.
 
 ## MCP parity
 

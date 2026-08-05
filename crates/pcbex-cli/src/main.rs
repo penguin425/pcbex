@@ -958,6 +958,9 @@ enum Command {
         /// New canonical plan path; existing, aliased, or symlinked destinations are refused.
         #[arg(short, long)]
         output: PathBuf,
+        /// Echo digest-bound plan metadata to stdout for the MCP subprocess bridge.
+        #[arg(long, hide = true)]
+        mcp_echo_plan_summary: bool,
     },
     /// Print the deterministic full hardware pipeline gate JSON Schema.
     PipelineSchema {
@@ -5720,7 +5723,11 @@ fn run_cli() -> Result<()> {
                 bail!("deterministic hardware pipeline rejected");
             }
         }
-        Command::CompileDeterministicPipelinePlan { intent, output } => {
+        Command::CompileDeterministicPipelinePlan {
+            intent,
+            output,
+            mcp_echo_plan_summary,
+        } => {
             // The compiler performs all bounded intent parsing, role-path
             // validation, stable reads, digest calculation, and plan/output
             // alias checks before this CLI creates any temporary output.
@@ -5730,6 +5737,18 @@ fn run_cli() -> Result<()> {
             // destination and intent alias immediately before publication.
             let prepared = prepare_pipeline_output(&output, &[intent.as_path()])?;
             persist_atomic_new_file_bytes(prepared, &output, &compiled.plan_bytes)?;
+            if mcp_echo_plan_summary {
+                let summary = serde_json::json!({
+                    "schema_version": deterministic_pipeline_runner::PLAN_SCHEMA_VERSION,
+                    "intent_source_bytes": compiled.intent_source_bytes,
+                    "intent_source_sha256": compiled.intent_source_sha256,
+                    "plan_source_bytes": compiled.plan_bytes.len(),
+                    "plan_source_sha256": hex::encode(Sha256::digest(&compiled.plan_bytes)),
+                });
+                serde_json::to_writer(&mut io::stdout(), &summary)?;
+                io::stdout().write_all(b"\n")?;
+                io::stdout().flush()?;
+            }
             eprintln!(
                 "compiled deterministic pipeline plan: intent={} ({} bytes, sha256={}), plan={} ({} bytes)",
                 intent.display(),
