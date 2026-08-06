@@ -39,12 +39,16 @@ version, and KiCad build, `manufacturing.zip` is byte-for-byte reproducible.
 The ZIP uses sorted names, fixed entry metadata, and contains `manifest.json`;
 the manifest's artifact array intentionally omits itself and the archive.
 
-No-profile packages retain manifest schema v1. A profile-aware package uses
-schema v2 and includes the profile ID/revision, its domain-separated canonical
-SHA-256, and a basename/byte-count/raw-SHA-256 source descriptor. The factory
-validator accepts both forms but rejects a v1 manifest carrying the new field
-or a v2 manifest without it. Factory feedback repair may update manufacturing
-artifacts but cannot add, drop, or substitute this binding.
+No-profile packages retain manifest schema v1. A physical-profile package keeps
+schema v2 and its existing physical binding unchanged. A DFM-profile package
+uses schema v3 and includes the DFM profile ID/revision, the
+domain-separated canonical SHA-256, and an explicit origin: an external origin
+contains one portable basename/byte-count/raw-SHA-256 source descriptor, while
+a built-in origin contains only the closed built-in ID (no fabricated raw
+source). Physical and DFM selections remain mutually exclusive, so this
+release intentionally has no schema v4. The factory validator accepts v1,
+v2, and v3, rejects profile fields in the wrong version, and factory feedback
+repair cannot add, drop, or substitute the complete binding.
 
 Generation occurs entirely in the private stage. Contents of files already
 present in the requested output directory are never read or added to the

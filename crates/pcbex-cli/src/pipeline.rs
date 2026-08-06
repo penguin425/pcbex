@@ -1,5 +1,8 @@
 //! Final, fail-closed gate for the local hardware development pipeline.
 
+use crate::dfm_profile_binding::{
+    DfmProfileBinding, builtin_dfm_profile_binding, external_dfm_profile_binding,
+};
 use crate::factory::{
     FactorySubmissionReceipt, factory_feedback_passed, validate_factory_submission_receipt,
     validate_manufacturing_package,
@@ -16,7 +19,7 @@ use crate::physical_profile::{
 use crate::policy_pack::parse_policy_pack;
 use pcbex_core::{
     DfmProfile, MAX_DFM_PROFILE_TEXT_BYTES, PhysicalConstraintProfile, Rules, apply_dfm_profile,
-    apply_physical_profile, checking::CheckReport, checking::check_board,
+    apply_physical_profile, checking::CheckReport, checking::check_board, dfm_profile,
     parse_external_dfm_profile, quality::RoutingQuality, quality::routing_quality,
     validate_dfm_profile,
 };
@@ -172,6 +175,12 @@ struct AnalysisBinding {
     result: AnalysisResult,
     recomputed_quality: RoutingQuality,
     physical_profile: Option<PhysicalProfileBinding>,
+    dfm_profile: Option<DfmProfileBinding>,
+}
+
+struct AnalysisRecomputation {
+    quality: RoutingQuality,
+    dfm_profile: Option<DfmProfileBinding>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -242,8 +251,15 @@ pub fn verify_pipeline(inputs: &PipelineInputs<'_>) -> PipelineGateReport {
     let expected_physical_profile = analysis_binding
         .as_ref()
         .and_then(|binding| binding.physical_profile.as_ref());
-    let (manufacturing, manufacturing_identity) =
-        manufacturing_phase(inputs, board_identity.as_ref(), expected_physical_profile);
+    let expected_dfm_profile = analysis_binding
+        .as_ref()
+        .and_then(|binding| binding.dfm_profile.as_ref());
+    let (manufacturing, manufacturing_identity) = manufacturing_phase(
+        inputs,
+        board_identity.as_ref(),
+        expected_physical_profile,
+        expected_dfm_profile,
+    );
     let firmware = firmware_phase(inputs, schematic_sha256.as_deref());
     let factory_enabled = inputs.require_factory || inputs.factory_receipt.is_some();
     let mut phases = vec![electrical, analysis, quality, manufacturing, firmware];
@@ -651,13 +667,14 @@ fn analysis_phase(
         } else {
             phase.check("clean=true;violations=0");
         }
-        if let Some(recomputed_quality) =
+        if let Some(recomputed) =
             recompute_analysis(&mut phase, inputs, board_snapshot, manifest, checks)
         {
             binding = Some(AnalysisBinding {
                 result: manifest.result.clone(),
-                recomputed_quality,
+                recomputed_quality: recomputed.quality,
                 physical_profile: manifest.physical_profile.clone(),
+                dfm_profile: recomputed.dfm_profile,
             });
         }
     }
@@ -671,7 +688,7 @@ fn recompute_analysis(
     board_snapshot: &Snapshot,
     manifest: &AnalysisManifest,
     supplied_checks: &CheckReport,
-) -> Option<RoutingQuality> {
+) -> Option<AnalysisRecomputation> {
     let source = match std::str::from_utf8(&board_snapshot.bytes) {
         Ok(source) => source,
         Err(error) => {
@@ -734,17 +751,31 @@ fn recompute_analysis(
         }
     }
 
-    let dfm_profile = capture_optional_descriptor_snapshot(
+    let dfm_snapshot = capture_optional_descriptor_snapshot(
         phase,
         manifest.dfm_profile_file.as_ref(),
         inputs.analysis_dfm_profile,
         "analysis-dfm-profile",
         MAX_DFM_PROFILE_BYTES,
     )?;
-    if let Some(snapshot) = dfm_profile {
+    let mut dfm_binding = None;
+    if let Some(snapshot) = dfm_snapshot {
         let source = snapshot_utf8(phase, &snapshot, "analysis DFM profile")?;
         match parse_external_dfm_profile(source) {
-            Ok(profile) if manifest.configuration.dfm_profile.as_ref() == Some(&profile) => {}
+            Ok(profile) if manifest.configuration.dfm_profile.as_ref() == Some(&profile) => {
+                let path = inputs
+                    .analysis_dfm_profile
+                    .expect("descriptor snapshot requires an explicit DFM profile path");
+                match external_dfm_profile_binding(&profile, path, &snapshot.bytes) {
+                    Ok(binding) => dfm_binding = Some(binding),
+                    Err(error) => {
+                        phase.fail(format!(
+                            "cannot construct analysis DFM profile binding: {error:#}"
+                        ));
+                        return None;
+                    }
+                }
+            }
             Ok(_) => {
                 phase.fail("analysis DFM profile does not match its exact source file");
                 return None;
@@ -790,6 +821,29 @@ fn recompute_analysis(
         }
     }
 
+    if dfm_binding.is_none()
+        && manifest.policy_pack_file.is_none()
+        && let Some(profile) = manifest.configuration.dfm_profile.as_ref()
+    {
+        match dfm_profile(&profile.id) {
+            Some(builtin) if builtin == *profile => match builtin_dfm_profile_binding(profile) {
+                Ok(binding) => dfm_binding = Some(binding),
+                Err(error) => {
+                    phase.fail(format!(
+                        "cannot construct built-in DFM profile binding: {error:#}"
+                    ));
+                    return None;
+                }
+            },
+            _ => {
+                phase.fail(
+                    "analysis DFM profile has no external or built-in provenance for cross-phase binding",
+                );
+                return None;
+            }
+        }
+    }
+
     if let Some(profile) = &manifest.configuration.dfm_profile {
         apply_dfm_profile(&mut imported.board, profile);
     }
@@ -819,7 +873,10 @@ fn recompute_analysis(
     } else {
         phase.check("board-checks-recomputed");
     }
-    Some(recomputed_quality)
+    Some(AnalysisRecomputation {
+        quality: recomputed_quality,
+        dfm_profile: dfm_binding,
+    })
 }
 
 fn capture_optional_descriptor_snapshot(
@@ -1005,6 +1062,7 @@ fn manufacturing_phase(
     inputs: &PipelineInputs<'_>,
     board: Option<&BoardIdentity>,
     expected_physical_profile: Option<&PhysicalProfileBinding>,
+    expected_dfm_profile: Option<&DfmProfileBinding>,
 ) -> (PipelinePhase, Option<ManufacturingIdentity>) {
     let mut phase = PipelinePhase::new("manufacturing-package");
     let mut manufacturing_identity = None;
@@ -1028,6 +1086,13 @@ fn manufacturing_phase(
                     );
                 } else {
                     phase.check("manufacturing-physical-profile-bound");
+                }
+                if identity.dfm_profile.as_ref() != expected_dfm_profile {
+                    phase.fail(
+                        "manufacturing package DFM profile binding does not match the analysis profile",
+                    );
+                } else {
+                    phase.check("manufacturing-dfm-profile-bound");
                 }
                 if let Some(board) = board {
                     if identity.input_bytes != board.bytes || identity.input_sha256 != board.sha256
@@ -1393,6 +1458,12 @@ fn validate_analysis_manifest(manifest: &AnalysisManifest) -> Result<(), String>
             );
         }
         _ => unreachable!("schema version was checked above"),
+    }
+    if manifest.dfm_profile_file.is_some() && manifest.policy_pack_file.is_some() {
+        return Err(
+            "analysis DFM profile and organization policy pack sources are mutually exclusive"
+                .into(),
+        );
     }
     validate_text(&manifest.engine_version, "analysis engine version")?;
     validate_analysis_descriptor(&manifest.input, "analysis input", MAX_BOARD_BYTES)?;
@@ -1836,6 +1907,92 @@ mod tests {
             factory_receipt: None,
             require_factory: false,
         }
+    }
+
+    #[test]
+    fn manufacturing_phase_requires_exact_dfm_binding() {
+        let directory = tempdir().unwrap();
+        let drc = directory.path().join("drc.rpt");
+        fs::write(&drc, b"DRC clean").unwrap();
+        let job = directory.path().join("board-job.gbrjob");
+        fs::write(
+            &job,
+            serde_json::to_vec(&json!({
+                "GeneralSpecs": {"LayerNumber": 2},
+                "FilesAttributes": [
+                    {"Path": "board-F_Cu.gtl", "FileFunction": "Copper,L1,Top"},
+                    {"Path": "board-B_Cu.gbl", "FileFunction": "Copper,L2,Bot"},
+                    {"Path": "board-f_mask.gts", "FileFunction": "SolderMask,Top"},
+                    {"Path": "board-b_mask.gbs", "FileFunction": "SolderMask,Bot"},
+                    {"Path": "board-f_silkscreen.gto", "FileFunction": "Legend,Top"},
+                    {"Path": "board-b_silkscreen.gbo", "FileFunction": "Legend,Bot"},
+                    {"Path": "board-Edge_Cuts.gm1", "FileFunction": "Profile"}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let artifact_specs = [
+            ("board-F_Cu.gtl", b"front-copper".as_slice()),
+            ("board-B_Cu.gbl", b"back-copper".as_slice()),
+            ("board-f_mask.gts", b"front-mask".as_slice()),
+            ("board-b_mask.gbs", b"back-mask".as_slice()),
+            ("board-f_silkscreen.gto", b"front-legend".as_slice()),
+            ("board-b_silkscreen.gbo", b"back-legend".as_slice()),
+            ("board-Edge_Cuts.gm1", b"profile".as_slice()),
+            ("board.drl", b"drill".as_slice()),
+        ];
+        let mut exported_artifacts = vec![drc.clone(), job.clone()];
+        for (name, contents) in artifact_specs {
+            let path = directory.path().join(name);
+            fs::write(&path, contents).unwrap();
+            exported_artifacts.push(path);
+        }
+        let binding =
+            builtin_dfm_profile_binding(&pcbex_core::dfm_profile("jlcpcb-2layer").unwrap())
+                .unwrap();
+        let archive = crate::manufacturing_package::write_manufacturing_package_with_profiles(
+            directory.path(),
+            Path::new("board.kicad_pcb"),
+            b"board",
+            &[],
+            &[],
+            &exported_artifacts,
+            &crate::manufacturing_package::KiCadIdentity {
+                version: "10.0.5".into(),
+                about_sha256: "a".repeat(64),
+            },
+            None,
+            Some(&binding),
+            0,
+            0,
+        )
+        .unwrap();
+        let inputs = all_inputs(&archive);
+        let board = BoardIdentity {
+            bytes: 5,
+            sha256: sha256(b"board"),
+            file_name: Some("board.kicad_pcb".into()),
+        };
+        let (accepted, _) = manufacturing_phase(&inputs, Some(&board), None, Some(&binding));
+        assert!(accepted.passed, "{:?}", accepted.failures);
+        assert!(
+            accepted
+                .checks
+                .iter()
+                .any(|check| check == "manufacturing-dfm-profile-bound")
+        );
+
+        let mut mismatch = binding.clone();
+        mismatch.revision += 1;
+        let (rejected, _) = manufacturing_phase(&inputs, Some(&board), None, Some(&mismatch));
+        assert!(!rejected.passed);
+        assert!(
+            rejected
+                .failures
+                .iter()
+                .any(|failure| failure.contains("DFM profile binding"))
+        );
     }
 
     #[test]
@@ -2381,6 +2538,17 @@ mod tests {
         });
         let parsed: AnalysisManifest = serde_json::from_value(manifest.clone()).unwrap();
         assert!(validate_analysis_manifest(&parsed).is_ok());
+
+        let mut mixed_sources = manifest.clone();
+        mixed_sources["policy_pack_file"] = json!({
+            "path": "policy-pack.json",
+            "bytes": 1,
+            "sha256": "d".repeat(64)
+        });
+        mixed_sources["configuration"]["organization_policy_pack"] = json!("fixture-pack");
+        let parsed: AnalysisManifest = serde_json::from_value(mixed_sources).unwrap();
+        let error = validate_analysis_manifest(&parsed).unwrap_err();
+        assert!(error.contains("mutually exclusive"));
 
         manifest["dfm_profile_file"]["bytes"] = (MAX_DFM_PROFILE_BYTES + 1).into();
         let parsed: AnalysisManifest = serde_json::from_value(manifest.clone()).unwrap();

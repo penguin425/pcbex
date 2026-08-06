@@ -2,6 +2,7 @@
 
 use crate::anchored_io::{AnchoredTempFile, PinnedDirectory};
 use crate::bounded_io::{opened_path_matches, same_file};
+use crate::dfm_profile_binding::{DfmProfileBinding, validate_dfm_profile_binding};
 use crate::manufacturing_limits::{
     ManufacturingLimits, portable_manufacturing_name_key, scan_manufacturing_workspace,
     validate_manufacturing_basename,
@@ -46,6 +47,8 @@ struct ManufacturingManifest {
     archive: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     physical_profile: Option<PhysicalProfileBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dfm_profile: Option<DfmProfileBinding>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -97,6 +100,7 @@ pub fn write_manufacturing_package(
 
 /// Generate a package while reserving quota already consumed elsewhere in the
 /// same private manufacturing workspace.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn write_manufacturing_package_with_workspace_reservation(
     output_dir: &Path,
@@ -110,6 +114,42 @@ pub(crate) fn write_manufacturing_package_with_workspace_reservation(
     outside_bytes: u64,
     outside_entries: usize,
 ) -> Result<PathBuf> {
+    write_manufacturing_package_with_profiles(
+        output_dir,
+        input_path,
+        input_bytes,
+        project_inputs,
+        parts,
+        exported_artifacts,
+        kicad_identity,
+        physical_profile,
+        None,
+        outside_bytes,
+        outside_entries,
+    )
+}
+
+/// Generate a package with an optional DFM identity.  `physical_profile` and
+/// `dfm_profile` remain mutually exclusive in this release, so a DFM-aware
+/// package is schema v3 while the existing physical-profile package stays
+/// byte/schema compatible at v2.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn write_manufacturing_package_with_profiles(
+    output_dir: &Path,
+    input_path: &Path,
+    input_bytes: &[u8],
+    project_inputs: &[KiCadProjectInput],
+    parts: &[ManufacturingPart],
+    exported_artifacts: &[PathBuf],
+    kicad_identity: &KiCadIdentity,
+    physical_profile: Option<&PhysicalProfileBinding>,
+    dfm_profile: Option<&DfmProfileBinding>,
+    outside_bytes: u64,
+    outside_entries: usize,
+) -> Result<PathBuf> {
+    if physical_profile.is_some() && dfm_profile.is_some() {
+        bail!("physical_profile and dfm_profile are mutually exclusive");
+    }
     let mut limits = ManufacturingLimits::production();
     limits.max_total_bytes = limits
         .max_total_bytes
@@ -129,7 +169,7 @@ pub(crate) fn write_manufacturing_package_with_workspace_reservation(
                 limits.max_entries
             )
         })?;
-    write_manufacturing_package_with_limits(
+    write_manufacturing_package_with_limits_and_profiles(
         output_dir,
         input_path,
         input_bytes,
@@ -138,11 +178,13 @@ pub(crate) fn write_manufacturing_package_with_workspace_reservation(
         exported_artifacts,
         kicad_identity,
         physical_profile,
+        dfm_profile,
         limits,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 fn write_manufacturing_package_with_limits(
     output_dir: &Path,
     input_path: &Path,
@@ -154,6 +196,36 @@ fn write_manufacturing_package_with_limits(
     physical_profile: Option<&PhysicalProfileBinding>,
     limits: ManufacturingLimits,
 ) -> Result<PathBuf> {
+    write_manufacturing_package_with_limits_and_profiles(
+        output_dir,
+        input_path,
+        input_bytes,
+        project_inputs,
+        parts,
+        exported_artifacts,
+        kicad_identity,
+        physical_profile,
+        None,
+        limits,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_manufacturing_package_with_limits_and_profiles(
+    output_dir: &Path,
+    input_path: &Path,
+    input_bytes: &[u8],
+    project_inputs: &[KiCadProjectInput],
+    parts: &[ManufacturingPart],
+    exported_artifacts: &[PathBuf],
+    kicad_identity: &KiCadIdentity,
+    physical_profile: Option<&PhysicalProfileBinding>,
+    dfm_profile: Option<&DfmProfileBinding>,
+    limits: ManufacturingLimits,
+) -> Result<PathBuf> {
+    if physical_profile.is_some() && dfm_profile.is_some() {
+        bail!("physical_profile and dfm_profile are mutually exclusive");
+    }
     fs::create_dir_all(output_dir).with_context(|| format!("creating {}", output_dir.display()))?;
     let pinned_output = PinnedDirectory::open(output_dir).with_context(|| {
         format!(
@@ -188,6 +260,10 @@ fn write_manufacturing_package_with_limits(
     if let Some(binding) = physical_profile {
         validate_physical_profile_binding(binding)
             .context("validating manufacturing physical profile binding")?;
+    }
+    if let Some(binding) = dfm_profile {
+        validate_dfm_profile_binding(binding)
+            .context("validating manufacturing DFM profile binding")?;
     }
     let (mut files, _exported_bytes) =
         validate_exported_artifacts(output_dir, exported_artifacts, limits)?;
@@ -256,7 +332,13 @@ fn write_manufacturing_package_with_limits(
         .map(|path| descriptor_for_file(output_dir, path, limits))
         .collect::<Result<Vec<_>>>()?;
     let manifest = ManufacturingManifest {
-        schema_version: if physical_profile.is_some() { 2 } else { 1 },
+        schema_version: if dfm_profile.is_some() {
+            3
+        } else if physical_profile.is_some() {
+            2
+        } else {
+            1
+        },
         engine: "pcbex",
         engine_version: env!("CARGO_PKG_VERSION"),
         tools: kicad_identity.clone(),
@@ -271,6 +353,7 @@ fn write_manufacturing_package_with_limits(
         artifacts,
         archive: ARCHIVE_NAME.to_string(),
         physical_profile: physical_profile.cloned(),
+        dfm_profile: dfm_profile.cloned(),
     };
     let manifest_path = output_dir.join(MANIFEST_NAME);
     let mut manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
@@ -2078,6 +2161,13 @@ mod tests {
         }
     }
 
+    fn dfm_profile_binding() -> DfmProfileBinding {
+        crate::dfm_profile_binding::builtin_dfm_profile_binding(
+            &pcbex_core::dfm_profile("jlcpcb-2layer").unwrap(),
+        )
+        .unwrap()
+    }
+
     #[test]
     fn writes_grouped_bom_and_only_explicit_artifacts() {
         let staging = tempdir().unwrap();
@@ -2663,6 +2753,52 @@ mod tests {
             manifest["physical_profile"],
             serde_json::to_value(binding).unwrap()
         );
+    }
+
+    #[test]
+    fn dfm_profile_binding_selects_manifest_schema_v3_and_is_mutually_exclusive() {
+        let staging = tempdir().unwrap();
+        let drc = staging.path().join("drc.rpt");
+        fs::write(&drc, b"DRC clean\n").unwrap();
+        let binding = dfm_profile_binding();
+        write_manufacturing_package_with_profiles(
+            staging.path(),
+            Path::new("board.kicad_pcb"),
+            b"board",
+            &[],
+            &[],
+            std::slice::from_ref(&drc),
+            &identity(),
+            None,
+            Some(&binding),
+            0,
+            0,
+        )
+        .unwrap();
+        let manifest_path = staging.path().join(MANIFEST_NAME);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["schema_version"], 3);
+        assert_eq!(
+            manifest["dfm_profile"],
+            serde_json::to_value(&binding).unwrap()
+        );
+
+        let error = write_manufacturing_package_with_profiles(
+            staging.path(),
+            Path::new("board.kicad_pcb"),
+            b"board",
+            &[],
+            &[],
+            std::slice::from_ref(&drc),
+            &identity(),
+            Some(&physical_profile_binding()),
+            Some(&binding),
+            0,
+            0,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("mutually exclusive"));
     }
 
     #[test]

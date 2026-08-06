@@ -158,6 +158,7 @@ auditable release.
 | v1.444.0 | Root Action live AI schematic quorum | Add an explicit schema-v1 live-schematic quorum input to the root Action, freshly verify semantic and electrical-review binding, publish a distinct live verification result, and reject mixing with schema-v2-through-v4 artifact, native-ERC, or deterministic-pipeline review inputs |
 | v1.445.0 | Bounded external DFM profile loader | Route every external fabrication-profile entry point through one 4 MiB stable regular-file reader, reject direct or ancestor symlinks and duplicate JSON keys, and preserve built-in and policy-pack profile behavior without changing DFM or manifest schemas; the embedded DFM object in a policy pack remains on its separate parser/size contract |
 | v1.446.0 | Strict SKiDL no-connect adapter | Preserve checked circuit-spec v2 no-connect pins through the compatibility SKiDL renderer with the native `NC` singleton, reject forged null/type or pin/net coverage relationships before source generation, and leave schema-v1 output byte-identical |
+| v1.447.0 | Cross-phase DFM manufacturing binding | Bind external and built-in DFM profile identity (canonical digest plus origin/source) into fabricate schema-v3 packages, reject binding changes during factory repair, and require exact analysis-to-package matching in the unchanged deterministic pipeline gate; physical-profile v2, policy-pack analysis, receipt v1, and runner schemas remain compatible |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -591,9 +592,10 @@ profiles and organization policy-pack resolution retain their existing
 behavior. The embedded DFM object inside a policy pack is intentionally not
 treated as an external profile file and remains on the policy-pack parser/size
 contract. This release does not yet add a DFM identity to fabrication or
-manufacturing manifests; that remains the next cross-phase binding boundary.
+manufacturing manifests; v1.447.0 adds that bounded cross-phase binding while
+leaving policy-pack embedding on its existing analysis-only provenance path.
 
-The current v1.446.0 milestone closes the v2-to-SKiDL no-connect boundary. The
+The released v1.446.0 milestone closes the v2-to-SKiDL no-connect boundary. The
 native envelope validator now rejects null/type mismatches, connected
 no-connect pins, declared-net mismatches, duplicate or cross-net membership,
 and missing declared-pin coverage before rendering. Explicit no-connect pins
@@ -601,3 +603,15 @@ are carried through the compatibility adapter as deterministic `NC` singleton
 assignments before ordinary nets; no synthetic `NC` net is created, and the
 schema-v1 generator remains byte-compatible. SKiDL stays an optional runtime
 dependency.
+
+The current v1.447.0 milestone adds a closed `DfmProfileBinding` contract for
+external and built-in fabrication profiles. `fabricate --fab` and
+`fabricate --fab-profile` apply the selected rules before DRC/export and write
+schema-v3 manufacturing manifests with canonical profile identity and either
+the exact external basename/bytes/raw-SHA descriptor or a built-in origin tag.
+Physical profiles remain mutually exclusive and retain schema-v2 bytes. The
+factory package validator and repair loop reject DFM binding add/drop/
+substitution, while `pipeline-verify` requires exact external/built-in binding
+equality between analysis and manufacturing. Policy-pack DFM, receipt v1,
+MCP/Action inputs, and deterministic plan/report schemas are intentionally
+unchanged.

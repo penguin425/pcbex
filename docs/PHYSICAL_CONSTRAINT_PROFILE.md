@@ -87,13 +87,20 @@ pcbex pipeline-verify \
 ```
 
 Without a profile, analysis and manufacturing continue to emit schema-v1
-manifests. With a profile they emit schema v2 and require its exact binding.
+manifests. With a physical profile they emit schema v2 and require its exact
+binding.
 The pipeline re-reads the supplied profile, checks raw and canonical digests,
 recomputes analysis after applying it, and requires the manufacturing ZIP to
 carry the identical binding. Factory submission already binds the complete
 ZIP digest, so the profile is transitively fixed for that submission. A
 factory feedback repair may change board/manufacturing artifacts but may not
 add, remove, or substitute the profile binding.
+
+Physical and DFM selections are mutually exclusive. A run using the external
+or built-in DFM profile path instead emits a schema-v3 manufacturing manifest
+with the DFM identity; the physical-profile binding remains unchanged at
+schema v2. An organization policy-pack DFM object retains its existing
+analysis-only provenance and is not promoted to this cross-phase binding.
 
 The composite GitHub Action forwards its `physical-profile` input into the
 opt-in `pipeline-verify` invocation as `--analysis-physical-profile`; the

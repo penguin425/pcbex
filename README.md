@@ -2822,6 +2822,8 @@ pcbex validate-dfm-profile hardware/acme-dfm.json \
   --output build/acme-dfm.normalized.json
 pcbex analyze-kicad board.kicad_pcb --output-dir build/analysis \
   --fab-profile hardware/acme-dfm.json
+pcbex fabricate board.kicad_pcb --output-dir build/manufacturing \
+  --fab-profile hardware/acme-dfm.json
 ```
 
 External profiles use `schema_version: 1`, a stable lowercase ID, optional
@@ -2835,11 +2837,18 @@ validation. `--fab-profile` is supported by KiCad analysis, routing,
 route-candidate generation, board DFM checks, the composite Action, and the
 corresponding MCP analysis and routing tools. Analysis manifests bind both the
 normalized resolved profile and the source file's path, byte length, and
-SHA-256 digest. Fabrication and manufacturing manifests do not yet bind this
-DFM identity; use a physical profile when the same constraints must be proven
-across those phases. This 4 MiB external-file boundary does not apply to the
-DFM object embedded inside an organization policy pack; policy-pack loading
-and validation retain their separate existing contract.
+SHA-256 digest. Fabrication applies the same profile before DRC/export and
+publishes a schema-v3 manufacturing manifest binding the complete identity.
+Built-in profiles use the same domain-separated canonical digest and an
+explicit built-in origin without inventing a raw source descriptor. The
+existing physical profile remains mutually exclusive and is still the sole
+physical/DFM authority when selected. The pipeline gate requires an exact
+external or built-in DFM binding match between analysis and the v3 package;
+policy-pack-embedded DFM keeps its existing analysis-only contract in this
+release and is not part of the new cross-phase binding. This 4 MiB
+external-file boundary does not apply to the DFM object embedded inside an
+organization policy pack; policy-pack loading and validation retain their
+separate existing contract.
 
 ### Physical constraint profiles
 
@@ -2856,12 +2865,14 @@ pcbex fabricate board.kicad_pcb --output-dir build/manufacturing \
 ```
 
 The profile is applied by JSON/KiCad placement and routing as well as analysis
-and fabrication. Profile-aware analysis and manufacturing manifests use schema
-v2 and carry the same raw-source and domain-separated canonical SHA-256
+and fabrication. Physical-profile analysis and manufacturing manifests use
+schema v2 and carry the same raw-source and domain-separated canonical SHA-256
 binding; `pipeline-verify --analysis-physical-profile` recomputes and compares
-that binding across both phases. Existing no-profile schema-v1 artifacts remain
-valid. See [the physical-profile contract](docs/PHYSICAL_CONSTRAINT_PROFILE.md)
-for limits, fail-closed behavior, GitHub Action/MCP usage, and the complete
+that binding across both phases. Physical and DFM selections are mutually
+exclusive, so DFM-aware manufacturing uses schema v3 rather than combining
+both bindings. Existing no-profile schema-v1 artifacts remain valid. See
+[the physical-profile contract](docs/PHYSICAL_CONSTRAINT_PROFILE.md) for
+limits, fail-closed behavior, GitHub Action/MCP usage, and the complete
 pipeline example.
 
 ### Organization policy packs
