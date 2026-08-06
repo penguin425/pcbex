@@ -3601,7 +3601,8 @@ pcbex verify-ai-approval \
   --public-key build/reviewer.pub
 ```
 
-Version 1.442.0 completes live signing parity for schema-v1 requests. Pass
+The released Version 1.442.0 completes live signing parity for schema-v1
+requests. Pass
 `--schematic` to `sign-ai-review`, or supply `schematic` to the MCP
 `sign_schematic_approval` tool. Each signing path imports the bounded live
 KiCad schematic, compares semantic IR, and freshly recomputes the deterministic
@@ -3625,8 +3626,34 @@ pcbex sign-ai-review \
 Run this signing boundary in an isolated workspace. Bounded reads detect
 replacements observed around semantic/review verification, but verification,
 private-key access, and output publication are not one atomic filesystem
-transaction and no race-free filesystem boundary is claimed. This release
-does not add output or session hardening.
+transaction and no race-free filesystem boundary is claimed.
+
+Version 1.443.0 hardens the trusted CLI and MCP signing preflight. The complete
+public input set is checked before private-key access: response bytes and
+schema, signer identity, optional active session and request binding, selected
+live or artifact-bound evidence, and the output destination all have to pass their
+normal bounded and no-clobber checks first. A response that is valid but
+rejected by one or more review gates remains a legitimate signed rejection;
+the approval is staged and atomically published before `--require-approved`
+may fail. A pre-existing output file, symbolic link, or other non-regular
+destination is never overwritten or replaced, including when preflight or
+signing fails.
+
+The MCP fail-closed response contract is unchanged: when
+`require_approved: true` turns a valid signed rejection into a tool error, the
+approval file remains published but `structuredContent.approval` is `null`.
+Verify or consume the retained file explicitly when rejected evidence is
+needed.
+
+This release leaves the request, response, session, and signed-approval wire
+schemas unchanged. Schema-v2 through v4 continue to use their existing
+generated-schematic, deterministic-pipeline, and native-ERC artifact paths;
+the schema-v1 `--schematic` value remains a live semantic input. The atomic
+publication guarantee covers the destination file only; input verification,
+private-key access, and publication are not one atomic filesystem transaction.
+The focused boardless verification Action remains verification-only and gains
+no signing secret or signing input. Root-Action live quorum input is a later
+v1.444 boundary.
 
 Version 1.419 adds root composite-Action parity. Set
 `deterministic-pipeline-plan` to opt in and optionally set

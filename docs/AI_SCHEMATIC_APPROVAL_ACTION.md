@@ -100,12 +100,23 @@ bounds and revalidation requirements.
   Action's legacy schema-v1 quorum route still does not automatically inject a
   live schematic; use this focused Action when an Action-level binding is
   required.
-- Version 1.442.0 adds the matching live signing boundary to
+- Version 1.442.0 added the matching live signing boundary to
   `pcbex sign-ai-review --schematic` and MCP `sign_schematic_approval`.
   Those paths perform the semantic and fresh electrical-review checks before
   reading a private key; they do not change the request, response, or signed
   approval wire schemas. Signing remains outside this verification-only
   Action.
+- Version 1.443.0 hardens those trusted CLI/MCP signing paths, not this
+  verification-only Action. Their response, signer, optional session, selected
+  evidence, and destination are all preflighted before private-key access;
+  valid rejected reviews are still signed and atomically published, while an
+  existing output file or symlink remains untouched. The request, response,
+  session, and signed-approval schemas and the schema-v2 through v4 artifact
+  paths are unchanged. Verification, key access, and publication are still
+  separate filesystem operations rather than one atomic transaction.
+- Root-Action live quorum input is intentionally deferred to the v1.444
+  boundary; this focused Action does not accept a signing secret or perform
+  signing.
 - AI provider execution and response normalization remain separate steps.
 - The verification path has no provider/network input. Like the other source
   Actions, its build step may use the runner's configured Rust toolchain and

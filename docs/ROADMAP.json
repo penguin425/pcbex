@@ -739,6 +739,11 @@
     {
       "id": "ai-schematic-approval-live-signing-parity",
       "release": "v1.442.0",
+      "status": "released"
+    },
+    {
+      "id": "ai-schematic-approval-signing-preflight",
+      "release": "v1.443.0",
       "status": "current"
     }
   ]

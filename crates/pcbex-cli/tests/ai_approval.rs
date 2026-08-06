@@ -1,8 +1,9 @@
 use pcbex_kicad::{
-    AiReviewArtifactBinding, AiReviewRequest, DeterministicPipelineIdentity, ExactArtifactIdentity,
-    bind_ai_review_request,
+    AiReviewArtifactBinding, AiReviewRequest, AiReviewSession, DeterministicPipelineIdentity,
+    ExactArtifactIdentity, bind_ai_review_request,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -30,6 +31,102 @@ fn temp_dir() -> PathBuf {
     let path = std::env::temp_dir().join(format!("pcbex-ai-approval-{suffix}"));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+struct SignFixture {
+    directory: PathBuf,
+    request: PathBuf,
+    response: PathBuf,
+    private_key: PathBuf,
+    session: PathBuf,
+}
+
+fn sign_fixture() -> SignFixture {
+    let directory = temp_dir();
+    let schematic =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/approved-empty.kicad_sch");
+    let policy = directory.join("policy.json");
+    assert!(
+        run(&["electrical-policy", "--output", path(&policy)])
+            .status
+            .success()
+    );
+    let review = directory.join("electrical-review.json");
+    assert!(
+        run(&[
+            "check-schematic",
+            path(&schematic),
+            "--policy",
+            path(&policy),
+            "--output",
+            path(&review),
+            "--require-approved",
+        ])
+        .status
+        .success()
+    );
+    let request = directory.join("request.json");
+    let session = directory.join("session.json");
+    assert!(
+        run(&[
+            "prepare-ai-review",
+            path(&schematic),
+            "--electrical-review",
+            path(&review),
+            "--policy",
+            path(&policy),
+            "--requirement",
+            "power=Power input treatment is intentional",
+            "--allow-no-simulation",
+            "--output",
+            path(&request),
+            "--session-output",
+            path(&session),
+        ])
+        .status
+        .success()
+    );
+    let request_value: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    let response = directory.join("response.json");
+    fs::write(
+        &response,
+        serde_json::to_vec_pretty(&json!({
+            "schema_version": 1,
+            "request_sha256": request_value["request_sha256"],
+            "model": {"provider": "test-provider", "model": "schematic-reviewer", "version": "1"},
+            "decision": "approve",
+            "summary": "The supplied requirement is supported by the bound review.",
+            "requirements": [{
+                "id": "power",
+                "status": "pass",
+                "rationale": "The deterministic review is approved.",
+                "evidence_refs": ["electrical-review"]
+            }],
+            "risks": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let private_key = directory.join("approval.key");
+    let public_key = directory.join("approval.pub");
+    assert!(
+        run(&[
+            "approval-keygen",
+            "--private-key",
+            path(&private_key),
+            "--public-key",
+            path(&public_key),
+        ])
+        .status
+        .success()
+    );
+    SignFixture {
+        directory,
+        request,
+        response,
+        private_key,
+        session,
+    }
 }
 
 #[test]
@@ -557,4 +654,193 @@ fn prepares_signs_verifies_and_gates_ai_schematic_approval() {
     }
 
     fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn sign_rejects_expired_session_before_reading_missing_private_key() {
+    let fixture = sign_fixture();
+    let mut session: AiReviewSession =
+        serde_json::from_slice(&fs::read(&fixture.session).unwrap()).unwrap();
+    session.issued_at_unix = 0;
+    session.expires_at_unix = 1;
+    session.session_sha256.clear();
+    session.session_sha256 = hex::encode(Sha256::digest(serde_json::to_vec(&session).unwrap()));
+    fs::write(
+        &fixture.session,
+        serde_json::to_vec_pretty(&session).unwrap(),
+    )
+    .unwrap();
+
+    let missing_key = fixture.directory.join("missing.key");
+    let output = fixture.directory.join("approval.json");
+    let result = run(&[
+        "sign-ai-review",
+        path(&fixture.request),
+        path(&fixture.response),
+        "--private-key",
+        path(&missing_key),
+        "--signer-id",
+        "ci",
+        "--session",
+        path(&fixture.session),
+        "--output",
+        path(&output),
+    ]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("AI review session has expired"), "{stderr}");
+    assert!(!stderr.contains("reading "), "{stderr}");
+    assert!(!output.exists());
+    fs::remove_dir_all(fixture.directory).unwrap();
+}
+
+#[test]
+fn sign_refuses_existing_output_without_clobbering_it() {
+    let fixture = sign_fixture();
+    let output = fixture.directory.join("approval.json");
+    let sentinel = br#"{"sentinel":true}"#;
+    fs::write(&output, sentinel).unwrap();
+    let missing_key = fixture.directory.join("missing.key");
+    let result = run(&[
+        "sign-ai-review",
+        path(&fixture.request),
+        path(&fixture.response),
+        "--private-key",
+        path(&missing_key),
+        "--signer-id",
+        "ci",
+        "--output",
+        path(&output),
+    ]);
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("refusing to overwrite existing output")
+    );
+    assert_eq!(fs::read(&output).unwrap(), sentinel);
+    fs::remove_dir_all(fixture.directory).unwrap();
+}
+
+#[test]
+fn sign_rejects_blank_signer_before_reading_missing_private_key() {
+    let fixture = sign_fixture();
+    let missing_key = fixture.directory.join("missing.key");
+    let output = fixture.directory.join("approval.json");
+    let result = run(&[
+        "sign-ai-review",
+        path(&fixture.request),
+        path(&fixture.response),
+        "--private-key",
+        path(&missing_key),
+        "--signer-id",
+        "",
+        "--output",
+        path(&output),
+    ]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("approval signer id must not be blank"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("reading "), "{stderr}");
+    assert!(!output.exists());
+    fs::remove_dir_all(fixture.directory).unwrap();
+}
+
+#[test]
+fn sign_rejects_response_bound_to_another_request_before_reading_missing_private_key() {
+    let fixture = sign_fixture();
+    let mut response: Value =
+        serde_json::from_slice(&fs::read(&fixture.response).unwrap()).unwrap();
+    response["request_sha256"] = json!("f".repeat(64));
+    fs::write(
+        &fixture.response,
+        serde_json::to_vec_pretty(&response).unwrap(),
+    )
+    .unwrap();
+    let missing_key = fixture.directory.join("missing.key");
+    let output = fixture.directory.join("approval.json");
+    let result = run(&[
+        "sign-ai-review",
+        path(&fixture.request),
+        path(&fixture.response),
+        "--private-key",
+        path(&missing_key),
+        "--signer-id",
+        "ci",
+        "--output",
+        path(&output),
+    ]);
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("AI review response is bound to a different request"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("reading "), "{stderr}");
+    assert!(!output.exists());
+    fs::remove_dir_all(fixture.directory).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn sign_refuses_symlink_output_without_following_it() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = sign_fixture();
+    let target = fixture.directory.join("target.json");
+    let output = fixture.directory.join("approval-link.json");
+    let sentinel = br#"{"sentinel":true}"#;
+    fs::write(&target, sentinel).unwrap();
+    symlink(&target, &output).unwrap();
+    let result = run(&[
+        "sign-ai-review",
+        path(&fixture.request),
+        path(&fixture.response),
+        "--private-key",
+        path(&fixture.private_key),
+        "--signer-id",
+        "ci",
+        "--output",
+        path(&output),
+    ]);
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("symlink"));
+    assert_eq!(fs::read(&target).unwrap(), sentinel);
+    fs::remove_dir_all(fixture.directory).unwrap();
+}
+
+#[test]
+fn sign_publishes_rejected_artifact_before_require_approved_failure() {
+    let fixture = sign_fixture();
+    let output = fixture.directory.join("rejected-approval.json");
+    let mut response: Value =
+        serde_json::from_slice(&fs::read(&fixture.response).unwrap()).unwrap();
+    response["decision"] = json!("reject");
+    fs::write(
+        &fixture.response,
+        serde_json::to_vec_pretty(&response).unwrap(),
+    )
+    .unwrap();
+    let result = run(&[
+        "sign-ai-review",
+        path(&fixture.request),
+        path(&fixture.response),
+        "--private-key",
+        path(&fixture.private_key),
+        "--signer-id",
+        "ci",
+        "--output",
+        path(&output),
+        "--require-approved",
+    ]);
+    assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr)
+            .contains("signed AI review did not pass every approval gate")
+    );
+    let approval: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+    assert_eq!(approval["approved"], false);
+    assert_eq!(approval["gate_failures"], json!(["ai_decision_reject"]));
+    fs::remove_dir_all(fixture.directory).unwrap();
 }

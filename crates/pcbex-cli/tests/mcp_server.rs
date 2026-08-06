@@ -1,3 +1,4 @@
+use pcbex_kicad::AiReviewSession;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -2856,6 +2857,7 @@ fn stdio_server_verifies_live_ai_schematic_approval_and_quorum() {
     );
 
     let request = output.join("request.json");
+    let session = output.join("review-session.json");
     assert!(
         run_cli(&[
             "prepare-ai-review".into(),
@@ -2866,6 +2868,8 @@ fn stdio_server_verifies_live_ai_schematic_approval_and_quorum() {
             path(&policy_pack),
             "--output".into(),
             path(&request),
+            "--session-output".into(),
+            path(&session),
         ])
         .status
         .success()
@@ -2993,6 +2997,135 @@ fn stdio_server_verifies_live_ai_schematic_approval_and_quorum() {
             .unwrap_or_default()
             .contains("live schematic semantic document does not match")
     );
+
+    let blank_signer_approval = output.join("blank-signer-approval.json");
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "live-ai-approval-blank-signer",
+            "method": "tools/call",
+            "params": {
+                "name": "sign_schematic_approval",
+                "arguments": {
+                    "request": path(&request),
+                    "response": path(&response),
+                    "private_key": path(&missing_private_key),
+                    "signer_id": " ",
+                    "schematic": path(&equivalent_schematic),
+                    "output": path(&blank_signer_approval),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let blank_signer = receive(&mut stdout);
+    assert_eq!(blank_signer["id"], "live-ai-approval-blank-signer");
+    assert_eq!(blank_signer["result"]["isError"], true);
+    assert_eq!(blank_signer["result"]["structuredContent"]["ok"], false);
+    assert_eq!(
+        blank_signer["result"]["structuredContent"]["approval"],
+        Value::Null
+    );
+    assert!(!blank_signer_approval.exists());
+    let blank_signer_message = blank_signer["result"]["structuredContent"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        blank_signer_message.contains("approval signer id must not be blank"),
+        "{blank_signer_message}"
+    );
+    assert!(
+        !blank_signer_message.contains("reading "),
+        "{blank_signer_message}"
+    );
+
+    let mut expired_session: AiReviewSession =
+        serde_json::from_slice(&fs::read(&session).unwrap()).unwrap();
+    expired_session.issued_at_unix = 0;
+    expired_session.expires_at_unix = 1;
+    expired_session.session_sha256.clear();
+    expired_session.session_sha256 = hex::encode(Sha256::digest(
+        serde_json::to_vec(&expired_session).unwrap(),
+    ));
+    fs::write(
+        &session,
+        serde_json::to_vec_pretty(&expired_session).unwrap(),
+    )
+    .unwrap();
+    let expired_session_approval = output.join("expired-session-approval.json");
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "live-ai-approval-expired-session",
+            "method": "tools/call",
+            "params": {
+                "name": "sign_schematic_approval",
+                "arguments": {
+                    "request": path(&request),
+                    "response": path(&response),
+                    "private_key": path(&missing_private_key),
+                    "signer_id": "ci-production",
+                    "session": path(&session),
+                    "schematic": path(&equivalent_schematic),
+                    "output": path(&expired_session_approval),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let expired = receive(&mut stdout);
+    assert_eq!(expired["id"], "live-ai-approval-expired-session");
+    assert_eq!(expired["result"]["isError"], true);
+    assert_eq!(expired["result"]["structuredContent"]["ok"], false);
+    assert_eq!(
+        expired["result"]["structuredContent"]["approval"],
+        Value::Null
+    );
+    assert!(!expired_session_approval.exists());
+    let expired_message = expired["result"]["structuredContent"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        expired_message.contains("AI review session has expired"),
+        "{expired_message}"
+    );
+    assert!(!expired_message.contains("reading "), "{expired_message}");
+
+    let existing_output = output.join("existing-approval.json");
+    let sentinel = br#"{"sentinel":true}"#;
+    fs::write(&existing_output, sentinel).unwrap();
+    send(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "live-ai-approval-existing-output",
+            "method": "tools/call",
+            "params": {
+                "name": "sign_schematic_approval",
+                "arguments": {
+                    "request": path(&request),
+                    "response": path(&response),
+                    "private_key": path(&missing_private_key),
+                    "signer_id": "ci-production",
+                    "schematic": path(&equivalent_schematic),
+                    "output": path(&existing_output),
+                    "require_approved": true
+                }
+            }
+        }),
+    );
+    let existing = receive(&mut stdout);
+    assert_eq!(existing["id"], "live-ai-approval-existing-output");
+    assert_eq!(existing["error"]["code"], -32602);
+    assert!(
+        existing["error"]["data"]["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("output path already exists; refusing stale MCP evidence")
+    );
+    assert_eq!(fs::read(&existing_output).unwrap(), sentinel);
 
     send(
         &mut stdin,
