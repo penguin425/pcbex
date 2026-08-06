@@ -360,6 +360,14 @@ any gate that consumes that input runs. Plans are limited to 4 MiB, the
 aggregate staged input set to 512 MiB, and the retained report to just under
 128 MiB; each role also keeps the stricter limit of its underlying verifier.
 
+For wire compatibility, schema-v1 keeps `analysis_dfm_profile` under the
+shared `analysis_descriptor` definition and its published 64 MiB maximum.
+The compiler and runner apply an additional 4 MiB runtime preflight when that
+role is actually read; this tightening is not represented as a new `$defs`
+entry or schema version. The embedded DFM object inside an organization
+policy pack remains on the policy-pack loading/validation path and is not
+treated as an external profile file by this preflight.
+
 The firmware descriptor must name `manifest.json`. Its original directory must
 contain exactly that manifest and the seven v2 source artifacts—no extra file,
 directory, or link is accepted. The runner validates this original directory

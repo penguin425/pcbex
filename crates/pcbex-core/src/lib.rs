@@ -16,8 +16,9 @@ pub mod schema;
 
 pub use analysis::{AnalysisDelta, analysis_delta_to_sarif};
 pub use dfm_profiles::{
-    DFM_PROFILE_SCHEMA_VERSION, DfmProfile, apply_dfm_profile, dfm_profile,
-    dfm_profile_json_schema, dfm_profiles, parse_external_dfm_profile, validate_dfm_profile,
+    DFM_PROFILE_SCHEMA_VERSION, DfmProfile, MAX_DFM_PROFILE_TEXT_BYTES, apply_dfm_profile,
+    dfm_profile, dfm_profile_json_schema, dfm_profiles, parse_external_dfm_profile,
+    validate_dfm_profile,
 };
 pub use impedance::{ImpedanceReport, impedance_report};
 pub use physical_profile::{

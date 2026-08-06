@@ -768,6 +768,28 @@ mod tests {
     }
 
     #[test]
+    fn compiler_applies_the_dedicated_dfm_profile_descriptor_limit() {
+        let directory = tempfile::tempdir().unwrap();
+        write_fixture(directory.path());
+        let profile = directory.path().join("analysis/dfm-profile.json");
+        fs::write(&profile, vec![b'x'; pcbex_core::MAX_DFM_PROFILE_TEXT_BYTES]).unwrap();
+        let intent = directory.path().join("intent.json");
+        let mut intent_value = intent_json();
+        intent_value["analysis_dfm_profile"] = Value::String("analysis/dfm-profile.json".into());
+        fs::write(&intent, serde_json::to_vec(&intent_value).unwrap()).unwrap();
+        let output = directory.path().join("pipeline-plan.json");
+        assert!(compile_deterministic_pipeline_plan(&intent, &output).is_ok());
+
+        fs::write(
+            &profile,
+            vec![b'x'; pcbex_core::MAX_DFM_PROFILE_TEXT_BYTES + 1],
+        )
+        .unwrap();
+        let error = compile_deterministic_pipeline_plan(&intent, &output).unwrap_err();
+        assert!(error.to_string().contains("analysis_dfm_profile"));
+    }
+
+    #[test]
     fn output_is_deterministic_and_rejects_existing_destinations() {
         let directory = tempfile::tempdir().unwrap();
         write_fixture(directory.path());

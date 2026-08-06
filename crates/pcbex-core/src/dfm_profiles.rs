@@ -1,9 +1,17 @@
 use crate::{Board, ManufacturingRules, NetClassRules, Rules};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::fmt;
 
 pub const DFM_PROFILE_SCHEMA_VERSION: u32 = 1;
+/// Maximum UTF-8 source size accepted for one external DFM profile.
+///
+/// The CLI applies the same ceiling before opening the JSON parser.  Keeping
+/// the limit here as part of the core parser contract also protects callers
+/// that use `parse_external_dfm_profile` directly.
+pub const MAX_DFM_PROFILE_TEXT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_DFM_PROFILE_JSON_ITEMS: usize = 4096;
 const MAXIMUM_PROFILE_DIMENSION_NM: i64 = 1_000_000_000_000;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -76,7 +84,27 @@ pub fn dfm_profile(name: &str) -> Option<DfmProfile> {
 }
 
 pub fn parse_external_dfm_profile(source: &str) -> Result<DfmProfile, String> {
-    let profile: DfmProfile = serde_json::from_str(source)
+    if source.is_empty() {
+        return Err("DFM profile must not be empty".into());
+    }
+    if source.len() > MAX_DFM_PROFILE_TEXT_BYTES {
+        return Err(format!(
+            "DFM profile JSON exceeds the {MAX_DFM_PROFILE_TEXT_BYTES}-byte input limit"
+        ));
+    }
+
+    // serde_json's derived struct deserializer accepts the last occurrence of
+    // a duplicate object key.  Parse through a duplicate-rejecting Value
+    // visitor first so an external profile cannot have two different semantic
+    // interpretations across tools or languages.
+    let mut deserializer = serde_json::Deserializer::from_str(source);
+    let value = deserializer
+        .deserialize_any(NoDuplicateValueVisitor)
+        .map_err(|error| format!("invalid DFM profile JSON: {error}"))?;
+    deserializer
+        .end()
+        .map_err(|error| format!("invalid DFM profile JSON: {error}"))?;
+    let profile: DfmProfile = serde_json::from_value(value)
         .map_err(|error| format!("invalid DFM profile JSON: {error}"))?;
     validate_dfm_profile(&profile)?;
 
@@ -92,6 +120,114 @@ pub fn parse_external_dfm_profile(source: &str) -> Result<DfmProfile, String> {
         }
     }
     Ok(profile)
+}
+
+struct NoDuplicateValueVisitor;
+
+struct NoDuplicateValueSeed;
+
+impl<'de> de::DeserializeSeed<'de> for NoDuplicateValueSeed {
+    type Value = Value;
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: de::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(NoDuplicateValueVisitor)
+    }
+}
+
+impl<'de> de::Visitor<'de> for NoDuplicateValueVisitor {
+    type Value = Value;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(Value::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(Value::Number(value.into()))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        serde_json::Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| E::custom("JSON number is not finite"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_borrowed_str<E>(self, value: &'de str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(Value::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(Value::String(value))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(Value::Null)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element_seed(NoDuplicateValueSeed)? {
+            values.push(value);
+            if values.len() > MAX_DFM_PROFILE_JSON_ITEMS {
+                return Err(de::Error::custom(
+                    "DFM profile JSON array exceeds item limit",
+                ));
+            }
+        }
+        Ok(Value::Array(values))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::MapAccess<'de>,
+    {
+        let mut object = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if object.contains_key(&key) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key {key:?}"
+                )));
+            }
+            let value = map.next_value_seed(NoDuplicateValueSeed)?;
+            object.insert(key, value);
+            if object.len() > MAX_DFM_PROFILE_JSON_ITEMS {
+                return Err(de::Error::custom(
+                    "DFM profile JSON object exceeds key limit",
+                ));
+            }
+        }
+        Ok(Value::Object(object))
+    }
 }
 
 pub fn validate_dfm_profile(profile: &DfmProfile) -> Result<(), String> {
@@ -417,6 +553,37 @@ mod tests {
             parse_external_dfm_profile(&value.to_string())
                 .unwrap_err()
                 .contains("unknown field")
+        );
+    }
+
+    #[test]
+    fn rejects_empty_duplicate_and_oversized_external_profiles() {
+        assert!(
+            parse_external_dfm_profile("")
+                .unwrap_err()
+                .contains("must not be empty")
+        );
+
+        let duplicate = r#"{"schema_version":1,"schema_version":1,"id":"acme-profile-v1"}"#;
+        assert!(
+            parse_external_dfm_profile(duplicate)
+                .unwrap_err()
+                .contains("duplicate JSON object key")
+        );
+
+        let mut value = serde_json::to_value(dfm_profile("jlcpcb-2layer").unwrap()).unwrap();
+        value["id"] = "acme-profile-v1".into();
+        value["aliases"] = serde_json::json!(["acme-profile"]);
+        let mut source = serde_json::to_string(&value).unwrap();
+        source.push_str(&" ".repeat(MAX_DFM_PROFILE_TEXT_BYTES - source.len()));
+        assert_eq!(source.len(), MAX_DFM_PROFILE_TEXT_BYTES);
+        assert!(parse_external_dfm_profile(&source).is_ok());
+
+        source.push(' ');
+        assert!(
+            parse_external_dfm_profile(&source)
+                .unwrap_err()
+                .contains("input limit")
         );
     }
 

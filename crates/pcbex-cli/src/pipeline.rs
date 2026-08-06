@@ -15,9 +15,10 @@ use crate::physical_profile::{
 };
 use crate::policy_pack::parse_policy_pack;
 use pcbex_core::{
-    DfmProfile, PhysicalConstraintProfile, Rules, apply_dfm_profile, apply_physical_profile,
-    checking::CheckReport, checking::check_board, parse_external_dfm_profile,
-    quality::RoutingQuality, quality::routing_quality, validate_dfm_profile,
+    DfmProfile, MAX_DFM_PROFILE_TEXT_BYTES, PhysicalConstraintProfile, Rules, apply_dfm_profile,
+    apply_physical_profile, checking::CheckReport, checking::check_board,
+    parse_external_dfm_profile, quality::RoutingQuality, quality::routing_quality,
+    validate_dfm_profile,
 };
 use pcbex_kicad::{
     ElectricalPolicy, ElectricalReview, apply_custom_design_rules, apply_project_net_settings,
@@ -37,6 +38,7 @@ const MAX_POLICY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_REVIEW_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BOARD_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_ANALYSIS_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_DFM_PROFILE_BYTES: u64 = MAX_DFM_PROFILE_TEXT_BYTES as u64;
 // A receipt repeats normalized quote/findings beside the bounded raw response,
 // and pretty JSON can be substantially larger than the provider's 8 MiB body.
 const MAX_FACTORY_RECEIPT_BYTES: u64 = 64 * 1024 * 1024;
@@ -737,7 +739,7 @@ fn recompute_analysis(
         manifest.dfm_profile_file.as_ref(),
         inputs.analysis_dfm_profile,
         "analysis-dfm-profile",
-        MAX_ANALYSIS_BYTES,
+        MAX_DFM_PROFILE_BYTES,
     )?;
     if let Some(snapshot) = dfm_profile {
         let source = snapshot_utf8(phase, &snapshot, "analysis DFM profile")?;
@@ -1394,14 +1396,30 @@ fn validate_analysis_manifest(manifest: &AnalysisManifest) -> Result<(), String>
     }
     validate_text(&manifest.engine_version, "analysis engine version")?;
     validate_analysis_descriptor(&manifest.input, "analysis input", MAX_BOARD_BYTES)?;
-    for (label, descriptor) in [
-        ("analysis project", manifest.project.as_ref()),
-        ("analysis rules file", manifest.rules_file.as_ref()),
-        ("analysis DFM profile", manifest.dfm_profile_file.as_ref()),
-        ("analysis policy pack", manifest.policy_pack_file.as_ref()),
+    for (label, descriptor, maximum) in [
+        (
+            "analysis project",
+            manifest.project.as_ref(),
+            MAX_ANALYSIS_BYTES,
+        ),
+        (
+            "analysis rules file",
+            manifest.rules_file.as_ref(),
+            MAX_ANALYSIS_BYTES,
+        ),
+        (
+            "analysis DFM profile",
+            manifest.dfm_profile_file.as_ref(),
+            MAX_DFM_PROFILE_BYTES,
+        ),
+        (
+            "analysis policy pack",
+            manifest.policy_pack_file.as_ref(),
+            MAX_ANALYSIS_BYTES,
+        ),
     ] {
         if let Some(descriptor) = descriptor {
-            validate_analysis_descriptor(descriptor, label, MAX_ANALYSIS_BYTES)?;
+            validate_analysis_descriptor(descriptor, label, maximum)?;
         }
     }
     if manifest.configuration.project_settings_loaded != manifest.project.is_some() {
@@ -2313,6 +2331,66 @@ mod tests {
         let parsed: AnalysisManifest = serde_json::from_value(manifest).unwrap();
         let error = validate_analysis_manifest(&parsed).unwrap_err();
         assert!(error.contains("v1 must omit"));
+    }
+
+    #[test]
+    fn analysis_dfm_descriptor_uses_dedicated_limit_without_narrowing_other_inputs() {
+        let profile = pcbex_core::dfm_profile("jlcpcb-2layer").unwrap();
+        let mut manifest = json!({
+            "schema_version": 1,
+            "engine": "pcbex",
+            "engine_version": env!("CARGO_PKG_VERSION"),
+            "command": "analyze-kicad",
+            "input": {"path": "board.kicad_pcb", "bytes": 1, "sha256": "a".repeat(64)},
+            "project": {
+                "path": "board.kicad_pro",
+                "bytes": MAX_ANALYSIS_BYTES,
+                "sha256": "b".repeat(64)
+            },
+            "rules_file": null,
+            "dfm_profile_file": {
+                "path": "dfm-profile.json",
+                "bytes": MAX_DFM_PROFILE_BYTES,
+                "sha256": "c".repeat(64)
+            },
+            "policy_pack_file": null,
+            "configuration": {
+                "rules": {
+                    "grid_nm": 250000,
+                    "track_width_nm": 250000,
+                    "clearance_nm": 200000,
+                    "via_diameter_nm": 600000,
+                    "via_drill_nm": 300000,
+                    "bend_cost": 5,
+                    "via_cost": 20
+                },
+                "project_settings_loaded": true,
+                "applied_custom_rules": 0,
+                "dfm_profile": profile,
+                "organization_policy_pack": null
+            },
+            "result": {
+                "clean": true,
+                "violations": 0,
+                "routed_nets": 0,
+                "unrouted_nets": 0,
+                "total_length_nm": 0,
+                "total_vias": 0
+            },
+            "artifacts": ANALYSIS_ARTIFACTS
+        });
+        let parsed: AnalysisManifest = serde_json::from_value(manifest.clone()).unwrap();
+        assert!(validate_analysis_manifest(&parsed).is_ok());
+
+        manifest["dfm_profile_file"]["bytes"] = (MAX_DFM_PROFILE_BYTES + 1).into();
+        let parsed: AnalysisManifest = serde_json::from_value(manifest.clone()).unwrap();
+        let error = validate_analysis_manifest(&parsed).unwrap_err();
+        assert!(error.contains("analysis DFM profile has an invalid byte count"));
+
+        manifest["dfm_profile_file"]["bytes"] = MAX_DFM_PROFILE_BYTES.into();
+        manifest["project"]["bytes"] = (MAX_ANALYSIS_BYTES + 1).into();
+        let parsed: AnalysisManifest = serde_json::from_value(manifest).unwrap();
+        assert!(validate_analysis_manifest(&parsed).is_err());
     }
 
     #[test]

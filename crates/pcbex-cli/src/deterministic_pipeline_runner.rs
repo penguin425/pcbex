@@ -16,6 +16,7 @@ use crate::manufacturing_limits::{
 use crate::physical_profile::MAX_PHYSICAL_PROFILE_BYTES;
 use crate::pipeline::{PipelineGateReport, PipelineInputs, verify_pipeline};
 use anyhow::{Context, Result, anyhow, bail};
+use pcbex_core::MAX_DFM_PROFILE_TEXT_BYTES;
 use pcbex_kicad::{
     AiReviewArtifactBinding, AiReviewRequest, CIRCUIT_KICAD_BOARD_BINDING_MAX_BOARD_BYTES,
     CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES, CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES,
@@ -52,6 +53,7 @@ pub(crate) const PORTABLE_PLAN_PATH_PATTERN: &str = r#"^(?!/)(?!.*//)(?!.*(?:^|/
 const MAX_POLICY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_REVIEW_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_ANALYSIS_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_DFM_PROFILE_BYTES: u64 = MAX_DFM_PROFILE_TEXT_BYTES as u64;
 const MAX_FACTORY_RECEIPT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FIRMWARE_MANIFEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_CIRCUIT_SPEC_BYTES: u64 = pcbex_kicad::CIRCUIT_SPEC_V2_MAX_BYTES;
@@ -408,7 +410,7 @@ pub(crate) fn load_deterministic_pipeline_plan(path: &Path) -> Result<Determinis
         wire.analysis_dfm_profile,
         &plan_directory,
         "analysis_dfm_profile",
-        MAX_ANALYSIS_BYTES,
+        MAX_DFM_PROFILE_BYTES,
     )?;
     let analysis_policy_pack = resolve_optional_descriptor(
         wire.analysis_policy_pack,
@@ -1287,8 +1289,8 @@ pub(crate) fn descriptor_limit(role: &str) -> u64 {
         | "quality"
         | "analysis_project"
         | "analysis_rules"
-        | "analysis_dfm_profile"
         | "analysis_policy_pack" => MAX_ANALYSIS_BYTES,
+        "analysis_dfm_profile" => MAX_DFM_PROFILE_BYTES,
         "analysis_physical_profile" => MAX_PHYSICAL_PROFILE_BYTES,
         "manufacturing_package" => MAX_PACKAGE_BYTES,
         "firmware_manifest" => MAX_FIRMWARE_MANIFEST_BYTES,
@@ -1667,6 +1669,10 @@ pub(crate) fn deterministic_pipeline_plan_schema() -> Value {
             "quality": descriptor_ref("analysis_descriptor"),
             "analysis_project": optional_ref("analysis_descriptor"),
             "analysis_rules": optional_ref("analysis_descriptor"),
+            // Keep the public plan-v1 wire shape compatible: this role uses
+            // the shared 64 MiB analysis descriptor schema.  The dedicated
+            // 4 MiB limit is enforced by the runtime/compiler descriptor
+            // resolver below, not by a schema-version change.
             "analysis_dfm_profile": optional_ref("analysis_descriptor"),
             "analysis_policy_pack": optional_ref("analysis_descriptor"),
             "analysis_physical_profile": optional_ref("physical_profile_descriptor"),
@@ -2043,6 +2049,20 @@ mod tests {
             plan["$defs"]["physical_profile_descriptor"]["properties"]["bytes"]["maximum"],
             MAX_PHYSICAL_PROFILE_BYTES
         );
+        assert_eq!(
+            plan["$defs"]["analysis_descriptor"]["properties"]["bytes"]["maximum"],
+            MAX_ANALYSIS_BYTES
+        );
+        assert_eq!(
+            plan["properties"]["analysis_dfm_profile"]["oneOf"][1]["$ref"],
+            "#/$defs/analysis_descriptor"
+        );
+        assert!(
+            !plan["$defs"]
+                .as_object()
+                .unwrap()
+                .contains_key("analysis_dfm_profile_descriptor")
+        );
         let report = deterministic_pipeline_report_schema();
         assert_eq!(report["additionalProperties"], false);
         assert!(report["$defs"]["binding_report"]["additionalProperties"] == false);
@@ -2056,6 +2076,76 @@ mod tests {
             report["allOf"][0]["else"]["properties"]["failures"]["minItems"],
             1
         );
+    }
+
+    #[test]
+    fn descriptor_limits_keep_dfm_profile_tight_and_other_analysis_inputs_wide() {
+        assert_eq!(
+            descriptor_limit("analysis_dfm_profile"),
+            MAX_DFM_PROFILE_BYTES
+        );
+        assert_eq!(descriptor_limit("analysis_policy_pack"), MAX_ANALYSIS_BYTES);
+        assert_eq!(descriptor_limit("analysis_project"), MAX_ANALYSIS_BYTES);
+
+        let mut plan = plan_json();
+        plan["analysis_dfm_profile"] = json!({
+            "path": "analysis/dfm-profile.json",
+            "bytes": MAX_DFM_PROFILE_BYTES,
+            "sha256": "a".repeat(64)
+        });
+        let workspace = tempfile::tempdir().unwrap();
+        let plan_path = workspace.path().join("plan.json");
+        fs::write(&plan_path, serde_json::to_vec(&plan).unwrap()).unwrap();
+        fs::create_dir_all(workspace.path().join("analysis")).unwrap();
+        fs::write(
+            workspace.path().join("analysis/dfm-profile.json"),
+            b"fixture",
+        )
+        .unwrap();
+        assert!(load_deterministic_pipeline_plan(&plan_path).is_ok());
+
+        let runtime_path = workspace.path().join("analysis/dfm-runtime.json");
+        let exact_bytes = vec![b'x'; MAX_DFM_PROFILE_BYTES as usize];
+        fs::write(&runtime_path, &exact_bytes).unwrap();
+        let runtime_descriptor = DeterministicPipelineInputDescriptor {
+            path: runtime_path.clone(),
+            bytes: exact_bytes.len() as u64,
+            sha256: digest_hex(&exact_bytes),
+            relative_path: "analysis/dfm-runtime.json".into(),
+        };
+        assert_eq!(
+            read_expected("analysis_dfm_profile", &runtime_descriptor)
+                .unwrap()
+                .bytes
+                .len(),
+            MAX_DFM_PROFILE_BYTES as usize
+        );
+        let oversized_bytes = vec![b'x'; MAX_DFM_PROFILE_BYTES as usize + 1];
+        fs::write(&runtime_path, &oversized_bytes).unwrap();
+        let oversized_descriptor = DeterministicPipelineInputDescriptor {
+            path: runtime_path,
+            bytes: oversized_bytes.len() as u64,
+            sha256: digest_hex(&oversized_bytes),
+            relative_path: "analysis/dfm-runtime.json".into(),
+        };
+        assert!(read_expected("analysis_dfm_profile", &oversized_descriptor).is_err());
+
+        plan["analysis_dfm_profile"]["bytes"] = (MAX_DFM_PROFILE_BYTES + 1).into();
+        fs::write(&plan_path, serde_json::to_vec(&plan).unwrap()).unwrap();
+        let error = load_deterministic_pipeline_plan(&plan_path).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("analysis_dfm_profile descriptor")
+        );
+
+        plan["analysis_dfm_profile"] = json!({
+            "path": "analysis/dfm-profile.json",
+            "bytes": MAX_ANALYSIS_BYTES,
+            "sha256": "a".repeat(64)
+        });
+        fs::write(&plan_path, serde_json::to_vec(&plan).unwrap()).unwrap();
+        assert!(load_deterministic_pipeline_plan(&plan_path).is_err());
     }
 
     #[test]

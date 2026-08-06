@@ -9,11 +9,11 @@ use pcbex_core::placement::{
     PlacementProblem, place, place_candidates,
 };
 use pcbex_core::{
-    AnalysisDelta, Board, CURRENT_SCHEMA_VERSION, DfmProfile, PhysicalConstraintProfile,
-    RoutingCandidateObjective, RoutingCandidateOptions, RoutingCandidateSet, RoutingQuality, Rules,
-    analysis_delta_to_sarif, apply_dfm_profile, apply_physical_profile,
-    apply_physical_profile_to_placement, board_json_schema, dfm_profile, dfm_profile_json_schema,
-    dfm_profiles, impedance_report, migrate_board_json, parse_board_json,
+    AnalysisDelta, Board, CURRENT_SCHEMA_VERSION, DfmProfile, MAX_DFM_PROFILE_TEXT_BYTES,
+    PhysicalConstraintProfile, RoutingCandidateObjective, RoutingCandidateOptions,
+    RoutingCandidateSet, RoutingQuality, Rules, analysis_delta_to_sarif, apply_dfm_profile,
+    apply_physical_profile, apply_physical_profile_to_placement, board_json_schema, dfm_profile,
+    dfm_profile_json_schema, dfm_profiles, impedance_report, migrate_board_json, parse_board_json,
     parse_external_dfm_profile, physical_profile_json_schema, render_svg, repair_routes,
     repairable_net_ids, route_board, route_candidates, routing_quality,
     solve_stackup_differential_width_nm, solve_stackup_width_nm,
@@ -5063,7 +5063,11 @@ fn resolve_dfm_profile(
     external: Option<&Path>,
 ) -> Result<(Option<DfmProfile>, Option<InputDescriptor>)> {
     if let Some(path) = external {
-        let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        let bytes = fs::read_with_limit(path, MAX_DFM_PROFILE_TEXT_BYTES as u64)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if bytes.is_empty() {
+            bail!("external DFM profile {} must not be empty", path.display());
+        }
         let source = std::str::from_utf8(&bytes)
             .with_context(|| format!("decoding {} as UTF-8", path.display()))?;
         let profile = parse_external_dfm_profile(source)
@@ -18570,6 +18574,97 @@ exit 9
             ])
             .is_err()
         );
+    }
+
+    fn external_dfm_profile_source() -> String {
+        let mut value = serde_json::to_value(dfm_profile("jlcpcb-2layer").unwrap()).unwrap();
+        value["id"] = "acme-profile-v1".into();
+        value["aliases"] = serde_json::json!(["acme-profile"]);
+        serde_json::to_string(&value).unwrap()
+    }
+
+    #[test]
+    fn external_dfm_profile_loader_enforces_empty_size_and_duplicate_guards() {
+        let workspace = tempfile::tempdir().unwrap();
+        let empty = workspace.path().join("empty.json");
+        std::fs::write(&empty, []).unwrap();
+        let empty_error = resolve_dfm_profile(None, Some(&empty)).unwrap_err();
+        let empty_error_text = format!("{empty_error:#}");
+        assert!(
+            empty_error_text.contains("must not be empty"),
+            "{empty_error_text}"
+        );
+
+        let duplicate = workspace.path().join("duplicate.json");
+        std::fs::write(
+            &duplicate,
+            r#"{"schema_version":1,"schema_version":1,"id":"acme-profile-v1"}"#,
+        )
+        .unwrap();
+        let duplicate_error = resolve_dfm_profile(None, Some(&duplicate)).unwrap_err();
+        let duplicate_error_text = format!("{duplicate_error:#}");
+        assert!(
+            duplicate_error_text.contains("duplicate JSON object key"),
+            "{duplicate_error_text}"
+        );
+
+        let exact = workspace.path().join("exact.json");
+        let mut exact_source = external_dfm_profile_source();
+        exact_source.push_str(&" ".repeat(MAX_DFM_PROFILE_TEXT_BYTES - exact_source.len()));
+        assert_eq!(exact_source.len(), MAX_DFM_PROFILE_TEXT_BYTES);
+        std::fs::write(&exact, &exact_source).unwrap();
+        let (profile, descriptor) = resolve_dfm_profile(None, Some(&exact)).unwrap();
+        assert_eq!(profile.unwrap().id, "acme-profile-v1");
+        assert_eq!(descriptor.unwrap().bytes, MAX_DFM_PROFILE_TEXT_BYTES);
+
+        exact_source.push(' ');
+        std::fs::write(&exact, &exact_source).unwrap();
+        let oversized_error = resolve_dfm_profile(None, Some(&exact)).unwrap_err();
+        let oversized_error_text = format!("{oversized_error:#}");
+        assert!(
+            oversized_error_text.contains("file limit"),
+            "{oversized_error_text}"
+        );
+    }
+
+    #[test]
+    fn external_dfm_profile_loader_rejects_nonregular_and_symlink_paths() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("directory");
+        std::fs::create_dir(&directory).unwrap();
+        let directory_error = resolve_dfm_profile(None, Some(&directory)).unwrap_err();
+        let directory_error_text = format!("{directory_error:#}");
+        assert!(
+            directory_error_text.contains("regular non-symlink file"),
+            "{directory_error_text}"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let target = workspace.path().join("target.json");
+            std::fs::write(&target, external_dfm_profile_source()).unwrap();
+            let direct = workspace.path().join("direct.json");
+            symlink(&target, &direct).unwrap();
+            let direct_error = resolve_dfm_profile(None, Some(&direct)).unwrap_err();
+            let direct_error_text = format!("{direct_error:#}");
+            assert!(direct_error_text.contains("symlink"), "{direct_error_text}");
+
+            let real_parent = workspace.path().join("real-parent");
+            std::fs::create_dir(&real_parent).unwrap();
+            let linked_parent = workspace.path().join("linked-parent");
+            symlink(&real_parent, &linked_parent).unwrap();
+            let nested = linked_parent.join("profile.json");
+            std::fs::write(
+                real_parent.join("profile.json"),
+                external_dfm_profile_source(),
+            )
+            .unwrap();
+            let nested_error = resolve_dfm_profile(None, Some(&nested)).unwrap_err();
+            let nested_error_text = format!("{nested_error:#}");
+            assert!(nested_error_text.contains("symlink"), "{nested_error_text}");
+        }
     }
 
     #[test]

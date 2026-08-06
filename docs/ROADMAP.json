@@ -749,6 +749,11 @@
     {
       "id": "root-action-live-ai-schematic-quorum",
       "release": "v1.444.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-external-dfm-profile-loader",
+      "release": "v1.445.0",
       "status": "current"
     }
   ]
