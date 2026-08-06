@@ -3191,8 +3191,14 @@ snapshot and runs a second Rust review on the resolved specification. The
 generation bundle is `schema_version: 2` and carries the digest-bound catalog
 receipt when selection is enabled. See
 [`docs/CIRCUIT_GENERATION.md`](docs/CIRCUIT_GENERATION.md) for the v2 contract,
-correction rules, evidence digests, and remaining trust boundaries. The
-snapshot and receipt contracts can be emitted independently:
+correction rules, evidence digests, and remaining trust boundaries.
+
+The v2-to-SKiDL compatibility renderer preserves explicit no-connect pins with
+SKiDL's `NC` singleton assignment before ordinary net wiring; it does not
+invent a regular `NC` net. The public `generate-skidl` command remains the
+schema-v1 adapter, and SKiDL is still an optional runtime dependency.
+
+The snapshot and receipt contracts can be emitted independently:
 
 ```sh
 PYTHONPATH=agent/src python3 -m pcbex_agent catalog-snapshot-schema

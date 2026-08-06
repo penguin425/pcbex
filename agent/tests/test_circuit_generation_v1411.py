@@ -1,15 +1,20 @@
+import ast
+import copy
 import hashlib
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
 from unittest.mock import patch
 
 from pcbex_agent.bounded_process import BoundedProcessResult
 from pcbex_agent.circuit_generation import (
     CircuitCandidateRejected,
     CircuitGenerationError,
+    _compact_json,
+    _validate_check_envelope,
     circuit_generation_json_schema,
     generate_circuit_with_llm,
 )
@@ -57,6 +62,19 @@ def _spec(*, hostile=False):
     }
 
 
+def _spec_with_no_connect():
+    spec = _spec()
+    spec["parts"][0]["pins"].append(
+        {
+            "number": "3",
+            "name": "NC",
+            "net": None,
+            "electrical_type": "no_connect",
+        }
+    )
+    return spec
+
+
 def _review(errors=0, *, approved=None):
     if approved is None:
         approved = errors == 0
@@ -79,6 +97,17 @@ def _review(errors=0, *, approved=None):
             }
             for index in range(errors)
         ],
+    }
+
+
+def _check_envelope(spec):
+    review = _review()
+    return {
+        "schema_version": 1,
+        "circuit_spec_sha256": hashlib.sha256(_compact_json(spec)).hexdigest(),
+        "electrical_review_sha256": hashlib.sha256(_compact_json(review)).hexdigest(),
+        "normalized_spec": spec,
+        "electrical_review": review,
     }
 
 
@@ -395,6 +424,114 @@ class CircuitGenerationV1411Tests(unittest.TestCase):
         self.assertIn('_pcbex_nets["__builtins__"]', first["skidl"])
         self.assertIn(first["circuit_spec_sha256"], first["skidl"])
         self.assertIn(first["electrical_review_sha256"], first["skidl"])
+        self.assertIn("from skidl import Net, Part, generate_netlist", first["skidl"])
+        self.assertNotIn("from skidl import NC,", first["skidl"])
+
+    def test_v2_no_connects_render_as_skidl_nc_before_ordinary_nets(self):
+        spec = _spec_with_no_connect()
+        result = generate_circuit_with_llm(
+            "make a resistor with one intentionally unconnected pin",
+            {"type": "object"},
+            lambda _prompt, _remaining: b'{"candidate":true}',
+            _checker_for(spec),
+        )
+        source = result["skidl"]
+        self.assertIn("from skidl import NC, Net, Part, generate_netlist", source)
+        self.assertIn('_pcbex_parts["R1"]["3"] += NC', source)
+        self.assertNotIn('_pcbex_nets["NC"]', source)
+        self.assertLess(
+            source.index('_pcbex_parts["R1"]["3"] += NC'),
+            source.index('_pcbex_parts["R1"]["1"] += _pcbex_nets["N1"]'),
+        )
+        ast.parse(source)
+        compiled = compile(source, "generated-circuit.py", "exec")
+
+        class FakeNet:
+            def __init__(self, name):
+                self.name = name
+                self.connections = 0
+
+        class FakePin:
+            def __iadd__(self, net):
+                net.connections += 1
+                return self
+
+        class FakePart:
+            def __init__(self, _library, _symbol, *, value, footprint):
+                self.value = value
+                self.footprint = footprint
+                self.pins = {}
+
+            def __getitem__(self, pin):
+                return self.pins.setdefault(pin, FakePin())
+
+            def __setitem__(self, pin, value):
+                self.pins[pin] = value
+
+        fake_skidl = ModuleType("skidl")
+        fake_skidl.NC = FakeNet("NC")
+        fake_skidl.Net = FakeNet
+        fake_skidl.Part = FakePart
+        fake_skidl.generate_netlist = lambda: None
+        namespace = {}
+        with patch.dict(sys.modules, {"skidl": fake_skidl}):
+            exec(compiled, namespace)
+        self.assertEqual(fake_skidl.NC.connections, 1)
+        self.assertEqual(namespace["_pcbex_nets"]["N1"].connections, 2)
+
+    def test_v2_envelope_rejects_forged_no_connect_relationships(self):
+        spec = _spec_with_no_connect()
+        cases = []
+
+        bad = copy.deepcopy(spec)
+        bad["parts"][0]["pins"][2]["electrical_type"] = "passive"
+        cases.append((bad, "null net but is not no-connect"))
+
+        bad = copy.deepcopy(spec)
+        bad["parts"][0]["pins"][2]["net"] = "N1"
+        cases.append((bad, "is no-connect but declares net"))
+
+        bad = copy.deepcopy(spec)
+        bad["nets"][0]["connections"].append({"reference": "R1", "pin": "3"})
+        cases.append((bad, "connects no-connect pin"))
+
+        bad = copy.deepcopy(spec)
+        bad["parts"][0]["pins"][0]["net"] = "N2"
+        cases.append((bad, "declares net"))
+
+        bad = copy.deepcopy(spec)
+        bad["parts"][0]["pins"].append(
+            {
+                "number": "4",
+                "name": "UNWIRED",
+                "net": "N1",
+                "electrical_type": "passive",
+            }
+        )
+        cases.append((bad, "is not connected to its declared net"))
+
+        bad = copy.deepcopy(spec)
+        bad["nets"].append(
+            {
+                "name": "N2",
+                "voltage_uv": None,
+                "connections": [
+                    {"reference": "R1", "pin": "1"},
+                    {"reference": "R1", "pin": "2"},
+                ],
+            }
+        )
+        cases.append((bad, "is connected to multiple nets"))
+
+        bad = copy.deepcopy(spec)
+        bad["nets"][0]["connections"].append({"reference": "R1", "pin": "1"})
+        cases.append((bad, "native net N1 has an invalid connection"))
+
+        for bad, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                CircuitGenerationError, message
+            ):
+                _validate_check_envelope(_check_envelope(bad))
 
     def test_provider_wrapper_preserves_shell_free_argv_and_remaining_float(self):
         result = BoundedProcessResult(("provider", "--arg"), 0, b"{}", b"")

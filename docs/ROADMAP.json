@@ -754,6 +754,11 @@
     {
       "id": "bounded-external-dfm-profile-loader",
       "release": "v1.445.0",
+      "status": "released"
+    },
+    {
+      "id": "strict-skidl-no-connect-adapter",
+      "release": "v1.446.0",
       "status": "current"
     }
   ]

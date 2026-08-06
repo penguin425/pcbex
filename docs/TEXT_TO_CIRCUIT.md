@@ -69,6 +69,14 @@ contract by its schema version and accept nullable catalog receipt fields when
 no snapshot is used. SKiDL remains an optional runtime dependency; the
 generated file can be executed in a separate environment that installs SKiDL.
 
+The compatibility `generate-skidl` command remains a schema-v1 adapter. The
+Rust-gated `generate-circuit` path consumes the checked v2 pin array and keeps
+an explicit `{"net": null, "electrical_type": "no_connect"}` pin as a
+private rendering marker. The generated source imports SKiDL's `NC` singleton
+and assigns it directly to that pin before ordinary net wiring; it never
+creates a normal net named `NC`. This preserves the v2 no-connect meaning
+without changing the byte-for-byte output of schema-v1 generation.
+
 External net names and part references are retained as quoted mapping keys in
 the generated Python instead of being interpolated as Python identifiers. This
 keeps common rail names such as `5V`, punctuation-bearing names such as `USB+`,
