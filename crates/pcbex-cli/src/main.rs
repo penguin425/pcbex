@@ -170,6 +170,7 @@ mod bounded_process;
 mod canary_completion;
 mod deterministic_pipeline_compiler;
 mod deterministic_pipeline_runner;
+mod dfm_profile_binding;
 mod factory;
 mod firmware;
 mod manufacturing_feedback;
@@ -223,6 +224,9 @@ use deterministic_pipeline_runner::{
     load_deterministic_pipeline_plan, run_deterministic_pipeline,
     verify_ai_review_artifact_binding,
 };
+use dfm_profile_binding::{
+    DfmProfileBinding, builtin_dfm_profile_binding, external_dfm_profile_binding,
+};
 use factory::{
     FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
     factory_submission_json_schema, run_factory_feedback_loop, submit_factory_package,
@@ -245,7 +249,7 @@ use manufacturing_limits::{ManufacturingLimits, scan_manufacturing_workspace};
 use manufacturing_package::{
     KiCadIdentity, KiCadProjectInput, collect_staged_artifacts, normalize_kicad_artifacts,
     prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
-    write_manufacturing_package_with_workspace_reservation,
+    write_manufacturing_package_with_profiles,
 };
 use native_kicad_drc::{
     NativeKicadDrcReport, native_kicad_drc_report_schema, native_kicad_drc_report_summary,
@@ -4982,8 +4986,14 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output_dir: PathBuf,
+        /// Built-in fabrication profile ID or stable alias.
+        #[arg(long, conflicts_with_all = ["fab_profile", "physical_profile"])]
+        fab: Option<String>,
+        /// Strict external DFM profile JSON.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "physical_profile"])]
+        fab_profile: Option<PathBuf>,
         /// Revalidate the board against this profile and bind it into the package manifest.
-        #[arg(long, value_name = "PATH")]
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
         physical_profile: Option<PathBuf>,
     },
     /// Print the JSON Schema for factory submission receipts.
@@ -5061,7 +5071,11 @@ fn read(path: &PathBuf) -> Result<Board> {
 fn resolve_dfm_profile(
     name: Option<&str>,
     external: Option<&Path>,
-) -> Result<(Option<DfmProfile>, Option<InputDescriptor>)> {
+) -> Result<(
+    Option<DfmProfile>,
+    Option<DfmProfileBinding>,
+    Option<InputDescriptor>,
+)> {
     if let Some(path) = external {
         let bytes = fs::read_with_limit(path, MAX_DFM_PROFILE_TEXT_BYTES as u64)
             .with_context(|| format!("reading {}", path.display()))?;
@@ -5073,7 +5087,12 @@ fn resolve_dfm_profile(
         let profile = parse_external_dfm_profile(source)
             .map_err(anyhow::Error::msg)
             .with_context(|| format!("validating external DFM profile {}", path.display()))?;
-        return Ok((Some(profile), Some(input_descriptor(path, &bytes))));
+        let binding = external_dfm_profile_binding(&profile, path, &bytes)?;
+        return Ok((
+            Some(profile),
+            Some(binding),
+            Some(input_descriptor(path, &bytes)),
+        ));
     }
     let profile = name
         .map(|name| {
@@ -5089,7 +5108,11 @@ fn resolve_dfm_profile(
             })
         })
         .transpose()?;
-    Ok((profile, None))
+    let binding = profile
+        .as_ref()
+        .map(builtin_dfm_profile_binding)
+        .transpose()?;
+    Ok((profile, binding, None))
 }
 
 fn load_policy_pack(path: &Path) -> Result<(OrganizationPolicyPack, InputDescriptor)> {
@@ -14866,7 +14889,7 @@ fn run_cli() -> Result<()> {
             }
         }
         Command::ValidateDfmProfile { input, output } => {
-            let (profile, _) = resolve_dfm_profile(None, Some(&input))?;
+            let (profile, _, _) = resolve_dfm_profile(None, Some(&input))?;
             let normalized = serde_json::to_string_pretty(
                 &profile.expect("external profile resolution always returns a profile"),
             )?;
@@ -15332,7 +15355,7 @@ fn run_cli() -> Result<()> {
                 .as_ref()
                 .map(|path| load_policy_pack(path))
                 .transpose()?;
-            let (mut dfm_profile, dfm_profile_file) =
+            let (mut dfm_profile, _dfm_profile_binding, dfm_profile_file) =
                 resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?;
             if let Some((pack, _)) = &policy_pack {
                 dfm_profile = Some(pack.dfm_profile.clone());
@@ -16103,8 +16126,12 @@ fn run_cli() -> Result<()> {
         Command::Fabricate {
             input,
             output_dir,
+            fab,
+            fab_profile,
             physical_profile,
         } => {
+            let (dfm_profile, dfm_profile_binding, _dfm_profile_file) =
+                resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?;
             let physical_profile = physical_profile
                 .as_deref()
                 .map(load_physical_profile)
@@ -16116,6 +16143,25 @@ fn run_cli() -> Result<()> {
                 .with_context(|| format!("reading {}", input.display()))?;
             let source = std::str::from_utf8(&input_bytes)
                 .with_context(|| format!("decoding {} as UTF-8", input.display()))?;
+            if let Some(profile) = &dfm_profile {
+                let mut imported = import_kicad(
+                    source,
+                    Rules {
+                        grid_nm: 250_000,
+                        track_width_nm: 250_000,
+                        clearance_nm: 200_000,
+                        via_diameter_nm: 600_000,
+                        via_drill_nm: 300_000,
+                        bend_cost: 5,
+                        via_cost: 20,
+                    },
+                )
+                .map_err(anyhow::Error::msg)
+                .context("importing board for DFM manufacturing gate")?;
+                apply_dfm_profile(&mut imported.board, profile);
+                ensure_clean(&imported.board)
+                    .context("DFM manufacturing gate rejected the board")?;
+            }
             if let Some(loaded) = &physical_profile {
                 let mut imported = import_kicad(
                     source,
@@ -16223,7 +16269,7 @@ fn run_cli() -> Result<()> {
                 .ok_or_else(|| {
                     anyhow::anyhow!("manufacturing workspace entry accounting underflow")
                 })?;
-            let staged_archive = write_manufacturing_package_with_workspace_reservation(
+            let staged_archive = write_manufacturing_package_with_profiles(
                 &staging_dir,
                 &input,
                 &input_bytes,
@@ -16232,6 +16278,7 @@ fn run_cli() -> Result<()> {
                 &exported_artifacts,
                 &kicad_identity,
                 physical_profile.as_ref().map(|loaded| &loaded.binding),
+                dfm_profile_binding.as_ref(),
                 outside_package_bytes,
                 outside_package_entries,
             )?;
@@ -18534,11 +18581,12 @@ exit 9
 
     #[test]
     fn resolves_fabrication_profile_aliases_with_versioned_identity() {
-        let profile = resolve_dfm_profile(Some("pcbway-2layer"), None)
-            .unwrap()
-            .0
-            .unwrap();
+        let (profile, binding, descriptor) =
+            resolve_dfm_profile(Some("pcbway-2layer"), None).unwrap();
+        let profile = profile.unwrap();
         assert_eq!(profile.id, "pcbway-standard-2layer-1oz-v1");
+        assert!(binding.is_some());
+        assert!(descriptor.is_none());
         assert!(resolve_dfm_profile(Some("missing-profile"), None).is_err());
     }
 
@@ -18613,8 +18661,9 @@ exit 9
         exact_source.push_str(&" ".repeat(MAX_DFM_PROFILE_TEXT_BYTES - exact_source.len()));
         assert_eq!(exact_source.len(), MAX_DFM_PROFILE_TEXT_BYTES);
         std::fs::write(&exact, &exact_source).unwrap();
-        let (profile, descriptor) = resolve_dfm_profile(None, Some(&exact)).unwrap();
+        let (profile, binding, descriptor) = resolve_dfm_profile(None, Some(&exact)).unwrap();
         assert_eq!(profile.unwrap().id, "acme-profile-v1");
+        assert!(binding.is_some());
         assert_eq!(descriptor.unwrap().bytes, MAX_DFM_PROFILE_TEXT_BYTES);
 
         exact_source.push(' ');
@@ -18725,6 +18774,68 @@ exit 9
                 ..
             } if path.as_os_str() == "physical.json"
         ));
+
+        let fabrication = parse_cli(&[
+            "pcbex",
+            "fabricate",
+            "board.kicad_pcb",
+            "--output-dir",
+            "manufacturing",
+            "--fab",
+            "jlcpcb-2layer",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *fabrication.command,
+            Command::Fabricate {
+                fab: Some(profile),
+                fab_profile: None,
+                physical_profile: None,
+                ..
+            } if profile == "jlcpcb-2layer"
+        ));
+        assert!(
+            parse_cli(&[
+                "pcbex",
+                "fabricate",
+                "board.kicad_pcb",
+                "--output-dir",
+                "manufacturing",
+                "--fab",
+                "jlcpcb-2layer",
+                "--fab-profile",
+                "profile.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_cli(&[
+                "pcbex",
+                "fabricate",
+                "board.kicad_pcb",
+                "--output-dir",
+                "manufacturing",
+                "--fab-profile",
+                "profile.json",
+                "--physical-profile",
+                "physical.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_cli(&[
+                "pcbex",
+                "fabricate",
+                "board.kicad_pcb",
+                "--output-dir",
+                "manufacturing",
+                "--fab",
+                "jlcpcb-2layer",
+                "--physical-profile",
+                "physical.json",
+            ])
+            .is_err()
+        );
 
         assert!(
             parse_cli(&[

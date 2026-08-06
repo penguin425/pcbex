@@ -759,6 +759,11 @@
     {
       "id": "strict-skidl-no-connect-adapter",
       "release": "v1.446.0",
+      "status": "released"
+    },
+    {
+      "id": "cross-phase-dfm-manufacturing-binding",
+      "release": "v1.447.0",
       "status": "current"
     }
   ]

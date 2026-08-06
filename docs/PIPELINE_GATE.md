@@ -58,7 +58,12 @@ shape remains shared with the neighboring 64 MiB analysis descriptors. This
 runtime preflight applies only to an external profile file. A DFM profile
 embedded in an `--analysis-policy-pack` continues through the policy-pack
 parser and its existing size/validation contract; it is not routed through
-the external-profile loader.
+the external-profile loader. For an external or built-in DFM selected during
+analysis, the manufacturing phase requires the complete matching DFM binding
+in a schema-v3 manufacturing package: profile ID/revision, canonical digest,
+and external origin source descriptor (or the closed built-in origin).
+Policy-pack DFM remains on its existing analysis-only contract and is not part
+of this cross-phase binding.
 
 ## Composite Action parity
 
@@ -132,9 +137,12 @@ unchanged and appends `factory-dfm` as a strict sixth phase:
    entry's byte count and SHA-256, required BOM/CPL/DRC, drill output, Gerber
    job, and complete declared layer set must validate. The embedded input
    descriptor must identify the exact board passed with `--board`. Its optional
-   physical-profile binding must exactly equal the analysis binding. This proves
-   internal ZIP integrity and manifest identity binding; it does not regenerate
-   Gerber/BOM/CPL from the board or establish signed producer provenance.
+   physical-profile binding must exactly equal the analysis binding. When an
+   external or built-in DFM profile is selected, its complete schema-v3 binding
+   must also exactly equal the analysis binding; policy-pack DFM is not checked
+   at this cross-phase boundary. This proves internal ZIP integrity and
+   manifest identity binding; it does not regenerate Gerber/BOM/CPL from the
+   board or establish signed producer provenance.
 5. **firmware-build** strictly validates the generated firmware manifest,
    binds its canonical-IR `schematic_sha256` to the recomputed electrical
    identity, requires the C11, C++17, and Python gates (including each smoke
@@ -158,6 +166,9 @@ schematic bytes -> canonical imported IR identity -> recomputed review
 
 physical profile bytes -> canonical profile identity
                     `-> analysis run -> manufacturing manifest
+
+DFM profile selection -> canonical profile identity
+                    `-> analysis run -> schema-v3 manufacturing manifest
 
 board bytes -> analysis run -> checks + routing quality
           `-> manufacturing manifest -> exact final ZIP digest

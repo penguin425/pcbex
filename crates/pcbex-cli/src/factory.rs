@@ -6,6 +6,8 @@
 //! remain configuration, never source-code secrets.
 
 use crate::bounded_process::{ProcessError, ProcessLimits, run_bounded_with_stdin_file};
+use crate::deterministic_pipeline_runner::reject_duplicate_json_keys;
+use crate::dfm_profile_binding::{DfmProfileBinding, validate_dfm_profile_binding};
 use crate::manufacturing_limits::{
     MAX_ARCHIVE_ENTRIES, MAX_ARCHIVE_UNCOMPRESSED_BYTES, MAX_MANIFEST_BYTES, MAX_PACKAGE_BYTES,
     ManufacturingLimits, portable_manufacturing_name_key, scan_manufacturing_workspace,
@@ -370,6 +372,7 @@ fn run_factory_feedback_loop_with_limits(
     let initial_package = read_package(package_path)?;
     let initial_identity = validate_manufacturing_package(&initial_package)?;
     let initial_physical_profile = initial_identity.physical_profile.clone();
+    let initial_dfm_profile = initial_identity.dfm_profile.clone();
     let workspace = TempfileBuilder::new()
         .prefix("pcbex-factory-loop-")
         .tempdir()
@@ -383,6 +386,9 @@ fn run_factory_feedback_loop_with_limits(
         let current_validation =
             validate_manufacturing_package(&current.bytes).and_then(|identity| {
                 validate_expected_physical_profile(&identity, initial_physical_profile.as_ref())
+                    .and_then(|()| {
+                        validate_expected_dfm_profile(&identity, initial_dfm_profile.as_ref())
+                    })
                     .map(|()| identity)
             });
         if let Err(error) = current_validation {
@@ -500,6 +506,7 @@ fn run_factory_feedback_loop_with_limits(
             bearer_token_env,
             manufacturing_limits: limits.manufacturing,
             expected_physical_profile: initial_physical_profile.as_ref(),
+            expected_dfm_profile: initial_dfm_profile.as_ref(),
         });
         attempt.repair_command_ran = repair.command_ran;
         let candidate = match repair.result {
@@ -582,6 +589,7 @@ struct RepairCommandRequest<'a> {
     bearer_token_env: Option<&'a str>,
     manufacturing_limits: ManufacturingLimits,
     expected_physical_profile: Option<&'a PhysicalProfileBinding>,
+    expected_dfm_profile: Option<&'a DfmProfileBinding>,
 }
 
 fn run_repair_command(request: RepairCommandRequest<'_>) -> RepairCommandOutcome {
@@ -594,6 +602,7 @@ fn run_repair_command(request: RepairCommandRequest<'_>) -> RepairCommandOutcome
         bearer_token_env: _bearer_token_env,
         manufacturing_limits,
         expected_physical_profile,
+        expected_dfm_profile,
     } = request;
     let deadline = match Instant::now().checked_add(timeout) {
         Some(deadline) => deadline,
@@ -759,6 +768,7 @@ fn run_repair_command(request: RepairCommandRequest<'_>) -> RepairCommandOutcome
                     output_package.path(),
                     manufacturing_limits,
                     expected_physical_profile,
+                    expected_dfm_profile,
                 ),
             }
         }
@@ -824,6 +834,7 @@ fn read_validated_repair_output(
     path: &Path,
     manufacturing_limits: ManufacturingLimits,
     expected_physical_profile: Option<&PhysicalProfileBinding>,
+    expected_dfm_profile: Option<&DfmProfileBinding>,
 ) -> Result<Vec<u8>, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("factory repair command did not write output package: {error}"))?;
@@ -855,6 +866,9 @@ fn read_validated_repair_output(
         format!("factory repair output is not a valid manufacturing package: {error}")
     })?;
     validate_expected_physical_profile(&identity, expected_physical_profile).map_err(|error| {
+        format!("factory repair output is not a valid manufacturing package: {error}")
+    })?;
+    validate_expected_dfm_profile(&identity, expected_dfm_profile).map_err(|error| {
         format!("factory repair output is not a valid manufacturing package: {error}")
     })?;
     Ok(package)
@@ -1149,6 +1163,8 @@ struct ManufacturingManifest {
     archive: String,
     #[serde(default)]
     physical_profile: Option<PhysicalProfileBinding>,
+    #[serde(default)]
+    dfm_profile: Option<DfmProfileBinding>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1157,6 +1173,7 @@ pub(crate) struct ManufacturingPackageIdentity {
     pub(crate) input_bytes: u64,
     pub(crate) input_sha256: String,
     pub(crate) physical_profile: Option<PhysicalProfileBinding>,
+    pub(crate) dfm_profile: Option<DfmProfileBinding>,
 }
 
 fn validate_expected_physical_profile(
@@ -1165,6 +1182,16 @@ fn validate_expected_physical_profile(
 ) -> Result<(), String> {
     if identity.physical_profile.as_ref() != expected {
         return Err("factory package physical profile binding changed during repair".into());
+    }
+    Ok(())
+}
+
+fn validate_expected_dfm_profile(
+    identity: &ManufacturingPackageIdentity,
+    expected: Option<&DfmProfileBinding>,
+) -> Result<(), String> {
+    if identity.dfm_profile.as_ref() != expected {
+        return Err("factory package DFM profile binding changed during repair".into());
     }
     Ok(())
 }
@@ -1241,6 +1268,9 @@ fn validate_manufacturing_package_with_expanded_limit(
             "factory package manifest.json must contain 1 to {MAX_MANIFEST_BYTES} bytes"
         ));
     }
+    reject_duplicate_json_keys(&manifest_bytes).map_err(|error| {
+        format!("factory package manifest.json contains duplicate or invalid JSON keys: {error:#}")
+    })?;
     let manifest_value: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| format!("factory package manifest.json is not valid JSON: {error}"))?;
     let manifest: ManufacturingManifest = serde_json::from_value(manifest_value.clone())
@@ -1248,36 +1278,67 @@ fn validate_manufacturing_package_with_expanded_limit(
     let physical_profile_present = manifest_value
         .as_object()
         .is_some_and(|object| object.contains_key("physical_profile"));
-    let physical_profile = match (
+    let dfm_profile_present = manifest_value
+        .as_object()
+        .is_some_and(|object| object.contains_key("dfm_profile"));
+    let (physical_profile, dfm_profile) = match (
         manifest.schema_version,
         physical_profile_present,
         manifest.physical_profile.as_ref(),
+        dfm_profile_present,
+        manifest.dfm_profile.as_ref(),
     ) {
-        (1, false, None) => None,
-        (1, true, _) => {
+        (1, false, None, false, None) => (None, None),
+        (1, true, _, _, _) => {
             return Err(
                 "factory package manifest.json schema_version 1 must omit physical_profile".into(),
             );
         }
-        (2, false, _) => {
+        (1, false, None, true, _) => {
+            return Err(
+                "factory package manifest.json schema_version 1 must omit dfm_profile".into(),
+            );
+        }
+        (2, false, _, false, _) => {
             return Err(
                 "factory package manifest.json schema_version 2 requires physical_profile".into(),
             );
         }
-        (2, true, Some(binding)) => {
+        (2, true, Some(binding), false, None) => {
             validate_physical_profile_binding(binding).map_err(|error| {
                 format!("factory package manifest.json physical_profile is invalid: {error:#}")
             })?;
-            Some(binding.clone())
+            (Some(binding.clone()), None)
         }
-        (2, true, None) => {
+        (2, true, _, true, _) => {
+            return Err(
+                "factory package manifest.json schema_version 2 must omit dfm_profile".into(),
+            );
+        }
+        (2, true, None, false, _) => {
             return Err(
                 "factory package manifest.json schema_version 2 requires physical_profile".into(),
+            );
+        }
+        (3, false, None, true, Some(binding)) => {
+            validate_dfm_profile_binding(binding).map_err(|error| {
+                format!("factory package manifest.json dfm_profile is invalid: {error:#}")
+            })?;
+            (None, Some(binding.clone()))
+        }
+        (3, true, _, _, _) => {
+            return Err(
+                "factory package manifest.json schema_version 3 must omit physical_profile".into(),
+            );
+        }
+        (3, false, None, false, _) | (3, false, None, true, None) => {
+            return Err(
+                "factory package manifest.json schema_version 3 requires dfm_profile".into(),
             );
         }
         _ => {
             return Err(
-                "factory package manifest.json schema_version must be 1 without physical_profile or 2 with physical_profile"
+                "factory package manifest.json schema_version must be 1 without profiles, 2 with physical_profile, or 3 with dfm_profile"
                     .into(),
             );
         }
@@ -1313,6 +1374,7 @@ fn validate_manufacturing_package_with_expanded_limit(
         input_bytes: manifest.input.bytes,
         input_sha256: manifest.input.sha256.clone(),
         physical_profile,
+        dfm_profile,
     };
     let expected_bom_quantity = manifest.parts.bom;
     let expected_placement_rows = manifest.parts.placement;
@@ -2759,6 +2821,77 @@ mod tests {
         }
     }
 
+    fn dfm_profile_binding() -> DfmProfileBinding {
+        crate::dfm_profile_binding::builtin_dfm_profile_binding(
+            &pcbex_core::dfm_profile("jlcpcb-2layer").unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn manufacturing_package_with_dfm_profile() -> Vec<u8> {
+        rewrite_manifest(manufacturing_package(), |manifest| {
+            let binding = dfm_profile_binding();
+            manifest["schema_version"] = json!(3);
+            manifest["dfm_profile"] = serde_json::to_value(binding).unwrap();
+        })
+    }
+
+    fn rewrite_manifest(package: Vec<u8>, edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+        let mut archive = ZipArchive::new(Cursor::new(package)).unwrap();
+        let mut entries = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            entries.push((name, bytes));
+        }
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let mut edit = Some(edit);
+        for (name, mut bytes) in entries {
+            if name == "manifest.json" {
+                let mut manifest: Value = serde_json::from_slice(&bytes).unwrap();
+                edit.take().expect("manifest is present")(&mut manifest);
+                bytes = serde_json::to_vec(&manifest).unwrap();
+            }
+            writer.start_file(name, options).unwrap();
+            writer.write_all(&bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn manifest_bytes(package: &[u8]) -> Vec<u8> {
+        let mut archive = ZipArchive::new(Cursor::new(package)).unwrap();
+        let mut entry = archive.by_name("manifest.json").unwrap();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        bytes
+    }
+
+    fn replace_manifest_bytes(package: Vec<u8>, replacement: &[u8]) -> Vec<u8> {
+        let mut archive = ZipArchive::new(Cursor::new(package)).unwrap();
+        let mut entries = Vec::new();
+        for index in 0..archive.len() {
+            let mut entry = archive.by_index(index).unwrap();
+            let name = entry.name().to_string();
+            let mut bytes = Vec::new();
+            entry.read_to_end(&mut bytes).unwrap();
+            entries.push((name, bytes));
+        }
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        for (name, bytes) in entries {
+            writer.start_file(&name, options).unwrap();
+            if name == "manifest.json" {
+                writer.write_all(replacement).unwrap();
+            } else {
+                writer.write_all(&bytes).unwrap();
+            }
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
     fn spawn_http_fixture(
         status: u16,
         content_type: &str,
@@ -3427,6 +3560,7 @@ mod tests {
                 input_bytes: input.len() as u64,
                 input_sha256: sha256(input),
                 physical_profile: None,
+                dfm_profile: None,
             }
         );
 
@@ -3654,6 +3788,7 @@ mod tests {
             input_bytes: 1,
             input_sha256: "a".repeat(64),
             physical_profile: None,
+            dfm_profile: None,
         };
         let with = ManufacturingPackageIdentity {
             physical_profile: Some(binding.clone()),
@@ -3671,6 +3806,68 @@ mod tests {
             ..without
         };
         assert!(validate_expected_physical_profile(&substituted_identity, Some(&binding)).is_err());
+    }
+
+    #[test]
+    fn validates_dfm_profile_schema_v3_and_rejects_binding_changes() {
+        let package = manufacturing_package_with_dfm_profile();
+        let identity = validate_manufacturing_package(&package).unwrap();
+        let binding = dfm_profile_binding();
+        assert_eq!(identity.dfm_profile, Some(binding.clone()));
+        assert!(validate_expected_dfm_profile(&identity, Some(&binding)).is_ok());
+        assert!(validate_expected_dfm_profile(&identity, None).is_err());
+
+        let mut substituted = binding;
+        substituted.canonical_sha256 = "d".repeat(64);
+        let substituted_identity = ManufacturingPackageIdentity {
+            dfm_profile: Some(substituted),
+            ..identity.clone()
+        };
+        assert!(
+            validate_expected_dfm_profile(&substituted_identity, identity.dfm_profile.as_ref())
+                .is_err()
+        );
+
+        let missing = rewrite_manifest(package.clone(), |manifest| {
+            manifest["dfm_profile"] = Value::Null;
+        });
+        assert!(
+            validate_manufacturing_package(&missing)
+                .unwrap_err()
+                .contains("schema_version 3 requires dfm_profile")
+        );
+
+        let legacy_with_dfm = rewrite_manifest(package, |manifest| {
+            manifest["schema_version"] = json!(1);
+        });
+        assert!(
+            validate_manufacturing_package(&legacy_with_dfm)
+                .unwrap_err()
+                .contains("schema_version 1")
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_top_level_and_nested_dfm_manifest_keys() {
+        let package = manufacturing_package_with_dfm_profile();
+        let manifest = String::from_utf8(manifest_bytes(&package)).unwrap();
+
+        let mut top_level_duplicate = manifest.clone();
+        let end = top_level_duplicate.rfind('}').unwrap();
+        top_level_duplicate.insert_str(end, ",\"dfm_profile\":null");
+        let top_level = replace_manifest_bytes(package.clone(), top_level_duplicate.as_bytes());
+        let error = validate_manufacturing_package(&top_level).unwrap_err();
+        assert!(error.contains("duplicate JSON object key"), "{error}");
+
+        let binding = dfm_profile_binding();
+        let canonical = binding.canonical_sha256;
+        let needle = format!("\"canonical_sha256\":\"{canonical}\"");
+        let replacement = format!("{needle},\"canonical_sha256\":\"{}\"", "0".repeat(64));
+        let nested_duplicate = manifest.replacen(&needle, &replacement, 1);
+        assert_ne!(nested_duplicate, manifest);
+        let nested = replace_manifest_bytes(package, nested_duplicate.as_bytes());
+        let error = validate_manufacturing_package(&nested).unwrap_err();
+        assert!(error.contains("duplicate JSON object key"), "{error}");
     }
 
     #[test]
@@ -3732,6 +3929,7 @@ mod tests {
                 input_bytes: 5,
                 input_sha256: sha256(b"board"),
                 physical_profile: None,
+                dfm_profile: None,
             }
         );
     }
@@ -4521,6 +4719,7 @@ mod tests {
             bearer_token_env: None,
             manufacturing_limits: ManufacturingLimits::production(),
             expected_physical_profile: None,
+            expected_dfm_profile: None,
         });
 
         assert!(!outcome.command_ran);

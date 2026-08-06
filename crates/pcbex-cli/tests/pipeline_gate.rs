@@ -1,3 +1,4 @@
+use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -69,6 +70,86 @@ fn sha256(bytes: &[u8]) -> String {
 
 fn sha256_file(path: &Path) -> String {
     sha256(&fs::read(path).unwrap())
+}
+
+#[derive(Serialize)]
+struct CanonicalDfmProfile {
+    schema_version: u32,
+    id: String,
+    aliases: Vec<String>,
+    revision: u32,
+    verified_on: String,
+    description: String,
+    source_urls: Vec<String>,
+    rules: CanonicalDfmRules,
+}
+
+#[derive(Serialize)]
+struct CanonicalDfmRules {
+    minimum_track_width_nm: u64,
+    minimum_clearance_nm: u64,
+    minimum_drill_nm: u64,
+    minimum_annular_ring_nm: u64,
+    minimum_copper_to_edge_nm: u64,
+    board_thickness_nm: u64,
+    maximum_via_aspect_ratio: u16,
+    minimum_drill_to_drill_nm: u64,
+    allow_via_in_pad: bool,
+    minimum_trace_angle_deg: u16,
+}
+
+fn external_dfm_binding(profile: &Value, source: &Path) -> Value {
+    let rules = &profile["rules"];
+    let canonical = CanonicalDfmProfile {
+        schema_version: profile["schema_version"].as_u64().unwrap() as u32,
+        id: profile["id"].as_str().unwrap().to_string(),
+        aliases: profile["aliases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|alias| alias.as_str().unwrap().to_string())
+            .collect(),
+        revision: profile["revision"].as_u64().unwrap() as u32,
+        verified_on: profile["verified_on"].as_str().unwrap().to_string(),
+        description: profile["description"].as_str().unwrap().to_string(),
+        source_urls: profile["source_urls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|url| url.as_str().unwrap().to_string())
+            .collect(),
+        rules: CanonicalDfmRules {
+            minimum_track_width_nm: rules["minimum_track_width_nm"].as_u64().unwrap(),
+            minimum_clearance_nm: rules["minimum_clearance_nm"].as_u64().unwrap(),
+            minimum_drill_nm: rules["minimum_drill_nm"].as_u64().unwrap(),
+            minimum_annular_ring_nm: rules["minimum_annular_ring_nm"].as_u64().unwrap(),
+            minimum_copper_to_edge_nm: rules["minimum_copper_to_edge_nm"].as_u64().unwrap(),
+            board_thickness_nm: rules["board_thickness_nm"].as_u64().unwrap(),
+            maximum_via_aspect_ratio: rules["maximum_via_aspect_ratio"].as_u64().unwrap() as u16,
+            minimum_drill_to_drill_nm: rules["minimum_drill_to_drill_nm"].as_u64().unwrap(),
+            allow_via_in_pad: rules["allow_via_in_pad"].as_bool().unwrap(),
+            minimum_trace_angle_deg: rules["minimum_trace_angle_deg"].as_u64().unwrap() as u16,
+        },
+    };
+    let canonical_bytes = serde_json::to_vec(&canonical).unwrap();
+    let mut digest = Sha256::new();
+    digest.update(b"pcbex-dfm-profile-v1\0");
+    digest.update(canonical_bytes);
+    let source_bytes = fs::read(source).unwrap();
+    json!({
+        "schema_version": 1,
+        "id": profile["id"],
+        "revision": profile["revision"],
+        "canonical_sha256": hex::encode(digest.finalize()),
+        "origin": {
+            "kind": "external",
+            "source": {
+                "path": source.file_name().unwrap().to_str().unwrap(),
+                "bytes": source_bytes.len(),
+                "sha256": sha256(&source_bytes),
+            }
+        }
+    })
 }
 
 fn read_json(path: &Path) -> Value {
@@ -296,6 +377,20 @@ fn write_manufacturing_package_with_profile(
     board: &Path,
     physical_profile: Option<&Value>,
 ) {
+    write_manufacturing_package_with_profiles(path, board, physical_profile, None);
+}
+
+fn write_manufacturing_package_with_dfm_profile(path: &Path, board: &Path, dfm_profile: &Value) {
+    write_manufacturing_package_with_profiles(path, board, None, Some(dfm_profile));
+}
+
+fn write_manufacturing_package_with_profiles(
+    path: &Path,
+    board: &Path,
+    physical_profile: Option<&Value>,
+    dfm_profile: Option<&Value>,
+) {
+    assert!(physical_profile.is_none() || dfm_profile.is_none());
     let board_bytes = fs::read(board).unwrap();
     let board_name = board.file_name().unwrap().to_str().unwrap();
     let gerber_job = serde_json::to_vec(&json!({
@@ -332,7 +427,13 @@ fn write_manufacturing_package_with_profile(
         ),
     ];
     let mut manifest = json!({
-        "schema_version": if physical_profile.is_some() { 2 } else { 1 },
+        "schema_version": if dfm_profile.is_some() {
+            3
+        } else if physical_profile.is_some() {
+            2
+        } else {
+            1
+        },
         "engine": "pcbex",
         "engine_version": env!("CARGO_PKG_VERSION"),
         "tools": {
@@ -356,6 +457,9 @@ fn write_manufacturing_package_with_profile(
     if let Some(binding) = physical_profile {
         manifest["physical_profile"] = binding.clone();
     }
+    if let Some(binding) = dfm_profile {
+        manifest["dfm_profile"] = binding.clone();
+    }
     let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
@@ -365,6 +469,37 @@ fn write_manufacturing_package_with_profile(
     }
     writer.start_file("manifest.json", options).unwrap();
     writer.write_all(&manifest_bytes).unwrap();
+    fs::write(path, writer.finish().unwrap().into_inner()).unwrap();
+}
+
+fn rewrite_manufacturing_manifest(path: &Path, update: impl FnOnce(&mut Value)) {
+    let original = fs::read(path).unwrap();
+    let mut archive = ZipArchive::new(Cursor::new(original)).unwrap();
+    let mut entries = Vec::new();
+    let mut manifest = None;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        let name = entry.name().to_string();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if name == "manifest.json" {
+            manifest = Some(serde_json::from_slice::<Value>(&bytes).unwrap());
+        }
+        entries.push((name, bytes));
+    }
+    let mut manifest = manifest.expect("manufacturing package must include manifest.json");
+    update(&mut manifest);
+    let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for (name, bytes) in entries {
+        writer.start_file(&name, options).unwrap();
+        if name == "manifest.json" {
+            writer.write_all(&manifest_bytes).unwrap();
+        } else {
+            writer.write_all(&bytes).unwrap();
+        }
+    }
     fs::write(path, writer.finish().unwrap().into_inner()).unwrap();
 }
 
@@ -1170,11 +1305,30 @@ fn pipeline_verify_rejects_unsafe_factory_receipts_and_preserves_an_aliased_outp
 fn pipeline_verify_requires_explicit_analysis_sources_and_ignores_descriptor_paths() {
     let temporary = tempfile::tempdir().unwrap();
     let (mut inputs, _, _) = passing_inputs(temporary.path());
+    let dfm_profile = example("acme-dfm-profile.json");
+    let dfm_value = read_json(&dfm_profile);
+    let unexpected_dfm_binding = external_dfm_binding(&dfm_value, &dfm_profile);
+    rewrite_manufacturing_manifest(&inputs.manufacturing_package, |manifest| {
+        manifest["schema_version"] = json!(3);
+        manifest["dfm_profile"] = unexpected_dfm_binding.clone();
+    });
+    let unexpected_report = temporary.path().join("unexpected-dfm.json");
+    let unexpected = inputs.command(&unexpected_report).output().unwrap();
+    assert!(!unexpected.status.success());
+    let unexpected_report = read_json(&unexpected_report);
+    assert!(
+        phase(&unexpected_report, "manufacturing-package")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("DFM profile binding"))
+    );
+
+    write_manufacturing_package(&inputs.manufacturing_package, &inputs.board);
     let project = temporary.path().join("explicit-project.kicad_pro");
     write_json(&project, &json!({"net_settings": {"classes": []}}));
     let rules = temporary.path().join("explicit-rules.kicad_dru");
     fs::write(&rules, b"(version 1)\n").unwrap();
-    let dfm_profile = example("acme-dfm-profile.json");
     let analysis = temporary.path().join("analysis-with-project");
     let analyze = Command::new(binary())
         .arg("analyze-kicad")
@@ -1194,6 +1348,17 @@ fn pipeline_verify_requires_explicit_analysis_sources_and_ignores_descriptor_pat
     inputs.analysis_manifest = analysis.join("run.json");
     inputs.analysis_checks = analysis.join("checks.json");
     inputs.quality = analysis.join("quality.json");
+
+    let analysis_output = read_json(&inputs.analysis_manifest);
+    let dfm_binding = external_dfm_binding(
+        &analysis_output["configuration"]["dfm_profile"],
+        &dfm_profile,
+    );
+    write_manufacturing_package_with_dfm_profile(
+        &inputs.manufacturing_package,
+        &inputs.board,
+        &dfm_binding,
+    );
 
     let mut manifest = read_json(&inputs.analysis_manifest);
     manifest["project"]["path"] = Value::String("/untrusted/host/secret".into());
@@ -1242,6 +1407,39 @@ fn pipeline_verify_requires_explicit_analysis_sources_and_ignores_descriptor_pat
             .unwrap();
         assert_eq!(descriptor["sha256"], sha256_file(path));
     }
+
+    rewrite_manufacturing_manifest(&inputs.manufacturing_package, |manifest| {
+        manifest["schema_version"] = json!(1);
+        manifest.as_object_mut().unwrap().remove("dfm_profile");
+    });
+    let dropped_report = temporary.path().join("dropped-dfm.json");
+    let dropped = inputs.command(&dropped_report).output().unwrap();
+    assert!(!dropped.status.success());
+    let dropped_report = read_json(&dropped_report);
+    assert!(
+        phase(&dropped_report, "manufacturing-package")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("DFM profile binding"))
+    );
+
+    rewrite_manufacturing_manifest(&inputs.manufacturing_package, |manifest| {
+        manifest["schema_version"] = json!(3);
+        manifest["dfm_profile"] = dfm_binding.clone();
+        manifest["dfm_profile"]["canonical_sha256"] = Value::String("0".repeat(64));
+    });
+    let substituted_report = temporary.path().join("substituted-dfm.json");
+    let substituted = inputs.command(&substituted_report).output().unwrap();
+    assert!(!substituted.status.success());
+    let substituted_report = read_json(&substituted_report);
+    assert!(
+        phase(&substituted_report, "manufacturing-package")["failures"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|failure| failure.as_str().unwrap().contains("DFM profile binding"))
+    );
 }
 
 #[test]

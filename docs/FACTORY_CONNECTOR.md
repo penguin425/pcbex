@@ -18,7 +18,7 @@ hidden `--allow-http-loopback` flag. Bearer tokens are read from the named
 environment variable and are never written to the receipt. Redirects are
 disabled, endpoint query strings/userinfo are rejected, package uploads are
 limited to 128 MiB, and responses to 8 MiB. Before network access, pcbex opens
-the real, non-symlink package file once and verifies the closed schema-v1
+the real, non-symlink package file once and verifies the closed schema-v1/v2/v3
 `manifest.json`, safe and unique ZIP entry names, non-empty descriptors, every
 declared artifact's byte count and SHA-256, a 4,096-entry ceiling, and a 512 MiB
 expanded-artifact ceiling. A complete package must contain BOM, CPL, DRC,
@@ -170,7 +170,10 @@ leave a truthful passing report while the command exits unsuccessfully because
 an optional receipt or package could not be published.
 
 The loop's trust boundary ends at the final ZIP and its matching factory
-receipt. `--final-package` copies exact ZIP bytes; it does not rebuild or
+receipt. For schema-v3 packages the complete DFM binding (including external
+raw source descriptor or built-in origin) must remain unchanged across every
+repair candidate; adding, dropping, or substituting it is rejected. The
+`--final-package` option copies exact ZIP bytes; it does not rebuild or
 silently update a downstream pipeline/run manifest. Run `pipeline-verify`
 against that exact final ZIP with `--factory-receipt` and
 `--require-factory`. This emits the six-phase v2 digest manifest and binds the
