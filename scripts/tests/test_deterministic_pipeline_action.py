@@ -689,10 +689,13 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertIn("  deterministic-pipeline-plan-output:\n", action)
         self.assertIn("  deterministic-pipeline-require-approved:\n", action)
         self.assertIn("  ai-review-generated-schematic:\n", action)
+        self.assertIn("  ai-review-schematic:\n", action)
+        self.assertIn("  ai-review-live-schematic-verified:\n", action)
         self.assertIn("  ai-review-native-kicad-erc-report:\n", action)
         self.assertIn("  ai-review-native-kicad-erc-warning-policy:\n", action)
         self.assertIn("  ai-review-kicad-cli:\n", action)
         self.assertIn("PCBEX_AI_REVIEW_GENERATED_SCHEMATIC", action)
+        self.assertIn("PCBEX_AI_REVIEW_SCHEMATIC", action)
         self.assertIn("PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT", action)
         self.assertIn("PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY", action)
         self.assertIn("PCBEX_AI_REVIEW_KICAD_CLI", action)
@@ -723,6 +726,136 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertIn("run-deterministic-pipeline", script)
         self.assertIn("--mcp-echo-report-summary", script)
         self.assertIn("deterministic_pipeline_summary.py", script)
+
+    def test_live_ai_quorum_forwards_literal_schematic_without_artifact_pipeline(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_SCHEMATIC": "design.kicad_sch",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self._commands(root), ["analyze-kicad", "verify-ai-quorum"])
+        arguments = (root / "arguments").read_text(encoding="utf-8").splitlines()
+        self.assertIn("--schematic=design.kicad_sch", arguments)
+        self.assertNotIn("--generated-schematic", arguments)
+        self.assertNotIn("--deterministic-pipeline-plan", arguments)
+        self.assertNotIn("--deterministic-pipeline-report", arguments)
+        outputs = self._outputs(root / "github-output")
+        self.assertEqual(outputs["ai-review-live-schematic-verified"], "true")
+        self.assertEqual(outputs["ai-review-artifacts-verified"], "")
+
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_SCHEMATIC": "-design.kicad_sch",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(
+            "--schematic=-design.kicad_sch",
+            (root / "arguments").read_text(encoding="utf-8").splitlines(),
+        )
+
+    def test_live_ai_quorum_allows_session_and_default_kicad_cli(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            extra={
+                "PCBEX_POLICY_PACK": "policy-pack.json",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+                "PCBEX_AI_REVIEW_SCHEMATIC": "design.kicad_sch",
+                "PCBEX_AI_REVIEW_SESSION": "session.json",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        arguments = (root / "arguments").read_text(encoding="utf-8").splitlines()
+        session_index = arguments.index("--session")
+        self.assertEqual(arguments[session_index + 1], "session.json")
+        self.assertNotIn("--kicad-cli", arguments)
+
+    def test_live_ai_quorum_requires_policy_and_complete_inputs(self):
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            extra={"PCBEX_AI_REVIEW_SCHEMATIC": "design.kicad_sch"},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+        root, fake_binary = self._prepare_fixture()
+        result = self._run_script(
+            root,
+            fake_binary,
+            plan="",
+            extra={
+                "PCBEX_AI_REVIEW_SCHEMATIC": "design.kicad_sch",
+                "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                "PCBEX_AI_RESPONSE_FILES": "response.json",
+            },
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self._commands(root), [])
+
+    def test_live_ai_quorum_rejects_mixed_artifact_and_deterministic_inputs(self):
+        combinations = (
+            {"PCBEX_AI_REVIEW_GENERATED_SCHEMATIC": "design.kicad_sch"},
+            {"PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT": "native-erc-report.json"},
+            {"PCBEX_DETERMINISTIC_PIPELINE_PLAN": "plan.json"},
+            {
+                "PCBEX_DETERMINISTIC_PIPELINE_INTENT": "intent.json",
+                "PCBEX_DETERMINISTIC_PIPELINE_PLAN_OUTPUT": "compiled-plan.json",
+            },
+            {"PCBEX_DETERMINISTIC_PIPELINE_REQUIRE_APPROVED": "true"},
+        )
+        for incompatible in combinations:
+            with self.subTest(incompatible=incompatible):
+                root, fake_binary = self._prepare_fixture()
+                extra = {
+                    "PCBEX_POLICY_PACK": "policy-pack.json",
+                    "PCBEX_AI_REVIEW_REQUEST": "request.json",
+                    "PCBEX_AI_APPROVAL_FILES": "approval.json",
+                    "PCBEX_AI_RESPONSE_FILES": "response.json",
+                    "PCBEX_AI_REVIEW_SCHEMATIC": "design.kicad_sch",
+                    **incompatible,
+                }
+                result = self._run_script(root, fake_binary, plan="", extra=extra)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self._commands(root), [])
+
+    def test_live_ai_quorum_rejects_blank_or_oversized_schematic_path(self):
+        for value in (" \t", "x" * 4097):
+            with self.subTest(value_length=len(value)):
+                root, fake_binary = self._prepare_fixture()
+                result = self._run_script(
+                    root,
+                    fake_binary,
+                    plan="",
+                    extra={"PCBEX_AI_REVIEW_SCHEMATIC": value},
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self._commands(root), [])
 
     def test_disabled_runner_does_not_invoke_child_and_clears_outputs(self):
         root, result, outputs = self._valid_run(plan="", mode="approved")
@@ -1222,6 +1355,7 @@ class DeterministicPipelineActionTests(unittest.TestCase):
         self.assertNotIn("--kicad-cli", arguments)
         outputs = self._outputs(root / "github-output")
         self.assertEqual(outputs["ai-review-artifacts-verified"], "")
+        self.assertEqual(outputs["ai-review-live-schematic-verified"], "")
         self.assertEqual(outputs["ai-review-native-kicad-erc-report-bytes"], "")
         self.assertEqual(outputs["ai-review-native-kicad-erc-report-sha256"], "")
         self.assertEqual(outputs["ai-review-native-kicad-erc-run-sha256"], "")

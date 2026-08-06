@@ -282,9 +282,25 @@ Python review adapter accepts request schemas v1 through v4,
 treats artifact identities as untrusted evidence rather than instructions, and
 continues to require response schema v1.
 
-For the root composite Action, set `ai-review-generated-schematic` together
-with `deterministic-pipeline-plan` and the complete AI quorum inputs. To opt
-into schema v3, also set `ai-review-native-kicad-erc-report` and optionally
+For the root composite Action, schema v1 can explicitly bind a live source by
+setting `ai-review-schematic` with the complete AI quorum inputs and a policy
+source. The Action passes the path to `verify-ai-quorum --schematic`, which
+imports the live source and freshly recomputes the deterministic electrical
+review before accepting signatures. `ai-review-live-schematic-verified`
+becomes `true` only after that gate succeeds. This mode is mutually exclusive
+with `ai-review-generated-schematic`, native ERC review evidence, and the
+deterministic-pipeline intent, plan, and retained artifact inputs used by the
+artifact-bound review path. An optional review session and the quorum
+threshold inputs remain available.
+
+The root Action reuses the CLI's bounded stable reads and semantic verifier,
+but its general analysis workflow is not one atomic snapshot of every review
+input. Use an isolated trusted workspace, and use the focused boardless Action
+when the smaller aggregate-input snapshot and publication boundary is needed.
+
+For schemas v2 through v4, set `ai-review-generated-schematic` together with
+`deterministic-pipeline-plan` and the complete AI quorum inputs. To opt into
+schema v3, also set `ai-review-native-kicad-erc-report` and optionally
 `ai-review-kicad-cli`. The Action runs the deterministic pipeline, reads the
 retained native report, and passes both artifacts to `verify-ai-quorum`, which
 reruns native ERC before accepting signatures. It never accepts a
@@ -295,8 +311,9 @@ To opt into schema v4, also set
 policy-failure counts, canonical policy SHA-256, and exact policy-source
 byte/SHA identity after the CLI's fresh verification succeeds.
 
-The Action output `ai-review-artifacts-verified` becomes `true` only after the
-live artifact gate succeeds. The raw plan source is reported separately as
+The Action output `ai-review-artifacts-verified` remains reserved for a
+successful schema-v2-through-v4 artifact gate; it is not reused for the
+schema-v1 live-source result. The raw plan source is reported separately as
 `ai-review-pipeline-plan-source-bytes` and
 `ai-review-pipeline-plan-source-sha256`; the normalized semantic identity is
 `ai-review-pipeline-plan-sha256`. Generated-schematic and retained-report
@@ -304,5 +321,5 @@ byte/SHA outputs plus `ai-review-pipeline-run-sha256` complete the evidence.
 When native ERC is enabled, `ai-review-native-kicad-erc-report-bytes`,
 `ai-review-native-kicad-erc-report-sha256`, and
 `ai-review-native-kicad-erc-run-sha256` are also published.
-Existing request-schema-v1 Action workflows omit
-`ai-review-generated-schematic` and retain their prior behavior.
+Existing request-schema-v1 Action workflows that omit `ai-review-schematic`
+and `ai-review-generated-schematic` retain their prior unbound behavior.

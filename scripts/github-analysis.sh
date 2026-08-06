@@ -178,6 +178,7 @@ write_output schematic-review-all-routed ""
 write_output ai-approval-quorum ""
 write_output ai-approval-quorum-met ""
 write_output ai-review-artifacts-verified ""
+write_output ai-review-live-schematic-verified ""
 write_output ai-review-generated-schematic-bytes ""
 write_output ai-review-generated-schematic-sha256 ""
 write_output ai-review-pipeline-plan-source-bytes ""
@@ -287,8 +288,10 @@ native_kicad_drc_report_bytes=""
 native_kicad_drc_report_sha256=""
 native_kicad_drc_rc=0
 native_kicad_drc_summary_json=""
+ai_review_schematic="${PCBEX_AI_REVIEW_SCHEMATIC:-}"
 ai_review_generated_schematic="${PCBEX_AI_REVIEW_GENERATED_SCHEMATIC:-}"
 ai_review_artifacts_verified=""
+ai_review_live_schematic_verified=""
 ai_review_generated_schematic_bytes=""
 ai_review_generated_schematic_sha256=""
 ai_review_pipeline_plan_source_bytes=""
@@ -368,6 +371,40 @@ if [[ -n "${PCBEX_AI_RESPONSE_FILES:-}" ]]; then ((ai_quorum_inputs += 1)); fi
 if ((ai_quorum_inputs != 0 && ai_quorum_inputs != 3)); then
   echo "PCBEX_AI_REVIEW_REQUEST, PCBEX_AI_APPROVAL_FILES, and PCBEX_AI_RESPONSE_FILES must be supplied together" >&2
   exit 2
+fi
+if [[ -n "$ai_review_schematic" ]]; then
+  if [[ "$ai_review_schematic" =~ ^[[:space:]]*$ ]]; then
+    echo "PCBEX_AI_REVIEW_SCHEMATIC must not be blank" >&2
+    exit 2
+  fi
+  if [[ "$ai_review_schematic" =~ [[:cntrl:]] ]]; then
+    echo "PCBEX_AI_REVIEW_SCHEMATIC must not contain control characters" >&2
+    exit 2
+  fi
+  if ((${#ai_review_schematic} > 4096)); then
+    echo "PCBEX_AI_REVIEW_SCHEMATIC exceeds the 4096-character path bound" >&2
+    exit 2
+  fi
+  if ((ai_quorum_inputs != 3)); then
+    echo "PCBEX_AI_REVIEW_SCHEMATIC requires the complete AI quorum input set" >&2
+    exit 2
+  fi
+  if [[ -n "$ai_review_generated_schematic" ]]; then
+    echo "PCBEX_AI_REVIEW_SCHEMATIC is mutually exclusive with PCBEX_AI_REVIEW_GENERATED_SCHEMATIC" >&2
+    exit 2
+  fi
+  if [[ -n "$ai_review_native_kicad_erc_report" ||
+    -n "$ai_review_native_kicad_erc_warning_policy" ]]; then
+    echo "PCBEX_AI_REVIEW_SCHEMATIC is mutually exclusive with AI-bound native KiCad ERC evidence" >&2
+    exit 2
+  fi
+  if [[ -n "$deterministic_pipeline_plan" ||
+    -n "$deterministic_pipeline_intent" ||
+    -n "$deterministic_pipeline_plan_output" ||
+    "$deterministic_pipeline_require_approved" == "true" ]]; then
+    echo "PCBEX_AI_REVIEW_SCHEMATIC is mutually exclusive with deterministic pipeline plan inputs" >&2
+    exit 2
+  fi
 fi
 if [[ -n "${PCBEX_AI_REVIEW_SESSION:-}" ]] && ((ai_quorum_inputs != 3)); then
   echo "PCBEX_AI_REVIEW_SESSION requires the complete AI quorum input set" >&2
@@ -3524,7 +3561,9 @@ if ((ai_quorum_inputs == 3)); then
   if [[ -n "${PCBEX_AI_REVIEW_SESSION:-}" ]]; then
     quorum_arguments+=(--session "$PCBEX_AI_REVIEW_SESSION")
   fi
-  if [[ -n "$ai_review_generated_schematic" ]]; then
+  if [[ -n "$ai_review_schematic" ]]; then
+    quorum_arguments+=("--schematic=$ai_review_schematic")
+  elif [[ -n "$ai_review_generated_schematic" ]]; then
     quorum_arguments+=(
       --generated-schematic "$ai_review_generated_schematic"
       --deterministic-pipeline-plan "$deterministic_pipeline_plan"
@@ -3566,6 +3605,9 @@ if ((ai_quorum_inputs == 3)); then
     ai_review_artifacts_verified=true
     ai_review_pipeline_plan_sha256="$deterministic_pipeline_plan_sha256"
     ai_review_pipeline_run_sha256="$deterministic_pipeline_run_sha256"
+  fi
+  if [[ -n "$ai_review_schematic" ]]; then
+    ai_review_live_schematic_verified=true
   fi
   {
     printf '\n'
@@ -4791,6 +4833,7 @@ write_output schematic-review-all-routed "$schematic_review_all_routed"
 write_output ai-approval-quorum "$ai_approval_quorum"
 write_output ai-approval-quorum-met "$ai_approval_quorum_met"
 write_output ai-review-artifacts-verified "$ai_review_artifacts_verified"
+write_output ai-review-live-schematic-verified "$ai_review_live_schematic_verified"
 write_output ai-review-generated-schematic-bytes "$ai_review_generated_schematic_bytes"
 write_output ai-review-generated-schematic-sha256 "$ai_review_generated_schematic_sha256"
 write_output ai-review-pipeline-plan-source-bytes "$ai_review_pipeline_plan_source_bytes"
