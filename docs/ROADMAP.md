@@ -156,6 +156,7 @@ auditable release.
 | v1.442.0 | AI schematic approval live signing parity | Extend the bounded schema-v1 live KiCad schematic binding to `sign-ai-review --schematic` and MCP `sign_schematic_approval`, completing semantic and fresh electrical-review verification before private-key access while leaving wire schemas and schema-v2 through v4 artifact paths unchanged |
 | v1.443.0 | AI schematic approval signing preflight | Validate every public response, signer, optional session, selected evidence, and destination before private-key access; sign and atomically publish legitimate rejected approvals, refuse output clobbering while preserving existing files/symlinks, and leave schemas and schema-v2 through v4 artifact paths unchanged |
 | v1.444.0 | Root Action live AI schematic quorum | Add an explicit schema-v1 live-schematic quorum input to the root Action, freshly verify semantic and electrical-review binding, publish a distinct live verification result, and reject mixing with schema-v2-through-v4 artifact, native-ERC, or deterministic-pipeline review inputs |
+| v1.445.0 | Bounded external DFM profile loader | Route every external fabrication-profile entry point through one 4 MiB stable regular-file reader, reject direct or ancestor symlinks and duplicate JSON keys, and preserve built-in and policy-pack profile behavior without changing DFM or manifest schemas; the embedded DFM object in a policy pack remains on its separate parser/size contract |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -568,7 +569,7 @@ but input verification, private-key access, and publication are not one
 atomic filesystem transaction. Root-Action live quorum input remains a later
 v1.444 boundary.
 
-The current v1.444.0 milestone adds that explicit live-source boundary to the
+The released v1.444.0 milestone adds that explicit live-source boundary to the
 root composite Action. The optional `ai-review-schematic` input selects the
 schema-v1 `verify-ai-quorum --schematic` path and publishes the distinct
 `ai-review-live-schematic-verified` result only after the live schematic's
@@ -578,3 +579,15 @@ exclusive with generated-schematic, deterministic-pipeline artifact, and
 native-ERC evidence used by schemas v2 through v4. The existing
 `ai-review-artifacts-verified` output keeps its v2-through-v4 meaning, and the
 focused verification-only Action remains unchanged.
+
+The current v1.445.0 milestone hardens external DFM profile ingestion before
+the profile reaches analysis, routing, candidate generation, or standalone DFM
+checks. Every `--fab-profile` path and `validate-dfm-profile` uses one bounded
+stable reader with a 4 MiB ceiling, rejects empty, non-regular, directly or
+ancestor-symlinked, and changing inputs, and parses JSON with duplicate object
+key rejection before the existing closed semantic validator. Built-in
+profiles and organization policy-pack resolution retain their existing
+behavior. The embedded DFM object inside a policy pack is intentionally not
+treated as an external profile file and remains on the policy-pack parser/size
+contract. This release does not yet add a DFM identity to fabrication or
+manufacturing manifests; that remains the next cross-phase binding boundary.

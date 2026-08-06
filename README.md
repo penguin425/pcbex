@@ -2828,11 +2828,18 @@ External profiles use `schema_version: 1`, a stable lowercase ID, optional
 aliases, a positive revision, a real `YYYY-MM-DD` verification date, at least
 one HTTPS source, and a complete manufacturing-rules object. Unknown fields,
 invalid dimensions, duplicate names or sources, and collisions with built-in
-IDs or aliases fail closed. `--fab-profile` is supported by KiCad analysis,
-routing, route-candidate generation, board DFM checks, the composite Action,
-and the corresponding MCP analysis and routing tools. Analysis manifests bind
-both the normalized resolved profile and the source file's path, byte length,
-and SHA-256 digest.
+IDs or aliases fail closed. External profile files are limited to 4 MiB and
+must be non-empty, stable regular files reached without a direct or ancestor
+symbolic link; duplicate JSON object keys are rejected before semantic
+validation. `--fab-profile` is supported by KiCad analysis, routing,
+route-candidate generation, board DFM checks, the composite Action, and the
+corresponding MCP analysis and routing tools. Analysis manifests bind both the
+normalized resolved profile and the source file's path, byte length, and
+SHA-256 digest. Fabrication and manufacturing manifests do not yet bind this
+DFM identity; use a physical profile when the same constraints must be proven
+across those phases. This 4 MiB external-file boundary does not apply to the
+DFM object embedded inside an organization policy pack; policy-pack loading
+and validation retain their separate existing contract.
 
 ### Physical constraint profiles
 
@@ -2887,7 +2894,9 @@ board DFM checking, schematic checking, AI-review preparation, approval
 verification, the composite Action, and the corresponding MCP analysis,
 routing, preparation, and verification tools. It is mutually exclusive with
 ad-hoc policy/profile overrides. Analysis manifests bind the pack ID, resolved
-DFM rules, source path, byte length, and SHA-256 digest.
+DFM rules, source path, byte length, and SHA-256 digest. Its embedded DFM
+profile is intentionally handled by the policy-pack parser rather than the
+external `--fab-profile` 4 MiB file loader.
 
 Authenticate packs before distributing them to CI:
 

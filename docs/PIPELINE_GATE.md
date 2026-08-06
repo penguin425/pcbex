@@ -52,6 +52,14 @@ loose manufacturing manifest. Use
 `pcbex pipeline-schema --factory` for the closed v2 schema. Schema output also
 follows the no-clobber rules described below.
 
+The external `--analysis-dfm-profile` source is additionally capped at 4 MiB
+when the gate snapshots it, while the schema-v1 `analysis_descriptor` wire
+shape remains shared with the neighboring 64 MiB analysis descriptors. This
+runtime preflight applies only to an external profile file. A DFM profile
+embedded in an `--analysis-policy-pack` continues through the policy-pack
+parser and its existing size/validation contract; it is not routed through
+the external-profile loader.
+
 ## Composite Action parity
 
 The repository composite Action keeps pipeline verification opt-in. Set
