@@ -114,9 +114,14 @@ bounds and revalidation requirements.
   session, and signed-approval schemas and the schema-v2 through v4 artifact
   paths are unchanged. Verification, key access, and publication are still
   separate filesystem operations rather than one atomic transaction.
-- Root-Action live quorum input is intentionally deferred to the v1.444
-  boundary; this focused Action does not accept a signing secret or perform
-  signing.
+- Version 1.444.0 adds an explicit `ai-review-schematic` live-source input and
+  `ai-review-live-schematic-verified` result to the root composite Action. It
+  uses the same schema-v1 semantic and fresh-review gate, while remaining
+  mutually exclusive with the root Action's schema-v2-through-v4 artifact
+  inputs. This focused Action remains the smaller boardless verifier and does
+  not accept a signing secret or perform signing. It also retains its ordered
+  aggregate-input snapshot checks; the root Action instead uses the CLI's
+  bounded stable reads inside the broader general analysis workflow.
 - AI provider execution and response normalization remain separate steps.
 - The verification path has no provider/network input. Like the other source
   Actions, its build step may use the runner's configured Rust toolchain and

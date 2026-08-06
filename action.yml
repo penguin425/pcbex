@@ -762,6 +762,10 @@ inputs:
     description: Optional digest-bound AI schematic-review request used for quorum verification.
     required: false
     default: ""
+  ai-review-schematic:
+    description: Optional live .kicad_sch whose semantic content is freshly bound to a schema-v1 AI review request; requires the complete AI quorum set and a policy source, and cannot be combined with generated-artifact, native-ERC, or deterministic-pipeline review inputs.
+    required: false
+    default: ""
   ai-review-generated-schematic:
     description: Optional generated .kicad_sch whose exact bytes are bound by a schema-v2 AI review request; requires the complete AI quorum set and deterministic-pipeline-plan.
     required: false
@@ -1497,6 +1501,9 @@ outputs:
   ai-review-artifacts-verified:
     description: Whether the AI quorum was verified against the exact generated schematic and a fresh deterministic pipeline report.
     value: ${{ steps.analyze.outputs.ai-review-artifacts-verified }}
+  ai-review-live-schematic-verified:
+    description: Whether the schema-v1 AI quorum was freshly verified against the supplied live KiCad schematic.
+    value: ${{ steps.analyze.outputs.ai-review-live-schematic-verified }}
   ai-review-generated-schematic-bytes:
     description: Exact byte count of the generated schematic bound by the AI review request.
     value: ${{ steps.analyze.outputs.ai-review-generated-schematic-bytes }}
@@ -1855,6 +1862,7 @@ runs:
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_BEARER_TOKEN: ${{ inputs.policy-lifecycle-log-remote-gossip-bearer-token }}
         PCBEX_POLICY_LIFECYCLE_LOG_REMOTE_GOSSIP_TIMEOUT_SECONDS: ${{ inputs.policy-lifecycle-log-remote-gossip-timeout-seconds }}
         PCBEX_AI_REVIEW_REQUEST: ${{ inputs.ai-review-request }}
+        PCBEX_AI_REVIEW_SCHEMATIC: ${{ inputs.ai-review-schematic }}
         PCBEX_AI_REVIEW_GENERATED_SCHEMATIC: ${{ inputs.ai-review-generated-schematic }}
         PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_REPORT: ${{ inputs.ai-review-native-kicad-erc-report }}
         PCBEX_AI_REVIEW_NATIVE_KICAD_ERC_WARNING_POLICY: ${{ inputs.ai-review-native-kicad-erc-warning-policy }}

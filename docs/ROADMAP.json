@@ -744,6 +744,11 @@
     {
       "id": "ai-schematic-approval-signing-preflight",
       "release": "v1.443.0",
+      "status": "released"
+    },
+    {
+      "id": "root-action-live-ai-schematic-quorum",
+      "release": "v1.444.0",
       "status": "current"
     }
   ]

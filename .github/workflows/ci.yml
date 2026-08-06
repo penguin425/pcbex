@@ -910,6 +910,38 @@ jobs:
           artifact-name: pcbex-action-smoke
           pr-comment: "false"
           comment-id: action-smoke
+      - name: Exercise root live schematic quorum binding
+        id: live-ai-quorum
+        uses: ./
+        with:
+          board: examples/simple.kicad_pcb
+          schematic: crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch
+          baseline-schematic: crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch
+          schematic-reviewer-routing-policy: examples/reviewer-routing-policy.json
+          policy-pack: build/action-quorum/policy-pack.json
+          ai-review-request: build/action-quorum/request.json
+          ai-review-schematic: crates/pcbex-cli/tests/fixtures/approved-mcu.kicad_sch
+          ai-review-session: build/action-quorum/session.json
+          ai-approval-files: |
+            build/action-quorum/approval-a.json
+            build/action-quorum/approval-b.json
+          ai-response-files: |
+            build/action-quorum/response-a.json
+            build/action-quorum/response-b.json
+          output-dir: build/action-live-ai-quorum
+          fail-on-violations: "false"
+          fail-on-regressions: "false"
+          upload-artifact: "false"
+          pr-comment: "false"
+      - name: Verify root live schematic quorum outputs
+        env:
+          QUORUM_REPORT: ${{ steps.live-ai-quorum.outputs.ai-approval-quorum }}
+          LIVE_SCHEMATIC_VERIFIED: ${{ steps.live-ai-quorum.outputs.ai-review-live-schematic-verified }}
+          ARTIFACTS_VERIFIED: ${{ steps.live-ai-quorum.outputs.ai-review-artifacts-verified }}
+        run: |
+          test -s "$QUORUM_REPORT"
+          test "$LIVE_SCHEMATIC_VERIFIED" = "true"
+          test -z "$ARTIFACTS_VERIFIED"
       - name: Verify action outputs
         env:
           ARTIFACT_DIR: ${{ steps.pcbex.outputs.artifact-dir }}

@@ -2467,8 +2467,17 @@ Only after that gate succeeds, the Action exposes
 source byte/SHA outputs, normalized `ai-review-pipeline-plan-sha256`, retained
 report byte/SHA outputs, and `ai-review-pipeline-run-sha256`. Omitting the
 generated schematic preserves request-schema-v1 behavior for this artifact
-flow; live schematic binding remains an explicit focused-Action, CLI, or MCP
-choice.
+flow.
+
+Version 1.444 adds the explicit `ai-review-schematic` input to the root Action
+for schema-v1 live-source verification. It requires the complete quorum and
+policy inputs, invokes the existing semantic and fresh electrical-review gate,
+and exposes `ai-review-live-schematic-verified=true` only after that gate
+succeeds. Live mode cannot be combined with the generated-schematic,
+deterministic-pipeline artifact, or native-ERC review inputs used by schemas v2
+through v4. `ai-review-artifacts-verified` remains reserved for the
+artifact-bound path. The focused boardless Action, CLI, and MCP live-source
+surfaces remain available.
 
 Violation and regression gates run only after uploads and comment updates, so
 a failed PR check still retains the JSON, SVG, SARIF, summaries, and provenance
