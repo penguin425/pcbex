@@ -42,7 +42,11 @@ from .provider import (
     MAXIMUM_TIMEOUT_SECONDS,
     run_provider_command,
 )
-from .skidl import CircuitSpecError, generate_skidl, validate_circuit_spec
+from .skidl import (
+    CircuitSpecError,
+    _generate_skidl_with_no_connects,
+    validate_circuit_spec,
+)
 
 
 GENERATION_SCHEMA_VERSION = 2
@@ -203,6 +207,7 @@ def _validate_v2_spec(value: Any) -> dict[str, Any]:
         raise CircuitGenerationError("native normalized_spec nets must be an array")
 
     references: set[str] = set()
+    known_pins: dict[tuple[str, str], tuple[str | None, str]] = {}
     for part in parts:
         expected = {"reference", "lib_id", "value", "footprint", "mpn", "power", "pins"}
         if not isinstance(part, dict) or set(part) != expected:
@@ -245,6 +250,7 @@ def _validate_v2_spec(value: Any) -> dict[str, Any]:
         if not isinstance(pins, list) or not pins:
             raise CircuitGenerationError(f"native part {reference} pins must be an array")
         seen_numbers: set[str] = set()
+        has_non_no_connect = False
         for pin in pins:
             pin_keys = {"number", "name", "net", "electrical_type"}
             if not isinstance(pin, dict) or set(pin) != pin_keys:
@@ -273,8 +279,26 @@ def _validate_v2_spec(value: Any) -> dict[str, Any]:
             net = pin["net"]
             if net is not None and (not isinstance(net, str) or not net.strip()):
                 raise CircuitGenerationError(f"native part {reference} has invalid pin net")
+            electrical_type = pin["electrical_type"]
+            if net is None:
+                if electrical_type != "no_connect":
+                    raise CircuitGenerationError(
+                        f"native part {reference} pin {number} has a null net but is not no-connect"
+                    )
+            elif electrical_type == "no_connect":
+                raise CircuitGenerationError(
+                    f"native part {reference} pin {number} is no-connect but declares net {net}"
+                )
+            else:
+                has_non_no_connect = True
+            known_pins[(reference, number)] = (net, electrical_type)
+        if not has_non_no_connect:
+            raise CircuitGenerationError(
+                f"native part {reference} must contain a non-no-connect pin"
+            )
 
     net_names: set[str] = set()
+    connected: set[tuple[str, str]] = set()
     for net in nets:
         if not isinstance(net, dict) or set(net) != {"name", "voltage_uv", "connections"}:
             raise CircuitGenerationError("native normalized_spec net has an unexpected shape")
@@ -303,7 +327,31 @@ def _validate_v2_spec(value: Any) -> dict[str, Any]:
                 or (reference, pin) in seen
             ):
                 raise CircuitGenerationError(f"native net {name} has an invalid connection")
+            declared = known_pins.get((reference, pin))
+            if declared is None:
+                raise CircuitGenerationError(
+                    f"native net {name} references unknown {reference}.{pin}"
+                )
+            declared_net, electrical_type = declared
+            if electrical_type == "no_connect":
+                raise CircuitGenerationError(
+                    f"native net {name} connects no-connect pin {reference}.{pin}"
+                )
+            if (reference, pin) in connected:
+                raise CircuitGenerationError(
+                    f"{reference}.{pin} is connected to multiple nets"
+                )
+            if declared_net != name:
+                raise CircuitGenerationError(
+                    f"{reference}.{pin} declares net {declared_net!r} but is connected to {name}"
+                )
             seen.add((reference, pin))
+            connected.add((reference, pin))
+    for (reference, pin), (declared_net, _electrical_type) in known_pins.items():
+        if declared_net is not None and (reference, pin) not in connected:
+            raise CircuitGenerationError(
+                f"{reference}.{pin} is not connected to its declared net"
+            )
     return value
 
 
@@ -430,14 +478,29 @@ def _validate_check_envelope(value: Any) -> tuple[dict[str, Any], int]:
     return normalized, int(review["counts"]["errors"])
 
 
-def _v2_to_v1(value: Mapping[str, Any]) -> dict[str, Any]:
-    """Map the native v2 pin-array contract into the existing v1 renderer."""
+def _v2_to_v1(
+    value: Mapping[str, Any],
+) -> tuple[dict[str, Any], tuple[tuple[str, str], ...]]:
+    """Map v2 pins to v1 while retaining explicit no-connects separately."""
 
     parts: list[dict[str, Any]] = []
+    no_connects: list[tuple[str, str]] = []
     for part in value["parts"]:
         pins: dict[str, str] = {}
         for pin in part["pins"]:
-            if pin["net"] is not None:
+            net = pin["net"]
+            electrical_type = pin["electrical_type"]
+            if net is None:
+                if electrical_type != "no_connect":
+                    raise CircuitGenerationError(
+                        f"native part {part['reference']} pin {pin['number']} has a null net but is not no-connect"
+                    )
+                no_connects.append((part["reference"], pin["number"]))
+            else:
+                if electrical_type == "no_connect":
+                    raise CircuitGenerationError(
+                        f"native part {part['reference']} pin {pin['number']} is no-connect but declares net {net}"
+                    )
                 pins[pin["number"]] = pin["net"]
         parts.append(
             {
@@ -454,13 +517,14 @@ def _v2_to_v1(value: Mapping[str, Any]) -> dict[str, Any]:
         for net in value["nets"]
     ]
     try:
-        return validate_circuit_spec(
+        normalized = validate_circuit_spec(
             {"schema_version": 1, "parts": parts, "nets": nets}
         )
     except CircuitSpecError as error:
         raise CircuitGenerationError(
             f"native normalized_spec cannot be rendered by the v1 SKiDL renderer: {error}"
         ) from error
+    return normalized, tuple(sorted(no_connects))
 
 
 def _render_skidl(
@@ -469,9 +533,11 @@ def _render_skidl(
     review_sha: str,
     catalog_receipt_sha: str | None = None,
 ) -> str:
-    source = generate_skidl(
-        _v2_to_v1(value),
+    v1_spec, no_connects = _v2_to_v1(value)
+    source = _generate_skidl_with_no_connects(
+        v1_spec,
         catalog_receipt_sha256=catalog_receipt_sha,
+        no_connects=no_connects,
     )
     lines = source.splitlines()
     evidence = [
@@ -487,6 +553,12 @@ def _validate_catalog_resolution(
 ) -> dict[str, Any]:
     """Require a catalog selector to change MPNs and nothing electrical."""
 
+    # Keep the selector's electrical immutability diagnostic independent of
+    # the stricter v2 relationship checks below.  A selector that changes a
+    # net name must be rejected as a circuit-net mutation even when that edit
+    # also makes the candidate internally inconsistent.
+    if not isinstance(resolved, Mapping) or resolved.get("nets") != original["nets"]:
+        raise CircuitGenerationError("catalog selection changed circuit nets")
     normalized = _validate_v2_spec(resolved)
     if original["nets"] != normalized["nets"]:
         raise CircuitGenerationError("catalog selection changed circuit nets")

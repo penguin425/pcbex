@@ -162,6 +162,15 @@ normalizer verifies both representations agree, rejects duplicate or
 cross-net pin use, applies fixed item/text/work ceilings, and sorts all
 identity-bearing collections before hashing or conversion.
 
+The Python envelope validator repeats the v2 null/type and complete pin/net
+coverage invariants before rendering. Its compatibility SKiDL adapter drops
+no-connect pins from the legacy v1 net map only after validation, carries their
+reference/pin pairs in a deterministic private side channel, and emits
+`_pcbex_parts[...][...] += NC` before ordinary net assignments. No synthetic
+ordinary `Net("NC")` is introduced, and schema-v1 `generate-skidl` output is
+unchanged when no v2 marker is present. SKiDL itself remains optional; this
+boundary validates source syntax and evidence without importing the package.
+
 Nominal rail and maximum input values are facts supplied by the circuit
 requirements; pcbex does not invent datasheet ratings. Supplier/datasheet
 verification is a separate boundary. The generated review proves that the
