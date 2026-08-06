@@ -32,13 +32,23 @@ new filesystem object, so inode identity, ownership, ACLs, extended attributes,
 and hard-link relationships are not a preservation contract. A direct or
 ancestor symbolic link and a non-regular destination are rejected.
 
-Outputs whose existing contract is no-clobber, including signing keys and
-factory or pipeline evidence, use the same staged and synchronized publication
-but fail if the destination already exists. Multi-file commands publish each
-file atomically; the set is not one transaction. Output-directory creation is
-also outside the per-file transaction. A command may
+Outputs whose existing contract is no-clobber, including AI review approvals,
+signing keys, and factory or pipeline evidence, use the same staged and
+synchronized publication but fail if the destination already exists.
+`sign-ai-review` performs its response, signer, optional-session, evidence,
+and destination preflight before opening the private key. Multi-file commands
+publish each file atomically; the set is not one transaction.
+Output-directory creation is also outside the per-file transaction. A command may
 therefore retain already completed evidence files when a later publication or
 quality gate fails, as documented by that command.
+
+For signing, a valid response that fails an approval gate is still a legitimate
+signed rejection: the no-clobber approval is published before
+`--require-approved` returns failure. Any existing regular file, symbolic link,
+or other non-regular destination remains untouched on preflight, signing, or
+publication failure. The destination-file boundary is atomic, but input
+verification, private-key access, and publication are not one atomic filesystem
+transaction.
 
 The checks before and after opening reduce path-replacement races but are not an
 OS filesystem sandbox. Callers that require protection from a hostile local

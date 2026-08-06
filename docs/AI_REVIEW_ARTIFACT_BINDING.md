@@ -4,12 +4,16 @@ Version 1.425 adds an opt-in AI review request schema v3 that can bind an
 approval to one exact generated KiCad schematic, one exact successful
 deterministic-pipeline execution, and one exact normalized native KiCad ERC
 run. Version 1.426 adds request schema v4 for native ERC warning-policy
-evidence. Version 1.442.0 adds live signing parity: `sign-ai-review
+evidence. Version 1.442.0 added live signing parity: `sign-ai-review
 --schematic` and MCP `sign_schematic_approval` accept one bounded live
 schematic for schema-v1 semantic/fresh electrical-review verification
-before the private key is read. Request schema v1 remains unbound to artifact
-paths; schema v2 remains backward-compatible when native ERC evidence is not
-supplied, and schema v3 retains its error-only meaning.
+before the private key is read. Version 1.443.0 hardens that signing boundary:
+the response, signer, optional session, all selected evidence inputs, and the
+destination are validated before private-key access; valid rejected reviews
+are still signed and published; and approval output uses atomic no-clobber
+publication. Request schema v1 remains unbound to artifact paths; schema v2
+remains backward-compatible when native ERC evidence is not supplied, and
+schema v3 retains its error-only meaning.
 
 ## Bound identities
 
@@ -229,6 +233,37 @@ in an isolated workspace. Bounded reads can reject replacements observed
 around verification, but verification, private-key access, and output
 publication are not one atomic filesystem transaction and this flow does not
 claim a race-free filesystem boundary.
+
+### Signing preflight and publication (v1.443)
+
+The CLI and MCP signing paths perform their complete public-input preflight
+before opening the private key. This includes the request and selected live or
+artifact-bound evidence, the response schema and bytes, the signer identity,
+the optional session, its activity window and request binding, and the output destination.
+Invalid, missing, linked, replaced, stale, or otherwise mismatched inputs are
+rejected without reading the secret or changing the destination. The output
+path must be a fresh no-clobber destination; a pre-existing regular file,
+symbolic link, or other non-regular destination is left untouched.
+
+Once preflight succeeds, a response that is valid but fails one or more review
+gates is still a legitimate signed rejection. The approval envelope is staged,
+flushed, synchronized, and atomically published before `--require-approved`
+may return a non-zero status. A failed preflight never creates a partial or
+replacement approval.
+
+MCP preserves its existing fail-closed error shape. If
+`require_approved: true` rejects an otherwise valid signed rejection, the
+retained approval file is still published but the tool result reports
+`structuredContent.approval` as `null`; callers that need the rejection
+evidence must explicitly verify or consume that retained file.
+
+This hardening changes no request, response, session, or signed-approval wire
+schema. Schema-v2 through v4 continue to require their existing complete
+artifact paths and fresh replay rules; the schema-v1 `--schematic` input remains
+a live semantic source rather than a new artifact identity. The staged output
+publication is atomic at the destination-file boundary, but verification,
+private-key access, and publication are not one atomic filesystem transaction.
+Use an isolated workspace when a hostile local writer is in scope.
 
 Artifact binding prevents an approval from being presented beside a different
 schematic or pipeline run. A review session remains necessary when a caller

@@ -154,6 +154,7 @@ auditable release.
 | v1.440.0 | Boardless AI schematic approval Action | Bind a live KiCad schematic to an existing schema-v1 AI review request, re-verify signed reviewer/provider/model quorum evidence without PCB, provider, or signing-secret inputs, and retain bounded JSON/Markdown evidence before the optional final quorum gate |
 | v1.441.0 | AI schematic approval CLI/MCP parity | Extend schema-v1 live KiCad schematic binding to single approval verification and MCP single/quorum tools; semantically equivalent formatting is accepted while semantic or fresh electrical-review mismatches fail closed |
 | v1.442.0 | AI schematic approval live signing parity | Extend the bounded schema-v1 live KiCad schematic binding to `sign-ai-review --schematic` and MCP `sign_schematic_approval`, completing semantic and fresh electrical-review verification before private-key access while leaving wire schemas and schema-v2 through v4 artifact paths unchanged |
+| v1.443.0 | AI schematic approval signing preflight | Validate every public response, signer, optional session, selected evidence, and destination before private-key access; sign and atomically publish legitimate rejected approvals, refuse output clobbering while preserving existing files/symlinks, and leave schemas and schema-v2 through v4 artifact paths unchanged |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -538,7 +539,7 @@ mismatch before accepting signatures or quorum evidence. Formatting-only
 changes that preserve semantic IR remain accepted; schema-v2 through v4
 artifact-bound workflows are unchanged.
 
-The current v1.442.0 milestone extends that live binding to signing. The CLI
+The released v1.442.0 milestone extends that live binding to signing. The CLI
 `sign-ai-review --schematic` command and MCP `sign_schematic_approval` import
 the bounded live KiCad schematic, compare its semantic IR and freshly
 recompute the deterministic electrical review before reading the
@@ -550,3 +551,18 @@ workspace: bounded stable reads detect replacements observed around
 verification, but verification, private-key access, and output publication are
 not one atomic filesystem transaction and no race-free filesystem boundary is
 claimed.
+
+The current v1.443.0 milestone hardens the trusted signing preflight. Before
+the private key is opened, CLI and MCP signing validate the complete public
+input set: request and selected live or artifact-bound evidence, response
+schema and bytes, signer identity, optional active session and request binding, and
+the output destination. A valid response that fails a review gate remains a
+legitimate signed rejection; its approval is staged and atomically published
+before `--require-approved` may return a non-zero status. The no-clobber
+boundary rejects an existing regular file, symbolic link, or other non-regular
+destination without modifying it. Request, response, session, and signed-
+approval schemas are unchanged, and schema-v2 through v4 retain their
+existing artifact paths and replay rules. Destination publication is atomic,
+but input verification, private-key access, and publication are not one
+atomic filesystem transaction. Root-Action live quorum input remains a later
+v1.444 boundary.

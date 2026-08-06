@@ -535,6 +535,32 @@ pub fn verify_ai_review_schematic_binding(
     Ok(())
 }
 
+/// Validate the public inputs to an AI review signature before a signing key
+/// is accessed.
+///
+/// A response that fails one or more approval gates is still a valid signing
+/// input: the returned failures are retained in the signed rejection artifact.
+/// Structural, digest, and signer validation failures are returned as errors.
+pub fn validate_ai_review_signing_inputs(
+    request: &AiReviewRequest,
+    response: &AiReviewResponse,
+    signer_id: &str,
+) -> Result<Vec<String>, String> {
+    let (_, gate_failures) = validated_ai_review_signing_inputs(request, response, signer_id)?;
+    Ok(gate_failures)
+}
+
+fn validated_ai_review_signing_inputs(
+    request: &AiReviewRequest,
+    response: &AiReviewResponse,
+    signer_id: &str,
+) -> Result<(String, Vec<String>), String> {
+    validate_nonblank(signer_id, "approval signer id")?;
+    let request_sha256 = ai_review_request_sha256(request)?;
+    let gate_failures = evaluate_ai_review(request, response, &request_sha256)?;
+    Ok((request_sha256, gate_failures))
+}
+
 /// Add an exact generated-schematic and deterministic-pipeline binding to a
 /// valid v1 request, producing a v2 request with a fresh body digest.
 ///
@@ -916,9 +942,8 @@ pub fn sign_ai_review(
     signer_id: &str,
     secret_key: &[u8; 32],
 ) -> Result<SignedAiApproval, String> {
-    validate_nonblank(signer_id, "approval signer id")?;
-    let request_sha256 = ai_review_request_sha256(request)?;
-    let gate_failures = evaluate_ai_review(request, response, &request_sha256)?;
+    let (request_sha256, gate_failures) =
+        validated_ai_review_signing_inputs(request, response, signer_id)?;
     let response_bytes = serde_json::to_vec(response)
         .map_err(|error| format!("serializing AI review response: {error}"))?;
     let response_sha256 = hex_digest(&response_bytes);
@@ -955,9 +980,8 @@ pub fn sign_ai_review_for_session(
     secret_key: &[u8; 32],
 ) -> Result<SignedAiApproval, String> {
     validate_sha256(session_sha256, "AI review session SHA-256")?;
-    validate_nonblank(signer_id, "approval signer id")?;
-    let request_sha256 = ai_review_request_sha256(request)?;
-    let gate_failures = evaluate_ai_review(request, response, &request_sha256)?;
+    let (request_sha256, gate_failures) =
+        validated_ai_review_signing_inputs(request, response, signer_id)?;
     let response_sha256 = hex_digest(
         &serde_json::to_vec(response)
             .map_err(|error| format!("serializing AI review response: {error}"))?,

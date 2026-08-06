@@ -131,7 +131,7 @@ use pcbex_kicad::{
     signed_approval_log_gossip_receipt_json_schema, signed_approval_log_witness_json_schema,
     signed_approval_log_witness_key_rotation_json_schema, signed_human_escalation_json_schema,
     simulation_declaration_json_schema, simulation_evidence_json_schema,
-    validate_approval_log_gossip_organization_registry_history,
+    validate_ai_review_signing_inputs, validate_approval_log_gossip_organization_registry_history,
     validate_approval_log_gossip_organization_registry_history_audit_report,
     validate_approval_log_gossip_organization_registry_history_checkpoint_trust_state,
     validate_approval_log_gossip_organization_registry_history_checkpoint_witness_quorum_report,
@@ -11889,19 +11889,43 @@ fn run_cli() -> Result<()> {
             let response = parse_ai_review_response(&response_source)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("parsing {}", response.display()))?;
-            let secret = read_secret_key(&private_key)?;
-            let approval = if let Some(path) = session {
+            // Validate all public signing inputs before touching the private key.
+            // A non-empty gate-failure list is a legitimate rejected approval,
+            // so it must continue through signing and publication.
+            let _gate_failures = validate_ai_review_signing_inputs(
+                &request,
+                &response,
+                &signer_id,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let session_digest = if let Some(path) = session {
                 let (session, _) = read_described_json::<AiReviewSession>(&path)?;
-                let digest = pcbex_kicad::ai_review_session_sha256(&session, &request)
-                    .map_err(anyhow::Error::msg)?;
+                let evaluated_at_unix = current_unix_seconds()?;
+                Some(
+                    pcbex_kicad::validate_ai_review_session(
+                        &session,
+                        &request,
+                        evaluated_at_unix,
+                    )
+                    .map_err(anyhow::Error::msg)?,
+                )
+            } else {
+                None
+            };
+            // Reserve the destination before reading the private key.  The
+            // reservation plus persist_noclobber below guarantees that a
+            // pre-existing file or symlink can never be overwritten.
+            let prepared_output = prepare_atomic_new_file(&output)?;
+            let secret = read_secret_key(&private_key)?;
+            let approval = if let Some(digest) = session_digest {
                 sign_ai_review_for_session(&request, &response, &digest, &signer_id, &secret)
                     .map_err(anyhow::Error::msg)?
             } else {
                 sign_ai_review(&request, &response, &signer_id, &secret)
                     .map_err(anyhow::Error::msg)?
             };
-            fs::write(&output, serde_json::to_string_pretty(&approval)?)
-                .with_context(|| format!("writing {}", output.display()))?;
+            let rendered = serde_json::to_string_pretty(&approval)?;
+            persist_atomic_new_file(prepared_output, &output, &rendered)?;
             eprintln!(
                 "signed AI review: {}; {} gate failure(s)",
                 if approval.approved {
