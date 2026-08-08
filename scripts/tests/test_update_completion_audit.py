@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -17,6 +18,25 @@ SPEC.loader.exec_module(update_completion_audit)
 
 
 class UpdateCompletionAuditTests(unittest.TestCase):
+    def test_python_discovery_includes_repository_and_agent_import_roots(self):
+        suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)])
+
+        def discover(path):
+            self.assertEqual(
+                path,
+                str(update_completion_audit.ROOT / "agent" / "tests"),
+            )
+            self.assertIn(str(update_completion_audit.ROOT), sys.path)
+            self.assertIn(str(update_completion_audit.ROOT / "agent" / "src"), sys.path)
+            return suite
+
+        with mock.patch.object(
+            unittest.defaultTestLoader,
+            "discover",
+            side_effect=discover,
+        ):
+            self.assertEqual(update_completion_audit.python_test_count(), 1)
+
     def test_rust_test_list_is_time_and_output_bounded(self):
         result = SimpleNamespace(
             returncode=0,

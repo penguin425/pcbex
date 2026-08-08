@@ -25,8 +25,12 @@ from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
     build_circuit_handoff_archive,
     circuit_handoff_bundle_json_schema,
+    circuit_handoff_bundle_result_json_schema,
+    extract_circuit_handoff_bundle,
     handoff_circuit_generation,
+    validate_circuit_handoff_archive,
     validate_circuit_generation_bundle,
+    verify_circuit_handoff_bundle,
 )
 from .review import ReviewError, review_schematic_with_llm
 from .catalog_provenance import (
@@ -62,6 +66,8 @@ __all__ = [
     "run_provider_command",
     "circuit_generation_json_schema",
     "circuit_handoff_bundle_json_schema",
+    "circuit_handoff_bundle_result_json_schema",
+    "extract_circuit_handoff_bundle",
     "fetch_circuit_spec_v2_schema",
     "fetch_circuit_spec_check_schema",
     "generate_circuit_with_command",
@@ -73,5 +79,7 @@ __all__ = [
     "review_schematic_with_llm",
     "validate_catalog_fetch_receipt",
     "validate_catalog_generation_provenance",
+    "validate_circuit_handoff_archive",
     "validate_circuit_generation_bundle",
+    "verify_circuit_handoff_bundle",
 ]

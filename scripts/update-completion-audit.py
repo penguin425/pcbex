@@ -60,6 +60,12 @@ def rust_test_count() -> int:
 
 def python_test_count() -> int:
     agent_src = str(ROOT / "agent" / "src")
+    repository_root = str(ROOT)
+    # Some tests share fixtures through the ``agent.tests`` namespace. When
+    # this file is executed directly, Python otherwise exposes ``scripts/``
+    # rather than the repository root and unittest silently counts an import
+    # failure as one test case.
+    sys.path.insert(0, repository_root)
     sys.path.insert(0, agent_src)
     previous = os.getcwd()
     try:
@@ -69,6 +75,7 @@ def python_test_count() -> int:
     finally:
         os.chdir(previous)
         sys.path.remove(agent_src)
+        sys.path.remove(repository_root)
 
 
 def generated_block() -> str:

@@ -160,6 +160,7 @@ auditable release.
 | v1.446.0 | Strict SKiDL no-connect adapter | Preserve checked circuit-spec v2 no-connect pins through the compatibility SKiDL renderer with the native `NC` singleton, reject forged null/type or pin/net coverage relationships before source generation, and leave schema-v1 output byte-identical |
 | v1.447.0 | Cross-phase DFM manufacturing binding | Bind external and built-in DFM profile identity (canonical digest plus origin/source) into fabricate schema-v3 packages, reject binding changes during factory repair, and require exact analysis-to-package matching in the unchanged deterministic pipeline gate; physical-profile v2, policy-pack analysis, receipt v1, and runner schemas remain compatible |
 | v1.448.0 | Atomic circuit-generation KiCad handoff bundle | Revalidate one saved generation bundle, replay its immutable Rust ERC, deterministic KiCad writer, and semantic handoff under one deadline, then atomically publish the exact evidence set and closed digest graph as one deterministic no-clobber ZIP without claiming AI, board, or manufacturing approval |
+| v1.449.0 | Verified circuit handoff bundle consumer | Offline-verify the canonical six-entry v1.448 ZIP, complete digest/semantic graph, and optional external identities before safely extracting fixed names to a newly reserved no-clobber directory with a manifest-last commit boundary |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -617,7 +618,7 @@ equality between analysis and manufacturing. Policy-pack DFM, receipt v1,
 MCP/Action inputs, and deterministic plan/report schemas are intentionally
 unchanged.
 
-The current v1.448.0 milestone connects a retained schema-v2 circuit-generation
+The released v1.448.0 milestone connects a retained schema-v2 circuit-generation
 result to the existing native circuit checker, deterministic KiCad schematic
 writer, and semantic handoff verifier. It stable-reads the saved bundle and
 revalidates its closed shape plus every retained or reconstructable
@@ -630,3 +631,22 @@ domain-separated manifest; every failed gate publishes no partial archive.
 This boundary deliberately does not perform AI signing/quorum, native KiCad
 ERC, supplier snapshot/catalog-provenance authentication, board binding,
 layout, DRC/DFM, manufacturing export, or fabrication authorization.
+
+The current v1.449.0 milestone adds the matching offline consumer. A bounded
+stable read is accepted only when the archive has one canonical six-record
+central directory, fixed ordered ASCII names, stored payloads, fixed regular
+file metadata, no comments/extras/flags/ZIP64/data descriptors, valid CRCs and
+role-specific size bounds, and byte-for-byte deterministic ZIP framing. The
+consumer strictly reparses every JSON artifact, revalidates the closed
+manifest and domain-separated bundle identity, and cross-checks the retained
+generation, spec, immutable check, schematic, and semantic handoff graph.
+Verify-only writes nothing. Extraction uses only fixed names in a newly
+reserved private no-clobber directory and writes `manifest.json` last; caught
+write or fsync failures roll back only identities proven to be created by the
+invocation, and an uninspectable reservation is left untouched.
+Both operations emit a closed path-free result with the outer archive digest
+and optionally require expected archive and logical bundle digests. Because
+the archive remains unsigned and omits the catalog pre-selection check bytes,
+this proves internal consistency, not producer authenticity or fresh replay;
+AI, supplier, native KiCad, board, pipeline, manufacturing, and fabrication
+authorization remain separate gates.

@@ -57,7 +57,10 @@ from .circuit_generation import (
 from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
     circuit_handoff_bundle_json_schema,
+    circuit_handoff_bundle_result_json_schema,
+    extract_circuit_handoff_bundle,
     handoff_circuit_generation,
+    verify_circuit_handoff_bundle,
 )
 from .repair import propose_repairs
 from .repair_loop import repair_kicad_board, write_repair_report
@@ -298,6 +301,26 @@ def main() -> None:
         help="write the closed circuit-generation to KiCad handoff manifest schema",
     )
     handoff_schema.add_argument("-o", "--output", type=Path)
+    verify_handoff = sub.add_parser(
+        "verify-circuit-handoff-bundle",
+        help="verify one exact deterministic circuit handoff ZIP without extracting it",
+    )
+    verify_handoff.add_argument("bundle", type=Path)
+    verify_handoff.add_argument("--expected-archive-sha256")
+    verify_handoff.add_argument("--expected-bundle-sha256")
+    extract_handoff = sub.add_parser(
+        "extract-circuit-handoff-bundle",
+        help="verify and extract one circuit handoff ZIP to a new directory",
+    )
+    extract_handoff.add_argument("bundle", type=Path)
+    extract_handoff.add_argument("--output-dir", type=Path, required=True)
+    extract_handoff.add_argument("--expected-archive-sha256")
+    extract_handoff.add_argument("--expected-bundle-sha256")
+    handoff_result_schema = sub.add_parser(
+        "circuit-handoff-bundle-result-schema",
+        help="write the closed handoff ZIP verify/extract result schema",
+    )
+    handoff_result_schema.add_argument("-o", "--output", type=Path)
     catalog_snapshot_schema = sub.add_parser(
         "catalog-snapshot-schema",
         help="write the closed local catalog-snapshot JSON Schema",
@@ -658,6 +681,48 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
             raise SystemExit(f"circuit handoff schema failed: {error}") from error
+    elif args.command == "verify-circuit-handoff-bundle":
+        try:
+            result = verify_circuit_handoff_bundle(
+                args.bundle,
+                expected_archive_sha256=args.expected_archive_sha256,
+                expected_bundle_sha256=args.expected_bundle_sha256,
+            )
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(f"circuit handoff bundle verification failed: {error}") from error
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif args.command == "extract-circuit-handoff-bundle":
+        try:
+            result = extract_circuit_handoff_bundle(
+                args.bundle,
+                args.output_dir,
+                expected_archive_sha256=args.expected_archive_sha256,
+                expected_bundle_sha256=args.expected_bundle_sha256,
+            )
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(f"circuit handoff bundle extraction failed: {error}") from error
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif args.command == "circuit-handoff-bundle-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(f"circuit handoff result schema failed: {error}") from error
     elif args.command == "fetch-catalog-snapshot":
         try:
             receipt = fetch_catalog_snapshot(

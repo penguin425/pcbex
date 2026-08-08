@@ -18,6 +18,22 @@ request enters an LLM prompt: generated schematic identities allow at most
 These are descriptor checks; the adapter never loads those artifacts itself,
 and Rust remains the authority that live-reruns and verifies them.
 
+The circuit handoff ZIP has a separate 234,881,024-byte (224 MiB) outer and
+aggregate ceiling because it carries a generated schematic plus retained
+evidence. Its six stored entries also retain their individual generation,
+specification, check, schematic, handoff-report, and manifest limits. The
+offline verifier preflights the exact six-record central directory before ZIP
+allocation, streams each payload under its role limit, and rejects compression
+and noncanonical framing. Extraction reserves one new private directory,
+writes only fixed regular-file names, and writes `manifest.json` last as the
+commit marker. A caught failure rolls back only identities proven to be owned
+by that run; if initial identity inspection fails, the reservation is left
+untouched rather than risking deletion of a concurrent replacement. An abrupt
+crash may also leave an incomplete reserved directory that must be reverified
+rather than trusted by existence. Rollback is live-state cleanup;
+directory-entry deletion is not claimed crash-durable on filesystems that do
+not support directory `fsync`.
+
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent
 traversal is not accepted. The reader checks the advertised path identity and size, opens

@@ -14,6 +14,18 @@ PYTHONPATH=agent/src python3 -m pcbex_agent handoff-circuit \
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-schema \
   --output build/circuit-handoff-manifest.schema.json
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  verify-circuit-handoff-bundle build/circuit-handoff.zip \
+  --expected-archive-sha256 "$ARCHIVE_SHA256" \
+  --expected-bundle-sha256 "$BUNDLE_SHA256"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  extract-circuit-handoff-bundle build/circuit-handoff.zip \
+  --output-dir build/verified-circuit-handoff
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-result-schema
 ```
 
 The command consumes a saved bundle; it does not call an LLM, supplier API,
@@ -91,6 +103,63 @@ temporary directory; an invalid generation result, failed ERC, writer error,
 handoff rejection, timeout, malformed native output, or output collision
 publishes no archive.
 
+## Offline verification and extraction
+
+Version 1.449.0 adds a consumer for the exact v1.448 archive. The verify-only
+command stable-reads the ZIP once under the 224 MiB archive ceiling and writes
+nothing. Before `zipfile` parses the central directory, pcbex requires one
+single-disk, comment-free end record describing exactly six entries and the
+canonical fixed-size central directory. It then requires the exact entry order
+shown above, stored/no-compression payloads, equal compressed and expanded
+sizes, fixed timestamps, regular `0644` Unix metadata, empty entry comments
+and extras, zero flags, supported version fields, and every role-specific byte
+limit. CRC failures, truncation, prefix/trailing data, ZIP64 framing, data
+descriptors, encryption, links, special files, alternate names, duplicates,
+missing/extra entries, and any noncanonical local/central framing are rejected.
+The verifier never calls `extract()` or `extractall()`; it streams only the six
+fixed records into bounded memory and requires the complete input bytes to
+equal a reconstruction by the deterministic v1 writer.
+
+All JSON evidence is parsed as strict UTF-8 with duplicate keys, non-finite or
+oversized numbers, invalid Unicode, excessive depth, and excessive node counts
+rejected. The consumer manually revalidates the closed manifest, every raw
+byte-count/SHA-256 descriptor, the domain-separated aggregate identity, the
+generation history/SKiDL/catalog relationships retained by schema v2, the
+normalized specification and immutable ERC check, and the exact schematic and
+handoff report bindings. A manifest whose hashes have merely been recomputed
+over semantically inconsistent files therefore still fails.
+
+Both commands emit the same closed result-schema-v1 JSON. It contains no host
+paths and deliberately uses `verified`, not a production `approved` decision.
+It records the outer archive bytes/SHA-256, raw manifest identity, five
+artifact descriptors, logical bundle identity, engine claim, operation, and
+whether extraction completed. Its closed `validation` object states that
+internal consistency passed, whether at least one caller-supplied expected
+identity matched, and explicitly reports `native_handoff_replayed: false` and
+`catalog_input_erc_replayed: false`. Optional `--expected-archive-sha256` and
+`--expected-bundle-sha256` values are validated before success and retained in
+the result as external identity roots. Without one of those values from a
+trusted channel, verification proves internal consistency only, not who
+created the ZIP. A matched caller-supplied digest is only as trustworthy as
+the channel that supplied it.
+
+Extraction first completes the identical in-memory verification. It never
+uses archive-controlled paths: the six constants above are written to a newly
+reserved, private destination directory with atomic no-clobber file writes,
+and `manifest.json` is written last as the commit marker. Existing files or
+directories, direct or ancestor links/reparse points, concurrent destination
+reservation, unexpected directory entries, content changes, write failures,
+and synchronization failures fail without overwriting an existing object.
+Caught failures remove only directory and file identities that the invocation
+can prove it created. If identity inspection itself fails, the reservation is
+left untouched rather than risking deletion of a concurrent replacement. An
+abrupt process or host crash may likewise leave a reserved incomplete directory
+without a trustworthy commit; downstream consumers must rerun the verifier and
+must never accept mere directory existence. Rollback is a
+live-state cleanup guarantee, not a claim that directory metadata deletion is
+crash-durable on every filesystem; filesystems that reject directory `fsync`
+retain no portable Python durability primitive.
+
 ## Trust boundary
 
 This is an approved **deterministic electrical handoff**, not an AI approval
@@ -104,3 +173,13 @@ against that snapshot. Use the existing live/artifact-bound AI review gates
 and the normal board, pipeline, and manufacturing gates explicitly downstream. In
 particular, an `approved: true` handoff manifest must never be interpreted as
 permission to fabricate.
+
+The v1 archive is unsigned and its logical `bundle_sha256` covers the five
+manifest-described artifacts, not the outer ZIP or `manifest.json` bytes.
+Likewise, a catalog-resolved schema-v2 generation bundle does not retain the
+original pre-selection check bytes that the producer replayed. The offline
+consumer can revalidate every retained and reconstructable edge, but it cannot
+authenticate the claimed producer/engine or freshly replay that omitted
+catalog check. Use a trusted expected digest/signature and the existing native,
+supplier-provenance, AI, board, pipeline, and manufacturing gates when those
+properties are required.

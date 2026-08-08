@@ -211,6 +211,16 @@ their exact bytes in one deterministic no-clobber ZIP. It does not rerun the
 model or convert deterministic electrical approval into AI or manufacturing
 approval. The saved bundle does not retain the original supplier snapshot, so
 inventory/catalog authenticity remains the separate v1.421 provenance gate.
+Version 1.449.0 adds the matching offline
+[`verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`](CIRCUIT_HANDOFF_BUNDLE.md)
+consumer. It accepts only the canonical six-entry archive, revalidates the
+complete retained digest and semantic graph without executing provider/SKiDL/
+native content, and exposes optional expected outer/logical digests for an
+external identity root. Extraction publishes only fixed names to a newly
+reserved no-clobber directory with the manifest written last; it still does
+not authenticate the producer or replace any downstream approval gate. The
+closed result makes the offline boundary machine-readable by reporting that
+native handoff and omitted catalog-input ERC replay were not performed.
 The v1.417 [bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md)
 can recompute that standalone binding beside the unchanged `pipeline-verify`
 gate from one digest-bound snapshot plan. A generated design must still
