@@ -4,6 +4,8 @@ mod unix {
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
+    use std::thread;
+    use std::time::{Duration, Instant};
 
     const ERC_SCHEMA: &str = "https://schemas.kicad.org/erc.v1.json";
 
@@ -33,6 +35,29 @@ mod unix {
         fs::write(&path, script).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
         path
+    }
+
+    fn sleeping_cli(directory: &Path) -> PathBuf {
+        let path = directory.join("sleeping-kicad-erc.sh");
+        let script = concat!(
+            "#!/bin/sh\n",
+            "set -eu\n",
+            "printf '%s\\n' \"$$\" > \"$PCBEX_FAKE_KICAD_PID\"\n",
+            "sh -c 'printf started > \"$PCBEX_FAKE_KICAD_DESCENDANT_STARTED\"; sleep 0.6; printf survived > \"$PCBEX_FAKE_KICAD_SURVIVOR\"' &\n",
+            "while [ ! -s \"$PCBEX_FAKE_KICAD_DESCENDANT_STARTED\" ]; do sleep 0.01; done\n",
+            "sleep 30\n",
+        );
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+
+    fn process_is_alive(pid: &str) -> bool {
+        Command::new("sh")
+            .args(["-c", "kill -0 \"$1\" 2>/dev/null", "pcbex-test", pid])
+            .status()
+            .unwrap()
+            .success()
     }
 
     fn run<I, S>(args: I) -> Output
@@ -234,6 +259,8 @@ mod unix {
             policy.to_str().unwrap(),
             "--kicad-cli",
             cli.to_str().unwrap(),
+            "--timeout-seconds",
+            "1.5",
             "--mcp-echo-report-summary",
         ]);
         assert!(
@@ -298,6 +325,74 @@ mod unix {
                 .contains("does not match a fresh native KiCad ERC run")
         );
         assert_eq!(fs::read(&report).unwrap(), retained);
+    }
+
+    #[test]
+    fn explicit_timeout_terminates_and_reaps_fake_kicad_process_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        let schematic = directory.path().join("design.kicad_sch");
+        let report = directory.path().join("erc.json");
+        let normal_cli = fake_cli(directory.path(), &approved_report(), 0);
+        let sleeping_cli = sleeping_cli(directory.path());
+        let pid_file = directory.path().join("sleeping-kicad.pid");
+        let descendant_started = directory.path().join("sleeping-kicad-descendant-started");
+        let survivor = directory.path().join("sleeping-kicad-survivor");
+        fs::write(&schematic, b"schematic").unwrap();
+
+        let generated = run([
+            "run-native-kicad-erc",
+            schematic.to_str().unwrap(),
+            "--output",
+            report.to_str().unwrap(),
+            "--kicad-cli",
+            normal_cli.to_str().unwrap(),
+        ]);
+        assert!(generated.status.success());
+        let retained = fs::read(&report).unwrap();
+
+        let started = Instant::now();
+        let timed_out = Command::new(binary())
+            .args([
+                "verify-native-kicad-erc-report",
+                schematic.to_str().unwrap(),
+                report.to_str().unwrap(),
+                "--kicad-cli",
+                sleeping_cli.to_str().unwrap(),
+                "--timeout-seconds",
+                "0.25",
+            ])
+            .env("PCBEX_FAKE_KICAD_PID", &pid_file)
+            .env("PCBEX_FAKE_KICAD_DESCENDANT_STARTED", &descendant_started)
+            .env("PCBEX_FAKE_KICAD_SURVIVOR", &survivor)
+            .output()
+            .unwrap();
+        assert!(!timed_out.status.success());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "explicit timeout was not applied promptly"
+        );
+        assert!(
+            String::from_utf8_lossy(&timed_out.stderr)
+                .contains("subprocess exceeded timeout of 250ms"),
+            "{}",
+            String::from_utf8_lossy(&timed_out.stderr)
+        );
+        assert_eq!(fs::read(&report).unwrap(), retained);
+        assert!(
+            descendant_started.exists(),
+            "fake KiCad descendant did not start before the timeout"
+        );
+
+        let pid = fs::read_to_string(&pid_file).unwrap();
+        assert!(
+            !process_is_alive(pid.trim()),
+            "timed-out fake KiCad child was not reaped"
+        );
+        thread::sleep(Duration::from_millis(900));
+        assert!(
+            !survivor.exists(),
+            "timed-out fake KiCad descendant survived process-tree cleanup"
+        );
     }
 
     #[test]

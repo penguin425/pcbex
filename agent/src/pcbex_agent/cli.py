@@ -57,6 +57,7 @@ from .circuit_generation import (
 from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
     circuit_handoff_bundle_json_schema,
+    circuit_handoff_bundle_native_erc_replay_result_json_schema,
     circuit_handoff_bundle_replay_result_json_schema,
     circuit_handoff_bundle_result_json_schema,
     extract_circuit_handoff_bundle,
@@ -319,6 +320,28 @@ def main() -> None:
     )
     replay_handoff.add_argument("bundle", type=Path)
     replay_handoff.add_argument("--pcbex", default="pcbex")
+    replay_handoff.add_argument(
+        "--native-kicad-erc-report",
+        type=Path,
+        help=(
+            "optionally require a retained native KiCad ERC report to match "
+            "a fresh run against the exactly reproduced schematic"
+        ),
+    )
+    replay_handoff.add_argument(
+        "--native-kicad-erc-warning-policy",
+        type=Path,
+        help="exact warning policy required by a schema-v2 native ERC report",
+    )
+    replay_handoff.add_argument(
+        "--kicad-cli",
+        help="trusted KiCad CLI used only with --native-kicad-erc-report",
+    )
+    replay_handoff.add_argument(
+        "--require-native-kicad-erc-approved",
+        action="store_true",
+        help="fail after exact native ERC replay when the retained evidence is rejected",
+    )
     replay_handoff.add_argument("--timeout-seconds", type=float, default=120.0)
     replay_handoff.add_argument("--expected-archive-sha256")
     replay_handoff.add_argument("--expected-bundle-sha256")
@@ -340,6 +363,11 @@ def main() -> None:
         help="write the closed fresh handoff-chain replay result schema",
     )
     handoff_replay_result_schema.add_argument("-o", "--output", type=Path)
+    handoff_native_erc_replay_result_schema = sub.add_parser(
+        "circuit-handoff-bundle-native-erc-replay-result-schema",
+        help="write the closed exact-chain plus native KiCad ERC replay result schema",
+    )
+    handoff_native_erc_replay_result_schema.add_argument("-o", "--output", type=Path)
     catalog_snapshot_schema = sub.add_parser(
         "catalog-snapshot-schema",
         help="write the closed local catalog-snapshot JSON Schema",
@@ -712,9 +740,29 @@ def main() -> None:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     elif args.command == "replay-circuit-handoff-bundle":
         try:
+            native_options = {}
+            if (
+                args.native_kicad_erc_report is not None
+                or args.native_kicad_erc_warning_policy is not None
+                or args.require_native_kicad_erc_approved
+                or args.kicad_cli is not None
+            ):
+                native_options = {
+                    "retained_native_kicad_erc_report": args.native_kicad_erc_report,
+                    "kicad_cli": (
+                        "kicad-cli" if args.kicad_cli is None else args.kicad_cli
+                    ),
+                    "native_kicad_erc_warning_policy": (
+                        args.native_kicad_erc_warning_policy
+                    ),
+                    "require_native_kicad_erc_approved": (
+                        args.require_native_kicad_erc_approved
+                    ),
+                }
             result = replay_circuit_handoff_bundle(
                 args.bundle,
                 args.pcbex,
+                **native_options,
                 timeout_seconds=args.timeout_seconds,
                 expected_archive_sha256=args.expected_archive_sha256,
                 expected_bundle_sha256=args.expected_bundle_sha256,
@@ -775,6 +823,29 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
             raise SystemExit(f"circuit handoff replay schema failed: {error}") from error
+    elif args.command == "circuit-handoff-bundle-native-erc-replay-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_native_erc_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(
+                f"circuit handoff native ERC replay schema failed: {error}"
+            ) from error
     elif args.command == "fetch-catalog-snapshot":
         try:
             receipt = fetch_catalog_snapshot(

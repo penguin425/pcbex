@@ -238,6 +238,16 @@ KiCad `kicad-cli sch erc` is not run, and supplier/catalog provenance,
 AI/human approval, board/PCB DRC/DFM, and manufacturing authorization remain
 separate gates. The v1.449 offline verify/extract commands remain unchanged
 and do not execute native content.
+Version 1.451.0 adds an explicit optional native-KiCad assertion to that replay.
+When `--native-kicad-erc-report` is supplied, the six-entry archive must first
+reproduce exactly; the retained report and optional exact warning policy are
+then replayed against the reproduced schematic with the caller-selected
+`kicad-cli`. The bounded sidecars remain outside the archive, and omitting the
+report preserves the v1 result and starts no KiCad child. The native-enabled
+path emits a closed path-free v2 result that binds the exact report, run,
+decision, counts, and optional policy identities under the same aggregate
+deadline. Exact replay is not toolchain authentication, AI/human approval,
+board approval, or manufacturing authorization.
 The v1.417 [bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md)
 can recompute that standalone binding beside the unchanged `pipeline-verify`
 gate from one digest-bound snapshot plan. A generated design must still

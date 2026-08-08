@@ -779,6 +779,11 @@
     {
       "id": "exact-circuit-handoff-chain-replay",
       "release": "v1.450.0",
+      "status": "released"
+    },
+    {
+      "id": "native-kicad-erc-handoff-replay",
+      "release": "v1.451.0",
       "status": "current"
     }
   ]

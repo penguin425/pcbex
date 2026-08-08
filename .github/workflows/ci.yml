@@ -1467,4 +1467,5 @@ jobs:
           agent.tests.test_repair_loop_boundaries
           agent.tests.test_circuit_handoff_bundle_v1449
           agent.tests.test_circuit_handoff_bundle_v1450
+          agent.tests.test_circuit_handoff_bundle_v1451
           scripts.tests.test_ci_runtime
