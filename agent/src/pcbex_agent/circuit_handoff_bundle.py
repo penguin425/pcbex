@@ -15,12 +15,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import copy
+import errno
 import hashlib
 import io
 import json
 import math
+import os
 from pathlib import Path
 import re
+import stat
+import struct
 import tempfile
 import time
 from typing import Any, Callable
@@ -30,6 +34,7 @@ from .bounded_io import (
     BoundedIOError,
     atomic_write_no_clobber,
     atomic_write_text_no_clobber,
+    create_safe_parent,
     read_bytes,
     validate_no_clobber_path,
 )
@@ -60,6 +65,10 @@ from .circuit_generation import (
 
 CIRCUIT_HANDOFF_BUNDLE_SCHEMA_VERSION = 1
 CIRCUIT_HANDOFF_BUNDLE_ADAPTER = "circuit-generation-kicad-handoff-v1"
+CIRCUIT_HANDOFF_BUNDLE_RESULT_SCHEMA_VERSION = 1
+CIRCUIT_HANDOFF_BUNDLE_VERIFICATION_SCOPE = (
+    "deterministic-electrical-handoff-archive-v1"
+)
 MAX_GENERATION_BUNDLE_BYTES = MAX_NATIVE_CHECK_BYTES
 MAX_CIRCUIT_SPEC_BYTES = 16 * 1024 * 1024
 MAX_SCHEMATIC_BYTES = 64 * 1024 * 1024
@@ -77,6 +86,8 @@ MANIFEST_NAME = "manifest.json"
 
 _BUNDLE_IDENTITY_DOMAIN = b"pcbex:circuit-generation-kicad-handoff-bundle-v1\0"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_MAX_JSON_DEPTH = 128
+_MAX_JSON_NODES = 1_000_000
 _GENERATION_KEYS = frozenset(
     {
         "schema_version",
@@ -151,6 +162,26 @@ _ARTIFACT_LIMITS = {
     "schematic": MAX_SCHEMATIC_BYTES,
     "handoff_report": MAX_HANDOFF_REPORT_BYTES,
 }
+_ARCHIVE_ENTRY_NAMES = (
+    GENERATION_BUNDLE_NAME,
+    CIRCUIT_SPEC_NAME,
+    CIRCUIT_CHECK_NAME,
+    SCHEMATIC_NAME,
+    HANDOFF_REPORT_NAME,
+    MANIFEST_NAME,
+)
+_ARCHIVE_ENTRY_LIMITS = {
+    GENERATION_BUNDLE_NAME: MAX_GENERATION_BUNDLE_BYTES,
+    CIRCUIT_SPEC_NAME: MAX_CIRCUIT_SPEC_BYTES,
+    CIRCUIT_CHECK_NAME: MAX_NATIVE_CHECK_BYTES,
+    SCHEMATIC_NAME: MAX_SCHEMATIC_BYTES,
+    HANDOFF_REPORT_NAME: MAX_HANDOFF_REPORT_BYTES,
+    MANIFEST_NAME: MAX_NATIVE_CHECK_BYTES,
+}
+_EXPECTED_CENTRAL_DIRECTORY_BYTES = sum(
+    46 + len(name.encode("ascii")) for name in _ARCHIVE_ENTRY_NAMES
+)
+_EOCD = struct.Struct("<4s4H2LH")
 
 
 class CircuitHandoffBundleError(ValueError):
@@ -191,6 +222,42 @@ def _reject_json_constant(_value: str) -> Any:
     raise ValueError
 
 
+def _validate_json_tree(value: Any, label: str) -> None:
+    """Reject JSON values that cannot safely cross the retained boundary."""
+
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    nodes = 0
+    while stack:
+        current, depth = stack.pop()
+        nodes += 1
+        if nodes > _MAX_JSON_NODES or depth > _MAX_JSON_DEPTH:
+            raise _fail(f"{label} exceeds its JSON structure bound")
+        if isinstance(current, Mapping):
+            for key, child in current.items():
+                if not isinstance(key, str):
+                    raise _fail(f"{label} contains a non-string JSON key")
+                try:
+                    key.encode("utf-8", errors="strict")
+                except UnicodeEncodeError:
+                    raise _fail(f"{label} contains invalid Unicode") from None
+                stack.append((child, depth + 1))
+        elif isinstance(current, list):
+            stack.extend((child, depth + 1) for child in current)
+        elif isinstance(current, str):
+            try:
+                current.encode("utf-8", errors="strict")
+            except UnicodeEncodeError:
+                raise _fail(f"{label} contains invalid Unicode") from None
+        elif isinstance(current, float):
+            if not math.isfinite(current):
+                raise _fail(f"{label} contains a non-finite JSON number")
+        elif isinstance(current, int):
+            if not isinstance(current, bool) and current.bit_length() > 128:
+                raise _fail(f"{label} contains an oversized JSON integer")
+        elif current is not None and not isinstance(current, bool):
+            raise _fail(f"{label} contains an unsupported JSON value")
+
+
 def _strict_object(raw: bytes, label: str) -> dict[str, Any]:
     try:
         value = json.loads(
@@ -208,6 +275,7 @@ def _strict_object(raw: bytes, label: str) -> dict[str, Any]:
         raise _fail(f"{label} is not strict JSON") from None
     if not isinstance(value, dict):
         raise _fail(f"{label} must be a JSON object")
+    _validate_json_tree(value, label)
     return value
 
 
@@ -594,6 +662,11 @@ def _validate_handoff(
         or len(handoff["engine_version"]) > 256
     ):
         raise _fail("native handoff engine identity is invalid")
+    try:
+        if len(handoff["engine_version"].encode("utf-8", errors="strict")) > 256:
+            raise _fail("native handoff engine identity is invalid")
+    except UnicodeEncodeError:
+        raise _fail("native handoff engine identity is invalid") from None
     if (
         isinstance(handoff["circuit_source_bytes"], bool)
         or not isinstance(handoff["circuit_source_bytes"], int)
@@ -619,7 +692,7 @@ def _validate_handoff(
         raise _fail("native handoff is not approved")
     try:
         schematic_review = _validate_review(handoff["schematic_review"])
-    except CircuitGenerationError:
+    except (CircuitGenerationError, TypeError, ValueError):
         raise _fail("native handoff schematic review is invalid") from None
     if (
         not schematic_review["approved"]
@@ -755,6 +828,690 @@ def circuit_handoff_bundle_json_schema() -> dict[str, Any]:
             "approved": {"const": True},
         },
     }
+
+
+def circuit_handoff_bundle_result_json_schema() -> dict[str, Any]:
+    """Return the closed verify/extract stdout result schema."""
+
+    digest = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+
+    def artifact(name: str, maximum: int) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["name", "bytes", "sha256"],
+            "properties": {
+                "name": {"const": name},
+                "bytes": {"type": "integer", "minimum": 1, "maximum": maximum},
+                "sha256": digest,
+            },
+        }
+
+    nullable_digest = {"anyOf": [digest, {"type": "null"}]}
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": (
+            "https://github.com/penguin425/pcbex/schemas/"
+            "circuit-generation-kicad-handoff-bundle-result-v1.json"
+        ),
+        "title": "pcbex circuit handoff bundle verification result",
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "schema_version",
+            "operation",
+            "verified",
+            "extracted",
+            "verification_scope",
+            "archive",
+            "manifest",
+            "expected",
+            "validation",
+            "adapter",
+            "engine_version",
+            "bundle_sha256",
+            "artifacts",
+        ],
+        "properties": {
+            "schema_version": {
+                "const": CIRCUIT_HANDOFF_BUNDLE_RESULT_SCHEMA_VERSION
+            },
+            "operation": {"enum": ["verify", "extract"]},
+            "verified": {"const": True},
+            "extracted": {"type": "boolean"},
+            "verification_scope": {
+                "const": CIRCUIT_HANDOFF_BUNDLE_VERIFICATION_SCOPE
+            },
+            "archive": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["bytes", "sha256"],
+                "properties": {
+                    "bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_HANDOFF_ARCHIVE_BYTES,
+                    },
+                    "sha256": digest,
+                },
+            },
+            "manifest": artifact(MANIFEST_NAME, MAX_NATIVE_CHECK_BYTES),
+            "expected": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["archive_sha256", "bundle_sha256"],
+                "properties": {
+                    "archive_sha256": nullable_digest,
+                    "bundle_sha256": nullable_digest,
+                },
+            },
+            "validation": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "internal_consistency",
+                    "expected_identity_matched",
+                    "native_handoff_replayed",
+                    "catalog_input_erc_replayed",
+                ],
+                "properties": {
+                    "internal_consistency": {"const": True},
+                    "expected_identity_matched": {"type": "boolean"},
+                    "native_handoff_replayed": {"const": False},
+                    "catalog_input_erc_replayed": {"const": False},
+                },
+            },
+            "adapter": {"const": CIRCUIT_HANDOFF_BUNDLE_ADAPTER},
+            "engine_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+            },
+            "bundle_sha256": digest,
+            "artifacts": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(_ARTIFACT_NAMES),
+                "properties": {
+                    key: artifact(name, _ARTIFACT_LIMITS[key])
+                    for key, name in _ARTIFACT_NAMES.items()
+                },
+            },
+        },
+        "oneOf": [
+            {
+                "properties": {
+                    "operation": {"const": "verify"},
+                    "extracted": {"const": False},
+                }
+            },
+            {
+                "properties": {
+                    "operation": {"const": "extract"},
+                    "extracted": {"const": True},
+                }
+            },
+        ],
+    }
+
+
+def _preflight_archive_directory(archive_raw: bytes) -> None:
+    """Bound the central directory before ``zipfile`` allocates its records."""
+
+    if (
+        not isinstance(archive_raw, bytes)
+        or not archive_raw
+        or len(archive_raw) > MAX_HANDOFF_ARCHIVE_BYTES
+        or len(archive_raw) < _EOCD.size
+    ):
+        raise _fail("circuit handoff archive exceeds its byte bound")
+    offset = len(archive_raw) - _EOCD.size
+    try:
+        (
+            signature,
+            disk_number,
+            directory_disk,
+            disk_entries,
+            total_entries,
+            directory_bytes,
+            directory_offset,
+            comment_bytes,
+        ) = _EOCD.unpack_from(archive_raw, offset)
+    except struct.error:
+        raise _fail("circuit handoff archive has no canonical central directory") from None
+    if (
+        signature != b"PK\x05\x06"
+        or disk_number != 0
+        or directory_disk != 0
+        or disk_entries != len(_ARCHIVE_ENTRY_NAMES)
+        or total_entries != len(_ARCHIVE_ENTRY_NAMES)
+        or directory_bytes != _EXPECTED_CENTRAL_DIRECTORY_BYTES
+        or comment_bytes != 0
+        or directory_offset + directory_bytes != offset
+    ):
+        raise _fail("circuit handoff archive has no canonical central directory")
+
+
+def _validate_archive_entry(info: zipfile.ZipInfo, expected_name: str) -> None:
+    maximum = _ARCHIVE_ENTRY_LIMITS[expected_name]
+    if (
+        info.filename != expected_name
+        or info.orig_filename != expected_name
+        or info.date_time != (1980, 1, 1, 0, 0, 0)
+        or info.compress_type != zipfile.ZIP_STORED
+        or info.create_system != 3
+        or info.create_version != 20
+        or info.extract_version != 20
+        or info.flag_bits != 0
+        or info.external_attr != 0o100644 << 16
+        or info.internal_attr != 0
+        or info.volume != 0
+        or info.extra != b""
+        or info.comment != b""
+        or info.is_dir()
+        or info.file_size <= 0
+        or info.file_size > maximum
+        or info.compress_size != info.file_size
+    ):
+        raise _fail("circuit handoff archive entry metadata is not canonical")
+
+
+def _read_archive_entry(
+    archive: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    maximum: int,
+) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        with archive.open(info, "r") as stream:
+            while True:
+                allowance = maximum - total
+                chunk = stream.read(min(1024 * 1024, allowance + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > maximum:
+                    raise _fail("circuit handoff archive entry exceeds its byte bound")
+                chunks.append(chunk)
+    except CircuitHandoffBundleError:
+        raise
+    except (OSError, EOFError, RuntimeError, NotImplementedError, zipfile.BadZipFile):
+        raise _fail("circuit handoff archive entry is corrupt") from None
+    raw = b"".join(chunks)
+    if not raw or len(raw) != info.file_size or len(raw) != info.compress_size:
+        raise _fail("circuit handoff archive entry size is inconsistent")
+    return raw
+
+
+def _validate_circuit_handoff_manifest(
+    manifest: Mapping[str, Any],
+    entries: Mapping[str, bytes],
+) -> None:
+    field_order = (
+        "schema_version",
+        "adapter",
+        "engine_version",
+        "artifacts",
+        "circuit_spec_sha256",
+        "electrical_review_sha256",
+        "policy_sha256",
+        "approved",
+        "bundle_sha256",
+    )
+    if list(manifest) != list(field_order):
+        raise _fail("circuit handoff manifest does not match its closed shape")
+    if (
+        isinstance(manifest["schema_version"], bool)
+        or manifest["schema_version"] != CIRCUIT_HANDOFF_BUNDLE_SCHEMA_VERSION
+        or manifest["adapter"] != CIRCUIT_HANDOFF_BUNDLE_ADAPTER
+        or manifest["approved"] is not True
+        or not isinstance(manifest["engine_version"], str)
+        or not manifest["engine_version"]
+        or len(manifest["engine_version"]) > 256
+    ):
+        raise _fail("circuit handoff manifest identity is invalid")
+    try:
+        if len(manifest["engine_version"].encode("utf-8", errors="strict")) > 256:
+            raise _fail("circuit handoff manifest engine identity is invalid")
+    except UnicodeEncodeError:
+        raise _fail("circuit handoff manifest engine identity is invalid") from None
+
+    artifacts = manifest["artifacts"]
+    if not isinstance(artifacts, Mapping) or list(artifacts) != list(_ARTIFACT_NAMES):
+        raise _fail("circuit handoff manifest artifacts are invalid")
+    for role, name in _ARTIFACT_NAMES.items():
+        descriptor = artifacts[role]
+        if not isinstance(descriptor, Mapping) or list(descriptor) != [
+            "name",
+            "bytes",
+            "sha256",
+        ]:
+            raise _fail("circuit handoff manifest artifact descriptor is invalid")
+        byte_count = descriptor["bytes"]
+        if (
+            descriptor["name"] != name
+            or isinstance(byte_count, bool)
+            or not isinstance(byte_count, int)
+            or byte_count <= 0
+            or byte_count > _ARTIFACT_LIMITS[role]
+        ):
+            raise _fail("circuit handoff manifest artifact descriptor is invalid")
+        digest = _digest(descriptor["sha256"], "circuit handoff artifact")
+        raw = entries[name]
+        if byte_count != len(raw) or digest != _sha256(raw):
+            raise _fail("circuit handoff manifest artifact binding is invalid")
+
+    for key in (
+        "circuit_spec_sha256",
+        "electrical_review_sha256",
+        "policy_sha256",
+        "bundle_sha256",
+    ):
+        _digest(manifest[key], f"circuit handoff manifest {key}")
+    identity = {
+        "schema_version": manifest["schema_version"],
+        "adapter": manifest["adapter"],
+        "engine_version": manifest["engine_version"],
+        "artifacts": artifacts,
+        "circuit_spec_sha256": manifest["circuit_spec_sha256"],
+        "electrical_review_sha256": manifest["electrical_review_sha256"],
+        "policy_sha256": manifest["policy_sha256"],
+        "approved": manifest["approved"],
+    }
+    expected_identity = _sha256(_BUNDLE_IDENTITY_DOMAIN + _compact_json(identity))
+    if manifest["bundle_sha256"] != expected_identity:
+        raise _fail("circuit handoff manifest aggregate identity is invalid")
+
+
+def _validate_circuit_handoff_artifact_graph(
+    entries: Mapping[str, bytes],
+    manifest: Mapping[str, Any],
+) -> None:
+    generation_raw = entries[GENERATION_BUNDLE_NAME]
+    circuit_raw = entries[CIRCUIT_SPEC_NAME]
+    check_raw = entries[CIRCUIT_CHECK_NAME]
+    schematic_raw = entries[SCHEMATIC_NAME]
+    handoff_raw = entries[HANDOFF_REPORT_NAME]
+
+    generation_value = _strict_object(generation_raw, "generation bundle")
+    generation, _catalog_input_spec = _validate_circuit_generation_bundle(
+        generation_value,
+        catalog_initial_check=None,
+        allow_unverified_catalog_history=True,
+    )
+    circuit_value = _strict_object(circuit_raw, "normalized circuit specification")
+    try:
+        circuit = _validate_v2_spec(circuit_value)
+    except CircuitGenerationError:
+        raise _fail("normalized circuit specification is invalid") from None
+    if circuit != generation["spec"] or circuit_raw != _pretty_json(
+        generation["spec"],
+        "normalized circuit specification",
+        MAX_CIRCUIT_SPEC_BYTES,
+    ):
+        raise _fail("normalized circuit specification binding is invalid")
+
+    check = _strict_object(check_raw, "native circuit check")
+    try:
+        normalized, error_count = _validate_check_envelope(check)
+    except CircuitGenerationError:
+        raise _fail("native circuit check is invalid") from None
+    if (
+        normalized != circuit
+        or error_count != 0
+        or not check["electrical_review"]["approved"]
+        or check != generation["check"]
+    ):
+        raise _fail("native circuit check binding is invalid")
+    if not schematic_raw:
+        raise _fail("KiCad schematic artifact is empty")
+
+    handoff = _strict_object(handoff_raw, "native handoff report")
+    _validate_handoff(
+        handoff,
+        circuit_raw=circuit_raw,
+        check=check,
+        schematic_raw=schematic_raw,
+    )
+    if (
+        manifest["engine_version"] != handoff["engine_version"]
+        or manifest["circuit_spec_sha256"] != check["circuit_spec_sha256"]
+        or manifest["electrical_review_sha256"]
+        != check["electrical_review_sha256"]
+        or manifest["policy_sha256"] != handoff["policy_sha256"]
+    ):
+        raise _fail("circuit handoff manifest evidence graph is inconsistent")
+
+
+def _circuit_handoff_result(
+    archive_raw: bytes,
+    manifest_raw: bytes,
+    manifest: Mapping[str, Any],
+    *,
+    operation: str,
+    expected_archive_sha256: str | None,
+    expected_bundle_sha256: str | None,
+) -> dict[str, Any]:
+    return {
+        "schema_version": CIRCUIT_HANDOFF_BUNDLE_RESULT_SCHEMA_VERSION,
+        "operation": operation,
+        "verified": True,
+        "extracted": operation == "extract",
+        "verification_scope": CIRCUIT_HANDOFF_BUNDLE_VERIFICATION_SCOPE,
+        "archive": {"bytes": len(archive_raw), "sha256": _sha256(archive_raw)},
+        "manifest": _artifact(MANIFEST_NAME, manifest_raw),
+        "expected": {
+            "archive_sha256": expected_archive_sha256,
+            "bundle_sha256": expected_bundle_sha256,
+        },
+        "validation": {
+            "internal_consistency": True,
+            "expected_identity_matched": (
+                expected_archive_sha256 is not None
+                or expected_bundle_sha256 is not None
+            ),
+            "native_handoff_replayed": False,
+            "catalog_input_erc_replayed": False,
+        },
+        "adapter": manifest["adapter"],
+        "engine_version": manifest["engine_version"],
+        "bundle_sha256": manifest["bundle_sha256"],
+        "artifacts": copy.deepcopy(manifest["artifacts"]),
+    }
+
+
+def _validate_circuit_handoff_archive(
+    archive_raw: bytes,
+    *,
+    operation: str,
+    expected_archive_sha256: str | None,
+    expected_bundle_sha256: str | None,
+) -> tuple[dict[str, Any], dict[str, bytes]]:
+    if operation not in {"verify", "extract"}:
+        raise _fail("circuit handoff verification operation is invalid")
+    expected_archive = _digest(
+        expected_archive_sha256,
+        "expected circuit handoff archive",
+        nullable=True,
+    )
+    expected_bundle = _digest(
+        expected_bundle_sha256,
+        "expected circuit handoff bundle",
+        nullable=True,
+    )
+    _preflight_archive_directory(archive_raw)
+    archive_sha = _sha256(archive_raw)
+    if expected_archive is not None and expected_archive != archive_sha:
+        raise _fail("circuit handoff archive does not match the expected digest")
+
+    entries: dict[str, bytes] = {}
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive_raw), "r", allowZip64=False) as archive:
+            infos = archive.infolist()
+            if archive.comment != b"" or [info.filename for info in infos] != list(
+                _ARCHIVE_ENTRY_NAMES
+            ):
+                raise _fail("circuit handoff archive entries are not the exact set")
+            if len(infos) != len(_ARCHIVE_ENTRY_NAMES):
+                raise _fail("circuit handoff archive entries are not the exact set")
+            for info, expected_name in zip(infos, _ARCHIVE_ENTRY_NAMES, strict=True):
+                _validate_archive_entry(info, expected_name)
+                entries[expected_name] = _read_archive_entry(
+                    archive,
+                    info,
+                    _ARCHIVE_ENTRY_LIMITS[expected_name],
+                )
+    except CircuitHandoffBundleError:
+        raise
+    except (
+        OSError,
+        EOFError,
+        RuntimeError,
+        NotImplementedError,
+        zipfile.BadZipFile,
+        zipfile.LargeZipFile,
+    ):
+        raise _fail("circuit handoff archive is not a valid canonical ZIP") from None
+
+    if sum(len(raw) for raw in entries.values()) > MAX_HANDOFF_ARCHIVE_BYTES:
+        raise _fail("circuit handoff archive entries exceed their aggregate bound")
+    if _archive([(name, entries[name]) for name in _ARCHIVE_ENTRY_NAMES]) != archive_raw:
+        raise _fail("circuit handoff archive container is not canonical")
+
+    manifest_raw = entries[MANIFEST_NAME]
+    manifest = _strict_object(manifest_raw, "circuit handoff manifest")
+    if manifest_raw != _pretty_json(
+        manifest,
+        "circuit handoff manifest",
+        MAX_NATIVE_CHECK_BYTES,
+    ):
+        raise _fail("circuit handoff manifest serialization is not canonical")
+    try:
+        _validate_circuit_handoff_manifest(manifest, entries)
+        _validate_circuit_handoff_artifact_graph(entries, manifest)
+    except CircuitHandoffBundleError:
+        raise
+    except (
+        CatalogError,
+        CircuitGenerationError,
+        KeyError,
+        TypeError,
+        ValueError,
+        UnicodeError,
+        OverflowError,
+    ):
+        raise _fail("circuit handoff artifact graph is invalid") from None
+    if expected_bundle is not None and expected_bundle != manifest["bundle_sha256"]:
+        raise _fail("circuit handoff bundle does not match the expected identity")
+    return (
+        _circuit_handoff_result(
+            archive_raw,
+            manifest_raw,
+            manifest,
+            operation=operation,
+            expected_archive_sha256=expected_archive,
+            expected_bundle_sha256=expected_bundle,
+        ),
+        entries,
+    )
+
+
+def validate_circuit_handoff_archive(
+    archive_raw: bytes,
+    *,
+    expected_archive_sha256: str | None = None,
+    expected_bundle_sha256: str | None = None,
+) -> tuple[dict[str, Any], dict[str, bytes]]:
+    """Validate immutable ZIP bytes and return a summary plus exact entries."""
+
+    return _validate_circuit_handoff_archive(
+        archive_raw,
+        operation="verify",
+        expected_archive_sha256=expected_archive_sha256,
+        expected_bundle_sha256=expected_bundle_sha256,
+    )
+
+
+def _same_identity(left: os.stat_result, right: os.stat_result) -> bool:
+    return (left.st_dev, left.st_ino) == (right.st_dev, right.st_ino)
+
+
+def _sync_directory(path: Path) -> None:
+    if not hasattr(os, "O_DIRECTORY"):
+        return
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0),
+        )
+        os.fsync(descriptor)
+    except OSError as error:
+        if error.errno in {
+            errno.EINVAL,
+            getattr(errno, "ENOTSUP", errno.EINVAL),
+            getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+        }:
+            return
+        raise _fail("could not synchronize extracted circuit handoff directory") from None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+
+def _rollback_owned_extraction(
+    output_dir: Path,
+    directory_identity: os.stat_result,
+    created: Mapping[str, os.stat_result],
+) -> bool:
+    try:
+        current = os.lstat(output_dir)
+        if (
+            not _same_identity(current, directory_identity)
+            or stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISDIR(current.st_mode)
+        ):
+            return False
+        with os.scandir(output_dir) as scanner:
+            entries = {entry.name: entry for entry in scanner}
+        if set(entries) != set(created):
+            return False
+        for name, expected in created.items():
+            metadata = os.lstat(output_dir / name)
+            if (
+                not _same_identity(metadata, expected)
+                or stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_size != expected.st_size
+            ):
+                return False
+        for name in reversed(_ARCHIVE_ENTRY_NAMES):
+            if name in created:
+                os.unlink(output_dir / name)
+        os.rmdir(output_dir)
+        return True
+    except OSError:
+        return False
+
+
+def _reserved_directory_identity(output_dir: Path) -> os.stat_result:
+    metadata = os.lstat(output_dir)
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise OSError(errno.ENOTDIR, "reserved output is not a directory")
+    return metadata
+
+
+def _publish_verified_entries(output_dir: Path, entries: Mapping[str, bytes]) -> None:
+    parent = create_safe_parent(output_dir)
+    validate_no_clobber_path(output_dir)
+    try:
+        os.mkdir(output_dir, 0o700)
+    except OSError:
+        raise _fail("could not reserve the circuit handoff extraction directory") from None
+    try:
+        directory_identity = _reserved_directory_identity(output_dir)
+    except OSError:
+        # Without a captured identity, even an apparently empty path may be a
+        # concurrent replacement.  Leave it untouched rather than deleting an
+        # object this invocation cannot prove it owns.
+        raise _fail(
+            "could not inspect the reserved extraction directory; safe rollback "
+            "was not possible"
+        ) from None
+    created: dict[str, os.stat_result] = {}
+    try:
+        for name in _ARCHIVE_ENTRY_NAMES:
+            atomic_write_no_clobber(
+                output_dir / name,
+                entries[name],
+                max_bytes=_ARCHIVE_ENTRY_LIMITS[name],
+            )
+            created[name] = os.lstat(output_dir / name)
+
+        with os.scandir(output_dir) as scanner:
+            actual_names = [entry.name for entry in scanner]
+        if set(actual_names) != set(_ARCHIVE_ENTRY_NAMES) or len(actual_names) != len(
+            _ARCHIVE_ENTRY_NAMES
+        ):
+            raise _fail("extracted circuit handoff directory has unexpected entries")
+        for name in _ARCHIVE_ENTRY_NAMES:
+            metadata = os.lstat(output_dir / name)
+            if (
+                not _same_identity(metadata, created[name])
+                or stat.S_ISLNK(metadata.st_mode)
+                or not stat.S_ISREG(metadata.st_mode)
+                or read_bytes(
+                    output_dir / name,
+                    max_bytes=_ARCHIVE_ENTRY_LIMITS[name],
+                )
+                != entries[name]
+            ):
+                raise _fail("extracted circuit handoff artifact changed before commit")
+        _sync_directory(output_dir)
+        _sync_directory(parent)
+    except Exception as error:
+        if not _rollback_owned_extraction(output_dir, directory_identity, created):
+            raise _fail(
+                "circuit handoff extraction failed and safe rollback was not possible"
+            ) from error
+        if isinstance(error, CircuitHandoffBundleError):
+            raise
+        if isinstance(error, BoundedIOError):
+            raise _fail("circuit handoff extraction output is invalid") from None
+        raise _fail("could not publish extracted circuit handoff artifacts") from None
+
+
+def verify_circuit_handoff_bundle(
+    bundle: str | os.PathLike[str],
+    *,
+    expected_archive_sha256: str | None = None,
+    expected_bundle_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Stable-read and verify one retained handoff ZIP without writing files."""
+
+    try:
+        archive_raw = read_bytes(bundle, max_bytes=MAX_HANDOFF_ARCHIVE_BYTES)
+    except BoundedIOError:
+        raise _fail("circuit handoff archive input path is invalid") from None
+    result, _entries = _validate_circuit_handoff_archive(
+        archive_raw,
+        operation="verify",
+        expected_archive_sha256=expected_archive_sha256,
+        expected_bundle_sha256=expected_bundle_sha256,
+    )
+    return result
+
+
+def extract_circuit_handoff_bundle(
+    bundle: str | os.PathLike[str],
+    output_dir: str | os.PathLike[str],
+    *,
+    expected_archive_sha256: str | None = None,
+    expected_bundle_sha256: str | None = None,
+) -> dict[str, Any]:
+    """Verify once, then publish the exact six bound entries to a new directory."""
+
+    try:
+        output_path = Path(os.fspath(output_dir))
+        validate_no_clobber_path(output_path)
+        archive_raw = read_bytes(bundle, max_bytes=MAX_HANDOFF_ARCHIVE_BYTES)
+    except (BoundedIOError, TypeError, ValueError):
+        raise _fail("circuit handoff archive input or output path is invalid") from None
+    result, entries = _validate_circuit_handoff_archive(
+        archive_raw,
+        operation="extract",
+        expected_archive_sha256=expected_archive_sha256,
+        expected_bundle_sha256=expected_bundle_sha256,
+    )
+    try:
+        _publish_verified_entries(output_path, entries)
+    except BoundedIOError:
+        raise _fail("circuit handoff extraction output is invalid") from None
+    return result
 
 
 def build_circuit_handoff_archive(
@@ -1006,10 +1763,16 @@ def handoff_circuit_generation(
 
 __all__ = [
     "CIRCUIT_HANDOFF_BUNDLE_ADAPTER",
+    "CIRCUIT_HANDOFF_BUNDLE_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_SCHEMA_VERSION",
+    "CIRCUIT_HANDOFF_BUNDLE_VERIFICATION_SCOPE",
     "CircuitHandoffBundleError",
     "build_circuit_handoff_archive",
     "circuit_handoff_bundle_json_schema",
+    "circuit_handoff_bundle_result_json_schema",
+    "extract_circuit_handoff_bundle",
     "handoff_circuit_generation",
+    "validate_circuit_handoff_archive",
     "validate_circuit_generation_bundle",
+    "verify_circuit_handoff_bundle",
 ]

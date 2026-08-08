@@ -3290,6 +3290,15 @@ PYTHONPATH=agent/src python3 -m pcbex_agent handoff-circuit \
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  verify-circuit-handoff-bundle build/circuit-handoff.zip \
+  --expected-archive-sha256 "$ARCHIVE_SHA256" \
+  --expected-bundle-sha256 "$BUNDLE_SHA256"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  extract-circuit-handoff-bundle build/circuit-handoff.zip \
+  --output-dir build/verified-circuit-handoff
 ```
 
 The input is stable-read once and its closed schema-v2 approval, history shape,
@@ -3302,6 +3311,20 @@ must also approve under one shared monotonic deadline. Success atomically
 publishes one deterministic no-clobber ZIP containing the exact source bundle,
 normalized spec, fresh check, generated schematic, handoff report, and a
 closed digest-graph manifest. Failure publishes no partial artifact.
+
+Version 1.449.0 adds the offline consumer. It rejects any noncanonical ZIP
+framing, entry name/order/metadata/compression, CRC or size mismatch, strict
+JSON failure, manifest forgery, or inconsistent generation/spec/check/
+schematic/handoff edge before publishing anything. Verify-only writes no
+files. Extraction reserves a new no-clobber directory, writes only the six
+fixed names, and commits `manifest.json` last; caught write or synchronization
+failures roll back only identities proven to be created by that invocation,
+while an uninspectable reservation is left untouched. Both commands
+emit closed result-schema-v1 JSON with the outer archive identity and no host
+paths. Its validation flags explicitly distinguish internal consistency from
+the native handoff and omitted catalog-input ERC replays that were not run.
+Optional expected archive and bundle digests bind the otherwise unsigned,
+internally consistent archive to an external trusted value.
 
 This bundle proves a deterministic electrical handoff only. It does not claim
 AI reviewer/quorum approval, supplier inventory or catalog-provenance

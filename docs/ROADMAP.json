@@ -769,6 +769,11 @@
     {
       "id": "atomic-circuit-generation-kicad-handoff-bundle",
       "release": "v1.448.0",
+      "status": "released"
+    },
+    {
+      "id": "verified-circuit-handoff-bundle-consumer",
+      "release": "v1.449.0",
       "status": "current"
     }
   ]
