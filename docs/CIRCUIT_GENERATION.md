@@ -221,6 +221,23 @@ reserved no-clobber directory with the manifest written last; it still does
 not authenticate the producer or replace any downstream approval gate. The
 closed result makes the offline boundary machine-readable by reporting that
 native handoff and omitted catalog-input ERC replay were not performed.
+Version 1.450.0 adds the explicit
+[`replay-circuit-handoff-bundle`](CIRCUIT_HANDOFF_BUNDLE.md) handoff-chain
+replay gate.
+It accepts the same six-entry archive and a caller-supplied `--pcbex` command,
+reconstructs the catalog pre-selection circuit when a catalog receipt is
+present, and reruns its native ERC before rerunning the resolved ERC, schematic
+writer, and semantic KiCad handoff gate. The freshly generated archive and
+manifest must reproduce the retained bytes exactly; the replay emits the
+closed `circuit-generation-kicad-handoff-bundle-replay-result-v1` result and
+writes no final artifact. One aggregate monotonic deadline covers archive
+input, every native child, temporary evidence, and the final byte comparison.
+The engine-version match implied by exact reproduction is not binary
+authentication. The supplied executable is untrusted caller input, real
+KiCad `kicad-cli sch erc` is not run, and supplier/catalog provenance,
+AI/human approval, board/PCB DRC/DFM, and manufacturing authorization remain
+separate gates. The v1.449 offline verify/extract commands remain unchanged
+and do not execute native content.
 The v1.417 [bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md)
 can recompute that standalone binding beside the unchanged `pipeline-verify`
 gate from one digest-bound snapshot plan. A generated design must still

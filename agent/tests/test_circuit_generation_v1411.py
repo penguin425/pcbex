@@ -135,6 +135,38 @@ def _checker_for(spec, errors=(0,), variants=None):
 
 
 class CircuitGenerationV1411Tests(unittest.TestCase):
+    def test_private_workspace_canonicalizes_trusted_temporary_root(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(strict=True)
+            physical = root / "physical-temp"
+            physical.mkdir()
+            linked = root / "linked-temp"
+            try:
+                linked.symlink_to(physical, target_is_directory=True)
+            except (NotImplementedError, OSError) as error:
+                self.skipTest(f"directory symlinks are unavailable: {error}")
+
+            candidate_parents = []
+            native_checker = _checker_for(_spec())
+
+            def checker(candidate, remaining):
+                candidate_parents.append(candidate.parent)
+                return native_checker(candidate, remaining)
+
+            with patch(
+                "pcbex_agent.circuit_generation.tempfile.gettempdir",
+                return_value=str(linked),
+            ):
+                result = generate_circuit_with_llm(
+                    "make a resistor",
+                    {"type": "object"},
+                    lambda _prompt, _remaining: '{"candidate":true}',
+                    checker,
+                )
+
+            self.assertEqual(result["attempts"], 1)
+            self.assertEqual(candidate_parents[0].parent, physical)
+
     def test_invalid_json_then_valid_correction(self):
         spec = _spec()
         responses = iter(["not-json", json.dumps({"candidate": True})])

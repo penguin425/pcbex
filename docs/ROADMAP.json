@@ -774,6 +774,11 @@
     {
       "id": "verified-circuit-handoff-bundle-consumer",
       "release": "v1.449.0",
+      "status": "released"
+    },
+    {
+      "id": "exact-circuit-handoff-chain-replay",
+      "release": "v1.450.0",
       "status": "current"
     }
   ]

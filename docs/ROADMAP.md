@@ -161,6 +161,7 @@ auditable release.
 | v1.447.0 | Cross-phase DFM manufacturing binding | Bind external and built-in DFM profile identity (canonical digest plus origin/source) into fabricate schema-v3 packages, reject binding changes during factory repair, and require exact analysis-to-package matching in the unchanged deterministic pipeline gate; physical-profile v2, policy-pack analysis, receipt v1, and runner schemas remain compatible |
 | v1.448.0 | Atomic circuit-generation KiCad handoff bundle | Revalidate one saved generation bundle, replay its immutable Rust ERC, deterministic KiCad writer, and semantic handoff under one deadline, then atomically publish the exact evidence set and closed digest graph as one deterministic no-clobber ZIP without claiming AI, board, or manufacturing approval |
 | v1.449.0 | Verified circuit handoff bundle consumer | Offline-verify the canonical six-entry v1.448 ZIP, complete digest/semantic graph, and optional external identities before safely extracting fixed names to a newly reserved no-clobber directory with a manifest-last commit boundary |
+| v1.450.0 | Exact circuit handoff chain replay | Re-run the complete deterministic handoff producer chain from a verified bundle and accept only byte-for-byte reproduction of the canonical archive, including catalog-input ERC when required, while keeping offline verify/extract and the archive format unchanged |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -632,7 +633,7 @@ This boundary deliberately does not perform AI signing/quorum, native KiCad
 ERC, supplier snapshot/catalog-provenance authentication, board binding,
 layout, DRC/DFM, manufacturing export, or fabrication authorization.
 
-The current v1.449.0 milestone adds the matching offline consumer. A bounded
+The released v1.449.0 milestone adds the matching offline consumer. A bounded
 stable read is accepted only when the archive has one canonical six-record
 central directory, fixed ordered ASCII names, stored payloads, fixed regular
 file metadata, no comments/extras/flags/ZIP64/data descriptors, valid CRCs and
@@ -650,3 +651,23 @@ the archive remains unsigned and omits the catalog pre-selection check bytes,
 this proves internal consistency, not producer authenticity or fresh replay;
 AI, supplier, native KiCad, board, pipeline, manufacturing, and fabrication
 authorization remain separate gates.
+
+The current v1.450.0 milestone adds an explicit fresh handoff-chain replay
+without changing the canonical six-entry archive or the offline verifier. It
+first completes the v1.449 structural, digest, semantic, and optional expected-
+identity checks, then reuses the exact retained generation source with a
+caller-selected `pcbex` command under one aggregate monotonic deadline. The
+producer chain reruns the reconstructed catalog-input ERC when applicable, the
+final immutable ERC, deterministic KiCad schematic writer, and semantic
+handoff verifier. Success requires the newly generated manifest and complete
+ZIP bytes to equal the retained archive exactly; otherwise no replay result is
+emitted. The closed path-free replay result distinguishes a required and
+completed catalog-input replay and explicitly records that native KiCad CLI ERC
+was not run.
+
+Exact reproduction intentionally requires an engine whose deterministic output
+matches the engine retained by the archive; older archives may therefore need
+their matching released `pcbex` binary. The supplied executable remains a
+caller trust boundary and is not authenticated by this command. Supplier
+snapshot/provenance, AI reviewer quorum, real KiCad native ERC, board, pipeline,
+manufacturing, and fabrication authorization remain separate later gates.

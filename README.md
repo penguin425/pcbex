@@ -3297,6 +3297,13 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --expected-bundle-sha256 "$BUNDLE_SHA256"
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --timeout-seconds 120 \
+  --expected-archive-sha256 "$ARCHIVE_SHA256" \
+  --expected-bundle-sha256 "$BUNDLE_SHA256"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 ```
@@ -3325,6 +3332,27 @@ paths. Its validation flags explicitly distinguish internal consistency from
 the native handoff and omitted catalog-input ERC replays that were not run.
 Optional expected archive and bundle digests bind the otherwise unsigned,
 internally consistent archive to an external trusted value.
+
+Version 1.450.0 adds `replay-circuit-handoff-bundle` for callers that need a
+fresh handoff-chain reproduction. It first performs the same canonical six-entry
+verification, then uses the supplied `--pcbex` executable to rerun the full
+handoff chain and compare the resulting ZIP and manifest byte-for-byte. When
+the generation bundle has a catalog receipt, this includes reconstructing the
+catalog pre-selection circuit and rerunning its native `check-circuit-spec`
+ERC; otherwise only the resolved-circuit chain is required. The command emits
+the closed replay-result schema and publishes no final artifact. Its one
+aggregate monotonic `--timeout-seconds` deadline covers archive input,
+temporary evidence, every native child, and the final byte comparison.
+
+Exact reproduction normally requires the supplied engine to report the same
+`engine_version` as the retained handoff. That is an output-match implication,
+not authentication: the caller-supplied binary and its version claim are not
+authenticated. This command does not invoke real KiCad native schematic ERC
+(`kicad-cli sch erc`), query or authenticate supplier/catalog provenance, grant
+AI or human approval, bind a PCB, run PCB DRC/DFM, or authorize manufacturing.
+The existing offline `verify-circuit-handoff-bundle` and
+`extract-circuit-handoff-bundle` commands remain unchanged and never execute
+native content.
 
 This bundle proves a deterministic electrical handoff only. It does not claim
 AI reviewer/quorum approval, supplier inventory or catalog-provenance
