@@ -52,8 +52,8 @@ def _write_native_wrapper(
         """from __future__ import annotations
 import hashlib
 import json
-import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -63,7 +63,8 @@ configuration = json.loads(
     (root / "native-configuration.json").read_text(encoding="utf-8")
 )
 if sys.argv[1] != "verify-native-kicad-erc-report":
-    os.execv(base[0], [*base, *sys.argv[1:]])
+    completed = subprocess.run([*base, *sys.argv[1:]], check=False)
+    raise SystemExit(completed.returncode)
 
 (root / "native-invocation.json").write_text(
     json.dumps(sys.argv[1:]),
