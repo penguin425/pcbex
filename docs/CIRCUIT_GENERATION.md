@@ -202,6 +202,15 @@ boundaries. v1.416 additionally provides the standalone
 the raw inputs and binds it to an actual `.kicad_pcb`.  It does not generate or
 modify a board or run geometry/routing/DRC/DFM checks; see [Circuit-spec v2 to
 KiCad schematic and board binding verification](CIRCUIT_KICAD_BOARD_BINDING.md).
+Version 1.448.0 adds the explicit downstream
+[`handoff-circuit`](CIRCUIT_HANDOFF_BUNDLE.md) command for a saved generation
+bundle. It revalidates its closed shape and every retained or reconstructable
+generation relationship, replays catalog input ERC when present, and reruns
+the final native check, writer, and semantic handoff under one deadline, then atomically publishes
+their exact bytes in one deterministic no-clobber ZIP. It does not rerun the
+model or convert deterministic electrical approval into AI or manufacturing
+approval. The saved bundle does not retain the original supplier snapshot, so
+inventory/catalog authenticity remains the separate v1.421 provenance gate.
 The v1.417 [bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md)
 can recompute that standalone binding beside the unchanged `pipeline-verify`
 gate from one digest-bound snapshot plan. A generated design must still

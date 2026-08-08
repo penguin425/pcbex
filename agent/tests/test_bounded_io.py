@@ -217,6 +217,26 @@ class BoundedIOTests(unittest.TestCase):
             atomic_write(path, b"published", max_bytes=9)
         self.assertEqual(path.read_bytes(), b"published")
 
+    @unittest.skipIf(os.name == "nt", "Windows skips directory fsync")
+    def test_no_clobber_directory_sync_failure_rolls_back_publication(self):
+        path = self.root / "output"
+        real_fsync = bounded_io.os.fsync
+
+        def fsync_or_fail_directory(descriptor):
+            if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                raise OSError(errno.EIO, "directory sync failed")
+            return real_fsync(descriptor)
+
+        with patch.object(
+            bounded_io.os,
+            "fsync",
+            side_effect=fsync_or_fail_directory,
+        ), self.assertRaises(BoundedIOError):
+            atomic_write_no_clobber(path, b"uncommitted", max_bytes=11)
+
+        self.assertFalse(path.exists())
+        self.assertEqual(list(self.root.iterdir()), [])
+
     def test_oversize_write_preserves_sentinel_and_leaves_no_temp(self):
         path = self.root / "output"
         path.write_bytes(b"sentinel")

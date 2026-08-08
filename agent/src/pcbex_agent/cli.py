@@ -54,6 +54,11 @@ from .circuit_generation import (
     fetch_circuit_spec_v2_schema,
     generate_circuit_with_command,
 )
+from .circuit_handoff_bundle import (
+    CircuitHandoffBundleError,
+    circuit_handoff_bundle_json_schema,
+    handoff_circuit_generation,
+)
 from .repair import propose_repairs
 from .repair_loop import repair_kicad_board, write_repair_report
 from .review import ReviewError
@@ -277,6 +282,22 @@ def main() -> None:
     )
     generation_schema.add_argument("--pcbex", default=None)
     generation_schema.add_argument("-o", "--output", type=Path)
+    handoff_circuit = sub.add_parser(
+        "handoff-circuit",
+        help=(
+            "replay a saved circuit-generation bundle and atomically publish "
+            "an approved KiCad handoff ZIP"
+        ),
+    )
+    handoff_circuit.add_argument("generation_bundle", type=Path)
+    handoff_circuit.add_argument("-o", "--output", type=Path, required=True)
+    handoff_circuit.add_argument("--pcbex", default="pcbex")
+    handoff_circuit.add_argument("--timeout-seconds", type=float, default=120.0)
+    handoff_schema = sub.add_parser(
+        "circuit-handoff-bundle-schema",
+        help="write the closed circuit-generation to KiCad handoff manifest schema",
+    )
+    handoff_schema.add_argument("-o", "--output", type=Path)
     catalog_snapshot_schema = sub.add_parser(
         "catalog-snapshot-schema",
         help="write the closed local catalog-snapshot JSON Schema",
@@ -602,6 +623,41 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, CircuitGenerationError) as error:
             raise SystemExit(f"circuit generation schema failed: {error}") from error
+    elif args.command == "handoff-circuit":
+        try:
+            manifest = handoff_circuit_generation(
+                args.generation_bundle,
+                args.output,
+                args.pcbex,
+                timeout_seconds=args.timeout_seconds,
+            )
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(f"circuit handoff failed: {error}") from error
+        print(
+            "approved circuit handoff bundle written with identity "
+            f"{manifest['bundle_sha256']}"
+        )
+    elif args.command == "circuit-handoff-bundle-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(f"circuit handoff schema failed: {error}") from error
     elif args.command == "fetch-catalog-snapshot":
         try:
             receipt = fetch_catalog_snapshot(

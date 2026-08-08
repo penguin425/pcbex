@@ -21,6 +21,13 @@ from .circuit_generation import (
     generate_circuit_with_command,
     generate_circuit_with_llm,
 )
+from .circuit_handoff_bundle import (
+    CircuitHandoffBundleError,
+    build_circuit_handoff_archive,
+    circuit_handoff_bundle_json_schema,
+    handoff_circuit_generation,
+    validate_circuit_generation_bundle,
+)
 from .review import ReviewError, review_schematic_with_llm
 from .catalog_provenance import (
     CatalogGenerationProvenanceError,
@@ -44,22 +51,27 @@ __all__ = [
     "CircuitGenerationError",
     "CircuitCandidateRejected",
     "CircuitCatalogRejected",
+    "CircuitHandoffBundleError",
     "build_plan",
     "build_catalog_generation_provenance",
+    "build_circuit_handoff_archive",
     "catalog_fetch_receipt_json_schema",
     "catalog_generation_provenance_json_schema",
     "managed_provider_receipt_json_schema",
     "provider_receipt_json_schema",
     "run_provider_command",
     "circuit_generation_json_schema",
+    "circuit_handoff_bundle_json_schema",
     "fetch_circuit_spec_v2_schema",
     "fetch_circuit_spec_check_schema",
     "generate_circuit_with_command",
     "generate_circuit_with_llm",
+    "handoff_circuit_generation",
     "fetch_catalog_snapshot",
     "review_schematic_with_managed_provider",
     "review_schematic_with_command",
     "review_schematic_with_llm",
     "validate_catalog_fetch_receipt",
     "validate_catalog_generation_provenance",
+    "validate_circuit_generation_bundle",
 ]

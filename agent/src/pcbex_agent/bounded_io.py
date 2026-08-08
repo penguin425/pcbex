@@ -787,7 +787,29 @@ def _publish(
                     os.unlink(temporary)
                 except FileNotFoundError:
                     pass
-            _sync_parent(parent)
+            try:
+                _sync_parent(parent)
+            except BoundedIOError as error:
+                # No-clobber publication is a transaction boundary for callers:
+                # if directory durability cannot be confirmed, remove only the
+                # destination that still names our staged inode before reporting
+                # failure.  Never unlink a path replaced by another actor.
+                if no_clobber:
+                    current = _lstat_path(destination, allow_missing_final=True)
+                    if (
+                        current is not None
+                        and _same_file(current, temporary_after)
+                        and current.st_size == len(data)
+                    ):
+                        try:
+                            os.unlink(destination)
+                        except OSError as rollback_error:
+                            raise _wrap_os_error(
+                                rollback_error,
+                                "roll back unsynchronized no-clobber output",
+                                destination,
+                            ) from error
+                raise
         finally:
             if temporary_descriptor is not None:
                 try:

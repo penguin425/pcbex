@@ -197,7 +197,10 @@ def _validate_v2_spec(value: Any) -> dict[str, Any]:
         raise CircuitGenerationError(
             "native normalized_spec must contain exactly schema_version, parts, and nets"
         )
-    if value["schema_version"] != NATIVE_SPEC_SCHEMA_VERSION:
+    if (
+        isinstance(value["schema_version"], bool)
+        or value["schema_version"] != NATIVE_SPEC_SCHEMA_VERSION
+    ):
         raise CircuitGenerationError("native normalized_spec has an unsupported schema version")
     parts = value["parts"]
     nets = value["nets"]
@@ -367,7 +370,7 @@ def _validate_review(value: Any) -> dict[str, Any]:
     }
     if not isinstance(value, dict) or set(value) != expected:
         raise CircuitGenerationError("native electrical_review has an unexpected shape")
-    if value["schema_version"] != 1:
+    if isinstance(value["schema_version"], bool) or value["schema_version"] != 1:
         raise CircuitGenerationError("native electrical_review has an unsupported schema version")
     _valid_sha(value["schematic_sha256"], "electrical review schematic_sha256")
     _valid_sha(value["policy_sha256"], "electrical review policy_sha256")
@@ -463,7 +466,10 @@ def _validate_check_envelope(value: Any) -> tuple[dict[str, Any], int]:
     }
     if not isinstance(value, dict) or set(value) != expected:
         raise CircuitGenerationError("native circuit check envelope has an unexpected shape")
-    if value["schema_version"] != NATIVE_CHECK_SCHEMA_VERSION:
+    if (
+        isinstance(value["schema_version"], bool)
+        or value["schema_version"] != NATIVE_CHECK_SCHEMA_VERSION
+    ):
         raise CircuitGenerationError("native circuit check envelope has an unsupported schema version")
     circuit_sha = _valid_sha(value["circuit_spec_sha256"], "circuit_spec_sha256")
     normalized = _validate_v2_spec(value["normalized_spec"])

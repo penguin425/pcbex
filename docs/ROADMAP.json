@@ -764,6 +764,11 @@
     {
       "id": "cross-phase-dfm-manufacturing-binding",
       "release": "v1.447.0",
+      "status": "released"
+    },
+    {
+      "id": "atomic-circuit-generation-kicad-handoff-bundle",
+      "release": "v1.448.0",
       "status": "current"
     }
   ]
