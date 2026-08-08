@@ -3276,6 +3276,41 @@ MPNs in `_PCBEX_MPN_BY_REFERENCE` and, for snapshot selection, records
 `_PCBEX_CATALOG_RECEIPT_SHA256`; it does not pass an unsupported `mpn=`
 keyword to `Part`.
 
+## Atomic saved-circuit handoff
+
+Version 1.448.0 connects the retained generation result to the existing Rust
+ERC, deterministic KiCad writer, and semantic handoff verifier without
+calling the model again:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent handoff-circuit \
+  build/circuit-generation.json \
+  --pcbex target/release/pcbex \
+  --output build/circuit-handoff.zip
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-schema
+```
+
+The input is stable-read once and its closed schema-v2 approval, history shape,
+retained/reconstructable catalog relationships, normalized spec/check, and
+inert SKiDL evidence are validated before a native child starts. Catalog input
+semantics are reconstructed from the receipt and replayed through Rust ERC so
+all pre-selection history digests are checked. A fresh `check-circuit-spec`
+result for the resolved circuit must equal the retained check; the writer and explicit handoff verifier
+must also approve under one shared monotonic deadline. Success atomically
+publishes one deterministic no-clobber ZIP containing the exact source bundle,
+normalized spec, fresh check, generated schematic, handoff report, and a
+closed digest-graph manifest. Failure publishes no partial artifact.
+
+This bundle proves a deterministic electrical handoff only. It does not claim
+AI reviewer/quorum approval, supplier inventory or catalog-provenance
+authenticity, native KiCad ERC, PCB/layout/DRC/DFM approval, or fabrication
+authorization. Procurement decisions must separately verify the retained
+catalog-generation provenance against its original snapshot. See
+[`docs/CIRCUIT_HANDOFF_BUNDLE.md`](docs/CIRCUIT_HANDOFF_BUNDLE.md) for the
+archive contract and downstream trust boundary.
+
 ## Deterministic circuit-spec v2 to KiCad schematic writer
 
 Version 1.422 can materialize an immutable-ERC-approved circuit-spec as a

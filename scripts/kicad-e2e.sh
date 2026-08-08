@@ -60,6 +60,14 @@ PY
 jq -e '.approved == true and .counts.errors == 0' \
   "$generated_handoff" >/dev/null
 
+# Reuse the same real Rust binary through the Python saved-generation
+# orchestrator. The focused test first obtains a genuine immutable-ERC check,
+# then requires the writer and explicit semantic handoff before inspecting the
+# atomically published deterministic ZIP.
+PCBEX_TEST_BINARY="$pcbex_binary" PYTHONPATH=agent/src \
+  python3 -m unittest \
+  agent.tests.test_circuit_handoff_bundle_v1448.CircuitHandoffBundleTests.test_real_native_erc_writer_and_handoff_when_binary_is_supplied
+
 # Native KiCad ERC is a second, independent electrical gate.  The runner uses
 # a private staged directory and an error-only invocation, so KiCad's
 # timestamp/source-path fields cannot make the retained evidence unstable.

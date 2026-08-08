@@ -159,6 +159,7 @@ auditable release.
 | v1.445.0 | Bounded external DFM profile loader | Route every external fabrication-profile entry point through one 4 MiB stable regular-file reader, reject direct or ancestor symlinks and duplicate JSON keys, and preserve built-in and policy-pack profile behavior without changing DFM or manifest schemas; the embedded DFM object in a policy pack remains on its separate parser/size contract |
 | v1.446.0 | Strict SKiDL no-connect adapter | Preserve checked circuit-spec v2 no-connect pins through the compatibility SKiDL renderer with the native `NC` singleton, reject forged null/type or pin/net coverage relationships before source generation, and leave schema-v1 output byte-identical |
 | v1.447.0 | Cross-phase DFM manufacturing binding | Bind external and built-in DFM profile identity (canonical digest plus origin/source) into fabricate schema-v3 packages, reject binding changes during factory repair, and require exact analysis-to-package matching in the unchanged deterministic pipeline gate; physical-profile v2, policy-pack analysis, receipt v1, and runner schemas remain compatible |
+| v1.448.0 | Atomic circuit-generation KiCad handoff bundle | Revalidate one saved generation bundle, replay its immutable Rust ERC, deterministic KiCad writer, and semantic handoff under one deadline, then atomically publish the exact evidence set and closed digest graph as one deterministic no-clobber ZIP without claiming AI, board, or manufacturing approval |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -604,7 +605,7 @@ assignments before ordinary nets; no synthetic `NC` net is created, and the
 schema-v1 generator remains byte-compatible. SKiDL stays an optional runtime
 dependency.
 
-The current v1.447.0 milestone adds a closed `DfmProfileBinding` contract for
+The released v1.447.0 milestone adds a closed `DfmProfileBinding` contract for
 external and built-in fabrication profiles. `fabricate --fab` and
 `fabricate --fab-profile` apply the selected rules before DRC/export and write
 schema-v3 manufacturing manifests with canonical profile identity and either
@@ -615,3 +616,17 @@ substitution, while `pipeline-verify` requires exact external/built-in binding
 equality between analysis and manufacturing. Policy-pack DFM, receipt v1,
 MCP/Action inputs, and deterministic plan/report schemas are intentionally
 unchanged.
+
+The current v1.448.0 milestone connects a retained schema-v2 circuit-generation
+result to the existing native circuit checker, deterministic KiCad schematic
+writer, and semantic handoff verifier. It stable-reads the saved bundle and
+revalidates its closed shape plus every retained or reconstructable
+relationship, treats provider metadata and SKiDL as inert evidence, and
+requires the freshly replayed check to equal the retained approved check before
+running the writer and explicit handoff under the same monotonic deadline.
+Success publishes one deterministic no-clobber ZIP containing the exact source
+bundle, normalized spec, check, schematic, handoff report, and a closed
+domain-separated manifest; every failed gate publishes no partial archive.
+This boundary deliberately does not perform AI signing/quorum, native KiCad
+ERC, supplier snapshot/catalog-provenance authentication, board binding,
+layout, DRC/DFM, manufacturing export, or fabrication authorization.
