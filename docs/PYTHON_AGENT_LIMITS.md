@@ -34,6 +34,13 @@ rather than trusted by existence. Rollback is live-state cleanup;
 directory-entry deletion is not claimed crash-durable on filesystems that do
 not support directory `fsync`.
 
+The optional v1.451 handoff native-ERC replay keeps its evidence outside that
+ZIP. A retained normalized report is limited to 32 MiB and its optional exact
+warning-policy source to 1 MiB. Both are stable-read before the expensive
+handoff-chain replay, staged as exact bytes only in private temporary storage,
+and reread from the caller-visible paths after KiCad exits. A mutation, alias,
+non-regular file, linked path, empty input, or over-limit input fails closed.
+
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent
 traversal is not accepted. The reader checks the advertised path identity and size, opens
@@ -87,7 +94,7 @@ limit before network access.
 |---|---:|---:|---:|---:|
 | External AI provider adapter | configurable 1–600 seconds; default 120 | 32 MiB | configurable 1 byte–16 MiB; default 1 MiB | same as stdout |
 | Generic agent `pcbex` invocation | default 300 seconds | closed | 8 MiB | 1 MiB |
-| Circuit handoff chain replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
+| Circuit handoff chain/native ERC replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
 
@@ -95,22 +102,28 @@ The circuit handoff replay is the only handoff consumer in this table that
 starts native children. Its one monotonic deadline begins before the archive
 read and is shared by canonical archive validation, every `pcbex` child,
 bounded temporary artifact reads, deterministic ZIP reconstruction, and the
-final byte-for-byte comparison. Each child receives only the remaining time;
-the deadline is not reset for the catalog-input ERC, resolved ERC, schematic
-writer, or semantic handoff stages. A catalog receipt makes the
-catalog-input ERC stage required. The replay writes only private temporary
-files and publishes no archive or extraction directory.
+final byte-for-byte comparison. When a retained native report is supplied, the
+same deadline also covers its optional policy, private staging, fresh native
+KiCad verification, post-run stable rereads, and cleanup. Each producer child
+receives only the remaining time; the deadline is not reset for the
+catalog-input ERC, resolved ERC, schematic writer, or semantic handoff stages.
+The nested Rust native verifier receives a shorter internal duration that
+reserves outer cleanup time and applies it directly to the KiCad process tree.
+A catalog receipt makes the catalog-input ERC stage required. The replay writes
+only private temporary files and publishes no archive or extraction directory.
 
 `--pcbex` is a caller-supplied executable/argument boundary, invoked without a
 shell. The process runner bounds its output and process-tree lifetime, but it
 is not a CPU, memory, filesystem, network, syscall, or privilege sandbox.
 The supplied binary and its reported version are not authenticated. Exact
 archive reproduction normally implies a matching retained `engine_version`,
-but that is an output equality check rather than binary provenance. The replay
-uses pcbex's semantic `verify-circuit-kicad-handoff` gate; it does not run real
-KiCad native schematic ERC. The offline `verify-circuit-handoff-bundle` and
-`extract-circuit-handoff-bundle` paths remain native-child-free and retain their
-existing no-execution boundary.
+but that is an output equality check rather than binary provenance. The default
+replay uses pcbex's semantic `verify-circuit-kicad-handoff` gate without real
+KiCad schematic ERC. v1.451 runs real `kicad-cli sch erc` only when the caller
+explicitly supplies `--native-kicad-erc-report`; both `--pcbex` and
+`--kicad-cli` are unauthenticated, unsandboxed caller-selected executables. The
+offline `verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`
+paths remain native-child-free and retain their existing no-execution boundary.
 
 Exactly the configured input or output limit is accepted. The next byte, deadline,
 pipe failure, or cleanup failure terminates the process tree and reaps the

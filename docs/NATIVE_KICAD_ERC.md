@@ -11,6 +11,9 @@ ERC evidence. CLI, MCP, and the focused Action replay report schema v1 or v2
 read-only, retain rejected evidence before an optional approval gate, and
 stable-read the original schematic around the KiCad run. Existing native run
 and AI-review contracts remain unchanged.
+Release v1.451.0 adds a finite CLI replay timeout and lets the Python circuit
+handoff replay bind retained native ERC evidence to an exactly reproduced
+schematic without changing the retained handoff archive.
 
 ```sh
 pcbex run-native-kicad-erc hardware/generated.kicad_sch \
@@ -134,12 +137,12 @@ replacement:
 ```sh
 pcbex verify-native-kicad-erc-report \
   hardware/controller.kicad_sch build/native-kicad-erc.json \
-  --kicad-cli kicad-cli --require-approved
+  --kicad-cli kicad-cli --timeout-seconds 120 --require-approved
 
 pcbex verify-native-kicad-erc-report \
   hardware/controller.kicad_sch build/native-kicad-erc-warning.json \
   --warning-policy examples/native-kicad-warning-policy.json \
-  --kicad-cli kicad-cli --require-approved
+  --kicad-cli kicad-cli --timeout-seconds 120 --require-approved
 ```
 
 The first command replays fixed error-only report v1; supplying the same
@@ -149,6 +152,24 @@ under the bounded report limit. Any source, policy, retained-report, or
 normalized-byte mutation fails closed while leaving retained evidence
 untouched. `--require-approved` is evaluated only after a complete replay and
 does not delete rejected evidence.
+
+The standalone CLI verifier's `--timeout-seconds` value is a finite positive
+number no greater than 600 and may be fractional. It is applied directly to the
+fresh KiCad process tree; zero, negative, non-finite, over-limit, or values that
+cannot be represented as a nonzero Rust duration are rejected before the run.
+Omitting the option preserves the 600-second default. This option changes only
+the synchronous `verify-native-kicad-erc-report` CLI path: existing native run,
+MCP, Task, and Action timeout contracts continue to use their established
+boundaries and defaults.
+
+Version 1.451 also exposes this verifier as an optional final assertion on
+`pcbex-agent replay-circuit-handoff-bundle`. That integration first reproduces
+the canonical six-entry handoff ZIP exactly, then runs this verifier against
+the reproduced schematic under the remaining aggregate deadline. The retained
+report and optional exact policy remain bounded external sidecars; they are not
+inserted into the archive. See
+[Atomic circuit-generation to KiCad handoff bundle](CIRCUIT_HANDOFF_BUNDLE.md)
+for its versioned, path-free replay-result contract and trust boundary.
 
 MCP exposes the same boundary as
 `verify_native_kicad_erc_report` with `input`, `retained_report`, optional

@@ -73,11 +73,17 @@ CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION = 1
 CIRCUIT_HANDOFF_BUNDLE_REPLAY_SCOPE = (
     "deterministic-electrical-handoff-chain-replay-v1"
 )
+CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION = 2
+CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE = (
+    "deterministic-electrical-handoff-chain-native-kicad-erc-replay-v2"
+)
 MAX_GENERATION_BUNDLE_BYTES = MAX_NATIVE_CHECK_BYTES
 MAX_CIRCUIT_SPEC_BYTES = 16 * 1024 * 1024
 MAX_SCHEMATIC_BYTES = 64 * 1024 * 1024
 MAX_HANDOFF_REPORT_BYTES = 64 * 1024 * 1024
 MAX_HANDOFF_ARCHIVE_BYTES = 224 * 1024 * 1024
+MAX_NATIVE_KICAD_ERC_REPORT_BYTES = 32 * 1024 * 1024
+MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES = 1 * 1024 * 1024
 MAX_CHILD_STDOUT_BYTES = 1 * 1024 * 1024
 MAX_CHILD_STDERR_BYTES = 1 * 1024 * 1024
 
@@ -611,7 +617,7 @@ def _run_native(
     step: str,
     deadline: float,
     clock: Callable[[], float],
-) -> None:
+) -> bytes:
     try:
         result = run_bounded(
             argv,
@@ -624,6 +630,216 @@ def _run_native(
     if result.returncode != 0:
         raise _fail(f"native {step} rejected the handoff")
     _remaining(deadline, clock)
+    return result.stdout
+
+
+def _path_argument(value: str | os.PathLike[str], label: str) -> str:
+    try:
+        rendered = os.fspath(value)
+    except TypeError:
+        raise _fail(f"{label} is invalid") from None
+    if (
+        not isinstance(rendered, str)
+        or not rendered
+        or "\x00" in rendered
+        or len(rendered) > 32_768
+    ):
+        raise _fail(f"{label} is invalid")
+    return rendered
+
+
+def _trusted_temporary_root() -> Path:
+    # macOS exposes its process-selected temporary area through the
+    # system-managed ``/var`` symlink. Canonicalize only that trusted root so
+    # strict descendant checks still reject caller-controlled symlinks.
+    try:
+        return Path(tempfile.gettempdir()).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise _fail("trusted temporary root is invalid") from None
+
+
+def _summary_count(value: Any, label: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value.bit_length() > 63
+    ):
+        raise _fail(f"native KiCad ERC {label} is invalid")
+    return value
+
+
+def _native_kicad_erc_replay_evidence(
+    summary: Mapping[str, Any],
+    *,
+    report_raw: bytes,
+    warning_policy_raw: bytes | None,
+    approval_required: bool,
+) -> dict[str, Any]:
+    common = {
+        "schema_version",
+        "approved",
+        "error_count",
+        "run_sha256",
+        "report_bytes",
+        "report_sha256",
+    }
+    warning = {
+        "warning_count",
+        "policy_failure_count",
+        "warning_policy_sha256",
+        "warning_policy_source_bytes",
+        "warning_policy_source_sha256",
+    }
+    expected = common if warning_policy_raw is None else common | warning
+    if set(summary) != expected:
+        raise _fail("native KiCad ERC replay summary fields are invalid")
+
+    expected_schema = 1 if warning_policy_raw is None else 2
+    if summary["schema_version"] != expected_schema:
+        raise _fail("native KiCad ERC replay summary schema is invalid")
+    approved = summary["approved"]
+    if not isinstance(approved, bool):
+        raise _fail("native KiCad ERC replay decision is invalid")
+    error_count = _summary_count(summary["error_count"], "error count")
+    report_bytes = _summary_count(summary["report_bytes"], "report byte count")
+    report_sha256 = _digest(summary["report_sha256"], "native KiCad ERC report")
+    run_sha256 = _digest(summary["run_sha256"], "native KiCad ERC run")
+    if (
+        report_bytes != len(report_raw)
+        or report_bytes == 0
+        or report_bytes > MAX_NATIVE_KICAD_ERC_REPORT_BYTES
+        or report_sha256 != _sha256(report_raw)
+    ):
+        raise _fail("native KiCad ERC replay report identity is invalid")
+
+    warning_count: int | None = None
+    policy_failure_count: int | None = None
+    warning_policy: dict[str, Any] | None = None
+    if warning_policy_raw is not None:
+        warning_count = _summary_count(summary["warning_count"], "warning count")
+        policy_failure_count = _summary_count(
+            summary["policy_failure_count"],
+            "policy failure count",
+        )
+        policy_source_bytes = _summary_count(
+            summary["warning_policy_source_bytes"],
+            "warning policy byte count",
+        )
+        policy_source_sha256 = _digest(
+            summary["warning_policy_source_sha256"],
+            "native KiCad ERC warning policy source",
+        )
+        policy_sha256 = _digest(
+            summary["warning_policy_sha256"],
+            "native KiCad ERC warning policy",
+        )
+        if (
+            policy_source_bytes != len(warning_policy_raw)
+            or policy_source_bytes == 0
+            or policy_source_bytes > MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES
+            or policy_source_sha256 != _sha256(warning_policy_raw)
+        ):
+            raise _fail("native KiCad ERC warning policy identity is invalid")
+        warning_policy = {
+            "source": {
+                "bytes": policy_source_bytes,
+                "sha256": policy_source_sha256,
+            },
+            "policy_sha256": policy_sha256,
+        }
+
+    expected_approved = error_count == 0 and (
+        policy_failure_count is None or policy_failure_count == 0
+    )
+    if approved != expected_approved or (approval_required and not approved):
+        raise _fail("native KiCad ERC replay decision is inconsistent")
+    return {
+        "schema_version": expected_schema,
+        "approved": approved,
+        "approval_required": approval_required,
+        "error_count": error_count,
+        "warning_count": warning_count,
+        "policy_failure_count": policy_failure_count,
+        "run_sha256": run_sha256,
+        "report": {
+            "bytes": report_bytes,
+            "sha256": report_sha256,
+        },
+        "warning_policy": warning_policy,
+    }
+
+
+def _replay_native_kicad_erc(
+    schematic_raw: bytes,
+    report_raw: bytes,
+    warning_policy_raw: bytes | None,
+    command: Sequence[str],
+    kicad_cli: str,
+    *,
+    require_approved: bool,
+    deadline: float,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="pcbex-handoff-native-erc-",
+            dir=_trusted_temporary_root(),
+        ) as directory:
+            root = Path(directory)
+            schematic_path = root / SCHEMATIC_NAME
+            report_path = root / "native-kicad-erc.json"
+            policy_path = root / "native-kicad-erc-warning-policy.json"
+            atomic_write_no_clobber(
+                schematic_path,
+                schematic_raw,
+                max_bytes=MAX_SCHEMATIC_BYTES,
+            )
+            _remaining(deadline, clock)
+            atomic_write_no_clobber(
+                report_path,
+                report_raw,
+                max_bytes=MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
+            )
+            _remaining(deadline, clock)
+            argv = [
+                *command,
+                "verify-native-kicad-erc-report",
+                f"--kicad-cli={kicad_cli}",
+            ]
+            if warning_policy_raw is not None:
+                atomic_write_no_clobber(
+                    policy_path,
+                    warning_policy_raw,
+                    max_bytes=MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                )
+                _remaining(deadline, clock)
+                argv.append(f"--warning-policy={policy_path}")
+            if require_approved:
+                argv.append("--require-approved")
+            argv.append("--mcp-echo-report-summary")
+            outer_remaining = _remaining(deadline, clock)
+            cleanup_reserve = min(5.0, outer_remaining / 2.0)
+            native_timeout = outer_remaining - cleanup_reserve
+            argv.append(f"--timeout-seconds={native_timeout:.17g}")
+            argv.extend(["--", str(schematic_path), str(report_path)])
+            stdout = _run_native(
+                argv,
+                step="KiCad ERC report replay",
+                deadline=deadline,
+                clock=clock,
+            )
+            summary = _strict_object(stdout, "native KiCad ERC replay summary")
+            return _native_kicad_erc_replay_evidence(
+                summary,
+                report_raw=report_raw,
+                warning_policy_raw=warning_policy_raw,
+                approval_required=require_approved,
+            )
+    except BoundedIOError:
+        raise _fail("native KiCad ERC replay staging failed") from None
+    except OSError:
+        raise _fail("native KiCad ERC replay workspace failed") from None
 
 
 def _artifact(name: str, raw: bytes) -> dict[str, Any]:
@@ -1024,6 +1240,114 @@ def circuit_handoff_bundle_replay_result_json_schema() -> dict[str, Any]:
     ]
     properties["schema_version"] = {
         "const": CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION
+    }
+    return schema
+
+
+def circuit_handoff_bundle_native_erc_replay_result_json_schema() -> dict[str, Any]:
+    """Return the closed exact-chain plus native KiCad ERC replay schema."""
+
+    schema = copy.deepcopy(circuit_handoff_bundle_replay_result_json_schema())
+    schema["$id"] = (
+        "https://github.com/penguin425/pcbex/schemas/"
+        "circuit-generation-kicad-handoff-bundle-native-erc-replay-result-v2.json"
+    )
+    schema["title"] = "pcbex circuit handoff bundle native KiCad ERC replay result"
+    schema["required"].append("native_kicad_erc")
+    properties = schema["properties"]
+    properties["schema_version"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION
+    }
+    properties["verification_scope"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE
+    }
+    properties["validation"]["properties"]["native_kicad_erc_replayed"] = {
+        "const": True
+    }
+
+    digest = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    count = {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": (1 << 63) - 1,
+    }
+    nullable_count = {"anyOf": [count, {"type": "null"}]}
+    warning_policy = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["source", "policy_sha256"],
+        "properties": {
+            "source": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["bytes", "sha256"],
+                "properties": {
+                    "bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                    },
+                    "sha256": digest,
+                },
+            },
+            "policy_sha256": digest,
+        },
+    }
+    properties["native_kicad_erc"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "schema_version",
+            "approved",
+            "approval_required",
+            "error_count",
+            "warning_count",
+            "policy_failure_count",
+            "run_sha256",
+            "report",
+            "warning_policy",
+        ],
+        "properties": {
+            "schema_version": {"enum": [1, 2]},
+            "approved": {"type": "boolean"},
+            "approval_required": {"type": "boolean"},
+            "error_count": count,
+            "warning_count": nullable_count,
+            "policy_failure_count": nullable_count,
+            "run_sha256": digest,
+            "report": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["bytes", "sha256"],
+                "properties": {
+                    "bytes": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
+                    },
+                    "sha256": digest,
+                },
+            },
+            "warning_policy": {"anyOf": [{"type": "null"}, warning_policy]},
+        },
+        "oneOf": [
+            {
+                "properties": {
+                    "schema_version": {"const": 1},
+                    "warning_count": {"type": "null"},
+                    "policy_failure_count": {"type": "null"},
+                    "warning_policy": {"type": "null"},
+                }
+            },
+            {
+                "properties": {
+                    "schema_version": {"const": 2},
+                    "warning_count": count,
+                    "policy_failure_count": count,
+                    "warning_policy": warning_policy,
+                }
+            },
+        ],
     }
     return schema
 
@@ -1612,10 +1936,33 @@ def _circuit_handoff_replay_result(
     return result
 
 
+def _circuit_handoff_native_erc_replay_result(
+    verification: Mapping[str, Any],
+    *,
+    catalog_input_erc_required: bool,
+    native_kicad_erc: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = _circuit_handoff_replay_result(
+        verification,
+        catalog_input_erc_required=catalog_input_erc_required,
+    )
+    result["schema_version"] = (
+        CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION
+    )
+    result["verification_scope"] = CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE
+    result["validation"]["native_kicad_erc_replayed"] = True
+    result["native_kicad_erc"] = copy.deepcopy(dict(native_kicad_erc))
+    return result
+
+
 def replay_circuit_handoff_bundle(
     bundle: str | os.PathLike[str],
     pcbex: str | Sequence[str],
     *,
+    retained_native_kicad_erc_report: str | os.PathLike[str] | None = None,
+    kicad_cli: str | os.PathLike[str] = "kicad-cli",
+    native_kicad_erc_warning_policy: str | os.PathLike[str] | None = None,
+    require_native_kicad_erc_approved: bool = False,
     timeout_seconds: float = 120.0,
     expected_archive_sha256: str | None = None,
     expected_bundle_sha256: str | None = None,
@@ -1639,6 +1986,16 @@ def replay_circuit_handoff_bundle(
     deadline = start + timeout
     if not math.isfinite(deadline):
         raise _fail("aggregate timeout is invalid")
+    if not isinstance(require_native_kicad_erc_approved, bool):
+        raise _fail("native KiCad ERC approval requirement is invalid")
+    kicad_cli_argument = _path_argument(kicad_cli, "kicad-cli argument")
+    native_erc_requested = retained_native_kicad_erc_report is not None
+    if not native_erc_requested and (
+        native_kicad_erc_warning_policy is not None
+        or require_native_kicad_erc_approved
+        or kicad_cli_argument != "kicad-cli"
+    ):
+        raise _fail("native KiCad ERC options require a retained report")
     try:
         command = _normalize_command(pcbex, label="pcbex command")
         archive_raw = read_bytes(bundle, max_bytes=MAX_HANDOFF_ARCHIVE_BYTES)
@@ -1656,6 +2013,33 @@ def replay_circuit_handoff_bundle(
     generation = _strict_object(entries[GENERATION_BUNDLE_NAME], "generation bundle")
     catalog_input_erc_required = generation["catalog_receipt"] is not None
     _remaining(deadline, _clock)
+
+    native_report_raw: bytes | None = None
+    warning_policy_raw: bytes | None = None
+    if native_erc_requested:
+        assert retained_native_kicad_erc_report is not None
+        try:
+            native_report_raw = read_bytes(
+                retained_native_kicad_erc_report,
+                max_bytes=MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
+            )
+        except BoundedIOError:
+            raise _fail("retained native KiCad ERC report path is invalid") from None
+        if not native_report_raw:
+            raise _fail("retained native KiCad ERC report is empty")
+        _remaining(deadline, _clock)
+        if native_kicad_erc_warning_policy is not None:
+            try:
+                warning_policy_raw = read_bytes(
+                    native_kicad_erc_warning_policy,
+                    max_bytes=MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                )
+            except BoundedIOError:
+                raise _fail("native KiCad ERC warning policy path is invalid") from None
+            if not warning_policy_raw:
+                raise _fail("native KiCad ERC warning policy is empty")
+            _remaining(deadline, _clock)
+
     replayed_archive, replayed_manifest = build_circuit_handoff_archive(
         entries[GENERATION_BUNDLE_NAME],
         command,
@@ -1669,6 +2053,45 @@ def replay_circuit_handoff_bundle(
             "fresh handoff-chain replay did not reproduce the retained archive"
         )
     _remaining(deadline, _clock)
+    if native_report_raw is not None:
+        native_kicad_erc = _replay_native_kicad_erc(
+            entries[SCHEMATIC_NAME],
+            native_report_raw,
+            warning_policy_raw,
+            command,
+            kicad_cli_argument,
+            require_approved=require_native_kicad_erc_approved,
+            deadline=deadline,
+            clock=_clock,
+        )
+        _remaining(deadline, _clock)
+        try:
+            report_after = read_bytes(
+                retained_native_kicad_erc_report,
+                max_bytes=MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
+            )
+        except BoundedIOError:
+            raise _fail("retained native KiCad ERC report changed during replay") from None
+        if report_after != native_report_raw:
+            raise _fail("retained native KiCad ERC report changed during replay")
+        _remaining(deadline, _clock)
+        if native_kicad_erc_warning_policy is not None:
+            assert warning_policy_raw is not None
+            try:
+                warning_policy_after = read_bytes(
+                    native_kicad_erc_warning_policy,
+                    max_bytes=MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                )
+            except BoundedIOError:
+                raise _fail("native KiCad ERC warning policy changed during replay") from None
+            if warning_policy_after != warning_policy_raw:
+                raise _fail("native KiCad ERC warning policy changed during replay")
+            _remaining(deadline, _clock)
+        return _circuit_handoff_native_erc_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            native_kicad_erc=native_kicad_erc,
+        )
     return _circuit_handoff_replay_result(
         verification,
         catalog_input_erc_required=catalog_input_erc_required,
@@ -1721,16 +2144,9 @@ def build_circuit_handoff_archive(
         generation["spec"], "normalized circuit specification", MAX_CIRCUIT_SPEC_BYTES
     )
 
-    # macOS exposes its process-selected temporary area through the
-    # system-managed ``/var`` symlink. Canonicalize only that trusted root so
-    # the strict descendant path checks do not reject our private workspace.
-    try:
-        trusted_temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
-    except (OSError, RuntimeError):
-        raise _fail("trusted temporary root is invalid") from None
     with tempfile.TemporaryDirectory(
         prefix="pcbex-handoff-",
-        dir=trusted_temporary_root,
+        dir=_trusted_temporary_root(),
     ) as directory:
         root = Path(directory)
         circuit_path = root / CIRCUIT_SPEC_NAME
@@ -1934,6 +2350,8 @@ def handoff_circuit_generation(
 
 __all__ = [
     "CIRCUIT_HANDOFF_BUNDLE_ADAPTER",
+    "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION",
+    "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_RESULT_SCHEMA_VERSION",
@@ -1942,6 +2360,7 @@ __all__ = [
     "CircuitHandoffBundleError",
     "build_circuit_handoff_archive",
     "circuit_handoff_bundle_json_schema",
+    "circuit_handoff_bundle_native_erc_replay_result_json_schema",
     "circuit_handoff_bundle_replay_result_json_schema",
     "circuit_handoff_bundle_result_json_schema",
     "extract_circuit_handoff_bundle",

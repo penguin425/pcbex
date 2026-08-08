@@ -3304,6 +3304,17 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --expected-bundle-sha256 "$BUNDLE_SHA256"
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --native-kicad-erc-report build/native-kicad-erc.json \
+  --kicad-cli kicad-cli \
+  --require-native-kicad-erc-approved \
+  --timeout-seconds 120
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-native-erc-replay-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 ```
@@ -3344,20 +3355,43 @@ the closed replay-result schema and publishes no final artifact. Its one
 aggregate monotonic `--timeout-seconds` deadline covers archive input,
 temporary evidence, every native child, and the final byte comparison.
 
+Version 1.451.0 optionally binds a retained native KiCad schematic ERC report
+to that exact replay. The six-entry ZIP must reproduce byte-for-byte before
+KiCad starts; only then does the supplied pcbex verifier rerun `kicad-cli sch
+erc` against the exact reproduced schematic and require the normalized report
+bytes to match. The report (32 MiB maximum) and optional closed warning policy
+(1 MiB maximum) are stable-read before and after the child and staged as exact
+bytes in private temporary storage. Supplying the policy selects native report
+schema v2; omitting it selects error-only schema v1. Rejected but exact evidence
+is returned visibly unless `--require-native-kicad-erc-approved` is set.
+
+Native-enabled replay emits the closed, path-free v2 result with the report,
+run, decision, count, and optional exact policy identities. The aggregate
+deadline includes sidecar reads, staging, KiCad replay, rereads, and cleanup;
+the nested Rust verifier receives a shorter internal timeout so it can terminate
+and reap KiCad before the Python guard expires. The archive itself remains the
+unchanged canonical six-entry v1 format and never embeds the report or policy.
+Omitting `--native-kicad-erc-report` preserves the exact v1.450 result and does
+not invoke KiCad.
+
 Exact reproduction normally requires the supplied engine to report the same
 `engine_version` as the retained handoff. That is an output-match implication,
 not authentication: the caller-supplied binary and its version claim are not
-authenticated. This command does not invoke real KiCad native schematic ERC
-(`kicad-cli sch erc`), query or authenticate supplier/catalog provenance, grant
-AI or human approval, bind a PCB, run PCB DRC/DFM, or authorize manufacturing.
+authenticated. Without the optional v1.451 native report this command does not
+invoke real KiCad schematic ERC. With it, the command verifies only that exact
+retained native evidence under the caller-selected toolchain; it still does not
+query or authenticate supplier/catalog provenance, grant AI or human approval,
+bind a PCB, run PCB DRC/DFM, or authorize manufacturing.
 The existing offline `verify-circuit-handoff-bundle` and
 `extract-circuit-handoff-bundle` commands remain unchanged and never execute
 native content.
 
-This bundle proves a deterministic electrical handoff only. It does not claim
-AI reviewer/quorum approval, supplier inventory or catalog-provenance
-authenticity, native KiCad ERC, PCB/layout/DRC/DFM approval, or fabrication
-authorization. Procurement decisions must separately verify the retained
+The bundle itself proves a deterministic electrical handoff only. A separate
+v1.451 replay result may additionally prove an exact native KiCad ERC replay,
+but neither artifact claims AI reviewer/quorum approval, supplier inventory or
+catalog-provenance authenticity, PCB/layout/DRC/DFM approval, or fabrication
+authorization. The caller-supplied pcbex and KiCad executables are not
+authenticated. Procurement decisions must separately verify the retained
 catalog-generation provenance against its original snapshot. See
 [`docs/CIRCUIT_HANDOFF_BUNDLE.md`](docs/CIRCUIT_HANDOFF_BUNDLE.md) for the
 archive contract and downstream trust boundary.

@@ -28,6 +28,14 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --expected-bundle-sha256 "$BUNDLE_SHA256"
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --native-kicad-erc-report build/native-kicad-erc.json \
+  --kicad-cli kicad-cli \
+  --require-native-kicad-erc-approved \
+  --timeout-seconds 120
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 
@@ -36,6 +44,9 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-replay-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-native-erc-replay-result-schema
 ```
 
 The `verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`
@@ -115,6 +126,62 @@ The replay result is emitted as the closed
 `catalog_input_erc_required` and `catalog_input_erc_replayed` were true. It
 also reports `native_kicad_erc_replayed: false`: the semantic pcbex handoff
 gate is not the real KiCad `kicad-cli sch erc` command.
+
+## Native KiCad ERC assertion (v1.451)
+
+Supplying `--native-kicad-erc-report` extends the exact replay with one retained,
+read-only native KiCad ERC assertion. Expected archive/bundle identities and the
+canonical archive graph are checked first. The report is then stable-read under
+a 32 MiB ceiling, and an optional
+`--native-kicad-erc-warning-policy` is stable-read under a 1 MiB ceiling. The
+complete six-entry producer chain must still reproduce the archive and manifest
+byte-for-byte before KiCad is allowed to start.
+
+After reproduction, the command stages the exact verified schematic, retained
+report, and optional policy bytes in a private temporary directory. It invokes
+the supplied pcbex command's `verify-native-kicad-erc-report` boundary with the
+caller-selected `--kicad-cli`. The Rust verifier privately restages the
+schematic, reruns `kicad-cli sch erc`, normalizes the result, and requires an
+exact retained-report match. The caller-visible report and policy are reread
+after the child exits and must still equal their initial stable reads.
+
+Omitting the warning policy selects the error-only native report schema v1;
+supplying the exact original policy selects schema v2. There is no report
+autodetection or policy fallback. An exact but rejected report is a successful
+replay by default and remains visibly `approved: false` in the result. Add
+`--require-native-kicad-erc-approved` when rejection must fail the command.
+That option, a warning policy, or a custom `--kicad-cli` is invalid without a
+retained report.
+
+The native-enabled command emits the closed
+`circuit-generation-kicad-handoff-bundle-native-erc-replay-result-v2`
+contract. Its path-free `native_kicad_erc` object binds the native schema,
+decision, approval requirement, error/warning/policy-failure counts, run
+identity, exact report byte/SHA-256 identity, and the optional canonical plus
+source-byte policy identities. The existing v1 result remains byte-for-byte
+compatible when no report is supplied: `native_kicad_erc_replayed` remains
+false and no `native_kicad_erc` object is added.
+
+The aggregate Python deadline covers archive input, expected identities,
+sidecar reads, complete producer replay, staging, native verification, caller
+source rereads, and cleanup. The nested Rust verifier receives the remaining
+budget minus a cleanup reserve and applies that finite timeout directly to the
+KiCad process tree, so the inner verifier can terminate and reap KiCad before
+the outer process guard expires. The selected pcbex must therefore support the
+v1.451 `verify-native-kicad-erc-report --timeout-seconds` contract. The standalone
+Rust verifier defaults to 600 seconds when that option is omitted and accepts
+only finite positive values no greater than 600 seconds.
+
+CI exercises the Python argument/deadline boundary on macOS and Windows and the
+complete real pcbex/KiCad flow on Linux. Deployments using another native KiCad
+platform should additionally qualify that exact KiCad build and its process-tree
+cleanup behavior in their protected runner environment.
+
+This addition does not change the ZIP or manifest schema: native ERC evidence
+and its warning policy remain sidecars and are never embedded in the canonical
+six-entry archive. Consequently the archive alone still makes no native-KiCad
+claim. The native result authenticates exact replay under the supplied tools,
+not the provenance of those tools or the authority of the caller.
 
 ## Exact archive
 
@@ -211,17 +278,20 @@ retain no portable Python durability primitive.
 
 ## Trust boundary
 
-This is an approved **deterministic electrical handoff**, not an AI approval
-or production authorization. It does not obtain or verify AI signatures,
-multi-reviewer quorum, human escalation, supplier inventory or
+The archive is an approved **deterministic electrical handoff**, not an AI
+approval or production authorization. By itself it does not obtain or verify
+AI signatures, multi-reviewer quorum, human escalation, supplier inventory or
 catalog-provenance authenticity, native KiCad ERC, board binding,
 placement/routing, PCB DRC/DFM, firmware, manufacturing data, or a factory
-order. The generation bundle does not contain the original supplier snapshot;
-procurement must separately validate the v1.421 catalog-generation provenance
-against that snapshot. Use the existing live/artifact-bound AI review gates
-and the normal board, pipeline, and manufacturing gates explicitly downstream. In
-particular, an `approved: true` handoff manifest must never be interpreted as
-permission to fabricate.
+order. A v1.451 native-enabled replay result adds only the exact native-KiCad
+assertion described above; it does not elevate the archive or grant any other
+approval. The generation bundle does not contain the original supplier
+snapshot, so procurement must separately validate the v1.421
+catalog-generation provenance against that snapshot. Use the existing
+live/artifact-bound AI review gates and the normal board, pipeline, and
+manufacturing gates explicitly downstream. In particular, an `approved: true`
+handoff manifest or native ERC decision must never be interpreted as permission
+to fabricate.
 
 The v1 archive is unsigned and its logical `bundle_sha256` covers the five
 manifest-described artifacts, not the outer ZIP or `manifest.json` bytes.
@@ -232,9 +302,11 @@ does not run that omitted catalog check. v1.450's replay command can freshly
 run the check and reproduce the complete archive, but the supplied `pcbex`
 binary and its claimed version are caller inputs and are not authenticated;
 matching `engine_version` is therefore a byte-reproduction implication, not a
-provenance statement. Neither replay nor offline verification runs real KiCad
-native schematic ERC, authenticates supplier/catalog provenance, obtains AI or
-human approval, binds a PCB, checks placement/routing/PCB DRC/DFM, or authorizes
-manufacturing. Use a trusted expected digest/signature and the existing
-supplier-provenance, AI, board, pipeline, and manufacturing gates when those
-properties are required.
+provenance statement. v1.451 can optionally run real KiCad native schematic ERC,
+but both the supplied pcbex command and selected `kicad-cli` executable remain
+unauthenticated caller inputs and are not sandboxed. Offline verify/extract and
+v1 replay remain native-KiCad-free. No mode authenticates supplier/catalog
+provenance, obtains AI or human approval, binds a PCB, checks placement/routing/
+PCB DRC/DFM, or authorizes manufacturing. Use a trusted expected
+digest/signature, a protected toolchain, and the existing supplier-provenance,
+AI, board, pipeline, and manufacturing gates when those properties are required.

@@ -35,7 +35,7 @@ const MAX_FINDINGS: usize = 100_000;
 const MAX_POLICY_FAILURES: usize = MAX_FINDINGS + MAX_IGNORED_CHECKS + 1;
 const MAX_ITEMS_PER_FINDING: usize = 1024;
 const MAX_COORDINATE_MM: f64 = 1_000_000_000.0;
-const KICAD_ERC_TIMEOUT: Duration = Duration::from_secs(600);
+pub(crate) const KICAD_ERC_TIMEOUT: Duration = Duration::from_secs(600);
 const KICAD_ERC_STDOUT_BYTES: usize = 8 * 1024 * 1024;
 const KICAD_ERC_STDERR_BYTES: usize = 1024 * 1024;
 const NATIVE_ERC_DOMAIN: &[u8] = b"pcbex/native-kicad-erc/v1\0";
@@ -1019,6 +1019,16 @@ pub(crate) fn run_native_kicad_erc(
     kicad_cli: &OsStr,
     cancellation: Option<&AtomicBool>,
 ) -> Result<NativeKicadErcReport> {
+    run_native_kicad_erc_with_timeout(input, kicad_cli, KICAD_ERC_TIMEOUT, cancellation)
+}
+
+/// Run native KiCad ERC with an explicit process deadline.
+pub(crate) fn run_native_kicad_erc_with_timeout(
+    input: &Path,
+    kicad_cli: &OsStr,
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+) -> Result<NativeKicadErcReport> {
     let source_bytes = crate::bounded_io::read_with_limit(input, MAX_SOURCE_BYTES)
         .with_context(|| format!("reading bounded KiCad schematic {}", input.display()))?;
     if source_bytes.is_empty() {
@@ -1079,7 +1089,7 @@ pub(crate) fn run_native_kicad_erc(
         .arg(&staged_report)
         .arg(&staged_input);
     let limits = crate::bounded_process::ProcessLimits {
-        timeout: KICAD_ERC_TIMEOUT,
+        timeout,
         stdout_bytes: KICAD_ERC_STDOUT_BYTES,
         stderr_bytes: KICAD_ERC_STDERR_BYTES,
     };
@@ -1141,6 +1151,23 @@ pub(crate) fn run_native_kicad_erc_with_warning_policy(
     input: &Path,
     warning_policy_path: &Path,
     kicad_cli: &OsStr,
+    cancellation: Option<&AtomicBool>,
+) -> Result<NativeKicadErcWarningReport> {
+    run_native_kicad_erc_with_warning_policy_with_timeout(
+        input,
+        warning_policy_path,
+        kicad_cli,
+        KICAD_ERC_TIMEOUT,
+        cancellation,
+    )
+}
+
+/// Run native KiCad ERC with a warning policy and explicit process deadline.
+pub(crate) fn run_native_kicad_erc_with_warning_policy_with_timeout(
+    input: &Path,
+    warning_policy_path: &Path,
+    kicad_cli: &OsStr,
+    timeout: Duration,
     cancellation: Option<&AtomicBool>,
 ) -> Result<NativeKicadErcWarningReport> {
     let policy_bytes =
@@ -1212,7 +1239,7 @@ pub(crate) fn run_native_kicad_erc_with_warning_policy(
         .arg(&staged_report)
         .arg(&staged_input);
     let limits = crate::bounded_process::ProcessLimits {
-        timeout: KICAD_ERC_TIMEOUT,
+        timeout,
         stdout_bytes: KICAD_ERC_STDOUT_BYTES,
         stderr_bytes: KICAD_ERC_STDERR_BYTES,
     };
@@ -1288,6 +1315,23 @@ pub(crate) fn replay_native_kicad_erc_report(
     kicad_cli: &OsStr,
     cancellation: Option<&AtomicBool>,
 ) -> Result<NativeKicadErcReport> {
+    replay_native_kicad_erc_report_with_timeout(
+        input,
+        retained_report_path,
+        kicad_cli,
+        KICAD_ERC_TIMEOUT,
+        cancellation,
+    )
+}
+
+/// Re-run native ERC with an explicit process deadline and verify retained evidence.
+pub(crate) fn replay_native_kicad_erc_report_with_timeout(
+    input: &Path,
+    retained_report_path: &Path,
+    kicad_cli: &OsStr,
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+) -> Result<NativeKicadErcReport> {
     let source_before = crate::bounded_io::read_with_limit(input, MAX_SOURCE_BYTES)
         .with_context(|| format!("reading generated schematic {}", input.display()))?;
     if source_before.is_empty() {
@@ -1313,7 +1357,7 @@ pub(crate) fn replay_native_kicad_erc_report(
         );
     }
 
-    let fresh = run_native_kicad_erc(input, kicad_cli, cancellation)?;
+    let fresh = run_native_kicad_erc_with_timeout(input, kicad_cli, timeout, cancellation)?;
     let source_after = crate::bounded_io::read_with_limit(input, MAX_SOURCE_BYTES)
         .with_context(|| format!("re-reading generated schematic {}", input.display()))?;
     if source_after != source_before {
@@ -1402,6 +1446,25 @@ pub(crate) fn replay_native_kicad_erc_report_with_warning_policy(
     kicad_cli: &OsStr,
     cancellation: Option<&AtomicBool>,
 ) -> Result<NativeKicadErcWarningReport> {
+    replay_native_kicad_erc_report_with_warning_policy_with_timeout(
+        input,
+        retained_report_path,
+        warning_policy_path,
+        kicad_cli,
+        KICAD_ERC_TIMEOUT,
+        cancellation,
+    )
+}
+
+/// Re-run warning-policy ERC with an explicit process deadline and verify retained evidence.
+pub(crate) fn replay_native_kicad_erc_report_with_warning_policy_with_timeout(
+    input: &Path,
+    retained_report_path: &Path,
+    warning_policy_path: &Path,
+    kicad_cli: &OsStr,
+    timeout: Duration,
+    cancellation: Option<&AtomicBool>,
+) -> Result<NativeKicadErcWarningReport> {
     let source_before = crate::bounded_io::read_with_limit(input, MAX_SOURCE_BYTES)
         .with_context(|| format!("reading generated schematic {}", input.display()))?;
     if source_before.is_empty() {
@@ -1442,10 +1505,11 @@ pub(crate) fn replay_native_kicad_erc_report_with_warning_policy(
         );
     }
 
-    let fresh = run_native_kicad_erc_with_warning_policy(
+    let fresh = run_native_kicad_erc_with_warning_policy_with_timeout(
         input,
         warning_policy_path,
         kicad_cli,
+        timeout,
         cancellation,
     )?;
     let source_after = crate::bounded_io::read_with_limit(input, MAX_SOURCE_BYTES)

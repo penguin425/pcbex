@@ -256,11 +256,11 @@ use native_kicad_drc::{
     render_native_kicad_drc_report, run_native_kicad_drc, verify_native_kicad_drc_report,
 };
 use native_kicad_erc::{
-    native_kicad_erc_report_schema, native_kicad_erc_report_summary,
+    KICAD_ERC_TIMEOUT, native_kicad_erc_report_schema, native_kicad_erc_report_summary,
     native_kicad_erc_warning_policy_schema, native_kicad_erc_warning_report_schema,
     native_kicad_erc_warning_report_summary, render_native_kicad_erc_report,
-    render_native_kicad_erc_warning_report, replay_native_kicad_erc_report,
-    replay_native_kicad_erc_report_with_warning_policy, run_native_kicad_erc,
+    render_native_kicad_erc_warning_report, replay_native_kicad_erc_report_with_timeout,
+    replay_native_kicad_erc_report_with_warning_policy_with_timeout, run_native_kicad_erc,
     run_native_kicad_erc_with_warning_policy, verify_native_kicad_erc_report,
     verify_native_kicad_erc_report_with_warning_policy,
 };
@@ -534,6 +534,24 @@ impl std::ops::Deref for CompactPath {
     fn deref(&self) -> &Self::Target {
         &self.0
     }
+}
+
+fn parse_native_kicad_erc_timeout_seconds(value: &str) -> std::result::Result<Duration, String> {
+    let invalid = || {
+        format!(
+            "expected a finite timeout greater than 0 and at most {} seconds",
+            KICAD_ERC_TIMEOUT.as_secs()
+        )
+    };
+    let seconds = value.parse::<f64>().map_err(|_| invalid())?;
+    if !seconds.is_finite() || seconds <= 0.0 || seconds > KICAD_ERC_TIMEOUT.as_secs_f64() {
+        return Err(invalid());
+    }
+    let timeout = Duration::try_from_secs_f64(seconds).map_err(|_| invalid())?;
+    if timeout.is_zero() || timeout > KICAD_ERC_TIMEOUT {
+        return Err(invalid());
+    }
+    Ok(timeout)
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -935,6 +953,14 @@ enum Command {
         /// Closed warning policy used to verify a schema-v2 report.
         #[arg(long, value_name = "PATH")]
         warning_policy: Option<PathBuf>,
+        /// Maximum wall-clock time for the fresh KiCad ERC run, in seconds.
+        #[arg(
+            long,
+            default_value = "600",
+            value_name = "SECONDS",
+            value_parser = parse_native_kicad_erc_timeout_seconds
+        )]
+        timeout_seconds: Duration,
         /// Fail after successful replay verification when native ERC is not approved.
         #[arg(long)]
         require_approved: bool,
@@ -5680,6 +5706,7 @@ fn run_cli() -> Result<()> {
             retained_report,
             kicad_cli,
             warning_policy,
+            timeout_seconds,
             require_approved,
             mcp_echo_report_summary,
         } => {
@@ -5688,11 +5715,12 @@ fn run_cli() -> Result<()> {
             // published. Rejected evidence is valid unless approval is
             // explicitly required by the caller.
             if let Some(policy) = warning_policy.as_deref() {
-                let report = replay_native_kicad_erc_report_with_warning_policy(
+                let report = replay_native_kicad_erc_report_with_warning_policy_with_timeout(
                     &input,
                     &retained_report,
                     policy,
                     kicad_cli.as_os_str(),
+                    timeout_seconds,
                     None,
                 )?;
                 let rendered = render_native_kicad_erc_warning_report(&report)?;
@@ -5714,10 +5742,11 @@ fn run_cli() -> Result<()> {
                     bail!("native KiCad schematic ERC warning policy rejected");
                 }
             } else {
-                let report = replay_native_kicad_erc_report(
+                let report = replay_native_kicad_erc_report_with_timeout(
                     &input,
                     &retained_report,
                     kicad_cli.as_os_str(),
+                    timeout_seconds,
                     None,
                 )?;
                 let rendered = render_native_kicad_erc_report(&report)?;
@@ -17941,6 +17970,74 @@ mod tests {
                 ..
             } if policy.as_os_str() == "policy.json"
         ));
+    }
+
+    #[test]
+    fn parses_native_erc_replay_timeout_default_and_fraction() {
+        let default = parse_cli(&[
+            "pcbex",
+            "verify-native-kicad-erc-report",
+            "input.kicad_sch",
+            "erc.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *default.command,
+            Command::VerifyNativeKicadErcReport {
+                timeout_seconds,
+                ..
+            } if timeout_seconds == KICAD_ERC_TIMEOUT
+        ));
+
+        let explicit = parse_cli(&[
+            "pcbex",
+            "verify-native-kicad-erc-report",
+            "input.kicad_sch",
+            "erc.json",
+            "--timeout-seconds",
+            "0.125",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *explicit.command,
+            Command::VerifyNativeKicadErcReport {
+                timeout_seconds,
+                ..
+            } if timeout_seconds == Duration::from_millis(125)
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_native_erc_replay_timeouts() {
+        for value in [
+            "0",
+            "-0",
+            "-1",
+            "NaN",
+            "inf",
+            "600.000001",
+            "1e999",
+            "0.0000000001",
+        ] {
+            let option = format!("--timeout-seconds={value}");
+            let result = parse_cli(&[
+                "pcbex",
+                "verify-native-kicad-erc-report",
+                "input.kicad_sch",
+                "erc.json",
+                &option,
+            ]);
+            let error = match result {
+                Ok(_) => panic!("invalid timeout {value:?} was accepted"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("expected a finite timeout greater than 0 and at most 600 seconds"),
+                "unexpected error for {value:?}: {error}"
+            );
+        }
     }
 
     #[test]
