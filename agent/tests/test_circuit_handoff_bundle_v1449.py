@@ -191,6 +191,25 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
             for name, contents in expected.items():
                 self.assertEqual((output / name).read_bytes(), contents)
 
+    def test_producer_canonicalizes_the_trusted_temporary_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            physical = root / "physical-temp"
+            physical.mkdir()
+            linked = root / "linked-temp"
+            try:
+                linked.symlink_to(physical, target_is_directory=True)
+            except (NotImplementedError, OSError):
+                self.skipTest("directory symlinks are unavailable")
+            with mock.patch.object(
+                handoff_module.tempfile,
+                "gettempdir",
+                return_value=str(linked),
+            ):
+                raw, manifest = _valid_archive(root)
+            result, _entries = validate_circuit_handoff_archive(raw)
+            self.assertEqual(result["bundle_sha256"], manifest["bundle_sha256"])
+
     def test_rejects_nonexact_and_unsafe_entry_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             raw, _manifest = _valid_archive(Path(directory))

@@ -1560,7 +1560,17 @@ def build_circuit_handoff_archive(
         generation["spec"], "normalized circuit specification", MAX_CIRCUIT_SPEC_BYTES
     )
 
-    with tempfile.TemporaryDirectory(prefix="pcbex-handoff-") as directory:
+    # macOS exposes its process-selected temporary area through the
+    # system-managed ``/var`` symlink. Canonicalize only that trusted root so
+    # the strict descendant path checks do not reject our private workspace.
+    try:
+        trusted_temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise _fail("trusted temporary root is invalid") from None
+    with tempfile.TemporaryDirectory(
+        prefix="pcbex-handoff-",
+        dir=trusted_temporary_root,
+    ) as directory:
         root = Path(directory)
         circuit_path = root / CIRCUIT_SPEC_NAME
         check_path = root / CIRCUIT_CHECK_NAME
