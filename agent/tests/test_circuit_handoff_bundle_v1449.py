@@ -104,7 +104,7 @@ def _rebind_manifest(entries: dict[str, bytes]) -> None:
 class CircuitHandoffBundleV1449Tests(unittest.TestCase):
     def test_validates_without_native_execution_and_binds_expected_roots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            raw, manifest = _valid_archive(Path(directory))
+            raw, manifest = _valid_archive(Path(directory).resolve(strict=True))
         with mock.patch.object(handoff_module, "run_bounded") as native:
             result, entries = validate_circuit_handoff_archive(
                 raw,
@@ -152,7 +152,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_verify_path_and_transactional_exact_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             raw, manifest = _valid_archive(root)
             archive_path = root / "handoff.zip"
             archive_path.write_bytes(raw)
@@ -193,7 +193,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_producer_canonicalizes_the_trusted_temporary_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             physical = root / "physical-temp"
             physical.mkdir()
             linked = root / "linked-temp"
@@ -212,7 +212,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_rejects_nonexact_and_unsafe_entry_names(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            raw, _manifest = _valid_archive(Path(directory))
+            raw, _manifest = _valid_archive(Path(directory).resolve(strict=True))
         entries = _archive_entries(raw)
         names = list(handoff_module._ARCHIVE_ENTRY_NAMES)
         cases: dict[str, list[str]] = {
@@ -237,7 +237,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_rejects_noncanonical_metadata_and_container_framing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            raw, _manifest = _valid_archive(Path(directory))
+            raw, _manifest = _valid_archive(Path(directory).resolve(strict=True))
         entries = _archive_entries(raw)
 
         def timestamp(info, name):
@@ -284,7 +284,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_rejects_crc_corruption_and_declared_or_actual_size_overflow(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            raw, _manifest = _valid_archive(Path(directory))
+            raw, _manifest = _valid_archive(Path(directory).resolve(strict=True))
         entries = _archive_entries(raw)
         marker = entries[handoff_module.SCHEMATIC_NAME][:32]
         offset = raw.find(marker)
@@ -313,7 +313,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_rejects_strict_manifest_and_aggregate_identity_forgery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            raw, _manifest = _valid_archive(Path(directory))
+            raw, _manifest = _valid_archive(Path(directory).resolve(strict=True))
         base = _archive_entries(raw)
 
         malformed: list[bytes] = []
@@ -363,7 +363,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_rejects_rehashed_but_semantically_inconsistent_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            raw, _manifest = _valid_archive(Path(directory))
+            raw, _manifest = _valid_archive(Path(directory).resolve(strict=True))
         base = _archive_entries(raw)
         for artifact in (
             handoff_module.GENERATION_BUNDLE_NAME,
@@ -394,7 +394,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_invalid_native_fields_stay_inside_the_typed_error_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            raw, _manifest = _valid_archive(Path(directory))
+            raw, _manifest = _valid_archive(Path(directory).resolve(strict=True))
         base = _archive_entries(raw)
 
         oversized = dict(base)
@@ -430,7 +430,9 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            raw, original_manifest = _valid_archive(Path(directory))
+            raw, original_manifest = _valid_archive(
+                Path(directory).resolve(strict=True)
+            )
         entries = _archive_entries(raw)
         schematic = b"not a KiCad schematic\n"
         entries[handoff_module.SCHEMATIC_NAME] = schematic
@@ -462,7 +464,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_paths_collisions_and_failures_never_clobber_owned_data(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             raw, _manifest = _valid_archive(root)
             archive_path = root / "handoff.zip"
             archive_path.write_bytes(raw)
@@ -512,7 +514,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "Windows skips directory fsync")
     def test_final_parent_sync_failure_rolls_back_owned_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             raw, _manifest = _valid_archive(root)
             archive_path = root / "handoff.zip"
             archive_path.write_bytes(raw)
@@ -543,11 +545,11 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
             "fsync",
             side_effect=OSError(errno.EINVAL, "unsupported"),
         ):
-            handoff_module._sync_directory(Path(directory))
+            handoff_module._sync_directory(Path(directory).resolve(strict=True))
 
     def test_failed_reservation_inspection_never_deletes_unproven_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             raw, _manifest = _valid_archive(root)
             archive_path = root / "handoff.zip"
             archive_path.write_bytes(raw)
@@ -563,7 +565,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
 
     def test_cli_verify_extract_and_result_schema_emit_closed_json(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             raw, manifest = _valid_archive(root)
             archive_path = root / "handoff.zip"
             archive_path.write_bytes(raw)
@@ -627,7 +629,7 @@ class CircuitHandoffBundleV1449Tests(unittest.TestCase):
         if not binary_path.is_file():
             self.fail("PCBEX_TEST_BINARY does not name a regular file")
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             spec_path = root / "spec.json"
             spec_path.write_bytes(_render(_spec()))
             native = subprocess.run(
