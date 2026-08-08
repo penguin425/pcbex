@@ -56,6 +56,7 @@ from .circuit_generation import (
 )
 from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
+    circuit_handoff_bundle_ai_quorum_replay_result_json_schema,
     circuit_handoff_bundle_json_schema,
     circuit_handoff_bundle_native_erc_replay_result_json_schema,
     circuit_handoff_bundle_replay_result_json_schema,
@@ -342,6 +343,44 @@ def main() -> None:
         action="store_true",
         help="fail after exact native ERC replay when the retained evidence is rejected",
     )
+    replay_handoff.add_argument(
+        "--ai-quorum-report",
+        type=Path,
+        help=(
+            "optionally require a retained non-session AI quorum report to "
+            "match fresh verification against the exactly reproduced schematic"
+        ),
+    )
+    replay_handoff.add_argument(
+        "--ai-review-request",
+        type=Path,
+        help="schema-v1 AI review request bound to the reproduced schematic",
+    )
+    replay_handoff.add_argument(
+        "--ai-policy-pack",
+        type=Path,
+        help="organization policy pack containing every trusted approval key",
+    )
+    replay_handoff.add_argument(
+        "--ai-approval",
+        action="append",
+        type=Path,
+        help="signed AI approval sidecar; repeat once per reviewer",
+    )
+    replay_handoff.add_argument(
+        "--ai-response",
+        action="append",
+        type=Path,
+        help="AI response paired by order with each --ai-approval",
+    )
+    replay_handoff.add_argument("--minimum-ai-approvals", type=int)
+    replay_handoff.add_argument("--minimum-distinct-ai-providers", type=int)
+    replay_handoff.add_argument("--minimum-distinct-ai-models", type=int)
+    replay_handoff.add_argument(
+        "--require-ai-quorum",
+        action="store_true",
+        help="fail only after exact evidence replay when the quorum is not met",
+    )
     replay_handoff.add_argument("--timeout-seconds", type=float, default=120.0)
     replay_handoff.add_argument("--expected-archive-sha256")
     replay_handoff.add_argument("--expected-bundle-sha256")
@@ -368,6 +407,11 @@ def main() -> None:
         help="write the closed exact-chain plus native KiCad ERC replay result schema",
     )
     handoff_native_erc_replay_result_schema.add_argument("-o", "--output", type=Path)
+    handoff_ai_quorum_replay_result_schema = sub.add_parser(
+        "circuit-handoff-bundle-ai-quorum-replay-result-schema",
+        help="write the closed exact-chain plus AI schematic quorum replay schema",
+    )
+    handoff_ai_quorum_replay_result_schema.add_argument("-o", "--output", type=Path)
     catalog_snapshot_schema = sub.add_parser(
         "catalog-snapshot-schema",
         help="write the closed local catalog-snapshot JSON Schema",
@@ -759,10 +803,36 @@ def main() -> None:
                         args.require_native_kicad_erc_approved
                     ),
                 }
+            ai_options = {}
+            if (
+                args.ai_quorum_report is not None
+                or args.ai_review_request is not None
+                or args.ai_policy_pack is not None
+                or args.ai_approval is not None
+                or args.ai_response is not None
+                or args.minimum_ai_approvals is not None
+                or args.minimum_distinct_ai_providers is not None
+                or args.minimum_distinct_ai_models is not None
+                or args.require_ai_quorum
+            ):
+                ai_options = {
+                    "retained_ai_quorum_report": args.ai_quorum_report,
+                    "ai_review_request": args.ai_review_request,
+                    "ai_policy_pack": args.ai_policy_pack,
+                    "ai_approvals": args.ai_approval,
+                    "ai_responses": args.ai_response,
+                    "minimum_ai_approvals": args.minimum_ai_approvals,
+                    "minimum_distinct_ai_providers": (
+                        args.minimum_distinct_ai_providers
+                    ),
+                    "minimum_distinct_ai_models": args.minimum_distinct_ai_models,
+                    "require_ai_quorum": args.require_ai_quorum,
+                }
             result = replay_circuit_handoff_bundle(
                 args.bundle,
                 args.pcbex,
                 **native_options,
+                **ai_options,
                 timeout_seconds=args.timeout_seconds,
                 expected_archive_sha256=args.expected_archive_sha256,
                 expected_bundle_sha256=args.expected_bundle_sha256,
@@ -845,6 +915,29 @@ def main() -> None:
         except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
             raise SystemExit(
                 f"circuit handoff native ERC replay schema failed: {error}"
+            ) from error
+    elif args.command == "circuit-handoff-bundle-ai-quorum-replay-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_ai_quorum_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(
+                f"circuit handoff AI quorum replay schema failed: {error}"
             ) from error
     elif args.command == "fetch-catalog-snapshot":
         try:

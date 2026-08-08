@@ -36,6 +36,22 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --timeout-seconds 120
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --ai-quorum-report build/ai-quorum.json \
+  --ai-review-request build/ai-review-request.json \
+  --ai-policy-pack hardware/organization-policy-pack.json \
+  --ai-approval build/reviewer-a.approval.json \
+  --ai-response build/reviewer-a.response.json \
+  --ai-approval build/reviewer-b.approval.json \
+  --ai-response build/reviewer-b.response.json \
+  --minimum-ai-approvals 2 \
+  --minimum-distinct-ai-providers 2 \
+  --minimum-distinct-ai-models 2 \
+  --require-ai-quorum \
+  --timeout-seconds 120
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 
@@ -47,6 +63,9 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-native-erc-replay-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-ai-quorum-replay-result-schema
 ```
 
 The `verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`
@@ -183,6 +202,89 @@ six-entry archive. Consequently the archive alone still makes no native-KiCad
 claim. The native result authenticates exact replay under the supplied tools,
 not the provenance of those tools or the authority of the caller.
 
+## Exact AI schematic quorum assertion (v1.452)
+
+Supplying any AI replay option selects a complete, non-session schema-v1 AI
+schematic quorum assertion. These inputs are all required together:
+
+- `--ai-quorum-report` for the exact retained closed quorum report;
+- `--ai-review-request` for its schema-v1 request without an artifact binding;
+- `--ai-policy-pack` for the organization policy and trusted approval keys;
+- one to 100 `--ai-approval` values and the same number of `--ai-response`
+  values, paired by their occurrence order.
+
+The three verification thresholds are caller-visible inputs:
+`--minimum-ai-approvals`, `--minimum-distinct-ai-providers`, and
+`--minimum-distinct-ai-models`. Each defaults to 2, must be between 1 and 100,
+and neither diversity threshold may exceed the approval threshold. A threshold
+override, `--require-ai-quorum`, or any other AI option without the complete
+sidecar set is rejected rather than silently falling back to a different
+verification mode.
+
+The retained quorum report is stable-read under a 16 MiB ceiling. The request,
+policy pack, each signed approval, and each response are individually limited
+to 32 MiB; together those non-report sidecars may occupy at most 128 MiB. Empty,
+non-regular, direct/ancestor symlink or reparse, changed, or over-limit inputs
+fail through the same caller-file boundary as the archive and native sidecars.
+
+The AI verifier child begins only after canonical offline verification and a
+complete byte-for-byte producer replay of the unchanged six-entry ZIP and
+manifest. If a native ERC report was also supplied, the v1.451 native replay
+runs next.
+The command then copies the exact reproduced `circuit-spec.kicad_sch` and the
+stable-read AI request, policy pack, approvals, and responses to fixed names in
+a private temporary directory. It invokes the existing Rust
+`verify-ai-quorum --schematic` command with the three exact thresholds and a
+fresh private report destination. No provider is called and no signing key is
+accepted.
+
+The Rust quorum verifier freshly checks every signed approval/response pair against
+the supplied organization policy and verifies that the schema-v1 request still
+matches the imported semantics of the reproduced schematic. Its stdout must be
+empty, its new report must fit the 16 MiB report ceiling, and its bytes must
+equal the retained quorum report exactly. The replay independently validates
+the closed report shape, sorted unique members, counts, threshold failures, and
+decision before exposing a result. Every caller-visible AI sidecar is then
+reread and must equal its initial stable read. When native ERC and AI replay are
+combined, the earlier native report and warning policy are reread again after
+the AI child so the combined result cannot retain stale native evidence.
+
+An exact report with `quorum_met: false` is useful retained evidence and is
+accepted by default. `--require-ai-quorum` applies the final fail gate only
+after the complete report reproduction, report validation, and all final
+rereads. It neither modifies nor deletes the caller's retained evidence.
+`--require-native-kicad-erc-approved` remains an independent gate for the
+optional native assertion.
+
+Success emits the closed, path-free
+`circuit-generation-kicad-handoff-bundle-ai-quorum-replay-result-v3`
+contract. Its `ai_schematic_quorum` object records the request identity carried
+by the report, explicit policy thresholds, verified counts and decision,
+whether quorum was required, exact report bytes/SHA-256, and exact byte/SHA-256
+identities for the request, policy pack, and each order-paired approval/
+response source. `validation.ai_schematic_quorum_replayed` is true;
+`native_kicad_erc_replayed` states whether the optional v2 native evidence is
+also present. The `native_kicad_erc` object is absent for AI-only v3 and is the
+unchanged v2 evidence object when the assertions are combined. Host paths and
+sidecar contents are not returned.
+
+Omitting every AI option preserves the earlier result contracts exactly: an
+ordinary exact producer replay returns v1, while a native-enabled replay
+returns v2. The archive, manifest, offline verify/extract commands, and their
+result bytes are unchanged. AI sidecars remain external and are never added to
+the canonical ZIP.
+
+This mode deliberately accepts only the existing live-schematic schema-v1
+request. That request is bound to pcbex's imported semantic schematic IR, not
+to irrelevant raw-source formatting; the preceding archive reproduction is
+the separate check that fixes the exact archived schematic bytes. Session
+binding, reviewer routing, schema-v2 through v4 artifact bindings, provider
+execution, signing, and toolchain provenance are outside this v3 assertion. AI
+quorum does not imply native KiCad approval; that evidence is present only when
+the independent optional v1.451 assertion is also requested. PCB binding, PCB
+DRC/DFM, and manufacturing authorization likewise require their existing
+explicit gates.
+
 ## Exact archive
 
 Success publishes exactly one no-clobber ZIP file with these ordered entries:
@@ -284,7 +386,9 @@ AI signatures, multi-reviewer quorum, human escalation, supplier inventory or
 catalog-provenance authenticity, native KiCad ERC, board binding,
 placement/routing, PCB DRC/DFM, firmware, manufacturing data, or a factory
 order. A v1.451 native-enabled replay result adds only the exact native-KiCad
-assertion described above; it does not elevate the archive or grant any other
+assertion described above. A v1.452 result adds the exact schema-v1 AI quorum
+assertion described above and may include that native assertion; neither
+elevates the archive into a production authorization or grants any other
 approval. The generation bundle does not contain the original supplier
 snapshot, so procurement must separately validate the v1.421
 catalog-generation provenance against that snapshot. Use the existing
@@ -305,8 +409,10 @@ matching `engine_version` is therefore a byte-reproduction implication, not a
 provenance statement. v1.451 can optionally run real KiCad native schematic ERC,
 but both the supplied pcbex command and selected `kicad-cli` executable remain
 unauthenticated caller inputs and are not sandboxed. Offline verify/extract and
-v1 replay remain native-KiCad-free. No mode authenticates supplier/catalog
-provenance, obtains AI or human approval, binds a PCB, checks placement/routing/
-PCB DRC/DFM, or authorizes manufacturing. Use a trusted expected
+v1 replay remain native-KiCad-free. v1.452 can cryptographically reverify a
+retained schema-v1 AI quorum, but it does not authenticate the supplied pcbex
+binary or obtain a human decision. No mode authenticates supplier/catalog
+provenance, binds a PCB, checks placement/routing/PCB DRC/DFM, or authorizes
+manufacturing. Use a trusted expected
 digest/signature, a protected toolchain, and the existing supplier-provenance,
 AI, board, pipeline, and manufacturing gates when those properties are required.

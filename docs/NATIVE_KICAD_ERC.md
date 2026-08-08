@@ -14,6 +14,9 @@ and AI-review contracts remain unchanged.
 Release v1.451.0 adds a finite CLI replay timeout and lets the Python circuit
 handoff replay bind retained native ERC evidence to an exactly reproduced
 schematic without changing the retained handoff archive.
+Release v1.452.0 can follow that optional native assertion with a separate
+exact schema-v1 AI schematic quorum replay. It does not change the native
+report or archive contracts, and AI-only handoff replay does not invoke KiCad.
 
 ```sh
 pcbex run-native-kicad-erc hardware/generated.kicad_sch \
@@ -170,6 +173,23 @@ report and optional exact policy remain bounded external sidecars; they are not
 inserted into the archive. See
 [Atomic circuit-generation to KiCad handoff bundle](CIRCUIT_HANDOFF_BUNDLE.md)
 for its versioned, path-free replay-result contract and trust boundary.
+
+Version 1.452 adds an independent complete non-session schema-v1 AI quorum
+sidecar set to the same agent command. When both assertions are requested, the
+native replay still runs immediately after exact archive reproduction; the
+existing `verify-ai-quorum --schematic` boundary then runs over the exact
+reproduced schematic and privately staged AI verifier inputs. After that child
+exits, the native report and optional warning policy are reread again before a
+combined path-free v3 result can be returned. This ordering prevents later AI
+verification from leaving stale native evidence in the combined result.
+
+AI replay does not convert native ERC into reviewer approval or vice versa.
+The AI request's live-schematic check binds imported semantic IR, while native
+ERC independently evaluates the exact staged file under the caller-selected
+KiCad toolchain. Either assertion may be omitted. Session/routing contracts,
+tool provenance, PCB DRC/DFM, and manufacturing authorization remain outside
+the handoff replay; see the handoff-bundle document for the AI sidecar limits,
+thresholds, exact report comparison, and v1/v2 compatibility rules.
 
 MCP exposes the same boundary as
 `verify_native_kicad_erc_report` with `input`, `retained_report`, optional

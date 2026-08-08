@@ -784,6 +784,11 @@
     {
       "id": "native-kicad-erc-handoff-replay",
       "release": "v1.451.0",
+      "status": "released"
+    },
+    {
+      "id": "exact-ai-schematic-quorum-handoff-replay",
+      "release": "v1.452.0",
       "status": "current"
     }
   ]
