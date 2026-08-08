@@ -13,10 +13,10 @@ import hashlib
 import json
 import math
 import re
+import tempfile
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Any
 
 from .bounded_io import (
@@ -797,7 +797,17 @@ def generate_circuit_with_llm(
     correction: str | None = None
     previous_errors: int | None = None
 
-    with TemporaryDirectory(prefix="pcbex-circuit-") as directory:
+    # macOS exposes its process-selected temporary area through the
+    # system-managed ``/var`` symlink. Canonicalize only that trusted root so
+    # strict descendant path checks do not reject our private workspace.
+    try:
+        trusted_temporary_root = Path(tempfile.gettempdir()).resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise CircuitGenerationError("trusted temporary root is invalid") from None
+    with tempfile.TemporaryDirectory(
+        prefix="pcbex-circuit-",
+        dir=trusted_temporary_root,
+    ) as directory:
         root = Path(directory)
         for attempt in range(1, max_attempts + 1):
             remaining = _remaining(deadline, _clock)

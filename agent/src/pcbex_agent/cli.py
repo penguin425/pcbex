@@ -57,9 +57,11 @@ from .circuit_generation import (
 from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
     circuit_handoff_bundle_json_schema,
+    circuit_handoff_bundle_replay_result_json_schema,
     circuit_handoff_bundle_result_json_schema,
     extract_circuit_handoff_bundle,
     handoff_circuit_generation,
+    replay_circuit_handoff_bundle,
     verify_circuit_handoff_bundle,
 )
 from .repair import propose_repairs
@@ -308,6 +310,18 @@ def main() -> None:
     verify_handoff.add_argument("bundle", type=Path)
     verify_handoff.add_argument("--expected-archive-sha256")
     verify_handoff.add_argument("--expected-bundle-sha256")
+    replay_handoff = sub.add_parser(
+        "replay-circuit-handoff-bundle",
+        help=(
+            "verify a handoff ZIP and require the complete producer handoff "
+            "chain to reproduce it exactly"
+        ),
+    )
+    replay_handoff.add_argument("bundle", type=Path)
+    replay_handoff.add_argument("--pcbex", default="pcbex")
+    replay_handoff.add_argument("--timeout-seconds", type=float, default=120.0)
+    replay_handoff.add_argument("--expected-archive-sha256")
+    replay_handoff.add_argument("--expected-bundle-sha256")
     extract_handoff = sub.add_parser(
         "extract-circuit-handoff-bundle",
         help="verify and extract one circuit handoff ZIP to a new directory",
@@ -321,6 +335,11 @@ def main() -> None:
         help="write the closed handoff ZIP verify/extract result schema",
     )
     handoff_result_schema.add_argument("-o", "--output", type=Path)
+    handoff_replay_result_schema = sub.add_parser(
+        "circuit-handoff-bundle-replay-result-schema",
+        help="write the closed fresh handoff-chain replay result schema",
+    )
+    handoff_replay_result_schema.add_argument("-o", "--output", type=Path)
     catalog_snapshot_schema = sub.add_parser(
         "catalog-snapshot-schema",
         help="write the closed local catalog-snapshot JSON Schema",
@@ -691,6 +710,18 @@ def main() -> None:
         except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
             raise SystemExit(f"circuit handoff bundle verification failed: {error}") from error
         print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif args.command == "replay-circuit-handoff-bundle":
+        try:
+            result = replay_circuit_handoff_bundle(
+                args.bundle,
+                args.pcbex,
+                timeout_seconds=args.timeout_seconds,
+                expected_archive_sha256=args.expected_archive_sha256,
+                expected_bundle_sha256=args.expected_bundle_sha256,
+            )
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(f"circuit handoff bundle replay failed: {error}") from error
+        print(json.dumps(result, indent=2, ensure_ascii=False))
     elif args.command == "extract-circuit-handoff-bundle":
         try:
             result = extract_circuit_handoff_bundle(
@@ -723,6 +754,27 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
             raise SystemExit(f"circuit handoff result schema failed: {error}") from error
+    elif args.command == "circuit-handoff-bundle-replay-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(f"circuit handoff replay schema failed: {error}") from error
     elif args.command == "fetch-catalog-snapshot":
         try:
             receipt = fetch_catalog_snapshot(

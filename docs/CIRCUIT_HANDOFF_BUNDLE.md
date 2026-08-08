@@ -21,16 +21,30 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --expected-bundle-sha256 "$BUNDLE_SHA256"
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --timeout-seconds 120 \
+  --expected-archive-sha256 "$ARCHIVE_SHA256" \
+  --expected-bundle-sha256 "$BUNDLE_SHA256"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-replay-result-schema
 ```
 
-The command consumes a saved bundle; it does not call an LLM, supplier API,
-SKiDL, KiCad GUI, or shell. The bundle's SKiDL text and provider metadata are
-validated as inert evidence and are never executed.
+The `verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`
+commands consume a saved bundle without calling an LLM, supplier API, SKiDL,
+KiCad GUI, native `pcbex`, or a shell. The bundle's SKiDL text and provider
+metadata are validated as inert evidence and are never executed. The explicit
+`replay-circuit-handoff-bundle` command is the exception: it invokes the
+caller-supplied `pcbex` executable through the bounded, shell-free process
+runner and requires the complete native chain to reproduce the archive.
 
 ## Gates
 
@@ -68,6 +82,39 @@ process receives only the remaining duration, and expiry before a stage or
 the final commit prevents that stage from starting. The final bounded local
 atomic write and filesystem synchronization are not asynchronously cancelled
 after commit begins.
+
+## Exact handoff-chain replay (v1.450)
+
+`replay-circuit-handoff-bundle` is an explicit fresh handoff-chain replay gate. It
+first performs the identical canonical six-entry archive verification used by
+`verify-circuit-handoff-bundle`, then rebuilds the handoff from the retained
+`generation-bundle.json` using the supplied `--pcbex` command. It publishes no
+archive or extracted directory; all intermediate files are private temporary
+files.
+
+For a catalog-resolved generation bundle, the receipt reconstructs the
+pre-selection circuit and the replay runs its `check-circuit-spec
+--require-approved` gate. The result must match the four retained
+pre-selection history digests. The replay then runs the resolved-circuit ERC,
+the deterministic schematic writer, and the semantic
+`verify-circuit-kicad-handoff --require-approved` gate. The newly generated
+ZIP bytes and manifest must equal the retained archive byte-for-byte. Thus a
+catalog-input ERC is replayed when, and only when, the retained generation
+bundle contains a catalog receipt; no live catalog request is made.
+
+`--timeout-seconds` is one aggregate monotonic deadline for archive input,
+canonical validation, every native child, temporary artifact reads, archive
+reconstruction, and the final byte comparison (default 120 seconds, maximum
+600 seconds). Each child receives only the remaining time. A timeout, child
+failure, digest mismatch, engine-version mismatch, or any byte difference
+fails closed and returns no replay success.
+
+The replay result is emitted as the closed
+`circuit-generation-kicad-handoff-bundle-replay-result-v1` contract. It reports
+`archive_reproduced: true`, `native_handoff_replayed: true`, and whether
+`catalog_input_erc_required` and `catalog_input_erc_replayed` were true. It
+also reports `native_kicad_erc_replayed: false`: the semantic pcbex handoff
+gate is not the real KiCad `kicad-cli sch erc` command.
 
 ## Exact archive
 
@@ -129,6 +176,8 @@ normalized specification and immutable ERC check, and the exact schematic and
 handoff report bindings. A manifest whose hashes have merely been recomputed
 over semantically inconsistent files therefore still fails.
 
+The v1.449 offline `verify` and `extract` behavior is unchanged by v1.450:
+they still start no native child and still report both replay flags as false.
 Both commands emit the same closed result-schema-v1 JSON. It contains no host
 paths and deliberately uses `verified`, not a production `approved` decision.
 It records the outer archive bytes/SHA-256, raw manifest identity, five
@@ -178,8 +227,14 @@ The v1 archive is unsigned and its logical `bundle_sha256` covers the five
 manifest-described artifacts, not the outer ZIP or `manifest.json` bytes.
 Likewise, a catalog-resolved schema-v2 generation bundle does not retain the
 original pre-selection check bytes that the producer replayed. The offline
-consumer can revalidate every retained and reconstructable edge, but it cannot
-authenticate the claimed producer/engine or freshly replay that omitted
-catalog check. Use a trusted expected digest/signature and the existing native,
+consumer can revalidate every retained and reconstructable edge, but it still
+does not run that omitted catalog check. v1.450's replay command can freshly
+run the check and reproduce the complete archive, but the supplied `pcbex`
+binary and its claimed version are caller inputs and are not authenticated;
+matching `engine_version` is therefore a byte-reproduction implication, not a
+provenance statement. Neither replay nor offline verification runs real KiCad
+native schematic ERC, authenticates supplier/catalog provenance, obtains AI or
+human approval, binds a PCB, checks placement/routing/PCB DRC/DFM, or authorizes
+manufacturing. Use a trusted expected digest/signature and the existing
 supplier-provenance, AI, board, pipeline, and manufacturing gates when those
 properties are required.

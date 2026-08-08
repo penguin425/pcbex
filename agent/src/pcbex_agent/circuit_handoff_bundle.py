@@ -69,6 +69,10 @@ CIRCUIT_HANDOFF_BUNDLE_RESULT_SCHEMA_VERSION = 1
 CIRCUIT_HANDOFF_BUNDLE_VERIFICATION_SCOPE = (
     "deterministic-electrical-handoff-archive-v1"
 )
+CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION = 1
+CIRCUIT_HANDOFF_BUNDLE_REPLAY_SCOPE = (
+    "deterministic-electrical-handoff-chain-replay-v1"
+)
 MAX_GENERATION_BUNDLE_BYTES = MAX_NATIVE_CHECK_BYTES
 MAX_CIRCUIT_SPEC_BYTES = 16 * 1024 * 1024
 MAX_SCHEMATIC_BYTES = 64 * 1024 * 1024
@@ -955,6 +959,75 @@ def circuit_handoff_bundle_result_json_schema() -> dict[str, Any]:
     }
 
 
+def circuit_handoff_bundle_replay_result_json_schema() -> dict[str, Any]:
+    """Return the closed fresh handoff-chain replay stdout result schema."""
+
+    schema = copy.deepcopy(circuit_handoff_bundle_result_json_schema())
+    schema["$id"] = (
+        "https://github.com/penguin425/pcbex/schemas/"
+        "circuit-generation-kicad-handoff-bundle-replay-result-v1.json"
+    )
+    schema["title"] = "pcbex circuit handoff bundle chain replay result"
+    required = schema["required"]
+    required.remove("extracted")
+    required.append("replayed")
+    properties = schema["properties"]
+    del properties["extracted"]
+    properties["operation"] = {"const": "replay"}
+    properties["replayed"] = {"const": True}
+    properties["verification_scope"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_REPLAY_SCOPE
+    }
+    properties["validation"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "internal_consistency",
+            "expected_identity_matched",
+            "archive_reproduced",
+            "native_handoff_replayed",
+            "catalog_input_erc_required",
+            "catalog_input_erc_replayed",
+            "native_kicad_erc_replayed",
+        ],
+        "properties": {
+            "internal_consistency": {"const": True},
+            "expected_identity_matched": {"type": "boolean"},
+            "archive_reproduced": {"const": True},
+            "native_handoff_replayed": {"const": True},
+            "catalog_input_erc_required": {"type": "boolean"},
+            "catalog_input_erc_replayed": {"type": "boolean"},
+            "native_kicad_erc_replayed": {"const": False},
+        },
+    }
+    schema["oneOf"] = [
+        {
+            "properties": {
+                "validation": {
+                    "properties": {
+                        "catalog_input_erc_required": {"const": False},
+                        "catalog_input_erc_replayed": {"const": False},
+                    }
+                }
+            }
+        },
+        {
+            "properties": {
+                "validation": {
+                    "properties": {
+                        "catalog_input_erc_required": {"const": True},
+                        "catalog_input_erc_replayed": {"const": True},
+                    }
+                }
+            }
+        },
+    ]
+    properties["schema_version"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION
+    }
+    return schema
+
+
 def _preflight_archive_directory(archive_raw: bytes) -> None:
     """Bound the central directory before ``zipfile`` allocates its records."""
 
@@ -1514,6 +1587,94 @@ def extract_circuit_handoff_bundle(
     return result
 
 
+def _circuit_handoff_replay_result(
+    verification: Mapping[str, Any],
+    *,
+    catalog_input_erc_required: bool,
+) -> dict[str, Any]:
+    result = copy.deepcopy(dict(verification))
+    result["schema_version"] = CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION
+    result["operation"] = "replay"
+    result.pop("extracted")
+    result["replayed"] = True
+    result["verification_scope"] = CIRCUIT_HANDOFF_BUNDLE_REPLAY_SCOPE
+    result["validation"] = {
+        "internal_consistency": True,
+        "expected_identity_matched": verification["validation"][
+            "expected_identity_matched"
+        ],
+        "archive_reproduced": True,
+        "native_handoff_replayed": True,
+        "catalog_input_erc_required": catalog_input_erc_required,
+        "catalog_input_erc_replayed": catalog_input_erc_required,
+        "native_kicad_erc_replayed": False,
+    }
+    return result
+
+
+def replay_circuit_handoff_bundle(
+    bundle: str | os.PathLike[str],
+    pcbex: str | Sequence[str],
+    *,
+    timeout_seconds: float = 120.0,
+    expected_archive_sha256: str | None = None,
+    expected_bundle_sha256: str | None = None,
+    _clock: Callable[[], float] = time.monotonic,
+) -> dict[str, Any]:
+    """Verify a bundle and require its complete native chain to reproduce it."""
+
+    try:
+        timeout = float(timeout_seconds)
+        start = float(_clock())
+    except (TypeError, ValueError, OverflowError):
+        raise _fail("aggregate timeout is invalid") from None
+    if (
+        isinstance(timeout_seconds, bool)
+        or not math.isfinite(timeout)
+        or timeout <= 0
+        or timeout > MAXIMUM_TIMEOUT_SECONDS
+        or not math.isfinite(start)
+    ):
+        raise _fail("aggregate timeout is invalid")
+    deadline = start + timeout
+    if not math.isfinite(deadline):
+        raise _fail("aggregate timeout is invalid")
+    try:
+        command = _normalize_command(pcbex, label="pcbex command")
+        archive_raw = read_bytes(bundle, max_bytes=MAX_HANDOFF_ARCHIVE_BYTES)
+    except (BoundedIOError, CircuitGenerationError, TypeError, ValueError):
+        raise _fail("circuit handoff archive input or pcbex command is invalid") from None
+    _remaining(deadline, _clock)
+
+    verification, entries = _validate_circuit_handoff_archive(
+        archive_raw,
+        operation="verify",
+        expected_archive_sha256=expected_archive_sha256,
+        expected_bundle_sha256=expected_bundle_sha256,
+    )
+    _remaining(deadline, _clock)
+    generation = _strict_object(entries[GENERATION_BUNDLE_NAME], "generation bundle")
+    catalog_input_erc_required = generation["catalog_receipt"] is not None
+    _remaining(deadline, _clock)
+    replayed_archive, replayed_manifest = build_circuit_handoff_archive(
+        entries[GENERATION_BUNDLE_NAME],
+        command,
+        timeout_seconds=timeout,
+        _clock=_clock,
+        _deadline=deadline,
+    )
+    retained_manifest = _strict_object(entries[MANIFEST_NAME], "handoff manifest")
+    if replayed_archive != archive_raw or replayed_manifest != retained_manifest:
+        raise _fail(
+            "fresh handoff-chain replay did not reproduce the retained archive"
+        )
+    _remaining(deadline, _clock)
+    return _circuit_handoff_replay_result(
+        verification,
+        catalog_input_erc_required=catalog_input_erc_required,
+    )
+
+
 def build_circuit_handoff_archive(
     generation_bundle_raw: bytes,
     pcbex: str | Sequence[str],
@@ -1773,15 +1934,19 @@ def handoff_circuit_generation(
 
 __all__ = [
     "CIRCUIT_HANDOFF_BUNDLE_ADAPTER",
+    "CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION",
+    "CIRCUIT_HANDOFF_BUNDLE_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_VERIFICATION_SCOPE",
     "CircuitHandoffBundleError",
     "build_circuit_handoff_archive",
     "circuit_handoff_bundle_json_schema",
+    "circuit_handoff_bundle_replay_result_json_schema",
     "circuit_handoff_bundle_result_json_schema",
     "extract_circuit_handoff_bundle",
     "handoff_circuit_generation",
+    "replay_circuit_handoff_bundle",
     "validate_circuit_handoff_archive",
     "validate_circuit_generation_bundle",
     "verify_circuit_handoff_bundle",
