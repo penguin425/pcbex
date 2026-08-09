@@ -8,7 +8,8 @@ This module keeps those checks in one place:
 * every operation has an explicit, positive ``max_bytes`` limit;
 * paths are walked with ``lstat`` and direct or ancestor symbolic links (and
   Windows reparse points) are rejected;
-* reads compare the path and opened descriptor before and after reading;
+* reads compare the path and opened descriptor before and after reading, then
+  repeat the descriptor read and require the exact same bytes;
 * writes stage data beside the destination, sync the staged file, and publish
   it atomically; and
 * no-clobber publication uses an atomic hard-link creation, so a destination
@@ -377,8 +378,10 @@ def read_bytes(path: PathLike, *, max_bytes: int) -> bytes:
     """Read one regular non-symlink file under ``max_bytes`` bytes.
 
     Exactly ``max_bytes`` bytes is valid; one additional byte is rejected.
-    The path and descriptor are checked before, during, and after the read so
-    replacement or resize races fail closed.
+    The path and descriptor are checked before, during, and after the read.  A
+    second bounded pass over the same descriptor must produce exactly the same
+    bytes, so replacement, resize, and ordinary same-size in-place mutation
+    races fail closed.
     """
 
     _validate_max_bytes(max_bytes)
@@ -432,7 +435,65 @@ def read_bytes(path: PathLike, *, max_bytes: int) -> bytes:
                 or not _same_file(opened, final)
             ):
                 raise _changed_error(value, "path identity or size changed while being read")
-            return b"".join(chunks)
+            contents = b"".join(chunks)
+
+            # Identity and size checks alone cannot detect an in-place writer
+            # that preserves the inode and byte count.  Rewind the already
+            # verified descriptor and compare a second bounded pass without
+            # allocating another file-sized buffer.  This cannot defend
+            # against a hostile local administrator that synchronizes two
+            # identical races, but it closes the ordinary same-size mutation
+            # gap while retaining the existing filesystem trust boundary.
+            try:
+                position = os.lseek(descriptor, 0, os.SEEK_SET)
+            except OSError as error:
+                raise _wrap_os_error(error, "rewind", value) from error
+            if position != 0:
+                raise _changed_error(value, "could not rewind for verification")
+
+            verified_total = 0
+            expected_contents = memoryview(contents)
+            while verified_total < read_limit:
+                chunk_size = min(_READ_CHUNK, read_limit - verified_total)
+                try:
+                    chunk = os.read(descriptor, chunk_size)
+                except OSError as error:
+                    raise _wrap_os_error(error, "verify read", value) from error
+                if not chunk:
+                    break
+                end = verified_total + len(chunk)
+                if end > len(contents) or expected_contents[verified_total:end] != chunk:
+                    raise _changed_error(value, "contents changed while being read")
+                verified_total = end
+            if verified_total > max_bytes:
+                raise _oversized_error(value, verified_total, max_bytes)
+            if verified_total != len(contents):
+                raise _changed_error(value, "contents changed while being read")
+
+            try:
+                verified = os.fstat(descriptor)
+            except OSError as error:
+                raise _wrap_os_error(error, "stat verified read", value) from error
+            _ensure_regular(verified, value, "opened input")
+            if (
+                not _same_file(opened, verified)
+                or verified.st_size != expected.st_size
+                or verified_total != expected.st_size
+            ):
+                raise _changed_error(value, "changed while being verified")
+
+            verified_final = _lstat_path(value)
+            if (
+                verified_final is None
+                or not _same_file(expected, verified_final)
+                or verified_final.st_size != expected.st_size
+                or not _same_file(opened, verified_final)
+            ):
+                raise _changed_error(
+                    value,
+                    "path identity or size changed while being verified",
+                )
+            return contents
         finally:
             try:
                 os.close(descriptor)

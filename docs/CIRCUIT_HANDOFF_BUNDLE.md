@@ -60,6 +60,15 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --timeout-seconds 120
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --kicad-board hardware/controller.kicad_pcb \
+  --board-binding-report build/circuit-kicad-board-binding.json \
+  --board-binding-policy electrical-policy.json \
+  --require-board-binding-approved \
+  --timeout-seconds 120
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 
@@ -77,6 +86,9 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-catalog-provenance-replay-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-board-binding-replay-result-schema
 ```
 
 The `verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`
@@ -360,6 +372,101 @@ or fabrication; authenticate pcbex, KiCad, or any other toolchain; or approve a
 board, placement, layout, routing, PCB DRC/DFM, manufacturing package, or
 manufacturing operation.
 
+## Exact retained-board binding replay (v1.454)
+
+Version 1.454.0 extends the same replay with one optional retained KiCad board
+and its retained board-binding report. `--kicad-board` and
+`--board-binding-report` are an all-or-nothing pair. The optional
+`--board-binding-policy` supplies the exact custom electrical-policy source
+used by the fresh replay; omitting it selects the board verifier's built-in
+default. `--require-board-binding-approved` is valid only with the pair and
+is applied after all evidence has been reproduced and reread. A partial pair,
+an approval requirement, or a policy by itself fails closed; there is no
+report or policy autodetection.
+
+The board is stable-read as caller evidence before a producer child starts,
+with a 128 MiB ceiling. The compact retained board-binding report is bounded
+at 12 MiB for canonical JSON (12 MiB plus one byte for its required trailing
+newline), and an optional policy is bounded at 4 MiB. The complete board,
+rendered-report, and policy capture is capped at 144 MiB plus one byte in
+aggregate. Each source must be a
+nonempty regular file with no direct or ancestor symlink/reparse component;
+size growth, replacement, aliasing, and any mutation fail closed. Python treats
+the retained report as opaque evidence and compares it byte-for-byte, including
+its canonical
+trailing newline, with a fresh report written to a private output destination
+by the existing `verify-circuit-kicad-board-binding` gate. The replay requests
+the hidden `--mcp-echo-report-summary` bridge, while the full report remains in
+its private output file; it is never echoed through the Python child stdout
+path. Only bounded parsing and the compact numeric/digest summary cross that
+boundary, and the summary cannot substitute for exact retained-report byte
+comparison.
+With the trusted pcbex verifier used by the release workflow, malformed board
+or policy inputs and noncanonical report output also fail closed. A
+caller-supplied `--pcbex` executable is an unauthenticated execution boundary,
+however, so Python does not independently claim to parse or authenticate that
+executable's retained report semantics.
+The report binds the normalized effective policy, not the historical raw JSON
+serialization. The v5 evidence therefore records both the effective
+`policy_sha256` and, when supplied, the exact raw policy source used for this
+fresh replay; it does not claim that an equivalent retained report was
+originally produced from byte-identical policy JSON.
+
+The v1.454 order is deterministic and remains within the one aggregate
+`--timeout-seconds` deadline (default 120 seconds, finite range 1–600):
+
+1. verify the canonical six-entry archive and any expected archive/bundle
+   identities;
+2. capture the board, retained report, and optional policy;
+3. reproduce the unchanged archive and manifest byte-for-byte;
+4. run any independently requested native KiCad ERC, AI quorum, and catalog
+   provenance assertions in their existing v1.451–v1.453 order;
+5. run the existing geometry-free board-binding verifier against the exact
+   reproduced circuit specification and schematic, the retained board, and
+   the optional policy; and
+6. reread every caller-visible source (including the board, report, and policy)
+   and then apply the optional approval gate.
+
+Every child receives only the remaining monotonic budget; the board verifier
+has no separate timeout flag. Its compact summary and child stdout/stderr each
+remain within the existing 1 MiB Python child-stream ceilings, while the
+12 MiB canonical report (+1 newline byte) is read from the private output file.
+A timeout,
+child failure, report-shape/hash mismatch, byte difference, source reread
+change, or cleanup failure returns no v5 success. No archive or extraction
+directory is published, and board evidence remains a sidecar rather than a
+seventh ZIP entry.
+
+Success emits the closed, path-free
+`circuit-generation-kicad-handoff-bundle-board-binding-replay-result-v5.json`
+contract with scope
+`deterministic-electrical-handoff-chain-board-binding-replay-v5`. Its
+`board_binding` summary contains only the retained-report schema and
+engine, decision/approval requirement, compact finding counts, exact board
+source and retained/fresh report byte/SHA-256 identities, and the
+board-electrical, circuit-handoff, binding, and effective-policy identities.
+The object is closed schema-v1: `counts`, `board`, `report`, optional raw
+replay-source `policy` (`null` when the built-in policy is used),
+`policy_sha256`, and the three electrical/handoff/binding SHA-256 identities
+are the only evidence fields.
+`validation.board_binding_replayed` is true. It contains no caller paths or raw
+board/report/policy bodies. An exact but
+rejected report is successful evidence by default; the optional
+`--require-board-binding-approved` flag turns that decision into a final
+failure only after replay and rereads.
+
+Omitting all v1.454 board options preserves v1, v2, v3, and v4 result bytes,
+schemas, archive bytes, and six-entry ZIP membership exactly, including when
+the earlier native, AI, or catalog options are used. The board replay binds
+only the electrical subset already defined by the standalone gate: reference,
+footprint, pad, net, no-connect, and related handoff identity. It does not
+approve placement or footprint geometry, copper geometry, routing, zones,
+PCB DRC or DFM, Gerber/BOM/CPL, manufacturing or fabrication data, supplier
+or procurement state, or toolchain provenance/authentication. In particular,
+an unchanged board-electrical digest after a geometry-only source edit does
+not make that edit layout-approved; the raw board and binding identities still
+change and must match the retained report exactly.
+
 ## Exact archive
 
 Success publishes exactly one no-clobber ZIP file with these ordered entries:
@@ -464,11 +571,13 @@ order. A v1.451 native-enabled replay result adds only the exact native-KiCad
 assertion described above. A v1.452 result adds the exact schema-v1 AI quorum
 assertion and may include that native assertion. A v1.453 result additionally
 revalidates the retained v1.421 catalog graph against caller-supplied historical
-sidecars. None elevates the archive into a production authorization or grants
-any other approval. Use the existing live/artifact-bound AI review gates and
-the normal board, pipeline, procurement, manufacturing, and fabrication gates
-explicitly downstream. In particular, an `approved: true` handoff manifest or
-native ERC decision must never be interpreted as permission to fabricate.
+sidecars. A v1.454 result adds only the retained-board, retained-report,
+geometry-free electrical binding described above. None elevates the archive
+into a production authorization or grants any other approval. Use the existing
+live/artifact-bound AI review gates and the normal board, pipeline, procurement,
+manufacturing, and fabrication gates explicitly downstream. In particular, an
+`approved: true` handoff manifest, board-binding report, or native ERC decision
+must never be interpreted as permission to fabricate.
 
 The v1 archive is unsigned and its logical `bundle_sha256` covers the five
 manifest-described artifacts, not the outer ZIP or `manifest.json` bytes.
@@ -487,8 +596,13 @@ retained schema-v1 AI quorum, but it does not authenticate the supplied pcbex
 binary or obtain a human decision. v1.453 can revalidate exact historical
 catalog linkage without authenticating the supplier, TLS transport, endpoint,
 or omitted raw HTTP response, and without establishing current inventory,
-price, or reservation. No replay mode authenticates its toolchain, binds or
-approves a PCB/layout, checks placement, routing, PCB DRC/DFM, approves
+price, or reservation. v1.454 can compare a retained raw board and compact
+board-binding report to a fresh geometry-free electrical binding, but it does
+not authenticate KiCad/pcbex/toolchain provenance, placement or footprint
+geometry, routing or copper, PCB DRC/DFM, Gerber/BOM/CPL, manufacturing or
+fabrication data, procurement, or supplier state. No replay mode authenticates
+its toolchain, binds or approves a PCB/layout, checks placement, routing, PCB
+DRC/DFM, approves
 manufacturing, or authorizes procurement or fabrication. Use a trusted
 expected digest/signature, a protected toolchain, and the existing supplier,
 AI, board, pipeline, procurement, manufacturing, and fabrication gates when

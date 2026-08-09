@@ -95,6 +95,10 @@ CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_RESULT_SCHEMA_VERSION = 4
 CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_SCOPE = (
     "deterministic-electrical-handoff-chain-catalog-provenance-replay-v4"
 )
+CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_RESULT_SCHEMA_VERSION = 5
+CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_SCOPE = (
+    "deterministic-electrical-handoff-chain-board-binding-replay-v5"
+)
 MAX_GENERATION_BUNDLE_BYTES = MAX_NATIVE_CHECK_BYTES
 MAX_CIRCUIT_SPEC_BYTES = 16 * 1024 * 1024
 MAX_SCHEMATIC_BYTES = 64 * 1024 * 1024
@@ -102,6 +106,17 @@ MAX_HANDOFF_REPORT_BYTES = 64 * 1024 * 1024
 MAX_HANDOFF_ARCHIVE_BYTES = 224 * 1024 * 1024
 MAX_NATIVE_KICAD_ERC_REPORT_BYTES = 32 * 1024 * 1024
 MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES = 1 * 1024 * 1024
+MAX_KICAD_BOARD_BINDING_BYTES = 128 * 1024 * 1024
+MAX_KICAD_BOARD_BINDING_POLICY_BYTES = 4 * 1024 * 1024
+MAX_KICAD_BOARD_BINDING_REPORT_BYTES = 12 * 1024 * 1024
+MAX_KICAD_BOARD_BINDING_RENDERED_REPORT_BYTES = (
+    MAX_KICAD_BOARD_BINDING_REPORT_BYTES + 1
+)
+MAX_KICAD_BOARD_BINDING_TOTAL_INPUT_BYTES = (
+    MAX_KICAD_BOARD_BINDING_BYTES
+    + MAX_KICAD_BOARD_BINDING_RENDERED_REPORT_BYTES
+    + MAX_KICAD_BOARD_BINDING_POLICY_BYTES
+)
 MAX_AI_QUORUM_INPUT_BYTES = 32 * 1024 * 1024
 MAX_AI_QUORUM_TOTAL_INPUT_BYTES = 128 * 1024 * 1024
 MAX_AI_QUORUM_REPORT_BYTES = 16 * 1024 * 1024
@@ -120,6 +135,7 @@ HANDOFF_REPORT_NAME = "circuit-kicad-handoff.json"
 MANIFEST_NAME = "manifest.json"
 
 _BUNDLE_IDENTITY_DOMAIN = b"pcbex:circuit-generation-kicad-handoff-bundle-v1\0"
+_BOARD_BINDING_HANDOFF_DOMAIN = b"pcbex:circuit-kicad-handoff-report-v1\0"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _WINDOWS_RESERVED_NUMERIC_SUFFIXES = (
     "123456789\N{SUPERSCRIPT ONE}\N{SUPERSCRIPT TWO}\N{SUPERSCRIPT THREE}"
@@ -131,6 +147,7 @@ _WINDOWS_RESERVED_LEAF_STEMS = frozenset(
 )
 _MAX_JSON_DEPTH = 128
 _MAX_JSON_NODES = 1_000_000
+_BOARD_BINDING_REQUIREMENT_UNSET = object()
 _GENERATION_KEYS = frozenset(
     {
         "schema_version",
@@ -882,6 +899,373 @@ def _replay_native_kicad_erc(
         raise _fail("native KiCad ERC replay staging failed") from None
     except OSError:
         raise _fail("native KiCad ERC replay workspace failed") from None
+
+
+def _board_binding_count(value: Any, label: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < 0
+        or value.bit_length() > 63
+    ):
+        raise _fail(f"board binding {label} is invalid")
+    return value
+
+
+def _board_binding_text(value: Any, label: str, *, maximum: int | None = None) -> str:
+    if not isinstance(value, str) or not value:
+        raise _fail(f"board binding {label} is invalid")
+    try:
+        encoded = value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        raise _fail(f"board binding {label} is invalid") from None
+    if maximum is not None and len(encoded) > maximum:
+        raise _fail(f"board binding {label} exceeds its byte bound")
+    return value
+
+
+def _board_binding_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, Mapping) or list(value) != [
+        "errors",
+        "warnings",
+        "info",
+    ]:
+        raise _fail("board binding finding counts are invalid")
+    return {
+        key: _board_binding_count(value[key], f"{key} count")
+        for key in ("errors", "warnings", "info")
+    }
+
+
+def _board_binding_replay_evidence(
+    summary: Mapping[str, Any],
+    *,
+    report_raw: bytes,
+    board_raw: bytes,
+    policy_raw: bytes | None,
+    circuit_raw: bytes,
+    check: Mapping[str, Any],
+    handoff: Mapping[str, Any],
+    schematic_raw: bytes,
+    approval_required: bool,
+) -> dict[str, Any]:
+    evidence = _validate_board_binding_summary_opaque(
+        summary,
+        report_raw=report_raw,
+        board_raw=board_raw,
+        policy_raw=policy_raw,
+        circuit_raw=circuit_raw,
+        check=check,
+        handoff=handoff,
+        schematic_raw=schematic_raw,
+    )
+    evidence["approval_required"] = approval_required
+    return evidence
+
+
+def _validate_board_binding_summary_opaque(
+    summary: Mapping[str, Any],
+    *,
+    report_raw: bytes,
+    board_raw: bytes,
+    policy_raw: bytes | None,
+    circuit_raw: bytes,
+    check: Mapping[str, Any],
+    handoff: Mapping[str, Any],
+    schematic_raw: bytes,
+) -> dict[str, Any]:
+    """Validate only bounded board summary metadata; keep the full report opaque."""
+
+    fields = [
+        "schema_version",
+        "report_schema_version",
+        "engine_version",
+        "approved",
+        "counts",
+        "board_source_bytes",
+        "board_source_sha256",
+        "board_electrical_sha256",
+        "circuit_kicad_handoff_sha256",
+        "circuit_kicad_handoff",
+        "binding_sha256",
+        "report_bytes",
+        "report_sha256",
+    ]
+    if list(summary) != fields:
+        raise _fail("board binding replay summary has an unexpected shape")
+    if (
+        isinstance(summary["schema_version"], bool)
+        or summary["schema_version"] != 1
+        or isinstance(summary["report_schema_version"], bool)
+        or summary["report_schema_version"] != 1
+        or not isinstance(summary["approved"], bool)
+    ):
+        raise _fail("board binding replay summary schema is invalid")
+    engine = _board_binding_text(
+        summary["engine_version"], "summary engine identity", maximum=256
+    )
+    counts = _board_binding_counts(summary["counts"])
+    board_bytes = _board_binding_count(
+        summary["board_source_bytes"], "summary board byte count"
+    )
+    report_bytes = _board_binding_count(
+        summary["report_bytes"], "summary report byte count"
+    )
+    board_sha = _digest(
+        summary["board_source_sha256"], "board binding summary board source"
+    )
+    electrical_sha = _digest(
+        summary["board_electrical_sha256"],
+        "board binding summary electrical identity",
+    )
+    handoff_sha = _digest(
+        summary["circuit_kicad_handoff_sha256"],
+        "board binding summary handoff identity",
+    )
+    binding_sha = _digest(
+        summary["binding_sha256"], "board binding summary binding identity"
+    )
+    report_sha = _digest(
+        summary["report_sha256"], "board binding summary report identity"
+    )
+    if (
+        not report_raw
+        or len(report_raw) > MAX_KICAD_BOARD_BINDING_RENDERED_REPORT_BYTES
+        or not report_raw.endswith(b"\n")
+        or report_raw[:-1].endswith(b"\n")
+        or report_bytes != len(report_raw)
+        or report_sha != _sha256(report_raw)
+    ):
+        raise _fail("board binding report identity is invalid")
+    if (
+        board_bytes == 0
+        or board_bytes > MAX_KICAD_BOARD_BINDING_BYTES
+        or board_bytes != len(board_raw)
+        or board_sha != _sha256(board_raw)
+    ):
+        raise _fail("board binding board source identity is invalid")
+
+    summary_handoff = summary["circuit_kicad_handoff"]
+    handoff_fields = [
+        "schema_version",
+        "engine_version",
+        "circuit_source_bytes",
+        "circuit_source_sha256",
+        "schematic_source_bytes",
+        "schematic_source_sha256",
+        "circuit_spec_sha256",
+        "circuit_check_sha256",
+        "schematic_sha256",
+        "policy_sha256",
+    ]
+    if not isinstance(summary_handoff, Mapping) or list(summary_handoff) != handoff_fields:
+        raise _fail("board binding summary nested handoff has an unexpected shape")
+    if not isinstance(handoff, Mapping):
+        raise _fail("board binding archive handoff is invalid")
+    for key in ("schema_version", "circuit_source_bytes", "schematic_source_bytes"):
+        if isinstance(summary_handoff[key], bool) or not isinstance(
+            summary_handoff[key], int
+        ):
+            raise _fail("board binding nested handoff byte identity is invalid")
+    if (
+        summary_handoff["schema_version"] != 1
+        or summary_handoff["engine_version"] != engine
+        or summary_handoff["circuit_source_bytes"] != len(circuit_raw)
+        or summary_handoff["circuit_source_sha256"] != _sha256(circuit_raw)
+        or summary_handoff["schematic_source_bytes"] != len(schematic_raw)
+        or summary_handoff["schematic_source_sha256"] != _sha256(schematic_raw)
+        or summary_handoff["circuit_spec_sha256"] != check["circuit_spec_sha256"]
+        or summary_handoff["circuit_check_sha256"] != _sha256(_compact_json(check))
+        or summary_handoff["schematic_sha256"] != handoff.get("schematic_sha256")
+    ):
+        raise _fail("board binding nested handoff source identity is invalid")
+    for key in (
+        "circuit_source_sha256",
+        "schematic_source_sha256",
+        "circuit_spec_sha256",
+        "circuit_check_sha256",
+        "schematic_sha256",
+        "policy_sha256",
+    ):
+        _digest(summary_handoff[key], f"board binding nested handoff {key}")
+    if list(handoff) != [
+        "schema_version",
+        "engine_version",
+        "circuit_source_bytes",
+        "circuit_source_sha256",
+        "schematic_source_bytes",
+        "schematic_source_sha256",
+        "circuit_spec_sha256",
+        "circuit_check_sha256",
+        "circuit_review",
+        "schematic_sha256",
+        "schematic_review",
+        "policy_sha256",
+        "findings",
+        "counts",
+        "approved",
+    ]:
+        raise _fail("board binding nested handoff identity is invalid")
+    if any(
+        handoff.get(key) != summary_handoff[key]
+        for key in handoff_fields
+        if key != "policy_sha256"
+    ):
+        raise _fail("board binding nested handoff identity is invalid")
+    if policy_raw is None:
+        if handoff.get("policy_sha256") != summary_handoff["policy_sha256"]:
+            raise _fail("board binding nested handoff policy identity is invalid")
+        expected_handoff_sha = _sha256(
+            _BOARD_BINDING_HANDOFF_DOMAIN + _compact_json(dict(handoff))
+        )
+        if handoff_sha != expected_handoff_sha:
+            raise _fail("board binding nested handoff digest is invalid")
+    _digest(electrical_sha, "board binding electrical identity")
+    _digest(binding_sha, "board binding aggregate identity")
+    if policy_raw is not None and (
+        not policy_raw
+        or len(policy_raw) > MAX_KICAD_BOARD_BINDING_POLICY_BYTES
+    ):
+        raise _fail("board binding policy identity is invalid")
+    return {
+        "schema_version": summary["report_schema_version"],
+        "engine_version": engine,
+        "approved": summary["approved"],
+        "approval_required": False,
+        "counts": counts,
+        "board": {"bytes": board_bytes, "sha256": board_sha},
+        "report": {"bytes": report_bytes, "sha256": report_sha},
+        "policy": (
+            None
+            if policy_raw is None
+            else {"bytes": len(policy_raw), "sha256": _sha256(policy_raw)}
+        ),
+        "policy_sha256": summary_handoff["policy_sha256"],
+        "board_electrical_sha256": electrical_sha,
+        "circuit_kicad_handoff_sha256": handoff_sha,
+        "binding_sha256": binding_sha,
+    }
+
+
+def _replay_board_binding(
+    circuit_raw: bytes,
+    schematic_raw: bytes,
+    board_raw: bytes,
+    report_raw: bytes,
+    policy_raw: bytes | None,
+    check: Mapping[str, Any],
+    handoff: Mapping[str, Any],
+    command: Sequence[str],
+    *,
+    require_approved: bool,
+    deadline: float,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    """Replay the standalone board gate in a private fixed-name workspace."""
+
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="pcbex-handoff-board-binding-",
+            dir=_trusted_temporary_root(),
+        ) as directory:
+            root = Path(directory)
+            circuit_path = root / CIRCUIT_SPEC_NAME
+            schematic_path = root / SCHEMATIC_NAME
+            board_path = root / "board.kicad_pcb"
+            policy_path = root / "board-binding-policy.json"
+            fresh_report_path = root / "board-binding-report.json"
+            atomic_write_no_clobber(
+                circuit_path,
+                circuit_raw,
+                max_bytes=MAX_CIRCUIT_SPEC_BYTES,
+            )
+            _remaining(deadline, clock)
+            atomic_write_no_clobber(
+                schematic_path,
+                schematic_raw,
+                max_bytes=MAX_SCHEMATIC_BYTES,
+            )
+            _remaining(deadline, clock)
+            atomic_write_no_clobber(
+                board_path,
+                board_raw,
+                max_bytes=MAX_KICAD_BOARD_BINDING_BYTES,
+            )
+            _remaining(deadline, clock)
+            argv = [
+                *command,
+                "verify-circuit-kicad-board-binding",
+                f"--output={fresh_report_path}",
+                "--mcp-echo-report-summary",
+            ]
+            if policy_raw is not None:
+                atomic_write_no_clobber(
+                    policy_path,
+                    policy_raw,
+                    max_bytes=MAX_KICAD_BOARD_BINDING_POLICY_BYTES,
+                )
+                _remaining(deadline, clock)
+                argv.append(f"--policy={policy_path}")
+            argv.extend(["--", str(circuit_path), str(schematic_path), str(board_path)])
+            outer_remaining = _remaining(deadline, clock)
+            cleanup_and_reread_reserve = min(15.0, outer_remaining / 2.0)
+            stdout = _run_native(
+                argv,
+                step="circuit KiCad board binding replay",
+                deadline=deadline,
+                clock=clock,
+                process_timeout_seconds=(
+                    outer_remaining - cleanup_and_reread_reserve
+                ),
+            )
+            summary = _strict_object(stdout, "board binding replay summary")
+            try:
+                fresh_report_raw = read_bytes(
+                    fresh_report_path,
+                    max_bytes=MAX_KICAD_BOARD_BINDING_RENDERED_REPORT_BYTES,
+                )
+            except BoundedIOError:
+                raise _fail("fresh board binding report is invalid") from None
+            if fresh_report_raw != report_raw:
+                raise _fail(
+                    "fresh board binding replay did not reproduce the retained report"
+                )
+            evidence = _board_binding_replay_evidence(
+                summary,
+                report_raw=fresh_report_raw,
+                board_raw=board_raw,
+                policy_raw=policy_raw,
+                circuit_raw=circuit_raw,
+                check=check,
+                handoff=handoff,
+                schematic_raw=schematic_raw,
+                approval_required=require_approved,
+            )
+            for staged_path, expected_raw, maximum in (
+                (circuit_path, circuit_raw, MAX_CIRCUIT_SPEC_BYTES),
+                (schematic_path, schematic_raw, MAX_SCHEMATIC_BYTES),
+                (board_path, board_raw, MAX_KICAD_BOARD_BINDING_BYTES),
+                (
+                    fresh_report_path,
+                    report_raw,
+                    MAX_KICAD_BOARD_BINDING_RENDERED_REPORT_BYTES,
+                ),
+            ):
+                if read_bytes(staged_path, max_bytes=maximum) != expected_raw:
+                    raise _fail("staged board binding input changed during replay")
+                _remaining(deadline, clock)
+            if policy_raw is not None:
+                if read_bytes(
+                    policy_path,
+                    max_bytes=MAX_KICAD_BOARD_BINDING_POLICY_BYTES,
+                ) != policy_raw:
+                    raise _fail("staged board binding policy changed during replay")
+                _remaining(deadline, clock)
+            return evidence
+    except BoundedIOError:
+        raise _fail("board binding replay staging failed") from None
+    except OSError:
+        raise _fail("board binding replay workspace failed") from None
 
 
 def _ai_quorum_count(value: Any, label: str, *, positive: bool = False) -> int:
@@ -2234,6 +2618,170 @@ def circuit_handoff_bundle_catalog_provenance_replay_result_json_schema() -> dic
     return schema
 
 
+def circuit_handoff_bundle_board_binding_replay_result_json_schema() -> dict[str, Any]:
+    """Return the closed exact-chain plus retained board-binding schema."""
+
+    schema = copy.deepcopy(circuit_handoff_bundle_replay_result_json_schema())
+    schema["$id"] = (
+        "https://github.com/penguin425/pcbex/schemas/"
+        "circuit-generation-kicad-handoff-bundle-board-binding-"
+        "replay-result-v5.json"
+    )
+    schema["title"] = "pcbex circuit handoff bundle board binding replay result"
+    schema["required"].append("board_binding")
+    properties = schema["properties"]
+    properties["schema_version"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_RESULT_SCHEMA_VERSION
+    }
+    properties["verification_scope"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_SCOPE
+    }
+    validation = properties["validation"]
+    for replay_flag in (
+        "native_kicad_erc_replayed",
+        "ai_schematic_quorum_replayed",
+        "catalog_generation_provenance_replayed",
+        "board_binding_replayed",
+    ):
+        if replay_flag not in validation["required"]:
+            validation["required"].append(replay_flag)
+    validation["properties"]["board_binding_replayed"] = {"const": True}
+    validation["properties"]["native_kicad_erc_replayed"] = {"type": "boolean"}
+    validation["properties"]["ai_schematic_quorum_replayed"] = {
+        "type": "boolean"
+    }
+    validation["properties"]["catalog_generation_provenance_replayed"] = {
+        "type": "boolean"
+    }
+
+    digest = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    count = {"type": "integer", "minimum": 0, "maximum": (1 << 63) - 1}
+
+    def source(maximum: int) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["bytes", "sha256"],
+            "properties": {
+                "bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": maximum,
+                },
+                "sha256": copy.deepcopy(digest),
+            },
+        }
+
+    properties["board_binding"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "schema_version",
+            "engine_version",
+            "approved",
+            "approval_required",
+            "counts",
+            "board",
+            "report",
+            "policy",
+            "policy_sha256",
+            "board_electrical_sha256",
+            "circuit_kicad_handoff_sha256",
+            "binding_sha256",
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "engine_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+            },
+            "approved": {"type": "boolean"},
+            "approval_required": {"type": "boolean"},
+            "counts": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["errors", "warnings", "info"],
+                "properties": {
+                    "errors": copy.deepcopy(count),
+                    "warnings": copy.deepcopy(count),
+                    "info": copy.deepcopy(count),
+                },
+            },
+            "board": source(MAX_KICAD_BOARD_BINDING_BYTES),
+            "report": source(MAX_KICAD_BOARD_BINDING_RENDERED_REPORT_BYTES),
+            "policy": {
+                "anyOf": [
+                    {"type": "null"},
+                    source(MAX_KICAD_BOARD_BINDING_POLICY_BYTES),
+                ]
+            },
+            "policy_sha256": copy.deepcopy(digest),
+            "board_electrical_sha256": copy.deepcopy(digest),
+            "circuit_kicad_handoff_sha256": copy.deepcopy(digest),
+            "binding_sha256": copy.deepcopy(digest),
+        },
+        "oneOf": [
+            {
+                "properties": {
+                    "approval_required": {"const": False},
+                }
+            },
+            {
+                "properties": {
+                    "approval_required": {"const": True},
+                    "approved": {"const": True},
+                }
+            },
+        ],
+    }
+
+    native_schema = circuit_handoff_bundle_native_erc_replay_result_json_schema()
+    ai_schema = circuit_handoff_bundle_ai_quorum_replay_result_json_schema()
+    catalog_schema = circuit_handoff_bundle_catalog_provenance_replay_result_json_schema()
+    properties["native_kicad_erc"] = copy.deepcopy(
+        native_schema["properties"]["native_kicad_erc"]
+    )
+    properties["ai_schematic_quorum"] = copy.deepcopy(
+        ai_schema["properties"]["ai_schematic_quorum"]
+    )
+    properties["catalog_generation_provenance"] = copy.deepcopy(
+        catalog_schema["properties"]["catalog_generation_provenance"]
+    )
+
+    def evidence_presence(field: str, replayed: str) -> dict[str, Any]:
+        return {
+            "oneOf": [
+                {
+                    "not": {"required": [field]},
+                    "properties": {
+                        "validation": {
+                            "properties": {replayed: {"const": False}}
+                        }
+                    },
+                },
+                {
+                    "required": [field],
+                    "properties": {
+                        "validation": {
+                            "properties": {replayed: {"const": True}}
+                        }
+                    },
+                },
+            ]
+        }
+
+    schema["allOf"] = [
+        evidence_presence("native_kicad_erc", "native_kicad_erc_replayed"),
+        evidence_presence("ai_schematic_quorum", "ai_schematic_quorum_replayed"),
+        evidence_presence(
+            "catalog_generation_provenance",
+            "catalog_generation_provenance_replayed",
+        ),
+    ]
+    return schema
+
+
 def _preflight_archive_directory(archive_raw: bytes) -> None:
     """Bound the central directory before ``zipfile`` allocates its records."""
 
@@ -2906,6 +3454,59 @@ def _circuit_handoff_catalog_provenance_replay_result(
     return result
 
 
+def _circuit_handoff_board_binding_replay_result(
+    verification: Mapping[str, Any],
+    *,
+    catalog_input_erc_required: bool,
+    board_binding: Mapping[str, Any],
+    native_kicad_erc: Mapping[str, Any] | None,
+    ai_schematic_quorum: Mapping[str, Any] | None,
+    catalog_generation_provenance: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if catalog_generation_provenance is not None:
+        result = _circuit_handoff_catalog_provenance_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            catalog_generation_provenance=catalog_generation_provenance,
+            native_kicad_erc=native_kicad_erc,
+            ai_schematic_quorum=ai_schematic_quorum,
+        )
+    elif ai_schematic_quorum is not None:
+        result = _circuit_handoff_ai_quorum_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            ai_schematic_quorum=ai_schematic_quorum,
+            native_kicad_erc=native_kicad_erc,
+        )
+    elif native_kicad_erc is not None:
+        result = _circuit_handoff_native_erc_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            native_kicad_erc=native_kicad_erc,
+        )
+    else:
+        result = _circuit_handoff_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+        )
+    result["schema_version"] = (
+        CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_RESULT_SCHEMA_VERSION
+    )
+    result["verification_scope"] = CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_SCOPE
+    result["validation"]["native_kicad_erc_replayed"] = (
+        native_kicad_erc is not None
+    )
+    result["validation"]["ai_schematic_quorum_replayed"] = (
+        ai_schematic_quorum is not None
+    )
+    result["validation"]["catalog_generation_provenance_replayed"] = (
+        catalog_generation_provenance is not None
+    )
+    result["validation"]["board_binding_replayed"] = True
+    result["board_binding"] = copy.deepcopy(dict(board_binding))
+    return result
+
+
 def replay_circuit_handoff_bundle(
     bundle: str | os.PathLike[str],
     pcbex: str | Sequence[str],
@@ -2917,6 +3518,10 @@ def replay_circuit_handoff_bundle(
     kicad_cli: str | os.PathLike[str] = "kicad-cli",
     native_kicad_erc_warning_policy: str | os.PathLike[str] | None = None,
     require_native_kicad_erc_approved: bool = False,
+    kicad_board: str | os.PathLike[str] | None = None,
+    retained_board_binding_report: str | os.PathLike[str] | None = None,
+    board_binding_policy: str | os.PathLike[str] | None = None,
+    require_board_binding_approved: bool | object = _BOARD_BINDING_REQUIREMENT_UNSET,
     retained_ai_quorum_report: str | os.PathLike[str] | None = None,
     ai_review_request: str | os.PathLike[str] | None = None,
     ai_policy_pack: str | os.PathLike[str] | None = None,
@@ -2953,6 +3558,28 @@ def replay_circuit_handoff_bundle(
         raise _fail("native KiCad ERC approval requirement is invalid")
     if not isinstance(require_ai_quorum, bool):
         raise _fail("AI schematic quorum requirement is invalid")
+    if (
+        require_board_binding_approved is not _BOARD_BINDING_REQUIREMENT_UNSET
+        and not isinstance(require_board_binding_approved, bool)
+    ):
+        raise _fail("board binding approval requirement is invalid")
+    board_binding_requested = any(
+        source is not None
+        for source in (
+            kicad_board,
+            retained_board_binding_report,
+            board_binding_policy,
+        )
+    ) or require_board_binding_approved is not _BOARD_BINDING_REQUIREMENT_UNSET
+    board_binding_require_approved = (
+        False
+        if require_board_binding_approved is _BOARD_BINDING_REQUIREMENT_UNSET
+        else bool(require_board_binding_approved)
+    )
+    if board_binding_requested and (
+        kicad_board is None or retained_board_binding_report is None
+    ):
+        raise _fail("board binding replay inputs are incomplete")
     catalog_requested = any(
         source is not None
         for source in (
@@ -3101,6 +3728,64 @@ def replay_circuit_handoff_bundle(
                 raise _fail("native KiCad ERC warning policy is empty")
             _remaining(deadline, _clock)
 
+    board_raw: bytes | None = None
+    board_binding_report_raw: bytes | None = None
+    board_binding_policy_raw: bytes | None = None
+    board_caller_sources: list[tuple[Any, bytes, int, str]] = []
+    if board_binding_requested:
+        assert kicad_board is not None
+        assert retained_board_binding_report is not None
+        board_sources = (
+            (kicad_board, MAX_KICAD_BOARD_BINDING_BYTES, "KiCad board"),
+            (
+                retained_board_binding_report,
+                MAX_KICAD_BOARD_BINDING_RENDERED_REPORT_BYTES,
+                "retained board binding report",
+            ),
+        )
+        captured_board: list[bytes] = []
+        board_aggregate_bytes = 0
+        for path, maximum, label in board_sources:
+            try:
+                raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(f"{label} path is invalid") from None
+            if not raw:
+                raise _fail(f"{label} is empty")
+            if label == "retained board binding report" and (
+                not raw.endswith(b"\n") or raw[:-1].endswith(b"\n")
+            ):
+                raise _fail("retained board binding report is not canonical rendered JSON")
+            board_aggregate_bytes += len(raw)
+            if board_aggregate_bytes > MAX_KICAD_BOARD_BINDING_TOTAL_INPUT_BYTES:
+                raise _fail("board binding inputs exceed their aggregate bound")
+            captured_board.append(raw)
+            board_caller_sources.append((path, raw, maximum, label))
+            _remaining(deadline, _clock)
+        board_raw, board_binding_report_raw = captured_board
+        if board_binding_policy is not None:
+            try:
+                board_binding_policy_raw = read_bytes(
+                    board_binding_policy,
+                    max_bytes=MAX_KICAD_BOARD_BINDING_POLICY_BYTES,
+                )
+            except BoundedIOError:
+                raise _fail("board binding policy path is invalid") from None
+            if not board_binding_policy_raw:
+                raise _fail("board binding policy is empty")
+            board_aggregate_bytes += len(board_binding_policy_raw)
+            if board_aggregate_bytes > MAX_KICAD_BOARD_BINDING_TOTAL_INPUT_BYTES:
+                raise _fail("board binding inputs exceed their aggregate bound")
+            board_caller_sources.append(
+                (
+                    board_binding_policy,
+                    board_binding_policy_raw,
+                    MAX_KICAD_BOARD_BINDING_POLICY_BYTES,
+                    "board binding policy",
+                )
+            )
+            _remaining(deadline, _clock)
+
     ai_report_raw: bytes | None = None
     ai_request_raw: bytes | None = None
     ai_policy_pack_raw: bytes | None = None
@@ -3175,6 +3860,14 @@ def replay_circuit_handoff_bundle(
             "fresh handoff-chain replay did not reproduce the retained archive"
         )
     _remaining(deadline, _clock)
+    board_check: dict[str, Any] | None = None
+    board_handoff: dict[str, Any] | None = None
+    if board_binding_requested:
+        board_check = _strict_object(entries[CIRCUIT_CHECK_NAME], "native circuit check")
+        board_handoff = _strict_object(
+            entries[HANDOFF_REPORT_NAME], "native handoff report"
+        )
+        _remaining(deadline, _clock)
     native_kicad_erc: dict[str, Any] | None = None
     if native_report_raw is not None:
         native_kicad_erc = _replay_native_kicad_erc(
@@ -3211,7 +3904,86 @@ def replay_circuit_handoff_bundle(
                 raise _fail("native KiCad ERC warning policy changed during replay")
             _remaining(deadline, _clock)
 
+    def finish_board_binding() -> dict[str, Any] | None:
+        if not board_binding_requested:
+            return None
+        assert board_raw is not None
+        assert board_binding_report_raw is not None
+        assert board_check is not None
+        assert board_handoff is not None
+        board_binding = _replay_board_binding(
+            entries[CIRCUIT_SPEC_NAME],
+            entries[SCHEMATIC_NAME],
+            board_raw,
+            board_binding_report_raw,
+            board_binding_policy_raw,
+            board_check,
+            board_handoff,
+            command,
+            require_approved=board_binding_require_approved,
+            deadline=deadline,
+            clock=_clock,
+        )
+        _remaining(deadline, _clock)
+        # This is intentionally the last source read before the result is
+        # composed.  It catches mutations by every earlier optional child.
+        for path, expected_raw, maximum, label in board_caller_sources:
+            try:
+                observed_raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(f"{label} changed during replay") from None
+            if observed_raw != expected_raw:
+                raise _fail(f"{label} changed during replay")
+            _remaining(deadline, _clock)
+        final_sources: list[tuple[Any, bytes, int, str]] = []
+        final_sources.append(
+            (bundle, archive_raw, MAX_HANDOFF_ARCHIVE_BYTES, "circuit handoff archive")
+        )
+        if native_report_raw is not None:
+            assert retained_native_kicad_erc_report is not None
+            final_sources.append(
+                (
+                    retained_native_kicad_erc_report,
+                    native_report_raw,
+                    MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
+                    "retained native KiCad ERC report",
+                )
+            )
+            if native_kicad_erc_warning_policy is not None:
+                assert warning_policy_raw is not None
+                final_sources.append(
+                    (
+                        native_kicad_erc_warning_policy,
+                        warning_policy_raw,
+                        MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                        "native KiCad ERC warning policy",
+                    )
+                )
+        final_sources.extend(ai_caller_sources)
+        final_sources.extend(catalog_caller_sources)
+        for path, expected_raw, maximum, label in final_sources:
+            try:
+                observed_raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(f"{label} changed during replay") from None
+            if observed_raw != expected_raw:
+                raise _fail(f"{label} changed during replay")
+            _remaining(deadline, _clock)
+        if board_binding_require_approved and not board_binding["approved"]:
+            raise _fail("board binding replay approval was not granted")
+        return board_binding
+
     if not ai_requested and not catalog_requested:
+        board_binding = finish_board_binding()
+        if board_binding is not None:
+            return _circuit_handoff_board_binding_replay_result(
+                verification,
+                catalog_input_erc_required=catalog_input_erc_required,
+                board_binding=board_binding,
+                native_kicad_erc=native_kicad_erc,
+                ai_schematic_quorum=None,
+                catalog_generation_provenance=None,
+            )
         if native_kicad_erc is not None:
             return _circuit_handoff_native_erc_replay_result(
                 verification,
@@ -3320,6 +4092,16 @@ def replay_circuit_handoff_bundle(
             if observed_raw != expected_raw:
                 raise _fail(f"{label} changed during replay")
             _remaining(deadline, _clock)
+        board_binding = finish_board_binding()
+        if board_binding is not None:
+            return _circuit_handoff_board_binding_replay_result(
+                verification,
+                catalog_input_erc_required=catalog_input_erc_required,
+                board_binding=board_binding,
+                native_kicad_erc=native_kicad_erc,
+                ai_schematic_quorum=ai_schematic_quorum,
+                catalog_generation_provenance=catalog_evidence,
+            )
         return _circuit_handoff_catalog_provenance_replay_result(
             verification,
             catalog_input_erc_required=catalog_input_erc_required,
@@ -3329,6 +4111,16 @@ def replay_circuit_handoff_bundle(
         )
 
     assert ai_schematic_quorum is not None
+    board_binding = finish_board_binding()
+    if board_binding is not None:
+        return _circuit_handoff_board_binding_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            board_binding=board_binding,
+            native_kicad_erc=native_kicad_erc,
+            ai_schematic_quorum=ai_schematic_quorum,
+            catalog_generation_provenance=None,
+        )
     return _circuit_handoff_ai_quorum_replay_result(
         verification,
         catalog_input_erc_required=catalog_input_erc_required,
@@ -3593,6 +4385,8 @@ __all__ = [
     "CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_SCOPE",
+    "CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_RESULT_SCHEMA_VERSION",
+    "CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION",
@@ -3603,6 +4397,7 @@ __all__ = [
     "CircuitHandoffBundleError",
     "build_circuit_handoff_archive",
     "circuit_handoff_bundle_ai_quorum_replay_result_json_schema",
+    "circuit_handoff_bundle_board_binding_replay_result_json_schema",
     "circuit_handoff_bundle_catalog_provenance_replay_result_json_schema",
     "circuit_handoff_bundle_json_schema",
     "circuit_handoff_bundle_native_erc_replay_result_json_schema",

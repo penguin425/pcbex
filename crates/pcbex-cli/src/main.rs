@@ -83,21 +83,22 @@ use pcbex_kicad::{
     bind_native_kicad_erc_to_ai_review_request,
     bind_native_kicad_erc_warning_policy_to_ai_review_request, build_ai_review_request,
     build_ai_review_session, check_schematic, circuit_kicad_board_binding_report_json_schema,
-    circuit_kicad_handoff_report_json_schema, circuit_spec_check_json_schema,
-    circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch, compare_electrical_reviews,
-    compare_schematics, create_approval_log_anchor_proof, create_approval_log_consistency_proof,
-    electrical_explanation_json_schema, electrical_policy_json_schema,
-    electrical_review_comparison_json_schema, electrical_review_json_schema,
-    electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
-    electrical_waiver_set_json_schema, explain_electrical_review,
-    human_escalation_report_json_schema, import as import_kicad, import_schematic,
-    manufacturing_gerber_layers, manufacturing_parts, new_approval_log_gossip_observer_trust_state,
-    new_approval_log_gossip_organization_registry,
+    circuit_kicad_board_binding_report_summary, circuit_kicad_handoff_report_json_schema,
+    circuit_spec_check_json_schema, circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch,
+    compare_electrical_reviews, compare_schematics, create_approval_log_anchor_proof,
+    create_approval_log_consistency_proof, electrical_explanation_json_schema,
+    electrical_policy_json_schema, electrical_review_comparison_json_schema,
+    electrical_review_json_schema, electrical_review_to_junit, electrical_review_to_sarif,
+    electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
+    explain_electrical_review, human_escalation_report_json_schema, import as import_kicad,
+    import_schematic, manufacturing_gerber_layers, manufacturing_parts,
+    new_approval_log_gossip_observer_trust_state, new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
     parse_and_check_circuit_spec_v2, parse_circuit_spec_v2, parse_electrical_policy,
     parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
-    record_simulation_evidence, render_ai_approval_quorum_summary, render_human_escalation_summary,
+    record_simulation_evidence, render_ai_approval_quorum_summary,
+    render_circuit_kicad_board_binding_report, render_human_escalation_summary,
     render_routed_ai_approval_quorum_summary, render_schematic_diff_summary,
     render_schematic_reviewer_routing_summary, render_session_routed_ai_approval_quorum_summary,
     route_schematic_review, routed_ai_approval_quorum_report_json_schema,
@@ -1248,6 +1249,9 @@ enum Command {
         /// Echo the retained report to stdout for the in-process MCP bridge.
         #[arg(long, hide = true)]
         mcp_echo_report: bool,
+        /// Echo a compact digest-only retained-report summary for the in-process MCP bridge.
+        #[arg(long, hide = true)]
+        mcp_echo_report_summary: bool,
     },
     /// Compare current electrical findings with an accepted baseline.
     CompareElectricalReviews {
@@ -6454,9 +6458,16 @@ fn run_cli() -> Result<()> {
             output,
             require_approved,
             mcp_echo_report,
+            mcp_echo_report_summary,
         } => {
             if mcp_echo_report && output.is_none() {
                 bail!("--mcp-echo-report requires --output");
+            }
+            if mcp_echo_report_summary && output.is_none() {
+                bail!("--mcp-echo-report-summary requires --output");
+            }
+            if mcp_echo_report && mcp_echo_report_summary {
+                bail!("--mcp-echo-report and --mcp-echo-report-summary are mutually exclusive");
             }
             let mut input_paths = vec![circuit_spec.as_path(), schematic.as_path(), board.as_path()];
             if let Some(path) = policy.as_deref() {
@@ -6502,11 +6513,18 @@ fn run_cli() -> Result<()> {
             // Keep the retained/echoed representation within the core report
             // byte contract. MCP embeds the parsed object in structuredContent,
             // so pretty-print amplification must not bypass that bound.
-            let rendered = format!("{}\n", serde_json::to_string(&report)?);
+            let rendered = render_circuit_kicad_board_binding_report(&report)
+                .map_err(anyhow::Error::msg)?;
             if let (Some(path), Some(prepared)) = (output.as_deref(), prepared) {
-                persist_atomic_new_file(prepared, path, &rendered)?;
+                persist_atomic_new_file_bytes(prepared, path, &rendered)?;
                 if mcp_echo_report {
-                    io::stdout().write_all(rendered.as_bytes())?;
+                    io::stdout().write_all(&rendered)?;
+                    io::stdout().flush()?;
+                } else if mcp_echo_report_summary {
+                    let summary = circuit_kicad_board_binding_report_summary(&report, &rendered)
+                        .map_err(anyhow::Error::msg)?;
+                    serde_json::to_writer(io::stdout(), &summary)?;
+                    io::stdout().write_all(b"\n")?;
                     io::stdout().flush()?;
                 }
                 eprintln!(
@@ -6515,7 +6533,7 @@ fn run_cli() -> Result<()> {
                     path.display()
                 );
             } else {
-                print!("{rendered}");
+                io::stdout().write_all(&rendered)?;
                 eprintln!(
                     "circuit-to-KiCad board binding: {}",
                     if report.approved { "approved" } else { "rejected" }
@@ -18177,6 +18195,49 @@ mod tests {
                 && project.as_os_str() == "-project.kicad_pro"
                 && rules.as_os_str() == "-rules.kicad_dru"
                 && kicad_cli.as_os_str() == "-kicad-cli"
+        ));
+    }
+
+    #[test]
+    fn parses_board_binding_compact_summary_as_hidden_additive_flag() {
+        let summary = parse_cli(&[
+            "pcbex",
+            "verify-circuit-kicad-board-binding",
+            "circuit.json",
+            "design.kicad_sch",
+            "design.kicad_pcb",
+            "--output",
+            "binding.json",
+            "--mcp-echo-report-summary",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *summary.command,
+            Command::VerifyCircuitKicadBoardBinding {
+                mcp_echo_report: false,
+                mcp_echo_report_summary: true,
+                ..
+            }
+        ));
+
+        let full = parse_cli(&[
+            "pcbex",
+            "verify-circuit-kicad-board-binding",
+            "circuit.json",
+            "design.kicad_sch",
+            "design.kicad_pcb",
+            "--output",
+            "binding.json",
+            "--mcp-echo-report",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *full.command,
+            Command::VerifyCircuitKicadBoardBinding {
+                mcp_echo_report: true,
+                mcp_echo_report_summary: false,
+                ..
+            }
         ));
     }
 

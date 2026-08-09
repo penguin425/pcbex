@@ -45,6 +45,14 @@ the 16 MiB MCP frame.  API consumers should use the native schema emitted by
 `circuit-kicad-board-binding-schema`; field nullability and finding details are
 not inferred from this document.
 
+For bounded subprocess bridges, the hidden `--mcp-echo-report-summary` option
+requires `--output` and emits only a closed numeric/digest summary after the
+full report has been atomically retained. It is mutually exclusive with the
+hidden full `--mcp-echo-report` option. The summary authenticates the retained
+report bytes and source/electrical/binding identities without copying the
+12 MiB report through a 1 MiB child-stdout channel; it does not replace the
+full report as the retained evidence.
+
 ## Three-way identity and comparison
 
 The gate records three identity layers for every accepted input:
@@ -119,18 +127,76 @@ overwritten.  Once all three raw contracts have been imported, a rejected
 comparison is published atomically and retained before `--require-approved`
 returns failure.
 
-The board input is capped at 128 MiB and the compact report at 12 MiB.  Exceeding
-the report cap is a resource-contract error rather than a semantic rejection,
-so no partial or truncated report is published.  The CLI stores board-binding
-reports as compact JSON to keep the retained file, MCP child output, and parsed
-structured result under their aligned limits.
+The board input is capped at 128 MiB and the compact canonical report at
+12 MiB (12 MiB plus one byte when rendered with its required newline).
+Exceeding the report cap is a resource-contract error rather than a semantic
+rejection, so no partial or truncated report is published. The CLI stores
+board-binding reports as compact JSON to keep the retained file, MCP child
+output, and parsed structured result under their aligned limits.
+
+## Retained-board replay in a circuit handoff (v1.454)
+
+The standalone gate remains the authority for the board's geometry-free
+electrical binding.  `replay-circuit-handoff-bundle` can optionally invoke that
+gate against the exact reproduced `circuit-spec-v2.json` and
+`circuit-spec.kicad_sch`, a retained `--kicad-board`, and a retained
+`--board-binding-report`.  Those two retained sources are required together;
+an optional `--board-binding-policy` is the exact custom policy source for the fresh replay, while
+omission uses the standalone gate's built-in policy.  The optional
+`--require-board-binding-approved` failure is deferred until fresh report
+bytes, closed report shape, source identities, and all final rereads pass.
+
+The handoff replay stable-reads the board (128 MiB), compact report (12 MiB
+canonical JSON plus its one trailing newline), and optional policy (4 MiB;
+all three sources 144 MiB plus one byte aggregate) before any producer child.
+After the unchanged
+six-entry archive and any independently requested native-ERC, AI, and catalog
+assertions finish, it invokes the existing CLI verifier with a private output
+destination.  The fresh compact report must equal the retained report bytes
+exactly, including its trailing newline; the full report is not transported in
+Python child stdout.  Board, report, and policy are reread after the child and
+must remain byte-identical.  The existing one monotonic 1–600 second replay
+deadline (default 120 seconds) supplies the remaining time to this child; the
+standalone board command itself has no timeout option.
+
+The retained report binds the normalized effective policy rather than the
+historical policy file's raw JSON serialization. The v5 evidence exposes that
+effective `policy_sha256` and separately records the exact raw custom-policy
+source used for this fresh replay when one is supplied. Semantically equivalent
+policy JSON can therefore reproduce the same retained report; this replay does
+not claim byte identity with the original historical policy source.
+
+The v5 path-free replay result has scope
+`deterministic-electrical-handoff-chain-board-binding-replay-v5`; its
+`board_binding` object carries only the bounded retained-report schema and
+engine metadata, decision/approval metadata,
+compact finding counts, and byte/SHA-256 identities for the board and report,
+plus board-electrical, circuit-handoff, binding, and effective-policy
+identities. The object is closed schema-v1 with `counts`, `board`, `report`,
+optional raw replay-source `policy` (`null` for the built-in policy),
+`policy_sha256`, and the three electrical/handoff/binding SHA-256 identities.
+`validation.board_binding_replayed` is true.
+It contains no host
+paths or raw sidecar bodies. This result proves exact
+electrical binding to the retained board artifact, not layout approval:
+placement and footprint geometry, copper/routing/zones, PCB DRC/DFM,
+Gerber/BOM/CPL, manufacturing/fabrication, procurement, supplier state, and
+KiCad/pcbex/tool provenance remain outside the claim.  Geometry-only board
+changes may leave `board_electrical_sha256` unchanged while changing raw and
+binding identities, so they are not accepted as an equivalent retained replay.
+
+With no v1.454 board options, the prior v1–v4 replay result bytes, schemas,
+archive bytes, and canonical six-entry ZIP remain unchanged.  Board evidence
+is a sidecar and never becomes a seventh archive entry or a new pipeline phase.
 
 ## Deliberate boundary
 
 This is an electrical/identity binding gate, not a board-quality or production
 gate.  It does not perform placement or footprint geometry checks, routing
 verification, DRC, DFM, Gerber/BOM/CPL generation, supplier lookup, hierarchy
-flattening, bus analysis, or multi-unit expansion. Existing `pipeline-verify`
+flattening, bus analysis, or multi-unit expansion. It does not establish
+manufacturing or fabrication approval, procurement authority, or toolchain
+provenance. Existing `pipeline-verify`
 v1 and v2 reports and phases are unchanged and do not consume this report.
 Version 1.417's bounded-input deterministic runner recomputes this gate from
 the same privately staged raw files and nests the resulting report beside the

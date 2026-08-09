@@ -49,6 +49,30 @@ class BoundedIOTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(BoundedIOError):
                 read_bytes(path, max_bytes=invalid)
 
+    def test_empty_input_is_stable_across_both_read_passes(self):
+        path = self.root / "empty"
+        path.write_bytes(b"")
+        self.assertEqual(read_bytes(path, max_bytes=1), b"")
+
+    def test_same_size_in_place_mutation_between_read_passes_is_rejected(self):
+        path = self.root / "input"
+        path.write_bytes(b"first")
+        real_lseek = bounded_io.os.lseek
+        mutated = False
+
+        def racing_lseek(descriptor, offset, whence):
+            nonlocal mutated
+            if offset == 0 and whence == os.SEEK_SET and not mutated:
+                path.write_bytes(b"other")
+                mutated = True
+            return real_lseek(descriptor, offset, whence)
+
+        with patch.object(bounded_io.os, "lseek", side_effect=racing_lseek):
+            with self.assertRaises(BoundedIOError) as raised:
+                read_bytes(path, max_bytes=5)
+        self.assertTrue(mutated)
+        self.assertIn("contents changed", str(raised.exception))
+
     def test_invalid_utf8_is_typed(self):
         path = self.root / "invalid-utf8"
         path.write_bytes(b"\xff\xfe")

@@ -165,6 +165,7 @@ auditable release.
 | v1.451.0 | Native KiCad ERC handoff replay | Optionally bind a retained native KiCad ERC v1 or warning-policy v2 report to the exactly reproduced handoff schematic, freshly replay it with one nested deadline and path-free evidence, while leaving the six-entry archive and v1 replay result unchanged when omitted |
 | v1.452.0 | Exact AI schematic quorum handoff replay | Bind a non-session schema-v1 AI quorum to the exactly reproduced handoff schematic, require an exact retained report replay, optionally compose native KiCad ERC evidence, and emit closed path-free v3 evidence while preserving v1/v2 results when AI evidence is omitted |
 | v1.453.0 | Catalog-provenance-bound exact handoff replay | Revalidate an all-or-nothing retained provenance/fetch-receipt/snapshot graph after exact handoff replay, optionally compose independent native and AI evidence, and emit closed path-free v4 evidence while preserving the unchanged six-entry archive and exact v1/v2/v3 results when catalog evidence is omitted |
+| v1.454.0 | Retained-board electrical handoff replay | Bind an optional retained KiCad board and exact board-binding report, with an optional custom electrical-policy replay source, to the exactly reproduced handoff after prior optional assertions; emit closed path-free v5 `board_binding` evidence with bounded board/report plus raw replay-source and effective-policy identities while preserving v1–v4 result bytes and the unchanged six-entry archive, without claiming layout, DRC/DFM, manufacturing/fabrication, procurement, or tool provenance |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -704,7 +705,7 @@ caller-selected `pcbex` and optional `kicad-cli` executables remain
 unauthenticated trust boundaries; quorum success does not by itself authorize
 supplier, board, pipeline, manufacturing, or fabrication stages.
 
-The current v1.453.0 milestone optionally binds the retained v1.421 catalog
+Version 1.453.0 optionally binds the retained v1.421 catalog
 generation provenance to that same exact handoff replay. Provenance, fetch
 receipt, and normalized snapshot inputs are required all together, bounded to
 1 MiB, 1 MiB, and 4 MiB respectively and to 6 MiB in aggregate, and accepted
@@ -730,3 +731,35 @@ endpoint, raw HTTP response, or the caller toolchain; establish current
 inventory, price, or reservation; authorize procurement or fabrication; or
 approve a board, placement/layout/routing, PCB DRC/DFM, manufacturing package,
 or manufacturing operation.
+
+The current v1.454.0 milestone optionally binds a retained KiCad board and
+retained compact board-binding report to the exact handoff replay. The CLI/API
+names are `--kicad-board`/`kicad_board` and
+`--board-binding-report`/`retained_board_binding_report`; an optional
+`--board-binding-policy`/`board_binding_policy` carries the exact custom
+electrical-policy source for the fresh replay, and `--require-board-binding-approved`/
+`require_board_binding_approved` is a final gate requiring the complete pair.
+The board, report, and policy are stable-read before any producer child under
+128 MiB, 12 MiB, and 4 MiB per-source bounds (144 MiB plus one byte aggregate)
+and reread after the existing board-binding child. The canonical report is
+12 MiB plus one trailing newline byte. The
+canonical six-entry archive and manifest reproduce first, existing
+v1.451–v1.453 assertions retain their order, and the geometry-free
+`verify-circuit-kicad-board-binding` gate then compares a private fresh report
+to the retained report byte-for-byte. One aggregate monotonic deadline (1–600
+seconds, default 120) covers reads, children, report validation, rereads, and
+cleanup; the standalone Rust board command has no timeout flag.
+
+The closed path-free v5 `board_binding` result (scope
+`deterministic-electrical-handoff-chain-board-binding-replay-v5`) contains only bounded
+schema/engine, decision/approval, compact finding counts, board/report, raw
+replay-policy source and effective-policy identity, plus board-electrical,
+circuit-handoff, and binding identities. It has no host
+paths or raw sidecar bodies. Omitting every board option preserves v1–v4
+result bytes, schemas, the canonical six-entry ZIP, and existing pipeline
+boundaries exactly. A successful binding is electrical identity evidence only:
+it does not approve placement or footprint geometry, copper/routing/zones,
+PCB DRC/DFM, Gerber/BOM/CPL, manufacturing/fabrication, procurement, supplier
+facts, or pcbex/KiCad/tool provenance. Geometry-only source changes may leave
+the electrical digest unchanged while changing raw/binding identity and do not
+constitute layout approval.

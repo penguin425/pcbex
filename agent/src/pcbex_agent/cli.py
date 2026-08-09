@@ -57,6 +57,7 @@ from .circuit_generation import (
 from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
     circuit_handoff_bundle_ai_quorum_replay_result_json_schema,
+    circuit_handoff_bundle_board_binding_replay_result_json_schema,
     circuit_handoff_bundle_catalog_provenance_replay_result_json_schema,
     circuit_handoff_bundle_json_schema,
     circuit_handoff_bundle_native_erc_replay_result_json_schema,
@@ -363,6 +364,26 @@ def main() -> None:
         help="fail after exact native ERC replay when the retained evidence is rejected",
     )
     replay_handoff.add_argument(
+        "--kicad-board",
+        type=Path,
+        help="retained KiCad board required with --board-binding-report",
+    )
+    replay_handoff.add_argument(
+        "--board-binding-report",
+        type=Path,
+        help="retained canonical board-binding report required with --kicad-board",
+    )
+    replay_handoff.add_argument(
+        "--board-binding-policy",
+        type=Path,
+        help="exact custom electrical-policy source used for the fresh replay",
+    )
+    replay_handoff.add_argument(
+        "--require-board-binding-approved",
+        action="store_true",
+        help="fail after exact board-binding replay when the retained evidence is rejected",
+    )
+    replay_handoff.add_argument(
         "--ai-quorum-report",
         type=Path,
         help=(
@@ -436,6 +457,13 @@ def main() -> None:
         help="write the closed exact-chain plus catalog provenance replay schema",
     )
     handoff_catalog_provenance_replay_result_schema.add_argument(
+        "-o", "--output", type=Path
+    )
+    handoff_board_binding_replay_result_schema = sub.add_parser(
+        "circuit-handoff-bundle-board-binding-replay-result-schema",
+        help="write the closed exact-chain plus board-binding replay schema",
+    )
+    handoff_board_binding_replay_result_schema.add_argument(
         "-o", "--output", type=Path
     )
     catalog_snapshot_schema = sub.add_parser(
@@ -829,6 +857,21 @@ def main() -> None:
                         args.require_native_kicad_erc_approved
                     ),
                 }
+            board_options = {}
+            if (
+                args.kicad_board is not None
+                or args.board_binding_report is not None
+                or args.board_binding_policy is not None
+                or args.require_board_binding_approved
+            ):
+                board_options = {
+                    "kicad_board": args.kicad_board,
+                    "retained_board_binding_report": args.board_binding_report,
+                    "board_binding_policy": args.board_binding_policy,
+                    "require_board_binding_approved": (
+                        args.require_board_binding_approved
+                    ),
+                }
             ai_options = {}
             if (
                 args.ai_quorum_report is not None
@@ -872,6 +915,7 @@ def main() -> None:
                 args.pcbex,
                 **catalog_options,
                 **native_options,
+                **board_options,
                 **ai_options,
                 timeout_seconds=args.timeout_seconds,
                 expected_archive_sha256=args.expected_archive_sha256,
@@ -1004,6 +1048,29 @@ def main() -> None:
         except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
             raise SystemExit(
                 f"circuit handoff catalog provenance replay schema failed: {error}"
+            ) from error
+    elif args.command == "circuit-handoff-bundle-board-binding-replay-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_board_binding_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(
+                f"circuit handoff board binding replay schema failed: {error}"
             ) from error
     elif args.command == "fetch-catalog-snapshot":
         try:
