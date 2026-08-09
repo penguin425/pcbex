@@ -71,6 +71,11 @@ from .circuit_handoff_bundle import (
 from .repair import propose_repairs
 from .repair_loop import repair_kicad_board, write_repair_report
 from .review import ReviewError
+from .manufacturing_replay import (
+    ManufacturingReplayError,
+    manufacturing_package_replay_result_json_schema,
+    replay_manufacturing_package,
+)
 from .skidl import (
     CircuitSpecError,
     assign_catalog_parts,
@@ -499,6 +504,26 @@ def main() -> None:
         help="write the closed catalog-to-generation provenance JSON Schema",
     )
     catalog_provenance_schema.add_argument("-o", "--output", type=Path)
+    manufacturing_replay = sub.add_parser(
+        "replay-manufacturing-package",
+        help="freshly regenerate and exactly verify a retained manufacturing ZIP",
+    )
+    manufacturing_replay.add_argument("board", type=Path)
+    manufacturing_replay.add_argument("retained_package", type=Path)
+    manufacturing_replay.add_argument("--pcbex", default="pcbex")
+    manufacturing_replay.add_argument("--kicad-cli", default="kicad-cli")
+    manufacturing_replay.add_argument("--kicad-project", type=Path)
+    manufacturing_replay.add_argument("--kicad-rules", type=Path)
+    manufacturing_profiles = manufacturing_replay.add_mutually_exclusive_group()
+    manufacturing_profiles.add_argument("--fab")
+    manufacturing_profiles.add_argument("--fab-profile", type=Path)
+    manufacturing_profiles.add_argument("--physical-profile", type=Path)
+    manufacturing_replay.add_argument("--timeout-seconds", type=float, default=120.0)
+    manufacturing_replay_schema = sub.add_parser(
+        "manufacturing-package-replay-result-schema",
+        help="write the closed fresh manufacturing-package replay result schema",
+    )
+    manufacturing_replay_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -1127,6 +1152,46 @@ def main() -> None:
             CatalogGenerationProvenanceError,
         ) as error:
             raise SystemExit(f"catalog schema failed: {error}") from error
+    elif args.command == "replay-manufacturing-package":
+        try:
+            result = replay_manufacturing_package(
+                args.board,
+                args.retained_package,
+                args.pcbex,
+                kicad_cli=args.kicad_cli,
+                kicad_project=args.kicad_project,
+                kicad_rules=args.kicad_rules,
+                fab=args.fab,
+                fab_profile=args.fab_profile,
+                physical_profile=args.physical_profile,
+                timeout_seconds=args.timeout_seconds,
+            )
+        except (OSError, BoundedIOError, ManufacturingReplayError) as error:
+            raise SystemExit(f"manufacturing package replay failed: {error}") from error
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    elif args.command == "manufacturing-package-replay-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    manufacturing_package_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, ManufacturingReplayError) as error:
+            raise SystemExit(
+                f"manufacturing package replay schema failed: {error}"
+            ) from error
     else:
         if _paths_are_same(args.output, args.report):
             raise SystemExit("repair board output and report paths must differ")

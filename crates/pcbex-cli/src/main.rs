@@ -162,7 +162,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
     str::FromStr,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 mod anchored_io;
@@ -249,8 +249,8 @@ use manufacturing_feedback::{
 use manufacturing_limits::{ManufacturingLimits, scan_manufacturing_workspace};
 use manufacturing_package::{
     KiCadIdentity, KiCadProjectInput, collect_staged_artifacts, normalize_kicad_artifacts,
-    prepare_manufacturing_output_directory, publish_staged_package, validate_exported_layer_set,
-    write_manufacturing_package_with_profiles,
+    prepare_manufacturing_output_directory, publish_staged_package_before_deadline,
+    validate_exported_layer_set, write_manufacturing_package_with_profiles,
 };
 use native_kicad_drc::{
     NativeKicadDrcReport, native_kicad_drc_report_schema, native_kicad_drc_report_summary,
@@ -540,7 +540,7 @@ impl std::ops::Deref for CompactPath {
 fn parse_native_kicad_erc_timeout_seconds(value: &str) -> std::result::Result<Duration, String> {
     let invalid = || {
         format!(
-            "expected a finite timeout greater than 0 and at most {} seconds",
+            "expected a finite timeout representable as a positive Duration and at most {} seconds",
             KICAD_ERC_TIMEOUT.as_secs()
         )
     };
@@ -5016,6 +5016,21 @@ enum Command {
         input: PathBuf,
         #[arg(short, long)]
         output_dir: PathBuf,
+        /// KiCad CLI executable or path. The command is invoked directly without a shell.
+        #[arg(long, default_value = "kicad-cli")]
+        kicad_cli: PathBuf,
+        /// Aggregate wall-clock limit for DRC, export, identity, and intervening phases.
+        /// Accepts finite fractional seconds representable as a positive Duration, at most 600.
+        #[arg(
+            long,
+            default_value = "600",
+            value_name = "SECONDS",
+            value_parser = parse_native_kicad_erc_timeout_seconds
+        )]
+        timeout_seconds: Duration,
+        /// Keep KiCad children in an already-installed outer process-tree supervisor.
+        #[arg(long, hide = true)]
+        outer_process_tree_supervised: bool,
         /// Built-in fabrication profile ID or stable alias.
         #[arg(long, conflicts_with_all = ["fab_profile", "physical_profile"])]
         fab: Option<String>,
@@ -5220,6 +5235,102 @@ const KICAD_IDENTITY_PROCESS_LIMITS: crate::bounded_process::ProcessLimits =
         stdout_bytes: 128 * 1024,
         stderr_bytes: 1024 * 1024,
     };
+
+fn manufacturing_deadline(timeout: Duration) -> Result<Instant> {
+    if timeout.is_zero() {
+        bail!("manufacturing aggregate timeout must be positive")
+    }
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| anyhow::anyhow!("manufacturing aggregate timeout is not representable"))
+}
+
+fn remaining_manufacturing_time_at(
+    deadline: Instant,
+    now: Instant,
+    phase: &str,
+) -> Result<Duration> {
+    deadline
+        .checked_duration_since(now)
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| anyhow::anyhow!("manufacturing aggregate timeout expired before {phase}"))
+}
+
+#[derive(Clone, Copy)]
+struct ManufacturingProcessContext {
+    deadline: Instant,
+    tree_mode: crate::bounded_process::ProcessTreeMode,
+}
+
+impl ManufacturingProcessContext {
+    fn new(deadline: Instant, outer_process_tree_supervised: bool) -> Self {
+        let tree_mode = if outer_process_tree_supervised {
+            crate::bounded_process::ProcessTreeMode::InheritSupervisor
+        } else {
+            crate::bounded_process::ProcessTreeMode::Isolated
+        };
+        Self {
+            deadline,
+            tree_mode,
+        }
+    }
+}
+
+fn run_manufacturing_process(
+    command: &mut ProcessCommand,
+    context: ManufacturingProcessContext,
+    original: crate::bounded_process::ProcessLimits,
+    phase: &str,
+) -> std::result::Result<crate::bounded_process::ProcessOutput, crate::bounded_process::ProcessError>
+{
+    remaining_manufacturing_time_at(context.deadline, Instant::now(), phase).map_err(|_| {
+        crate::bounded_process::ProcessError::Timeout {
+            timeout: Duration::ZERO,
+        }
+    })?;
+    crate::bounded_process::run_bounded_until(
+        command,
+        original,
+        context.deadline,
+        context.tree_mode,
+        None,
+    )
+}
+
+fn check_manufacturing_deadline(deadline: Instant, phase: &str) -> Result<()> {
+    remaining_manufacturing_time_at(deadline, Instant::now(), phase).map(|_| ())
+}
+
+fn validate_outer_process_tree_identity(
+    enabled: bool,
+    process_id: u32,
+    process_group_id: u32,
+) -> Result<()> {
+    if enabled && process_id != process_group_id {
+        bail!("--outer-process-tree-supervised requires pcbex to be the outer process-group leader")
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_outer_process_tree_supervision(enabled: bool) -> Result<()> {
+    unsafe extern "C" {
+        fn getpid() -> i32;
+        fn getpgrp() -> i32;
+    }
+
+    let process_id = unsafe { getpid() };
+    let process_group_id = unsafe { getpgrp() };
+    if process_id <= 0 || process_group_id <= 0 {
+        bail!("could not verify the outer manufacturing process-group supervisor")
+    }
+    validate_outer_process_tree_identity(enabled, process_id as u32, process_group_id as u32)
+}
+
+#[cfg(not(unix))]
+fn validate_outer_process_tree_supervision(_enabled: bool) -> Result<()> {
+    Ok(())
+}
 
 const MAX_DIAGNOSTIC_LINE_BYTES: usize = 4 * 1024;
 
@@ -16173,16 +16284,24 @@ fn run_cli() -> Result<()> {
         Command::Fabricate {
             input,
             output_dir,
+            kicad_cli,
+            timeout_seconds,
+            outer_process_tree_supervised,
             fab,
             fab_profile,
             physical_profile,
         } => {
+            let deadline = manufacturing_deadline(timeout_seconds)?;
+            validate_outer_process_tree_supervision(outer_process_tree_supervised)?;
+            let manufacturing_process =
+                ManufacturingProcessContext::new(deadline, outer_process_tree_supervised);
             let (dfm_profile, dfm_profile_binding, _dfm_profile_file) =
                 resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?;
             let physical_profile = physical_profile
                 .as_deref()
                 .map(load_physical_profile)
                 .transpose()?;
+            check_manufacturing_deadline(deadline, "input validation")?;
             if output_dir.file_name().is_none() {
                 bail!("manufacturing output must name a directory below its parent")
             }
@@ -16190,6 +16309,7 @@ fn run_cli() -> Result<()> {
                 .with_context(|| format!("reading {}", input.display()))?;
             let source = std::str::from_utf8(&input_bytes)
                 .with_context(|| format!("decoding {} as UTF-8", input.display()))?;
+            check_manufacturing_deadline(deadline, "DFM manufacturing gate")?;
             if let Some(profile) = &dfm_profile {
                 let mut imported = import_kicad(
                     source,
@@ -16209,6 +16329,7 @@ fn run_cli() -> Result<()> {
                 ensure_clean(&imported.board)
                     .context("DFM manufacturing gate rejected the board")?;
             }
+            check_manufacturing_deadline(deadline, "physical-profile manufacturing gate")?;
             if let Some(loaded) = &physical_profile {
                 let mut imported = import_kicad(
                     source,
@@ -16230,7 +16351,9 @@ fn run_cli() -> Result<()> {
                 ensure_clean(&imported.board)
                     .context("physical-profile manufacturing gate rejected the board")?;
             }
+            check_manufacturing_deadline(deadline, "manufacturing output preparation")?;
             let output_dir = prepare_manufacturing_output_directory(&output_dir)?;
+            check_manufacturing_deadline(deadline, "manufacturing metadata extraction")?;
             let parts = manufacturing_parts(source)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| {
@@ -16239,10 +16362,12 @@ fn run_cli() -> Result<()> {
                         input.display()
                     )
                 })?;
+            check_manufacturing_deadline(deadline, "Gerber layer discovery")?;
             let gerber_layers = manufacturing_gerber_layers(source)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("extracting Gerber layers from {}", input.display()))?;
             let gerber_layer_list = gerber_layers.join(",");
+            check_manufacturing_deadline(deadline, "manufacturing staging setup")?;
             let staging = tempfile::Builder::new()
                 .prefix(".pcbex-manufacturing-")
                 .tempdir_in(&output_dir)
@@ -16261,11 +16386,22 @@ fn run_cli() -> Result<()> {
                 .with_context(|| format!("creating {}", staging_dir.display()))?;
             let (staged_input, project_inputs) =
                 stage_kicad_project(&input, &input_bytes, &source_dir)?;
+            check_manufacturing_deadline(deadline, "project-staging quota check")?;
             enforce_manufacturing_workspace_quota(staging.path(), "project staging")?;
+            check_manufacturing_deadline(deadline, "KiCad DRC")?;
             let drc_report = staging_dir.join("drc.rpt");
-            run_kicad_drc_to(&staged_input, &drc_report, &kicad_environment)?;
+            run_kicad_drc_to_for_fabricate(
+                &staged_input,
+                &drc_report,
+                &kicad_environment,
+                &kicad_cli,
+                manufacturing_process,
+            )?;
+            check_manufacturing_deadline(deadline, "post-DRC project verification")?;
             verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
+            check_manufacturing_deadline(deadline, "post-DRC quota check")?;
             enforce_manufacturing_workspace_quota(staging.path(), "KiCad DRC")?;
+            check_manufacturing_deadline(deadline, "KiCad Gerber export")?;
             run_kicad_export(
                 &[
                     "pcb",
@@ -16279,23 +16415,45 @@ fn run_cli() -> Result<()> {
                 &staging_dir,
                 &staged_input,
                 &kicad_environment,
+                &kicad_cli,
+                manufacturing_process,
+                "KiCad Gerber export",
             )?;
+            check_manufacturing_deadline(deadline, "post-Gerber project verification")?;
             verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
+            check_manufacturing_deadline(deadline, "post-Gerber quota check")?;
             enforce_manufacturing_workspace_quota(staging.path(), "KiCad Gerber export")?;
+            check_manufacturing_deadline(deadline, "KiCad drill export")?;
             run_kicad_export(
                 &["pcb", "export", "drill", "--output"],
                 &staging_dir,
                 &staged_input,
                 &kicad_environment,
+                &kicad_cli,
+                manufacturing_process,
+                "KiCad drill export",
             )?;
+            check_manufacturing_deadline(deadline, "post-drill project verification")?;
             verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
+            check_manufacturing_deadline(deadline, "post-drill quota check")?;
             enforce_manufacturing_workspace_quota(staging.path(), "KiCad drill export")?;
+            check_manufacturing_deadline(deadline, "artifact collection")?;
             let exported_artifacts = collect_staged_artifacts(&staging_dir)?;
+            check_manufacturing_deadline(deadline, "exported-layer validation")?;
             validate_exported_layer_set(&exported_artifacts, &gerber_layers)?;
+            check_manufacturing_deadline(deadline, "artifact normalization")?;
             normalize_kicad_artifacts(&exported_artifacts)?;
+            check_manufacturing_deadline(deadline, "post-normalization quota check")?;
             enforce_manufacturing_workspace_quota(staging.path(), "artifact normalization")?;
-            let kicad_identity = kicad_cli_identity(&kicad_environment)?;
+            check_manufacturing_deadline(deadline, "KiCad identity")?;
+            let kicad_identity = kicad_cli_identity(
+                &kicad_environment,
+                &kicad_cli,
+                manufacturing_process,
+            )?;
+            check_manufacturing_deadline(deadline, "post-identity project verification")?;
             verify_staged_kicad_project(&staged_input, &input_bytes, &project_inputs)?;
+            check_manufacturing_deadline(deadline, "manufacturing workspace accounting")?;
             let workspace_before_package = scan_manufacturing_workspace(
                 staging.path(),
                 ManufacturingLimits::production(),
@@ -16316,6 +16474,7 @@ fn run_cli() -> Result<()> {
                 .ok_or_else(|| {
                     anyhow::anyhow!("manufacturing workspace entry accounting underflow")
                 })?;
+            check_manufacturing_deadline(deadline, "manufacturing package creation")?;
             let staged_archive = write_manufacturing_package_with_profiles(
                 &staging_dir,
                 &input,
@@ -16329,6 +16488,7 @@ fn run_cli() -> Result<()> {
                 outside_package_bytes,
                 outside_package_entries,
             )?;
+            check_manufacturing_deadline(deadline, "manufacturing package validation")?;
             let staged_package = fs::read(&staged_archive).with_context(|| {
                 format!(
                     "reading generated manufacturing archive {}",
@@ -16338,8 +16498,11 @@ fn run_cli() -> Result<()> {
             validate_manufacturing_package(&staged_package)
                 .map_err(anyhow::Error::msg)
                 .context("validating generated manufacturing package")?;
+            check_manufacturing_deadline(deadline, "post-package quota check")?;
             enforce_manufacturing_workspace_quota(staging.path(), "package creation")?;
-            let archive = publish_staged_package(&staging_dir, &output_dir)?;
+            check_manufacturing_deadline(deadline, "manufacturing package publication")?;
+            let archive =
+                publish_staged_package_before_deadline(&staging_dir, &output_dir, deadline)?;
             eprintln!(
                 "manufacturing files written to {}; archive: {}",
                 output_dir.display(),
@@ -17695,6 +17858,48 @@ fn run_kicad_drc_to_with_executable(
     environment: &Path,
     executable: &Path,
 ) -> Result<()> {
+    run_kicad_drc_to_with_executable_and_deadline(board, report, environment, executable, None)
+}
+
+fn run_kicad_drc_to_with_executable_and_deadline(
+    board: &Path,
+    report: &Path,
+    environment: &Path,
+    executable: &Path,
+    deadline: Option<Instant>,
+) -> Result<()> {
+    run_kicad_drc_to_with_execution(
+        board,
+        report,
+        environment,
+        executable,
+        deadline.map(|deadline| ManufacturingProcessContext::new(deadline, false)),
+    )
+}
+
+fn run_kicad_drc_to_for_fabricate(
+    board: &Path,
+    report: &Path,
+    environment: &Path,
+    executable: &Path,
+    manufacturing_process: ManufacturingProcessContext,
+) -> Result<()> {
+    run_kicad_drc_to_with_execution(
+        board,
+        report,
+        environment,
+        executable,
+        Some(manufacturing_process),
+    )
+}
+
+fn run_kicad_drc_to_with_execution(
+    board: &Path,
+    report: &Path,
+    environment: &Path,
+    executable: &Path,
+    manufacturing_process: Option<ManufacturingProcessContext>,
+) -> Result<()> {
     let output_directory = environment.join("drc-output");
     fs::create_dir_all(&output_directory).with_context(|| {
         format!(
@@ -17732,8 +17937,17 @@ fn run_kicad_drc_to_with_executable(
         .args(["pcb", "drc", "--exit-code-violations", "--output"])
         .arg(&staged_report)
         .arg(board);
-    let output = crate::bounded_process::run_bounded(&mut command, KICAD_PROCESS_LIMITS, None)
-        .map_err(|error| anyhow::anyhow!("bounded kicad-cli DRC execution failed: {error}"))?;
+    let output = if let Some(manufacturing_process) = manufacturing_process {
+        run_manufacturing_process(
+            &mut command,
+            manufacturing_process,
+            KICAD_PROCESS_LIMITS,
+            "KiCad DRC",
+        )
+    } else {
+        crate::bounded_process::run_bounded(&mut command, KICAD_PROCESS_LIMITS, None)
+    }
+    .map_err(|error| anyhow::anyhow!("bounded kicad-cli DRC execution failed: {error}"))?;
     if !output.status.success() {
         let diagnostic = process_diagnostic(&output.stderr, &output.stdout);
         bail!(
@@ -17771,13 +17985,19 @@ fn run_kicad_export(
     output: &Path,
     board: &Path,
     environment: &Path,
+    executable: &Path,
+    manufacturing_process: ManufacturingProcessContext,
+    phase: &str,
 ) -> Result<()> {
-    let mut command = kicad_command(environment)?;
+    let mut command = kicad_command_with_executable(environment, executable)?;
     command.args(arguments).arg(output).arg(board);
-    let execution = crate::bounded_process::run_bounded(&mut command, KICAD_PROCESS_LIMITS, None)
-        .map_err(|error| {
-        anyhow::anyhow!("bounded kicad-cli manufacturing export failed: {error}")
-    })?;
+    let execution = run_manufacturing_process(
+        &mut command,
+        manufacturing_process,
+        KICAD_PROCESS_LIMITS,
+        phase,
+    )
+    .map_err(|error| anyhow::anyhow!("bounded kicad-cli manufacturing export failed: {error}"))?;
     if !execution.status.success() {
         let diagnostic = process_diagnostic(&execution.stderr, &execution.stdout);
         bail!(
@@ -17876,12 +18096,20 @@ fn verify_staged_kicad_project(
     Ok(())
 }
 
-fn kicad_cli_identity(environment: &Path) -> Result<KiCadIdentity> {
-    let mut command = kicad_command(environment)?;
+fn kicad_cli_identity(
+    environment: &Path,
+    executable: &Path,
+    manufacturing_process: ManufacturingProcessContext,
+) -> Result<KiCadIdentity> {
+    let mut command = kicad_command_with_executable(environment, executable)?;
     command.args(["version", "--format", "about"]);
-    let output =
-        crate::bounded_process::run_bounded(&mut command, KICAD_IDENTITY_PROCESS_LIMITS, None)
-            .map_err(|error| anyhow::anyhow!("bounded kicad-cli build identity failed: {error}"))?;
+    let output = run_manufacturing_process(
+        &mut command,
+        manufacturing_process,
+        KICAD_IDENTITY_PROCESS_LIMITS,
+        "KiCad identity",
+    )
+    .map_err(|error| anyhow::anyhow!("bounded kicad-cli build identity failed: {error}"))?;
     if !output.status.success() {
         let diagnostic = process_diagnostic(&output.stderr, &output.stdout);
         bail!(
@@ -17904,10 +18132,6 @@ fn kicad_cli_identity(environment: &Path) -> Result<KiCadIdentity> {
         version: version.to_string(),
         about_sha256: hex::encode(Sha256::digest(&output.stdout)),
     })
-}
-
-fn kicad_command(environment: &Path) -> Result<ProcessCommand> {
-    kicad_command_with_executable(environment, Path::new("kicad-cli"))
 }
 
 fn kicad_command_with_executable(environment: &Path, executable: &Path) -> Result<ProcessCommand> {
@@ -18065,10 +18289,129 @@ mod tests {
             assert!(
                 error
                     .to_string()
-                    .contains("expected a finite timeout greater than 0 and at most 600 seconds"),
+                    .contains("representable as a positive Duration and at most 600 seconds"),
                 "unexpected error for {value:?}: {error}"
             );
         }
+    }
+
+    #[test]
+    fn parses_fabricate_execution_controls() {
+        let defaults = parse_cli(&[
+            "pcbex",
+            "fabricate",
+            "board.kicad_pcb",
+            "--output-dir",
+            "manufacturing",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *defaults.command,
+            Command::Fabricate {
+                kicad_cli,
+                timeout_seconds,
+                outer_process_tree_supervised,
+                ..
+            } if kicad_cli.as_os_str() == "kicad-cli"
+                && timeout_seconds == KICAD_ERC_TIMEOUT
+                && !outer_process_tree_supervised
+        ));
+
+        let explicit = parse_cli(&[
+            "pcbex",
+            "fabricate",
+            "board.kicad_pcb",
+            "--output-dir",
+            "manufacturing",
+            "--kicad-cli=-fake-kicad-cli",
+            "--timeout-seconds",
+            "0.125",
+            "--outer-process-tree-supervised",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *explicit.command,
+            Command::Fabricate {
+                kicad_cli,
+                timeout_seconds,
+                outer_process_tree_supervised,
+                ..
+            } if kicad_cli.as_os_str() == "-fake-kicad-cli"
+                && timeout_seconds == Duration::from_millis(125)
+                && outer_process_tree_supervised
+        ));
+
+        let help = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let mut command = Cli::command();
+                command
+                    .find_subcommand_mut("fabricate")
+                    .unwrap()
+                    .render_long_help()
+                    .to_string()
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(!help.contains("outer-process-tree-supervised"));
+    }
+
+    #[test]
+    fn outer_process_tree_mode_requires_the_supervised_group_identity() {
+        validate_outer_process_tree_identity(false, 10, 20).unwrap();
+        validate_outer_process_tree_identity(true, 10, 10).unwrap();
+        let error = validate_outer_process_tree_identity(true, 10, 20).unwrap_err();
+        assert!(error.to_string().contains("process-group leader"));
+    }
+
+    #[test]
+    fn rejects_invalid_fabricate_timeouts() {
+        for value in [
+            "0",
+            "-1",
+            "NaN",
+            "inf",
+            "600.000001",
+            "1e999",
+            "0.0000000001",
+        ] {
+            let option = format!("--timeout-seconds={value}");
+            let result = parse_cli(&[
+                "pcbex",
+                "fabricate",
+                "board.kicad_pcb",
+                "--output-dir",
+                "manufacturing",
+                &option,
+            ]);
+            let error = match result {
+                Ok(_) => panic!("invalid timeout {value:?} was accepted"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("representable as a positive Duration and at most 600 seconds"),
+                "unexpected error for {value:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn manufacturing_deadline_reports_exact_remaining_time_and_expiry() {
+        let now = Instant::now();
+        let deadline = now.checked_add(Duration::from_millis(125)).unwrap();
+        let remaining = remaining_manufacturing_time_at(deadline, now, "test export").unwrap();
+        assert_eq!(remaining, Duration::from_millis(125));
+
+        let error =
+            remaining_manufacturing_time_at(deadline, deadline, "test identity").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("aggregate timeout expired before test identity")
+        );
     }
 
     #[test]
@@ -18534,6 +18877,97 @@ exit 9
         let error = result.expect_err("fake KiCad DRC must fail");
         assert!(error.to_string().contains("synthetic DRC failure"));
         assert_eq!(fs::read(&public_report).unwrap(), b"known-good");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manufacturing_children_route_one_explicit_kicad_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        unsafe extern "C" {
+            fn getpgrp() -> i32;
+        }
+
+        let workspace = tempfile::tempdir().unwrap();
+        let fake_kicad = workspace.path().join("explicit-kicad-cli");
+        std::fs::write(
+            &fake_kicad,
+            br#"#!/bin/sh
+log="${0%/*}/invocations"
+printf '%s|%s\n' "$(ps -o pgid= -p $$ | tr -d ' ')" "$*" >> "$log"
+if [ "$1" = "version" ]; then
+  printf 'Version: pcbex-test-kicad\nBuild: deterministic-test\n'
+  exit 0
+fi
+if [ "$1" = "pcb" ] && [ "$2" = "drc" ]; then
+  report=""; capture=0
+  for arg in "$@"; do
+    if [ "$capture" = 1 ]; then
+      report="$arg"; capture=0
+    elif [ "$arg" = "--output" ]; then
+      capture=1
+    fi
+  done
+  printf 'synthetic DRC pass\n' > "$report"
+fi
+exit 0
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&fake_kicad, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let board = workspace.path().join("board.kicad_pcb");
+        let report = workspace.path().join("drc.rpt");
+        let artifacts = workspace.path().join("artifacts");
+        let environment = workspace.path().join("environment");
+        fs::write(&board, b"(kicad_pcb)").unwrap();
+        fs::create_dir(&artifacts).unwrap();
+        let deadline = manufacturing_deadline(Duration::from_secs(5)).unwrap();
+        let manufacturing_process = ManufacturingProcessContext::new(deadline, true);
+
+        run_kicad_drc_to_for_fabricate(
+            &board,
+            &report,
+            &environment,
+            &fake_kicad,
+            manufacturing_process,
+        )
+        .unwrap();
+        run_kicad_export(
+            &["pcb", "export", "gerbers", "--output"],
+            &artifacts,
+            &board,
+            &environment,
+            &fake_kicad,
+            manufacturing_process,
+            "test Gerber export",
+        )
+        .unwrap();
+        run_kicad_export(
+            &["pcb", "export", "drill", "--output"],
+            &artifacts,
+            &board,
+            &environment,
+            &fake_kicad,
+            manufacturing_process,
+            "test drill export",
+        )
+        .unwrap();
+        let identity =
+            kicad_cli_identity(&environment, &fake_kicad, manufacturing_process).unwrap();
+        assert_eq!(identity.version, "pcbex-test-kicad");
+
+        let invocations = fs::read_to_string(workspace.path().join("invocations")).unwrap();
+        let invocations = invocations.lines().collect::<Vec<_>>();
+        assert_eq!(invocations.len(), 4);
+        let process_group = unsafe { getpgrp() }.to_string();
+        assert!(invocations[0].starts_with(&format!("{process_group}|pcb drc ")));
+        assert!(invocations[1].starts_with(&format!("{process_group}|pcb export gerbers ")));
+        assert!(invocations[2].starts_with(&format!("{process_group}|pcb export drill ")));
+        assert_eq!(
+            invocations[3],
+            format!("{process_group}|version --format about")
+        );
     }
 
     #[test]

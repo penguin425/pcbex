@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 const MANIFEST_NAME: &str = "manifest.json";
@@ -695,17 +696,54 @@ pub fn validate_exported_layer_set(
 }
 
 /// Publish a complete private staging directory after preflighting the output names.
+#[cfg(test)]
 pub fn publish_staged_package(staging_dir: &Path, output_dir: &Path) -> Result<PathBuf> {
-    publish_staged_package_with_limits(staging_dir, output_dir, ManufacturingLimits::production())
+    publish_staged_package_with_limits_and_check(
+        staging_dir,
+        output_dir,
+        ManufacturingLimits::production(),
+        |_| Ok(()),
+    )
 }
 
+/// Publish a complete private staging directory without starting a visible
+/// commit after the aggregate manufacturing deadline has expired.
+pub fn publish_staged_package_before_deadline(
+    staging_dir: &Path,
+    output_dir: &Path,
+    deadline: Instant,
+) -> Result<PathBuf> {
+    publish_staged_package_with_limits_and_check(
+        staging_dir,
+        output_dir,
+        ManufacturingLimits::production(),
+        |phase| check_publication_deadline(deadline, phase),
+    )
+}
+
+#[cfg(test)]
 fn publish_staged_package_with_limits(
     staging_dir: &Path,
     output_dir: &Path,
     limits: ManufacturingLimits,
 ) -> Result<PathBuf> {
+    publish_staged_package_with_limits_and_check(staging_dir, output_dir, limits, |_| Ok(()))
+}
+
+fn publish_staged_package_with_limits_and_check<F>(
+    staging_dir: &Path,
+    output_dir: &Path,
+    limits: ManufacturingLimits,
+    mut check_deadline: F,
+) -> Result<PathBuf>
+where
+    F: FnMut(&str) -> Result<()>,
+{
+    check_deadline("manufacturing publication preflight")?;
     scan_manufacturing_workspace(staging_dir, limits, "manufacturing publication stage")?;
+    check_deadline("manufacturing output preparation")?;
     let output_dir = prepare_manufacturing_output_directory(output_dir)?;
+    check_deadline("manufacturing output pinning")?;
     let pinned_output = PinnedDirectory::open(&output_dir).with_context(|| {
         format!(
             "pinning manufacturing output directory {}",
@@ -713,6 +751,7 @@ fn publish_staged_package_with_limits(
         )
     })?;
     let output_dir = pinned_output.path();
+    check_deadline("manufacturing publication file discovery")?;
     let mut files = directory_regular_files(staging_dir, limits)?;
     files.sort_by(|left, right| {
         publish_rank(left)
@@ -748,6 +787,7 @@ fn publish_staged_package_with_limits(
     for entry in fs::read_dir(output_dir)
         .with_context(|| format!("listing manufacturing output {}", output_dir.display()))?
     {
+        check_deadline("manufacturing output preflight")?;
         output_entries = output_entries
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("manufacturing output entry count overflow"))?;
@@ -778,6 +818,7 @@ fn publish_staged_package_with_limits(
             );
         }
     }
+    check_deadline("manufacturing output entry accounting")?;
     let new_entries = files
         .iter()
         .filter_map(|path| path.file_name())
@@ -793,6 +834,7 @@ fn publish_staged_package_with_limits(
         );
     }
     for source in &files {
+        check_deadline("manufacturing destination preflight")?;
         let name = source
             .file_name()
             .ok_or_else(|| anyhow::anyhow!("staged artifact is missing its filename"))?;
@@ -817,6 +859,7 @@ fn publish_staged_package_with_limits(
     let mut prepared = Vec::with_capacity(files.len());
     let mut copied_total = 0_u64;
     for source in files {
+        check_deadline("manufacturing artifact copy")?;
         let name = source
             .file_name()
             .ok_or_else(|| anyhow::anyhow!("staged artifact is missing its filename"))?;
@@ -836,6 +879,7 @@ fn publish_staged_package_with_limits(
             limits,
             "published manufacturing artifacts",
         )?;
+        check_deadline("manufacturing artifact synchronization")?;
         temporary
             .as_file()
             .sync_all()
@@ -843,6 +887,11 @@ fn publish_staged_package_with_limits(
         prepared.push((temporary, destination));
     }
     for (temporary, destination) in prepared {
+        let name = destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("manufacturing artifact");
+        check_deadline(&format!("publishing {name}"))?;
         pinned_output
             .persist_replace(temporary, &destination)
             .with_context(|| format!("publishing {}", destination.display()))?;
@@ -864,6 +913,13 @@ fn publish_staged_package_with_limits(
         );
     }
     Ok(archive)
+}
+
+fn check_publication_deadline(deadline: Instant, phase: &str) -> Result<()> {
+    if Instant::now() >= deadline {
+        bail!("manufacturing aggregate timeout expired before {phase}")
+    }
+    Ok(())
 }
 
 /// Validate and create the output before any external tool or private stage runs.
@@ -2401,6 +2457,89 @@ mod tests {
         );
         let mut zip = ZipArchive::new(File::open(archive).unwrap()).unwrap();
         assert!(zip.by_name("unrelated.secret").is_err());
+    }
+
+    #[test]
+    fn expired_publication_deadline_commits_no_new_files() {
+        let staging = tempdir().unwrap();
+        let output = tempdir().unwrap();
+        fs::write(staging.path().join("drc.rpt"), b"new DRC").unwrap();
+        fs::write(staging.path().join(ARCHIVE_NAME), b"new archive").unwrap();
+
+        let error =
+            publish_staged_package_before_deadline(staging.path(), output.path(), Instant::now())
+                .unwrap_err();
+
+        assert!(
+            error.to_string().contains("aggregate timeout expired"),
+            "{error:#}"
+        );
+        assert!(fs::read_dir(output.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn deadline_checks_guard_manifest_and_archive_commits_in_order() {
+        fn staged_package() -> tempfile::TempDir {
+            let staging = tempdir().unwrap();
+            fs::write(staging.path().join("drc.rpt"), b"new DRC").unwrap();
+            fs::write(staging.path().join(MANIFEST_NAME), b"new manifest").unwrap();
+            fs::write(staging.path().join(ARCHIVE_NAME), b"new archive").unwrap();
+            staging
+        }
+
+        let staging = staged_package();
+        let output = tempdir().unwrap();
+        let error = publish_staged_package_with_limits_and_check(
+            staging.path(),
+            output.path(),
+            ManufacturingLimits::production(),
+            |phase| {
+                if phase == "publishing manifest.json" {
+                    Err(anyhow::anyhow!("simulated deadline expiry"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("simulated deadline expiry"));
+        assert_eq!(fs::read(output.path().join("drc.rpt")).unwrap(), b"new DRC");
+        assert!(!output.path().join(MANIFEST_NAME).exists());
+        assert!(!output.path().join(ARCHIVE_NAME).exists());
+
+        let staging = staged_package();
+        let output = tempdir().unwrap();
+        let mut commits = Vec::new();
+        let error = publish_staged_package_with_limits_and_check(
+            staging.path(),
+            output.path(),
+            ManufacturingLimits::production(),
+            |phase| {
+                if phase.starts_with("publishing ") {
+                    commits.push(phase.to_string());
+                }
+                if phase == "publishing manufacturing.zip" {
+                    Err(anyhow::anyhow!("simulated deadline expiry"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("simulated deadline expiry"));
+        assert_eq!(
+            commits,
+            [
+                "publishing drc.rpt",
+                "publishing manifest.json",
+                "publishing manufacturing.zip",
+            ]
+        );
+        assert_eq!(
+            fs::read(output.path().join(MANIFEST_NAME)).unwrap(),
+            b"new manifest"
+        );
+        assert!(!output.path().join(ARCHIVE_NAME).exists());
     }
 
     #[cfg(unix)]

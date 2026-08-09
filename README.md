@@ -505,7 +505,9 @@ SHA-256 manifest, and a reproducible ZIP:
 cargo run -p pcbex -- route-kicad examples/multilayer.kicad_pcb \
   --output multilayer.routed.kicad_pcb --drc
 cargo run -p pcbex -- fabricate multilayer.routed.kicad_pcb \
-  --output-dir manufacturing
+  --output-dir manufacturing \
+  --kicad-cli kicad-cli \
+  --timeout-seconds 600
 ```
 
 Source boards are not modified, and pre-existing output file contents are not
@@ -514,6 +516,72 @@ contract](docs/MANUFACTURING_PACKAGE.md) for metadata validation and the
 vendor-neutral CPL coordinate convention. Manufacturing staging, normalization,
 ZIP creation, factory repair, and publication share finite file-count, depth,
 per-file, aggregate-workspace, archive, and portable-name quotas.
+`fabricate` starts one aggregate monotonic deadline at command entry. DRC,
+Gerber export, drill export, and KiCad build identity each receive the earlier
+of their existing per-child cap and the shared time remaining. The default and
+maximum are 600 seconds; a value must be finite, positive, and representable as
+a Rust `Duration`, so a value that converts to zero at nanosecond resolution is
+rejected.
+`--kicad-cli` is invoked directly without a shell.
+
+Publication checks the deadline throughout preflight, before each artifact
+copy and synchronization, and immediately before each visible atomic persist.
+Ordinary sibling files are committed first, then `manifest.json`, with the
+canonical `manufacturing.zip` last. Expiry may therefore leave some new sibling
+files or a manifest, but without a newly committed canonical archive they are
+not evidence of a complete new package. There is no deadline check after the
+archive commit; non-preemptible post-commit metadata and diagnostic work means
+a direct `fabricate` command can return after its nominal deadline.
+
+Version 1.455 can prove that a retained package still follows from the captured
+design inputs by regenerating it privately and requiring exact ZIP bytes:
+
+```sh
+pcbex-agent replay-manufacturing-package \
+  multilayer.routed.kicad_pcb manufacturing/manufacturing.zip \
+  --pcbex target/release/pcbex \
+  --kicad-cli kicad-cli \
+  --kicad-project hardware/multilayer.routed.kicad_pro \
+  --kicad-rules hardware/multilayer.routed.kicad_dru \
+  --fab-profile hardware/acme-dfm.json \
+  --timeout-seconds 120 \
+  > manufacturing-replay.json
+pcbex-agent manufacturing-package-replay-result-schema \
+  --output manufacturing-replay.schema.json
+```
+
+Project and rules inputs are explicit; omit their options when they were not
+part of package generation. They are staged with names derived from the board,
+matching `fabricate`'s same-stem companion contract. An external profile keeps
+its validated portable source basename because that name is bound by the
+manufacturing manifest. Built-in `--fab`, file-backed `--fab-profile`, and
+`--physical-profile` are mutually exclusive. The replay stable-captures the
+board, retained ZIP, selected sidecars, and profile, stages their required names
+in a private temporary workspace, and invokes the selected pcbex/KiCad commands
+without a shell. Success requires the fresh `manufacturing.zip` to match the
+retained file byte-for-byte and every staged and caller-visible source to remain
+unchanged. The closed, path-free result uses verification scope
+`manufacturing-package-fresh-replay-v1` and reports only identities and completed
+validation flags; regenerated manufacturing files are not published.
+
+The outer deadline accepts any finite value greater than zero through 600 and
+defaults to 120 seconds. It reserves up to 15 seconds, or half the remaining
+time when smaller, by passing a shorter aggregate deadline to Rust `fabricate`.
+The replay's internal supervised mode keeps pcbex and all four KiCad children
+in the Python-owned process group on Unix or outer Job on Windows, so the outer
+timeout can collect descendants even across wrapper or pre-exec delay. Direct
+`fabricate` retains isolated KiCad process groups/Jobs instead. Python checks
+the deadline after cleanup and immediately before returning success. Board,
+project, rules, and each retained/fresh package read are limited to 128 MiB;
+external profiles are limited to 4 MiB.
+Caller-visible board, project, rules, retained-package, and profile captures
+share a 512 MiB aggregate input ceiling; the fresh output is checked
+separately.
+The pcbex and KiCad executables remain caller-trusted and unauthenticated;
+intentional process-tree escape by a supplied tool is outside this containment
+claim. This standalone replay does not alter pipeline evidence, invoke MCP or
+an Action, submit to a factory, authorize fabrication/procurement, or place an
+order.
 
 Submit that exact archive to a deployment-owned JLCPCB, PCBWay, or generic
 quote/DFM adapter without putting credentials in argv:
