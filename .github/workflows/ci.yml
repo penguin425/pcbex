@@ -1471,4 +1471,5 @@ jobs:
           agent.tests.test_circuit_handoff_bundle_v1452
           agent.tests.test_circuit_handoff_bundle_v1453
           agent.tests.test_circuit_handoff_bundle_v1454
+          agent.tests.test_manufacturing_replay_v1455
           scripts.tests.test_ci_runtime

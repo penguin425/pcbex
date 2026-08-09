@@ -166,6 +166,7 @@ auditable release.
 | v1.452.0 | Exact AI schematic quorum handoff replay | Bind a non-session schema-v1 AI quorum to the exactly reproduced handoff schematic, require an exact retained report replay, optionally compose native KiCad ERC evidence, and emit closed path-free v3 evidence while preserving v1/v2 results when AI evidence is omitted |
 | v1.453.0 | Catalog-provenance-bound exact handoff replay | Revalidate an all-or-nothing retained provenance/fetch-receipt/snapshot graph after exact handoff replay, optionally compose independent native and AI evidence, and emit closed path-free v4 evidence while preserving the unchanged six-entry archive and exact v1/v2/v3 results when catalog evidence is omitted |
 | v1.454.0 | Retained-board electrical handoff replay | Bind an optional retained KiCad board and exact board-binding report, with an optional custom electrical-policy replay source, to the exactly reproduced handoff after prior optional assertions; emit closed path-free v5 `board_binding` evidence with bounded board/report plus raw replay-source and effective-policy identities while preserving v1–v4 result bytes and the unchanged six-entry archive, without claiming layout, DRC/DFM, manufacturing/fabrication, procurement, or tool provenance |
+| v1.455.0 | Fresh manufacturing-package replay | Capture one board, retained manufacturing ZIP, optional explicit KiCad project/rules sidecars, and one optional manufacturing profile under closed bounds; run the existing `fabricate` producer privately with explicit pcbex/KiCad commands and nested aggregate deadlines, accept only a byte-identical fresh ZIP, reread every staged and caller-visible source, and emit closed path-free `manufacturing-package-fresh-replay-v1` evidence without changing pipeline/MCP/Action or authorizing fabrication |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -732,7 +733,7 @@ inventory, price, or reservation; authorize procurement or fabrication; or
 approve a board, placement/layout/routing, PCB DRC/DFM, manufacturing package,
 or manufacturing operation.
 
-The current v1.454.0 milestone optionally binds a retained KiCad board and
+The released v1.454.0 milestone optionally binds a retained KiCad board and
 retained compact board-binding report to the exact handoff replay. The CLI/API
 names are `--kicad-board`/`kicad_board` and
 `--board-binding-report`/`retained_board_binding_report`; an optional
@@ -763,3 +764,53 @@ PCB DRC/DFM, Gerber/BOM/CPL, manufacturing/fabrication, procurement, supplier
 facts, or pcbex/KiCad/tool provenance. Geometry-only source changes may leave
 the electrical digest unchanged while changing raw/binding identity and do not
 constitute layout approval.
+
+The current v1.455.0 milestone adds a standalone exact replay for one retained
+manufacturing package. The Python API is `replay_manufacturing_package`; the
+CLI and schema commands are `pcbex-agent replay-manufacturing-package` and
+`pcbex-agent manufacturing-package-replay-result-schema`. The replay captures
+one portable-basename `.kicad_pcb`, the retained `manufacturing.zip`, optional
+explicit `--kicad-project` and `--kicad-rules` sources, and at most one of a
+built-in `--fab`, external `--fab-profile`, or `--physical-profile` selection.
+The board, project, rules, and each retained/fresh ZIP read are limited to
+128 MiB, while an external profile is limited to 4 MiB. Caller-visible board,
+project, rules, retained ZIP, and profile captures share one 512 MiB aggregate
+input ceiling; the fresh output is checked separately.
+
+All caller files are stable-read before native execution and written under
+their required names in one private temporary workspace. The adapter invokes
+the caller-selected pcbex command without a shell and passes `fabricate` the
+private board, output directory, explicit `--kicad-cli`, selected profile, and
+an inner aggregate timeout. `fabricate` now accepts direct `--kicad-cli` and a
+finite positive `--timeout-seconds` through 600 seconds only when representable
+as a positive Rust `Duration`. Its four KiCad children share one absolute
+deadline and retain their per-child caps. Publication checks before each
+visible persist and commits ordinary siblings, `manifest.json`, then the
+canonical archive; a failed deadline can leave intermediate siblings but no
+new complete-package evidence, while non-preemptible work after the final
+archive commit can cross the direct command's nominal deadline.
+
+The Python replay has its own finite `0 < seconds <= 600` deadline (default 120)
+and subtracts up to 15 seconds, or half the remaining time when smaller, from
+the child budget. Its hidden outer-supervision mode keeps pcbex and all four
+KiCad children in one Python-owned process group on Unix or outer Job on
+Windows, while direct `fabricate` retains isolated child groups/Jobs. Python
+performs cleanup and final rereads and checks its deadline immediately before
+success. External profile staging preserves its
+validated portable source basename because that name is part of the
+manufacturing manifest;
+project/rules staging uses the board-derived same-stem names expected by
+`fabricate`.
+
+Success requires the freshly generated `manufacturing.zip` to equal the
+retained bytes exactly. The adapter then rereads every staged source, the fresh
+ZIP, and every caller-visible source before emitting closed path-free result
+schema v1 with verification scope `manufacturing-package-fresh-replay-v1`,
+board/project/rules/profile/package identities, an explicit identical-package
+decision, and completed validation flags. It publishes no regenerated Gerber,
+BOM, CPL, DRC, or ZIP outside its temporary workspace. Caller-selected pcbex
+and KiCad executables remain unauthenticated, unsandboxed trust boundaries;
+exact output equality does not establish their provenance. This standalone
+replay does not alter deterministic-pipeline schemas, add MCP or Action
+integration, submit to a factory, authorize fabrication/procurement, or place
+an order.

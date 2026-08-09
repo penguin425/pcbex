@@ -7,6 +7,29 @@ only then are manufacturing artifacts published. With
 check before creating the staging directory and binds that profile into the
 resulting package.
 
+`--kicad-cli <executable-or-path>` selects the directly invoked KiCad command
+without a shell and defaults to `kicad-cli`. `--timeout-seconds <seconds>`
+accepts a finite, positive value through 600 only when Rust can represent it as
+a positive `Duration`; fractional seconds are accepted, but a value that
+converts to zero at nanosecond resolution is rejected. It defaults to 600.
+One absolute monotonic deadline covers input/profile validation, DRC, Gerber
+and drill export, KiCad build-identity capture, intervening quota/source checks,
+normalization, package validation, and publication. Each of the four KiCad
+children receives the earlier of the shared time remaining and its existing
+per-child cap. A direct `fabricate` invocation gives each child an isolated
+process group on Unix or Job on Windows.
+
+Publication checks the deadline during preflight, before every staged-artifact
+copy and synchronization, and immediately before every visible atomic persist.
+It commits ordinary sibling files first, then `manifest.json`, and commits the
+canonical `manufacturing.zip` last. A deadline failure can therefore leave
+some new sibling files or the new manifest visible, but without a newly
+committed canonical archive they are not evidence of a complete new package.
+There is intentionally no deadline check after the archive commit: synchronous
+metadata and diagnostic work already in progress is not preempted, so a direct
+`fabricate` success can cross the nominal deadline after committing the
+complete archive.
+
 The board and adjacent same-stem `.kicad_pro`/`.kicad_dru` inputs are copied to
 a private staging directory before KiCad is started. This preserves project
 DRC context without writing `.kicad_prl` or DRC sidecars beside the source.
@@ -167,6 +190,94 @@ concurrent writer is required.
 For manufacturing upload, treat `manufacturing.zip` as the canonical package
 boundary. The sibling files are useful for inspection and review, but the ZIP
 is the reproducible, hash-bound artifact to submit to a fabrication service.
+
+## Fresh exact replay
+
+Version 1.455 adds a standalone consumer which freshly regenerates that
+canonical ZIP and accepts it only when all bytes match the retained package:
+
+```sh
+pcbex-agent replay-manufacturing-package \
+  board.kicad_pcb manufacturing/manufacturing.zip \
+  --pcbex pcbex \
+  --kicad-cli kicad-cli \
+  --kicad-project board.kicad_pro \
+  --kicad-rules board.kicad_dru \
+  --fab-profile profiles/acme-dfm.json \
+  --timeout-seconds 120 \
+  > manufacturing-replay.json
+
+pcbex-agent manufacturing-package-replay-result-schema \
+  --output manufacturing-package-replay.schema.json
+```
+
+The equivalent Python API is `replay_manufacturing_package`. Project and rules
+paths are optional explicit inputs; when present their exact captured bytes are
+staged under the board-derived same-stem `.kicad_pro` and `.kicad_dru` names.
+They must be omitted when those companions were not part of the retained
+package. Built-in fabrication IDs match `[a-z0-9][a-z0-9.-]{0,127}`. An
+external DFM or physical profile is staged under its validated
+portable caller basename because that name is retained in the manufacturing
+manifest. A built-in `--fab`, file-backed `--fab-profile`, and
+`--physical-profile` remain mutually exclusive.
+
+Before native execution, the adapter stable-reads every caller source as a
+nonempty regular non-link file. Board, project, rules, retained package, and
+fresh package reads are each limited to 128 MiB; an external profile is limited
+to 4 MiB; and all caller inputs together may not exceed 512 MiB. The board must
+have one portable `.kicad_pcb` basename. Each caller `PathLike` is converted to
+immutable path text exactly once; the identity computed at the first stable
+read is retained for the result rather than recomputed from a later path. The
+caller-selected sources are then written to a private temporary workspace, and
+the selected pcbex command is invoked without a shell as `fabricate` with the
+private board/output, explicit KiCad executable, profile selection, and a
+shorter inner timeout. Child stdout and stderr are independently limited to
+1 MiB. Both the caller command and final injected argv are capped at 256
+arguments and 32,768 aggregate UTF-8 bytes; the rendered Windows command line,
+including its terminator, is capped at 32,767 UTF-16 code units.
+
+The Python aggregate deadline accepts finite `0 < seconds <= 600` and defaults
+to 120 seconds. Immediately before invoking `fabricate`, the adapter reserves
+the smaller of 15 seconds or half the remaining budget for Python cleanup and
+post-child reads. Rust therefore receives a strictly shorter aggregate timeout;
+that inner value must also be representable as a positive Rust `Duration`.
+The adapter also activates a hidden internal outer-supervision mode. Instead of
+creating nested isolated groups/Jobs, DRC, Gerber, drill, and identity children
+inherit the Python-owned pcbex process group on Unix or outer Job on Windows.
+Rust can terminate and reap a direct KiCad child at its earlier deadline, while
+the later Python timeout still owns pcbex and every ordinary descendant if a
+wrapper or pre-exec delay prevents orderly inner cleanup. Direct standalone
+`fabricate` retains its isolated child mode. Synchronous file reads cannot be
+interrupted in the middle of a stalled filesystem operation, but Python checks
+the deadline after temporary cleanup and again immediately before returning,
+so replay never reports success after observing expiry.
+
+After `fabricate` has generated and internally validated the fresh package, the
+adapter requires the fresh and retained ZIP bodies to be byte-for-byte equal.
+It then rereads every private staged source, the fresh package, and every
+caller-visible input. Any observed mutation, missing/extra profile selection,
+different sidecar bytes, producer-version/KiCad-output change, timeout, child
+failure, output overflow, or package mismatch fails closed. Regenerated Gerber,
+drill, BOM, CPL, DRC, manifest, and ZIP files remain private and are removed
+with the temporary workspace.
+
+Success returns the closed path-free result schema v1 with verification scope
+`manufacturing-package-fresh-replay-v1`. It contains only the portable board
+name; byte/SHA-256 identities for the board, optional project/rules,
+file-backed profile, and retained/fresh packages; a built-in profile ID when
+selected; an explicit `identical: true`; and completed input, reproduction,
+staged-source, and caller-source validation flags. It contains no caller or
+temporary paths, command output, credentials, or manufacturing payloads.
+
+The supplied pcbex and KiCad commands remain unauthenticated, unsandboxed trust
+boundaries. Process-tree supervision covers ordinary descendants, not a tool
+that intentionally escapes with `setsid` or an equivalent Job-breakaway
+mechanism. Exact package equality establishes deterministic reproduction under
+those selected tools, not their provenance, signer, operating-system isolation,
+or absence of network/filesystem access. This command does not change the
+deterministic pipeline or its schemas, expose MCP or Action integration, submit
+to a factory, authenticate a factory receipt, authorize procurement/fabrication,
+or place an order.
 
 Component metadata is read from KiCad `property` fields and legacy `fp_text`
 fields. `Reference` and `Value` are required for a manufacturing row. `MPN`,

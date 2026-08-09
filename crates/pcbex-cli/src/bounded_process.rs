@@ -139,6 +139,20 @@ enum ReaderEvent {
     Limit(ProcessStream, usize),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ProcessTreeMode {
+    /// Give the child its own process group/Job so this runner owns the tree.
+    Isolated,
+    /// Keep the child in an already-installed outer process-tree supervisor.
+    InheritSupervisor,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ProcessDeadline {
+    After(Duration),
+    At(Instant),
+}
+
 /// Run a command with bounded, concurrently drained output.
 ///
 /// The command is never run through a shell.  Standard input is always
@@ -154,7 +168,37 @@ pub fn run_bounded(
     limits: ProcessLimits,
     cancellation: Option<&AtomicBool>,
 ) -> Result<ProcessOutput, ProcessError> {
-    run_bounded_inner(command, Stdio::null(), limits, cancellation)
+    run_bounded_inner(
+        command,
+        Stdio::null(),
+        limits,
+        ProcessDeadline::After(limits.timeout),
+        ProcessTreeMode::Isolated,
+        cancellation,
+    )
+}
+
+/// Run a command against an already-established absolute deadline.
+///
+/// The effective deadline is the earlier of `deadline` and the runner-entry
+/// instant plus `limits.timeout`; the output byte caps remain unchanged.
+/// `tree_mode` lets an outer bounded runner retain ownership of the whole
+/// process tree instead of nesting a new process group/Job.
+pub(crate) fn run_bounded_until(
+    command: &mut Command,
+    limits: ProcessLimits,
+    deadline: Instant,
+    tree_mode: ProcessTreeMode,
+    cancellation: Option<&AtomicBool>,
+) -> Result<ProcessOutput, ProcessError> {
+    run_bounded_inner(
+        command,
+        Stdio::null(),
+        limits,
+        ProcessDeadline::At(deadline),
+        tree_mode,
+        cancellation,
+    )
 }
 
 /// Run a command with bounded output and an exact file-backed standard input.
@@ -169,30 +213,66 @@ pub fn run_bounded_with_stdin_file(
     limits: ProcessLimits,
     cancellation: Option<&AtomicBool>,
 ) -> Result<ProcessOutput, ProcessError> {
-    run_bounded_inner(command, Stdio::from(stdin), limits, cancellation)
+    run_bounded_inner(
+        command,
+        Stdio::from(stdin),
+        limits,
+        ProcessDeadline::After(limits.timeout),
+        ProcessTreeMode::Isolated,
+        cancellation,
+    )
 }
 
 fn run_bounded_inner(
     command: &mut Command,
     stdin: Stdio,
     limits: ProcessLimits,
+    requested_deadline: ProcessDeadline,
+    tree_mode: ProcessTreeMode,
     cancellation: Option<&AtomicBool>,
 ) -> Result<ProcessOutput, ProcessError> {
     if cancellation.is_some_and(|cancelled| cancelled.load(Ordering::SeqCst)) {
         return Err(ProcessError::Cancelled);
     }
-    if limits.timeout.is_zero() {
-        return Err(ProcessError::InvalidTimeout {
-            timeout: limits.timeout,
-        });
-    }
-    let deadline =
-        Instant::now()
-            .checked_add(limits.timeout)
-            .ok_or(ProcessError::InvalidTimeout {
-                timeout: limits.timeout,
-            })?;
-    configure_command(command);
+    let started_at = Instant::now();
+    let (deadline, timeout) = match requested_deadline {
+        ProcessDeadline::After(timeout) => {
+            if timeout.is_zero() {
+                return Err(ProcessError::InvalidTimeout { timeout });
+            }
+            let deadline = started_at
+                .checked_add(timeout)
+                .ok_or(ProcessError::InvalidTimeout { timeout })?;
+            (deadline, timeout)
+        }
+        ProcessDeadline::At(deadline) => {
+            let Some(absolute_timeout) = deadline
+                .checked_duration_since(started_at)
+                .filter(|timeout| !timeout.is_zero())
+            else {
+                return Err(ProcessError::Timeout {
+                    timeout: Duration::ZERO,
+                });
+            };
+            if limits.timeout.is_zero() {
+                return Err(ProcessError::InvalidTimeout {
+                    timeout: limits.timeout,
+                });
+            }
+            let relative_deadline =
+                started_at
+                    .checked_add(limits.timeout)
+                    .ok_or(ProcessError::InvalidTimeout {
+                        timeout: limits.timeout,
+                    })?;
+            if deadline <= relative_deadline {
+                (deadline, absolute_timeout)
+            } else {
+                (relative_deadline, limits.timeout)
+            }
+        }
+    };
+    configure_command(command, tree_mode);
     command
         .stdin(stdin)
         .stdout(Stdio::piped())
@@ -201,15 +281,19 @@ fn run_bounded_inner(
     let mut child = command.spawn().map_err(ProcessError::Spawn)?;
 
     #[cfg(windows)]
-    let job = match windows_job::Job::for_child(&child) {
-        Ok(job) => Some(job),
-        Err(source) => {
-            let cleanup = terminate_and_reap(&mut child, None);
-            return Err(match cleanup {
-                Ok(()) => ProcessError::PostSpawnSetup(source),
-                Err(cleanup) => ProcessError::Wait(cleanup),
-            });
+    let job = if tree_mode == ProcessTreeMode::Isolated {
+        match windows_job::Job::for_child(&child) {
+            Ok(job) => Some(job),
+            Err(source) => {
+                let cleanup = terminate_and_reap(&mut child, None, tree_mode);
+                return Err(match cleanup {
+                    Ok(()) => ProcessError::PostSpawnSetup(source),
+                    Err(cleanup) => ProcessError::Wait(cleanup),
+                });
+            }
         }
+    } else {
+        None
     };
     #[cfg(not(windows))]
     let job = ();
@@ -221,7 +305,7 @@ fn run_bounded_inner(
     let stdout = match stdout {
         Ok(stdout) => stdout,
         Err(error) => {
-            let cleanup = terminate_and_reap(&mut child, terminate_handle(&job));
+            let cleanup = terminate_and_reap(&mut child, terminate_handle(&job), tree_mode);
             return Err(cleanup_error(error, cleanup));
         }
     };
@@ -232,7 +316,7 @@ fn run_bounded_inner(
     let stderr = match stderr {
         Ok(stderr) => stderr,
         Err(error) => {
-            let cleanup = terminate_and_reap(&mut child, terminate_handle(&job));
+            let cleanup = terminate_and_reap(&mut child, terminate_handle(&job), tree_mode);
             return Err(cleanup_error(error, cleanup));
         }
     };
@@ -247,7 +331,7 @@ fn run_bounded_inner(
     let stdout_reader = match stdout_reader {
         Ok(reader) => reader,
         Err(source) => {
-            let cleanup = terminate_and_reap(&mut child, terminate_handle(&job));
+            let cleanup = terminate_and_reap(&mut child, terminate_handle(&job), tree_mode);
             drop(receiver);
             return Err(cleanup_error(
                 ProcessError::Read {
@@ -262,7 +346,7 @@ fn run_bounded_inner(
     let stderr_reader = match stderr_reader {
         Ok(reader) => reader,
         Err(source) => {
-            let cleanup = terminate_and_reap(&mut child, terminate_handle(&job));
+            let cleanup = terminate_and_reap(&mut child, terminate_handle(&job), tree_mode);
             drop(receiver);
             // A descendant may deliberately escape the managed process
             // group while retaining this pipe. Detach the capped reader so
@@ -290,9 +374,7 @@ fn run_bounded_inner(
         if let Some(error) = cancellation_error(cancellation) {
             failure = Some(error);
         } else if Instant::now() >= deadline {
-            failure = Some(ProcessError::Timeout {
-                timeout: limits.timeout,
-            });
+            failure = Some(ProcessError::Timeout { timeout });
         }
 
         if failure.is_none() && status.is_none() {
@@ -305,7 +387,7 @@ fn run_bounded_inner(
                     // can consume the entire timeout while waiting on a
                     // background process that no longer has useful work.
                     tree_termination_attempted = true;
-                    terminate_remaining_descendants(&child, terminate_handle(&job));
+                    terminate_remaining_descendants(&child, terminate_handle(&job), tree_mode);
                 }
                 Ok(None) => {}
                 Err(source) => failure = Some(ProcessError::Wait(source)),
@@ -386,7 +468,7 @@ fn run_bounded_inner(
         let cleanup = if tree_termination_attempted {
             reap_only(&mut child)
         } else {
-            terminate_and_reap(&mut child, terminate_handle(&job))
+            terminate_and_reap(&mut child, terminate_handle(&job), tree_mode)
         };
         // Closing the receiver releases any blocked sends. Do not join on a
         // failure path: an adversarial descendant can escape a Unix process
@@ -510,16 +592,18 @@ fn reap_only(child: &mut Child) -> io::Result<()> {
 }
 
 #[cfg(unix)]
-fn configure_command(command: &mut Command) {
+fn configure_command(command: &mut Command, tree_mode: ProcessTreeMode) {
     use std::os::unix::process::CommandExt;
 
     // `process_group(0)` is the safe std API for making the child the leader
     // of a new process group.  Descendants inherit that group automatically.
-    command.process_group(0);
+    if tree_mode == ProcessTreeMode::Isolated {
+        command.process_group(0);
+    }
 }
 
 #[cfg(not(unix))]
-fn configure_command(_command: &mut Command) {}
+fn configure_command(_command: &mut Command, _tree_mode: ProcessTreeMode) {}
 
 #[cfg(unix)]
 fn terminate_handle(_job: &()) -> Option<&()> {
@@ -537,7 +621,11 @@ fn terminate_handle(_job: &()) -> Option<&()> {
 }
 
 #[cfg(windows)]
-fn terminate_and_reap(child: &mut Child, job: Option<&windows_job::Job>) -> io::Result<()> {
+fn terminate_and_reap(
+    child: &mut Child,
+    job: Option<&windows_job::Job>,
+    _tree_mode: ProcessTreeMode,
+) -> io::Result<()> {
     if let Some(job) = job {
         windows_job::terminate(job);
     }
@@ -546,38 +634,61 @@ fn terminate_and_reap(child: &mut Child, job: Option<&windows_job::Job>) -> io::
 }
 
 #[cfg(unix)]
-fn terminate_and_reap(child: &mut Child, _job: Option<&()>) -> io::Result<()> {
-    let process_group = -(child.id() as i32);
-    // A process that already exited may make kill(2) report ESRCH; wait()
-    // below still performs the required reap in that case.
-    let group_killed = unsafe { kill_process_group(process_group) };
-    if group_killed.is_err() {
+fn terminate_and_reap(
+    child: &mut Child,
+    _job: Option<&()>,
+    tree_mode: ProcessTreeMode,
+) -> io::Result<()> {
+    if tree_mode == ProcessTreeMode::Isolated {
+        let process_group = -(child.id() as i32);
+        // A process that already exited may make kill(2) report ESRCH; wait()
+        // below still performs the required reap in that case.
+        let group_killed = unsafe { kill_process_group(process_group) };
+        if group_killed.is_err() {
+            let _ = child.kill();
+        }
+    } else {
+        // The outer supervisor owns the inherited group. Killing it here
+        // would also kill pcbex/Python, so only terminate the direct child.
         let _ = child.kill();
     }
     child.wait().map(|_| ())
 }
 
 #[cfg(not(any(unix, windows)))]
-fn terminate_and_reap(child: &mut Child, _job: Option<&()>) -> io::Result<()> {
+fn terminate_and_reap(
+    child: &mut Child,
+    _job: Option<&()>,
+    _tree_mode: ProcessTreeMode,
+) -> io::Result<()> {
     let _ = child.kill();
     child.wait().map(|_| ())
 }
 
 #[cfg(windows)]
-fn terminate_remaining_descendants(_child: &Child, job: Option<&windows_job::Job>) {
-    if let Some(job) = job {
+fn terminate_remaining_descendants(
+    _child: &Child,
+    job: Option<&windows_job::Job>,
+    tree_mode: ProcessTreeMode,
+) {
+    if tree_mode == ProcessTreeMode::Isolated
+        && let Some(job) = job
+    {
         windows_job::terminate(job);
     }
 }
 
 #[cfg(unix)]
-fn terminate_remaining_descendants(child: &Child, _job: Option<&()>) {
-    let process_group = -(child.id() as i32);
-    let _ = unsafe { kill_process_group(process_group) };
+fn terminate_remaining_descendants(child: &Child, _job: Option<&()>, tree_mode: ProcessTreeMode) {
+    if tree_mode == ProcessTreeMode::Isolated {
+        let process_group = -(child.id() as i32);
+        let _ = unsafe { kill_process_group(process_group) };
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
-fn terminate_remaining_descendants(_child: &Child, _job: Option<&()>) {}
+fn terminate_remaining_descendants(_child: &Child, _job: Option<&()>, _tree_mode: ProcessTreeMode) {
+}
 
 #[cfg(unix)]
 unsafe fn kill_process_group(process_group: i32) -> io::Result<()> {
@@ -771,6 +882,99 @@ mod tests {
         )
         .expect_err("sleep should time out");
         assert!(matches!(error, ProcessError::Timeout { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_deadline_is_not_rebased_at_runner_entry() {
+        let deadline = Instant::now()
+            .checked_add(Duration::from_millis(120))
+            .unwrap();
+        thread::sleep(Duration::from_millis(80));
+        let mut command = shell("sleep 2");
+        let error = run_bounded_until(
+            &mut command,
+            limits(Duration::from_secs(5), 32, 32),
+            deadline,
+            ProcessTreeMode::Isolated,
+            None,
+        )
+        .expect_err("absolute deadline should retain only its original remainder");
+        let ProcessError::Timeout { timeout } = error else {
+            panic!("unexpected absolute-deadline error: {error}");
+        };
+        assert!(
+            timeout < Duration::from_millis(80),
+            "runner rebased an absolute deadline: {timeout:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_runner_retains_the_original_relative_cap() {
+        let deadline = Instant::now().checked_add(Duration::from_secs(5)).unwrap();
+        let mut command = shell("sleep 2");
+        let error = run_bounded_until(
+            &mut command,
+            limits(Duration::from_millis(40), 32, 32),
+            deadline,
+            ProcessTreeMode::Isolated,
+            None,
+        )
+        .expect_err("original relative cap should remain authoritative");
+        assert!(matches!(
+            error,
+            ProcessError::Timeout { timeout } if timeout == Duration::from_millis(40)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expired_absolute_deadline_is_rejected_before_spawn() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let marker = directory.path().join("spawned");
+        let mut command = shell("printf spawned > \"$1\"");
+        command.arg("pcbex-test").arg(&marker);
+        let error = run_bounded_until(
+            &mut command,
+            limits(Duration::from_secs(1), 32, 32),
+            Instant::now(),
+            ProcessTreeMode::Isolated,
+            None,
+        )
+        .expect_err("expired absolute deadline must not spawn");
+        assert!(matches!(
+            error,
+            ProcessError::Timeout { timeout } if timeout.is_zero()
+        ));
+        assert!(!marker.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn outer_supervised_child_inherits_callers_process_group() {
+        unsafe extern "C" {
+            fn getpgrp() -> i32;
+        }
+
+        let caller_group = unsafe { getpgrp() };
+        let mut command = shell("ps -o pgid= -p $$");
+        let deadline = Instant::now().checked_add(Duration::from_secs(1)).unwrap();
+        let output = run_bounded_until(
+            &mut command,
+            limits(Duration::from_secs(1), 64, 64),
+            deadline,
+            ProcessTreeMode::InheritSupervisor,
+            None,
+        )
+        .expect("outer-supervised child should run");
+        assert!(output.status.success());
+        let child_group = std::str::from_utf8(&output.stdout)
+            .unwrap()
+            .trim()
+            .parse::<i32>()
+            .unwrap();
+        assert_eq!(child_group, caller_group);
     }
 
     #[cfg(unix)]

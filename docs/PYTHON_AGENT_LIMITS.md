@@ -83,6 +83,27 @@ file and compared including its trailing newline; the hidden
 through Python stdout, never the full report. No board/report/policy source is
 embedded in the archive or returned by path.
 
+The standalone v1.455 manufacturing replay is separate from the electrical
+handoff archive. It captures a portable-basename board and retained package,
+plus optional explicit KiCad project/rules and one optional profile selection,
+before starting `pcbex fabricate`. Board, project, rules, and retained/fresh
+package reads are each limited to 128 MiB; external DFM and physical profiles
+are each limited to 4 MiB; and all caller inputs together are limited to
+512 MiB. Project and rules bytes are staged under names derived from the board
+stem. An external profile retains its validated portable caller basename
+because the manufacturing manifest binds that name. Every staged input, the
+fresh ZIP, and every caller-visible input is reread before success. Fresh and
+retained `manufacturing.zip` bodies must be byte-for-byte equal; regenerated
+manufacturing outputs never leave the private temporary workspace.
+Built-in fabrication IDs are limited to 128 lowercase ASCII letters, digits,
+dots, or hyphens, beginning with a letter or digit.
+Every caller `PathLike` is frozen to built-in immutable text with one
+`os.fspath` conversion before validation or reading, and the first stable-read
+byte/SHA-256 identity is retained for the final result. The caller pcbex
+command and the complete injected argv are each limited to 256 arguments and
+32,768 aggregate UTF-8 bytes. The rendered Windows command line, including its
+terminating null, is additionally limited to 32,767 UTF-16 code units.
+
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent
 traversal is not accepted. The reader checks the advertised path identity and size, opens
@@ -138,6 +159,7 @@ limit before network access.
 | Generic agent `pcbex` invocation | default 300 seconds | closed | 8 MiB | 1 MiB |
 | Circuit handoff chain/native ERC/AI quorum/catalog-provenance replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Circuit handoff retained-board binding replay | same aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
+| Fresh manufacturing-package replay (`replay-manufacturing-package`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; inner Rust deadline reserves up to 15 seconds or half of remaining time and must convert to a positive Rust `Duration` | closed | 1 MiB | 1 MiB |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
 
@@ -176,6 +198,43 @@ the remaining aggregate budget to the child. A retained but rejected report
 remains inspectable unless `--require-board-binding-approved` is requested,
 and that final gate is evaluated only after exact report comparison and all
 rereads.
+
+The manufacturing replay starts one independent monotonic deadline before any
+input read. It covers the bounded board/package/sidecar/profile captures,
+private staging, one shell-free `pcbex fabricate` child, fresh-package read and
+exact comparison, staged-source checks, caller-source rereads, result creation,
+and cleanup checkpoints. Immediately before the child starts, Python reserves
+the smaller of 15 seconds or half the remaining budget and passes the rest as
+Rust `fabricate --timeout-seconds`. Rust applies that strictly shorter deadline
+to its synchronous phase checkpoints and to DRC, Gerber, drill, and identity
+children, each with the earlier of the shared remaining time and its own cap.
+The inner timeout must be finite, positive, no greater than 600, and
+representable as a positive Rust `Duration`; a value that converts to zero at
+nanosecond resolution fails closed.
+
+The replay passes a hidden internal outer-supervision marker. Python's bounded
+runner makes pcbex the supervised process-group leader on Unix or places it in
+an outer Job on Windows; all four KiCad children inherit that tree instead of
+creating nested groups/Jobs. Rust terminates and reaps a direct child when its
+shorter deadline expires, and the outer supervisor can still collect pcbex and
+ordinary descendants across wrapper or pre-exec delays. A direct standalone
+Rust `fabricate` call does not use this marker and retains isolated KiCad child
+groups/Jobs. Intentional `setsid` or equivalent Job escape by an unauthenticated
+supplied tool is outside the containment guarantee. The caller-selected
+`--kicad-cli` is passed as a direct argument, not resolved or invoked by
+Python.
+
+Rust publication preflights, copies, synchronizes, and checks immediately
+before each visible persist; it commits ordinary siblings, `manifest.json`,
+then canonical `manufacturing.zip`. An inner failure may leave intermediate
+siblings or a manifest in the private output, but no newly committed canonical
+archive evidences a complete fresh package. Rust performs no deadline check
+after that final archive commit, so direct `fabricate` can cross its nominal
+deadline during non-preemptible post-commit work. The Python consumer accepts
+only a successful child, exact fresh archive bytes, all final rereads, and a
+deadline check after temporary cleanup and immediately before return, so it
+cannot report replay success after expiry.
+
 A monotonic deadline is checked after every bounded input read and no success
 is returned after it expires. Ordinary synchronous filesystem reads cannot be
 preempted in the middle of a kernel/FUSE/network-filesystem operation, so a
@@ -212,6 +271,14 @@ decision: it revalidates only the retained raw board and compact report against
 the geometry-free electrical subset. It does not approve placement/footprint
 geometry, copper/routing/zones, PCB DRC/DFM, Gerber/BOM/CPL, manufacturing or
 fabrication, procurement, supplier facts, or pcbex/KiCad/toolchain provenance.
+The v1.455 manufacturing replay starts no supplier/provider request and makes
+no fabrication decision. Its exact package equality binds fresh output to the
+captured board, optional sidecars/profile, and selected commands, but does not
+authenticate those pcbex/KiCad executables or provide a CPU, memory, filesystem,
+network, syscall, or privilege sandbox. It neither updates nor replaces a
+deterministic-pipeline report, factory receipt, AI approval, fabrication
+authorization, procurement authorization, or order record. MCP and GitHub
+Action exposure are not part of this standalone boundary.
 The offline `verify-circuit-handoff-bundle` and
 `extract-circuit-handoff-bundle`
 paths remain native-child-free and retain their existing no-execution boundary.

@@ -18,6 +18,7 @@ fixtures=(
 
 mkdir -p "$output_directory"
 kicad-cli --version
+kicad_cli_binary="$(command -v kicad-cli)"
 
 generated_schematic="$output_directory/circuit-spec-v2.generated.kicad_sch"
 repeated_schematic="$output_directory/circuit-spec-v2.repeated.kicad_sch"
@@ -73,7 +74,8 @@ PCBEX_TEST_BINARY="$pcbex_binary" PYTHONPATH=agent/src \
   agent.tests.test_circuit_handoff_bundle_v1451.CircuitHandoffBundleV1451Tests.test_real_rust_and_kicad_replay_when_binary_is_supplied \
   agent.tests.test_circuit_handoff_bundle_v1452.CircuitHandoffBundleV1452Tests.test_real_rust_kicad_and_two_reviewer_quorum_replay_when_binary_is_supplied \
   agent.tests.test_circuit_handoff_bundle_v1453.CircuitHandoffBundleV1453Tests.test_real_rust_catalog_provenance_handoff_replay_when_binary_is_supplied \
-  agent.tests.test_circuit_handoff_bundle_v1454.CircuitHandoffBundleV1454Tests.test_real_rust_board_binding_replay_with_deterministic_pipeline_fixture
+  agent.tests.test_circuit_handoff_bundle_v1454.CircuitHandoffBundleV1454Tests.test_real_rust_board_binding_replay_with_deterministic_pipeline_fixture \
+  agent.tests.test_manufacturing_replay_v1455.ManufacturingReplayTests.test_real_outer_timeout_reaps_kicad_after_pre_exec_delay
 
 # Native KiCad ERC is a second, independent electrical gate.  The runner uses
 # a private staged directory and an error-only invocation, so KiCad's
@@ -558,3 +560,136 @@ cp "$manufacturing_directory/manufacturing.zip" \
   --output-dir "$manufacturing_directory"
 cmp "$manufacturing_directory/first.manufacturing.zip" \
   "$manufacturing_directory/manufacturing.zip"
+
+# The canonical manufacturing ZIP is the retained boundary for the fresh
+# replay. Keep the Rust and KiCad executables explicit so the replay cannot
+# accidentally select a different producer from PATH; the command publishes
+# its path-free result on stdout and leaves no replay artifacts beside the
+# retained package.
+retained_manufacturing_zip="$manufacturing_directory/manufacturing.zip"
+retained_manufacturing_sha_before="$(sha256sum "$retained_manufacturing_zip" | awk '{print $1}')"
+retained_manufacturing_bytes_before="$(wc -c <"$retained_manufacturing_zip" | tr -d '[:space:]')"
+manufacturing_replay_result="$output_directory/multilayer.manufacturing.replay.json"
+PYTHONPATH=agent/src python3 -m pcbex_agent replay-manufacturing-package \
+  "$upgraded_multilayer" "$retained_manufacturing_zip" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 180 \
+  >"$manufacturing_replay_result"
+retained_manufacturing_sha_after_success="$(sha256sum "$retained_manufacturing_zip" | awk '{print $1}')"
+retained_manufacturing_bytes_after_success="$(wc -c <"$retained_manufacturing_zip" | tr -d '[:space:]')"
+test "$retained_manufacturing_sha_after_success" = "$retained_manufacturing_sha_before"
+test "$retained_manufacturing_bytes_after_success" = "$retained_manufacturing_bytes_before"
+python3 - "$manufacturing_replay_result" "$retained_manufacturing_zip" "$upgraded_multilayer" "$output_directory" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+from pathlib import PureWindowsPath
+import sys
+
+result_path, retained_path, board_path, output_directory = map(Path, sys.argv[1:])
+result = json.loads(result_path.read_text(encoding="utf-8"))
+assert set(result) == {
+    "schema_version", "verification_scope", "verified", "board", "project",
+    "rules", "profile", "package", "validation",
+}
+assert result["schema_version"] == 1
+assert result["verification_scope"] == "manufacturing-package-fresh-replay-v1"
+assert result["verified"] is True
+board = board_path.read_bytes()
+assert result["board"] == {
+    "name": board_path.name,
+    "bytes": len(board),
+    "sha256": hashlib.sha256(board).hexdigest(),
+}
+assert result["project"] is None
+assert result["rules"] is None
+assert result["profile"] == {"kind": "none"}
+retained = retained_path.read_bytes()
+retained_identity = {
+    "bytes": len(retained),
+    "sha256": hashlib.sha256(retained).hexdigest(),
+}
+assert result["package"] == {
+    "retained": retained_identity,
+    "fresh": retained_identity,
+    "identical": True,
+}
+assert result["validation"] == {
+    "inputs_captured": True,
+    "package_reproduced": True,
+    "staged_inputs_unchanged": True,
+    "caller_inputs_unchanged": True,
+}
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(result)
+PY
+
+# A one-byte change in a retained ZIP must fail closed. Mutate compressed
+# member data in place so ZIP structure and the retained path remain
+# unchanged; fresh regeneration must then reject it at exact package
+# comparison, rather than treating the retained bytes as pre-approved.
+manufacturing_tampered_zip="$output_directory/multilayer.manufacturing.tampered.zip"
+manufacturing_tampered_result="$output_directory/multilayer.manufacturing.tampered.result.json"
+manufacturing_tampered_error="$output_directory/multilayer.manufacturing.tampered.stderr"
+cp "$retained_manufacturing_zip" "$manufacturing_tampered_zip"
+python3 - "$manufacturing_tampered_zip" <<'PY'
+from pathlib import Path
+import struct
+import sys
+import zipfile
+
+path = Path(sys.argv[1])
+raw = bytearray(path.read_bytes())
+with zipfile.ZipFile(path) as archive:
+    info = next(
+        (item for item in archive.infolist() if item.compress_size > 0),
+        None,
+    )
+    if info is None:
+        raise SystemExit("manufacturing ZIP has no non-empty member to tamper")
+    name_length, extra_length = struct.unpack_from("<HH", raw, info.header_offset + 26)
+    payload_start = info.header_offset + 30 + name_length + extra_length
+    payload_offset = payload_start + min(info.compress_size - 1, info.compress_size // 2)
+    if payload_offset >= len(raw):
+        raise SystemExit("manufacturing ZIP member offset is invalid")
+raw[payload_offset] ^= 1
+path.write_bytes(raw)
+PY
+if PYTHONPATH=agent/src python3 -m pcbex_agent replay-manufacturing-package \
+  "$upgraded_multilayer" "$manufacturing_tampered_zip" \
+  --pcbex "$pcbex_binary" \
+  --kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 180 \
+  >"$manufacturing_tampered_result" \
+  2>"$manufacturing_tampered_error"; then
+  echo "expected manufacturing package replay rejection for one-byte ZIP tamper" >&2
+  exit 1
+fi
+retained_manufacturing_sha_after_tamper="$(sha256sum "$retained_manufacturing_zip" | awk '{print $1}')"
+retained_manufacturing_bytes_after_tamper="$(wc -c <"$retained_manufacturing_zip" | tr -d '[:space:]')"
+test "$retained_manufacturing_sha_after_tamper" = "$retained_manufacturing_sha_before"
+test "$retained_manufacturing_bytes_after_tamper" = "$retained_manufacturing_bytes_before"
+python3 - "$manufacturing_tampered_result" "$manufacturing_tampered_error" <<'PY'
+from pathlib import Path
+import sys
+
+result = Path(sys.argv[1])
+error = Path(sys.argv[2])
+assert error.read_bytes(), "tampered manufacturing replay produced no diagnostic"
+assert not result.read_bytes(), "tampered manufacturing replay unexpectedly emitted success JSON"
+PY

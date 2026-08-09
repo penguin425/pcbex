@@ -39,6 +39,11 @@ from .circuit_handoff_bundle import (
     verify_circuit_handoff_bundle,
 )
 from .review import ReviewError, review_schematic_with_llm
+from .manufacturing_replay import (
+    ManufacturingReplayError,
+    manufacturing_package_replay_result_json_schema,
+    replay_manufacturing_package,
+)
 from .catalog_provenance import (
     CatalogGenerationProvenanceError,
     build_catalog_generation_provenance,
@@ -62,12 +67,14 @@ __all__ = [
     "CircuitCandidateRejected",
     "CircuitCatalogRejected",
     "CircuitHandoffBundleError",
+    "ManufacturingReplayError",
     "build_plan",
     "build_catalog_generation_provenance",
     "build_circuit_handoff_archive",
     "catalog_fetch_receipt_json_schema",
     "catalog_generation_provenance_json_schema",
     "managed_provider_receipt_json_schema",
+    "manufacturing_package_replay_result_json_schema",
     "provider_receipt_json_schema",
     "run_provider_command",
     "circuit_generation_json_schema",
@@ -85,6 +92,7 @@ __all__ = [
     "generate_circuit_with_llm",
     "handoff_circuit_generation",
     "replay_circuit_handoff_bundle",
+    "replay_manufacturing_package",
     "fetch_catalog_snapshot",
     "review_schematic_with_managed_provider",
     "review_schematic_with_command",

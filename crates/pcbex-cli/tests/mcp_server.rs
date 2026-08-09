@@ -375,7 +375,12 @@ impl KicadProcessCleanup {
     }
 
     fn wait_for_exit(&self) -> Vec<i32> {
-        let deadline = Instant::now() + Duration::from_secs(5);
+        // A task-cancellation response acknowledges the atomic cancellation
+        // request; it does not synchronously join the worker that owns the
+        // native child.  Leave enough scheduling headroom for a loaded test
+        // runner while still failing far before the fixture's 600-second
+        // sleep could exit by itself.
+        let deadline = Instant::now() + Duration::from_secs(30);
         while self.pids.iter().any(|pid| unix_process_exists(*pid)) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
