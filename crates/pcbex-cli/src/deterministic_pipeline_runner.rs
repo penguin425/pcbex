@@ -48,7 +48,7 @@ pub(crate) const MAX_REPORT_BYTES: usize = 128 * 1024 * 1024 - 1;
 pub(crate) const MAX_TOTAL_INPUT_BYTES: u64 = 512 * 1024 * 1024;
 const PLAN_HASH_DOMAIN: &[u8] = b"pcbex:deterministic-pipeline-plan:v1\0";
 const RUN_HASH_DOMAIN: &[u8] = b"pcbex:deterministic-pipeline-runner:v1\0";
-pub(crate) const PORTABLE_PLAN_PATH_PATTERN: &str = r#"^(?!/)(?!.*//)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\.|/|$))(?!.*[ .](?:/|$))(?:[^\\/:*?<>"|\u0000-\u001F\u007F]{1,255}/)*[^\\/:*?<>"|\u0000-\u001F\u007F]{1,255}$"#;
+pub(crate) const PORTABLE_PLAN_PATH_PATTERN: &str = r#"^(?!/)(?!.*//)(?!.*(?:^|/)\.{1,2}(?:/|$))(?!.*(?:^|/)(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Nn][Ii][Nn][$]|[Cc][Oo][Nn][Oo][Uu][Tt][$]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\.|/|$))(?!.*[ .](?:/|$))(?:[^\\/:*?<>"|\u0000-\u001F\u007F]{1,255}/)*[^\\/:*?<>"|\u0000-\u001F\u007F]{1,255}$"#;
 
 const MAX_POLICY_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_REVIEW_BYTES: u64 = 64 * 1024 * 1024;
@@ -1971,6 +1971,8 @@ mod tests {
             "hardware/board.kicad_pcb/",
             "hardware/board\nkicad_pcb",
             "hardware/NUL.json",
+            "hardware/CONIN$",
+            "hardware/conout$.log",
             "hardware/COM1",
             "hardware/name.",
             "hardware/name ",

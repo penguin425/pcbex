@@ -104,6 +104,38 @@ command and the complete injected argv are each limited to 256 arguments and
 32,768 aggregate UTF-8 bytes. The rendered Windows command line, including its
 terminating null, is additionally limited to 32,767 UTF-16 code units.
 
+The standalone v1.456 deterministic-pipeline replay captures one plan up to
+4 MiB and one retained report up to 128 MiB before native execution. It parses
+the plan's closed 16-role shape itself, captures every present descriptor under
+the same role-specific 4–128 MiB limits enforced by Rust, and captures all seven
+fixed firmware siblings at up to 16 MiB each. Present role inputs and firmware
+siblings share one 512 MiB aggregate ceiling; the plan and retained/fresh
+reports are checked separately, and no more than 64 role/artifact evidence
+entries or 128 report failures are accepted. The original relative role tree
+is reproduced under a private input root without rewriting the plan. The
+firmware directory must contain exactly `manifest.json`, `pinout.h`,
+`firmware.h`, `firmware.c`, `firmware_smoke_test.c`, `firmware.cpp`,
+`firmware_cpp_smoke_test.cpp`, and `host.py`, both before and after execution
+and in the private stage.
+
+Every captured role and firmware source must match the descriptor or fixed
+source identity and is reread from both the stage and caller-visible path
+before and after the child where applicable. The plan, retained report, staged
+plan, and fresh private report receive their own final rereads. The fresh
+report must equal the retained bytes exactly, including its single final LF.
+The complete nested Rust report-v1 contract is then checked with closed object
+shapes, strict integer (not Boolean or floating-point) bounds, fixed pipeline
+phases, and binding/pipeline decision invariants.
+Only the plan/report and aggregate input identities plus bounded decisions are
+returned; paths, input bodies, report bodies, failures, and command output are
+excluded from the result.
+
+This descriptor-exact, nonempty regular-file and exact-eight firmware
+precondition means the adapter can reproduce approved reports and downstream
+binding/pipeline-gate rejections. It does not reproduce a Rust report whose
+rejection was itself caused by a missing, linked, empty, oversized,
+digest-mismatched, or inexact firmware source.
+
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent
 traversal is not accepted. The reader checks the advertised path identity and size, opens
@@ -160,6 +192,7 @@ limit before network access.
 | Circuit handoff chain/native ERC/AI quorum/catalog-provenance replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Circuit handoff retained-board binding replay | same aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Fresh manufacturing-package replay (`replay-manufacturing-package`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; inner Rust deadline reserves up to 15 seconds or half of remaining time and must convert to a positive Rust `Duration` | closed | 1 MiB | 1 MiB |
+| Fresh deterministic-pipeline report replay (`replay-deterministic-pipeline`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; child execution reserves up to 30 seconds or half of the remaining time, split between bounded process cleanup and outer rereads/cleanup | closed | 64 KiB | 1 MiB |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
 
@@ -235,6 +268,34 @@ only a successful child, exact fresh archive bytes, all final rereads, and a
 deadline check after temporary cleanup and immediately before return, so it
 cannot report replay success after expiry.
 
+The deterministic-pipeline replay starts its own monotonic deadline before
+reading the plan. That deadline covers the plan and retained-report captures,
+closed plan validation, every role and fixed firmware read, private staging,
+pre-child rereads, one shell-free `run-deterministic-pipeline` child, its
+bounded summary, the private fresh-report read and exact comparison, every
+post-child staged/caller reread, temporary cleanup, result construction, and
+the final pre-success check. The selected pcbex command and complete injected
+argv are limited to 256 arguments and 32,768 UTF-8 bytes; the rendered Windows
+command line including its terminator is limited to 32,767 UTF-16 units.
+
+The child receives the remaining aggregate time minus a cleanup/reread reserve
+of up to 30 seconds, or half the remaining time when smaller. Half of that
+reserve is an explicit process-tree termination/reap/worker-join deadline; the
+other half remains for fresh-report validation, final rereads, and temporary
+cleanup. The child writes its full report solely to a private no-clobber
+destination. Its hidden summary is
+limited to 64 KiB and is accepted only when its schema, approval decision,
+failure count, plan/run identities, and fresh report byte/SHA-256 identity all
+match the independently parsed file. A successful child does not imply an
+approved report: exact reproduction may return `verified: true` and
+`approved: false`. The replay operation returns the truthful reproduced
+decision in either case. The Python API leaves approval policy to its caller;
+the CLI's optional `--require-approved` gate is applied only after the exact
+result has been printed. Before returning, the adapter also recomputes the
+plan-v1 and run-v1 domain hashes, checks bounded sorted failure evidence and
+the top-level approval relationship, and restricts the returned engine version
+to a bounded SemVer string.
+
 A monotonic deadline is checked after every bounded input read and no success
 is returned after it expires. Ordinary synchronous filesystem reads cannot be
 preempted in the middle of a kernel/FUSE/network-filesystem operation, so a
@@ -279,6 +340,15 @@ network, syscall, or privilege sandbox. It neither updates nor replaces a
 deterministic-pipeline report, factory receipt, AI approval, fabrication
 authorization, procurement authorization, or order record. MCP and GitHub
 Action exposure are not part of this standalone boundary.
+The v1.456 deterministic-pipeline replay likewise makes no producer or network
+call beyond its caller-selected local pcbex process. The child runs only the
+existing runner against the privately staged closure; the adapter does not run
+KiCad or `fabricate`, generate or repair a circuit/board/package, rebuild
+firmware, contact an AI/supplier/factory, or authenticate the supplied binary.
+Exact equality may require the producer-compatible pcbex version because the
+report retains its engine version and run identity. Replay verification is not
+pipeline approval, deployment approval, procurement/fabrication authorization,
+or an order, and this release adds no MCP or GitHub Action surface.
 The offline `verify-circuit-handoff-bundle` and
 `extract-circuit-handoff-bundle`
 paths remain native-child-free and retain their existing no-execution boundary.

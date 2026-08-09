@@ -804,6 +804,11 @@
     {
       "id": "fresh-manufacturing-package-replay",
       "release": "v1.455.0",
+      "status": "released"
+    },
+    {
+      "id": "fresh-deterministic-pipeline-report-replay",
+      "release": "v1.456.0",
       "status": "current"
     }
   ]

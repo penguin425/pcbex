@@ -44,6 +44,11 @@ from .manufacturing_replay import (
     manufacturing_package_replay_result_json_schema,
     replay_manufacturing_package,
 )
+from .deterministic_pipeline_replay import (
+    DeterministicPipelineReplayError,
+    deterministic_pipeline_replay_result_json_schema,
+    replay_deterministic_pipeline,
+)
 from .catalog_provenance import (
     CatalogGenerationProvenanceError,
     build_catalog_generation_provenance,
@@ -67,6 +72,7 @@ __all__ = [
     "CircuitCandidateRejected",
     "CircuitCatalogRejected",
     "CircuitHandoffBundleError",
+    "DeterministicPipelineReplayError",
     "ManufacturingReplayError",
     "build_plan",
     "build_catalog_generation_provenance",
@@ -74,6 +80,7 @@ __all__ = [
     "catalog_fetch_receipt_json_schema",
     "catalog_generation_provenance_json_schema",
     "managed_provider_receipt_json_schema",
+    "deterministic_pipeline_replay_result_json_schema",
     "manufacturing_package_replay_result_json_schema",
     "provider_receipt_json_schema",
     "run_provider_command",
@@ -92,6 +99,7 @@ __all__ = [
     "generate_circuit_with_llm",
     "handoff_circuit_generation",
     "replay_circuit_handoff_bundle",
+    "replay_deterministic_pipeline",
     "replay_manufacturing_package",
     "fetch_catalog_snapshot",
     "review_schematic_with_managed_provider",

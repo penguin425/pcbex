@@ -308,7 +308,11 @@ pub(crate) fn validate_manufacturing_basename(
     let numbered_device = device_stem.len() == 4
         && (device_stem.starts_with("COM") || device_stem.starts_with("LPT"))
         && matches!(device_stem.as_bytes()[3], b'1'..=b'9');
-    if matches!(device_stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered_device {
+    if matches!(
+        device_stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || numbered_device
+    {
         bail!("{label} uses a reserved Windows device name: {name:?}");
     }
     Ok(())
@@ -447,6 +451,8 @@ mod tests {
     fn rejects_reserved_and_trailing_windows_names() {
         for name in [
             "CON.txt",
+            "CONIN$",
+            "conout$.log",
             "nul",
             "LPT9.gbr",
             "trailing.",

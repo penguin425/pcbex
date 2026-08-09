@@ -5,7 +5,9 @@ be used by providers, executors, and repair loops without each caller having
 to reimplement process supervision.  ``run_bounded`` starts the command in a
 dedicated process group (POSIX) or Job Object (Windows), closes standard input
 when no input is supplied, and enforces one monotonic deadline that includes
-delivery of ``input_bytes``.
+delivery of ``input_bytes``. Callers that compose this runner into a larger
+deadline can also cap the termination/reap phase independently with
+``cleanup_timeout_seconds``.
 
 On Windows a Job Object is created and assigned immediately after spawn.  The
 assignment is necessarily post-spawn, so a process which exits in that small
@@ -460,6 +462,7 @@ def _cleanup_process(
     *,
     terminate_tree: bool = True,
     prior_termination_failures: Sequence[str] = (),
+    cleanup_deadline: float | None = None,
 ) -> ProcessCleanupError | None:
     if process is None:
         return None
@@ -472,15 +475,27 @@ def _cleanup_process(
         if termination_failures
         else None
     )
+
+    def wait_budget(maximum: float) -> float:
+        if cleanup_deadline is None:
+            return maximum
+        return min(maximum, max(0.0, cleanup_deadline - time.monotonic()))
+
     try:
-        process.wait(timeout=_CLEANUP_WAIT_SECONDS)
+        first_wait = wait_budget(_CLEANUP_WAIT_SECONDS)
+        if first_wait <= 0 and process.poll() is None:
+            raise subprocess.TimeoutExpired(argv, 0)
+        process.wait(timeout=first_wait)
     except subprocess.TimeoutExpired as exc:
         try:
             process.kill()
         except Exception:
             pass
         try:
-            process.wait(timeout=_CLEANUP_WAIT_SECONDS)
+            second_wait = wait_budget(_CLEANUP_WAIT_SECONDS)
+            if second_wait <= 0 and process.poll() is None:
+                raise subprocess.TimeoutExpired(argv, 0)
+            process.wait(timeout=second_wait)
         except Exception as wait_exc:
             cleanup_error = ProcessCleanupError(
                 f"could not reap child process: {wait_exc}",
@@ -492,7 +507,7 @@ def _cleanup_process(
             argv=argv,
         )
     for thread in threads:
-        thread.join(timeout=_THREAD_JOIN_SECONDS)
+        thread.join(timeout=wait_budget(_THREAD_JOIN_SECONDS))
     workers_alive = any(thread.is_alive() for thread in threads)
     if cleanup_error is None and workers_alive:
         cleanup_error = ProcessCleanupError(
@@ -639,6 +654,7 @@ def run_bounded(
     *,
     input_bytes: bytes | bytearray | memoryview | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    cleanup_timeout_seconds: float | None = None,
     max_stdin_bytes: int = DEFAULT_MAX_INPUT_BYTES,
     max_stdout_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     max_stderr_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
@@ -651,7 +667,9 @@ def run_bounded(
     the child observes EOF immediately.  When bytes are supplied, they are
     delivered by a dedicated writer thread and the same monotonic deadline
     covers both delivery and child execution.  The input payload is checked
-    against ``max_stdin_bytes`` before it is copied or delivered.  A non-zero
+    against ``max_stdin_bytes`` before it is copied or delivered.
+    ``cleanup_timeout_seconds`` optionally caps the separate process-tree
+    termination, direct-child reap, and pipe-worker join phase. A non-zero
     child exit is a normal result; malformed arguments, input/output overflow,
     timeout, pipe errors, and unreaped children are represented by typed
     ``BoundedProcessError`` subclasses.
@@ -667,6 +685,23 @@ def run_bounded(
     if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
         raise InvalidTimeout(timeout_seconds, argv=normalized_argv)
     timeout_seconds = normalized_timeout
+    if cleanup_timeout_seconds is not None:
+        if isinstance(cleanup_timeout_seconds, bool) or not isinstance(
+            cleanup_timeout_seconds, (int, float)
+        ):
+            raise InvalidTimeout(cleanup_timeout_seconds, argv=normalized_argv)
+        try:
+            normalized_cleanup_timeout = float(cleanup_timeout_seconds)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise InvalidTimeout(
+                cleanup_timeout_seconds, argv=normalized_argv
+            ) from exc
+        if (
+            not math.isfinite(normalized_cleanup_timeout)
+            or normalized_cleanup_timeout <= 0
+        ):
+            raise InvalidTimeout(cleanup_timeout_seconds, argv=normalized_argv)
+        cleanup_timeout_seconds = normalized_cleanup_timeout
     stdin_limit = _validate_input_limit(max_stdin_bytes, normalized_argv)
     stdout_limit = _validate_limit(max_stdout_bytes, "stdout", normalized_argv)
     stderr_limit = _validate_limit(max_stderr_bytes, "stderr", normalized_argv)
@@ -811,6 +846,11 @@ def run_bounded(
         raise
     finally:
         if process is not None:
+            cleanup_deadline = (
+                None
+                if cleanup_timeout_seconds is None
+                else time.monotonic() + cleanup_timeout_seconds
+            )
             cleanup_error = _cleanup_process(
                 process,
                 job,
@@ -824,6 +864,7 @@ def run_bounded(
                 normalized_argv,
                 terminate_tree=not tree_terminated,
                 prior_termination_failures=tree_termination_failures,
+                cleanup_deadline=cleanup_deadline,
             )
             if job is not None:
                 try:

@@ -499,8 +499,86 @@ class BoundedProcessTests(unittest.TestCase):
         command = _python("pass")
         with self.assertRaises(InvalidTimeout):
             run_bounded(command, timeout_seconds=0)
+        for value in (True, 0, -1, float("inf")):
+            with self.subTest(cleanup_timeout=value), self.assertRaises(
+                InvalidTimeout
+            ):
+                run_bounded(command, cleanup_timeout_seconds=value)
         with self.assertRaises(InvalidOutputLimit):
             run_bounded(command, max_stdout_bytes=-1)
+
+    def test_cleanup_timeout_is_forwarded_as_an_absolute_deadline(self):
+        real_cleanup = bounded_process._cleanup_process
+        observed: list[float] = []
+
+        def record_cleanup(*args, **kwargs):
+            deadline = kwargs["cleanup_deadline"]
+            self.assertIsInstance(deadline, float)
+            remaining = deadline - time.monotonic()
+            self.assertGreater(remaining, 0)
+            self.assertLessEqual(remaining, 0.5)
+            observed.append(remaining)
+            return real_cleanup(*args, **kwargs)
+
+        with patch.object(
+            bounded_process, "_cleanup_process", side_effect=record_cleanup
+        ):
+            result = run_bounded(
+                _python("pass"),
+                timeout_seconds=5,
+                cleanup_timeout_seconds=0.5,
+                max_stdout_bytes=1024,
+                max_stderr_bytes=1024,
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(observed), 1)
+
+    def test_cleanup_deadline_caps_reap_and_worker_waits(self):
+        class StuckProcess:
+            def __init__(self):
+                self.waits: list[float] = []
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                return None
+
+            def wait(self, timeout):
+                self.waits.append(timeout)
+                time.sleep(timeout)
+                raise bounded_process.subprocess.TimeoutExpired(("stuck",), timeout)
+
+        class StuckThread:
+            def __init__(self):
+                self.joins: list[float] = []
+
+            def join(self, timeout):
+                self.joins.append(timeout)
+
+            def is_alive(self):
+                return True
+
+        process = StuckProcess()
+        thread = StuckThread()
+        started = time.monotonic()
+        error = bounded_process._cleanup_process(
+            process,
+            None,
+            bounded_process.threading.Event(),
+            (),
+            (thread,),
+            ("stuck",),
+            terminate_tree=False,
+            cleanup_deadline=started + 0.05,
+        )
+        elapsed = time.monotonic() - started
+        self.assertIsInstance(error, ProcessCleanupError)
+        self.assertLess(elapsed, 0.5)
+        self.assertGreaterEqual(len(process.waits), 1)
+        self.assertLessEqual(sum(process.waits), 0.055)
+        self.assertEqual(len(thread.joins), 1)
+        self.assertLessEqual(thread.joins[0], 0.005)
 
 
 if __name__ == "__main__":
