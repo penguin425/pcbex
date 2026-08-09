@@ -264,6 +264,25 @@ The schema-v1 binding compares imported schematic semantics rather than raw
 source formatting. Session/routing modes, tool provenance, native KiCad
 authorization, board approval, and manufacturing authorization remain separate
 boundaries.
+
+Version 1.453.0 adds an optional catalog-provenance-bound result to that same
+replay. `--catalog-generation-provenance`, `--catalog-fetch-receipt`, and
+`--catalog-snapshot` are required together and only for a catalog-backed
+archive. The 1 MiB, 1 MiB, and 4 MiB sources are captured under a 6 MiB
+aggregate ceiling, the unchanged six-entry archive reproduces first, and any
+independent native-KiCad and AI assertions retain their existing order. The
+existing offline v1.421 provenance validator then recomputes the retained
+fetch-time snapshot, selection, generation, bundle, and SKiDL relationships
+from exact captured bytes, with caller sources reread before and after.
+Success emits the closed path-free v4 scope
+`deterministic-electrical-handoff-chain-catalog-provenance-replay-v4` and
+`validation.catalog_generation_provenance_replayed: true`; omission preserves
+the exact v1/v2/v3 results, and the sidecars are never added to the archive.
+This historical linkage does not authenticate a supplier, TLS session, or raw
+HTTP response; establish current inventory, price, or reservation; authorize
+procurement or fabrication; prove toolchain provenance; or approve a board,
+layout, or manufacturing operation.
+
 The v1.417 [bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md)
 can recompute that standalone binding beside the unchanged `pipeline-verify`
 gate from one digest-bound snapshot plan. A generated design must still

@@ -164,6 +164,7 @@ auditable release.
 | v1.450.0 | Exact circuit handoff chain replay | Re-run the complete deterministic handoff producer chain from a verified bundle and accept only byte-for-byte reproduction of the canonical archive, including catalog-input ERC when required, while keeping offline verify/extract and the archive format unchanged |
 | v1.451.0 | Native KiCad ERC handoff replay | Optionally bind a retained native KiCad ERC v1 or warning-policy v2 report to the exactly reproduced handoff schematic, freshly replay it with one nested deadline and path-free evidence, while leaving the six-entry archive and v1 replay result unchanged when omitted |
 | v1.452.0 | Exact AI schematic quorum handoff replay | Bind a non-session schema-v1 AI quorum to the exactly reproduced handoff schematic, require an exact retained report replay, optionally compose native KiCad ERC evidence, and emit closed path-free v3 evidence while preserving v1/v2 results when AI evidence is omitted |
+| v1.453.0 | Catalog-provenance-bound exact handoff replay | Revalidate an all-or-nothing retained provenance/fetch-receipt/snapshot graph after exact handoff replay, optionally compose independent native and AI evidence, and emit closed path-free v4 evidence while preserving the unchanged six-entry archive and exact v1/v2/v3 results when catalog evidence is omitted |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -689,7 +690,7 @@ unchanged. The caller-selected `pcbex` and `kicad-cli` executables remain
 unauthenticated trust boundaries, and AI, supplier, board, pipeline,
 manufacturing, and fabrication authorization remain later gates.
 
-The current v1.452.0 milestone optionally composes a non-session schema-v1 AI
+The released v1.452.0 milestone optionally composes a non-session schema-v1 AI
 schematic quorum with that exact handoff replay. The retained request, policy
 pack, signed approvals, review responses, and quorum report are stable-read
 under per-file and aggregate bounds. Only after the canonical six-entry archive
@@ -702,3 +703,30 @@ existing v1 result without native ERC and v2 result with native ERC. The
 caller-selected `pcbex` and optional `kicad-cli` executables remain
 unauthenticated trust boundaries; quorum success does not by itself authorize
 supplier, board, pipeline, manufacturing, or fabrication stages.
+
+The current v1.453.0 milestone optionally binds the retained v1.421 catalog
+generation provenance to that same exact handoff replay. Provenance, fetch
+receipt, and normalized snapshot inputs are required all together, bounded to
+1 MiB, 1 MiB, and 4 MiB respectively and to 6 MiB in aggregate, and accepted
+only for a catalog-backed archive. They are captured before any producer child.
+The unchanged canonical six-entry archive reproduces byte-for-byte first;
+optional native KiCad ERC and AI quorum remain independent assertions and run
+in their existing order. The caller sources are then reread, the existing
+offline provenance validator recomputes the retained fetch-time snapshot,
+selection, generation, bundle, and SKiDL graph, and every source is reread again
+before success.
+
+The result is the closed path-free schema v4 with exact scope
+`deterministic-electrical-handoff-chain-catalog-provenance-replay-v4`, a true
+`validation.catalog_generation_provenance_replayed` flag, the validated v1.421
+13-field object directly under `catalog_generation_provenance`, and closed
+`{bytes, sha256}` identities for each of its three `sources`, without a
+`binding` wrapper. Its schema ID basename is
+`circuit-generation-kicad-handoff-bundle-catalog-provenance-replay-result-v4.json`.
+Omitting the complete catalog set preserves the exact prior v1, v2, or v3
+result; catalog evidence is not added to the archive. This is historical
+offline linkage only. It does not authenticate a supplier, TLS connection,
+endpoint, raw HTTP response, or the caller toolchain; establish current
+inventory, price, or reservation; authorize procurement or fabrication; or
+approve a board, placement/layout/routing, PCB DRC/DFM, manufacturing package,
+or manufacturing operation.

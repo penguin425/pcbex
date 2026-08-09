@@ -54,6 +54,17 @@ private report is compared with the retained bytes in memory. Every
 caller-visible sidecar is reread before success. When both assertions are
 enabled, the native report and policy are reread again after the AI verifier.
 
+The optional v1.453 catalog-provenance replay keeps its complete evidence set
+outside the same unchanged ZIP. Catalog-generation provenance and its retained
+fetch receipt are limited to 1 MiB each; the exact normalized snapshot is
+limited to 4 MiB; and the three captured sources are limited to 6 MiB in
+aggregate. All three paths are required together, must be nonempty stable
+regular files, and are accepted only for a catalog-backed archive. They are
+captured before a producer child, reread before offline provenance validation,
+and reread again afterward. A file-origin snapshot is staged under its exact
+bound basename only in a private temporary directory. No catalog source is
+published, embedded in the archive, or returned by path.
+
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent
 traversal is not accepted. The reader checks the advertised path identity and size, opens
@@ -107,7 +118,7 @@ limit before network access.
 |---|---:|---:|---:|---:|
 | External AI provider adapter | configurable 1–600 seconds; default 120 | 32 MiB | configurable 1 byte–16 MiB; default 1 MiB | same as stdout |
 | Generic agent `pcbex` invocation | default 300 seconds | closed | 8 MiB | 1 MiB |
-| Circuit handoff chain/native ERC/AI quorum replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
+| Circuit handoff chain/native ERC/AI quorum/catalog-provenance replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
 
@@ -129,6 +140,12 @@ rereads, and cleanup. The verifier child receives the remaining duration minus
 an outer cleanup reserve. `--require-ai-quorum` is evaluated only after the
 complete evidence replay and rereads, so a valid below-threshold report remains
 inspectable when the final gate is not requested.
+A requested catalog-provenance assertion uses that same deadline for its
+1/1/4 MiB source reads, complete producer replay, optional independent native
+and AI assertions, pre-validation rereads, private snapshot staging when
+required by its retained source descriptor, the offline v1.421 validation,
+post-validation rereads, and cleanup. The replay does not use a fresh current
+time or make a supplier/network request.
 A catalog receipt makes the catalog-input ERC stage required. The replay writes
 only private temporary files and publishes no archive or extraction directory.
 
@@ -148,7 +165,14 @@ reproduced schematic to the existing Rust quorum verifier. That verifier's
 live schematic boundary compares imported semantic IR, not irrelevant raw
 source formatting. Session-bound and routed quorums, artifact-bound request
 schemas, and tool provenance remain outside this replay contract. The
-offline `verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`
+v1.453 catalog option set similarly makes no supplier or network call. It
+revalidates a retained historical digest graph from the exact provenance,
+fetch-receipt, snapshot, and archived generation bytes, but does not
+authenticate a supplier, TLS session, or raw HTTP response; establish current
+inventory, price, or reservation; authorize procurement or fabrication; prove
+toolchain provenance; or approve a board, layout, or manufacturing operation.
+The offline `verify-circuit-handoff-bundle` and
+`extract-circuit-handoff-bundle`
 paths remain native-child-free and retain their existing no-execution boundary.
 
 Exactly the configured input or output limit is accepted. The next byte, deadline,

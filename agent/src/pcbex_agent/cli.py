@@ -57,6 +57,7 @@ from .circuit_generation import (
 from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
     circuit_handoff_bundle_ai_quorum_replay_result_json_schema,
+    circuit_handoff_bundle_catalog_provenance_replay_result_json_schema,
     circuit_handoff_bundle_json_schema,
     circuit_handoff_bundle_native_erc_replay_result_json_schema,
     circuit_handoff_bundle_replay_result_json_schema,
@@ -322,6 +323,24 @@ def main() -> None:
     replay_handoff.add_argument("bundle", type=Path)
     replay_handoff.add_argument("--pcbex", default="pcbex")
     replay_handoff.add_argument(
+        "--catalog-generation-provenance",
+        type=Path,
+        help=(
+            "retained catalog-generation provenance sidecar; requires the "
+            "matching fetch receipt and normalized snapshot"
+        ),
+    )
+    replay_handoff.add_argument(
+        "--catalog-fetch-receipt",
+        type=Path,
+        help="retained supplier fetch receipt bound by catalog provenance",
+    )
+    replay_handoff.add_argument(
+        "--catalog-snapshot",
+        type=Path,
+        help="exact normalized catalog snapshot bound by the retained evidence",
+    )
+    replay_handoff.add_argument(
         "--native-kicad-erc-report",
         type=Path,
         help=(
@@ -412,6 +431,13 @@ def main() -> None:
         help="write the closed exact-chain plus AI schematic quorum replay schema",
     )
     handoff_ai_quorum_replay_result_schema.add_argument("-o", "--output", type=Path)
+    handoff_catalog_provenance_replay_result_schema = sub.add_parser(
+        "circuit-handoff-bundle-catalog-provenance-replay-result-schema",
+        help="write the closed exact-chain plus catalog provenance replay schema",
+    )
+    handoff_catalog_provenance_replay_result_schema.add_argument(
+        "-o", "--output", type=Path
+    )
     catalog_snapshot_schema = sub.add_parser(
         "catalog-snapshot-schema",
         help="write the closed local catalog-snapshot JSON Schema",
@@ -828,9 +854,23 @@ def main() -> None:
                     "minimum_distinct_ai_models": args.minimum_distinct_ai_models,
                     "require_ai_quorum": args.require_ai_quorum,
                 }
+            catalog_options = {}
+            if (
+                args.catalog_generation_provenance is not None
+                or args.catalog_fetch_receipt is not None
+                or args.catalog_snapshot is not None
+            ):
+                catalog_options = {
+                    "catalog_generation_provenance": (
+                        args.catalog_generation_provenance
+                    ),
+                    "catalog_fetch_receipt": args.catalog_fetch_receipt,
+                    "catalog_snapshot": args.catalog_snapshot,
+                }
             result = replay_circuit_handoff_bundle(
                 args.bundle,
                 args.pcbex,
+                **catalog_options,
                 **native_options,
                 **ai_options,
                 timeout_seconds=args.timeout_seconds,
@@ -938,6 +978,32 @@ def main() -> None:
         except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
             raise SystemExit(
                 f"circuit handoff AI quorum replay schema failed: {error}"
+            ) from error
+    elif (
+        args.command
+        == "circuit-handoff-bundle-catalog-provenance-replay-result-schema"
+    ):
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_catalog_provenance_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(
+                f"circuit handoff catalog provenance replay schema failed: {error}"
             ) from error
     elif args.command == "fetch-catalog-snapshot":
         try:

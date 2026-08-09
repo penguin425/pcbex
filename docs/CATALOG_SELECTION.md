@@ -187,6 +187,56 @@ atomically; the provenance sidecar is published last. A late race on a later
 destination does not delete an already-published valid bundle or SKiDL file.
 This is per-file atomic publication, not a filesystem transaction.
 
+## Exact handoff replay linkage
+
+Version 1.453 can carry the retained fetch-to-generation relationship into an
+exact circuit handoff replay without changing either the v1.421 provenance
+sidecar or the six-entry handoff archive:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --catalog-generation-provenance build/catalog-generation-provenance.json \
+  --catalog-fetch-receipt build/catalog-fetch-receipt.json \
+  --catalog-snapshot build/catalog-snapshot.json \
+  --timeout-seconds 120
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-catalog-provenance-replay-result-schema
+```
+
+The three catalog options are an all-or-nothing set, and a catalog-backed
+generation bundle is required. The provenance and receipt are bounded to 1 MiB
+each, the snapshot to 4 MiB, and the complete group to 6 MiB. Exact inputs are
+captured before producer replay, reread before and after the existing
+`validate_catalog_generation_provenance` check, and kept outside the unchanged
+canonical ZIP. File-origin snapshots are privately staged with the basename
+recorded by the catalog receipt; no caller path is exposed in the result.
+
+Only after the producer archive reproduces byte-for-byte and any independently
+requested native-KiCad and AI-quorum assertions complete does the offline
+validator recompute the retained fetch receipt, snapshot, selection, generation
+history, bundle, and SKiDL digest graph. The closed path-free v4 result uses
+scope `deterministic-electrical-handoff-chain-catalog-provenance-replay-v4`,
+sets `validation.catalog_generation_provenance_replayed` to true, and retains
+the 13 validated provenance-v1 fields directly under
+`catalog_generation_provenance` plus closed
+`sources.{provenance,fetch_receipt,snapshot}` `{bytes, sha256}` descriptors;
+there is no `binding` wrapper. Omitting the complete catalog group preserves
+the exact existing replay-result v1, v2, or v3 contract. The v4 schema ID
+basename is
+`circuit-generation-kicad-handoff-bundle-catalog-provenance-replay-result-v4.json`.
+
+This is historical linkage at the retained fetch timestamp, not a live catalog
+check. It does not authenticate the supplier, TLS transport, endpoint, or raw
+HTTP response; establish current inventory, pricing, or reservation; authorize
+procurement or fabrication; authenticate toolchain provenance; or approve a
+board, layout, routing, PCB DRC/DFM, manufacturing package, or manufacturing
+operation. See [Atomic circuit-generation to KiCad handoff
+bundle](CIRCUIT_HANDOFF_BUNDLE.md) for execution order and the complete result
+contract.
+
 ## Selection and receipt
 
 `select_catalog_parts` first verifies every prefilled MPN, including exact

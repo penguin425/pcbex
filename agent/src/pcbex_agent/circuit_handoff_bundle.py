@@ -21,7 +21,7 @@ import io
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import re
 import stat
 import struct
@@ -40,9 +40,18 @@ from .bounded_io import (
 )
 from .bounded_process import BoundedProcessError, run_bounded
 from .catalog import (
+    MAX_CATALOG_RAW_BYTES,
     CatalogError,
     canonical_sha256,
     validate_catalog_receipt_shape,
+)
+from .catalog_provenance import (
+    MAX_PROVENANCE_BYTES,
+    PROVENANCE_ADAPTER,
+    PROVENANCE_SCHEMA_VERSION,
+    CatalogGenerationProvenanceError,
+    catalog_generation_provenance_json_schema,
+    validate_catalog_generation_provenance,
 )
 from .circuit_generation import (
     MAX_CORRECTION_BYTES,
@@ -61,6 +70,7 @@ from .circuit_generation import (
     _validate_review,
     _validate_v2_spec,
 )
+from .supplier_inventory import MAXIMUM_RECEIPT_BYTES
 
 
 CIRCUIT_HANDOFF_BUNDLE_SCHEMA_VERSION = 1
@@ -81,6 +91,10 @@ CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_RESULT_SCHEMA_VERSION = 3
 CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_SCOPE = (
     "deterministic-electrical-handoff-chain-ai-schematic-quorum-replay-v3"
 )
+CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_RESULT_SCHEMA_VERSION = 4
+CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_SCOPE = (
+    "deterministic-electrical-handoff-chain-catalog-provenance-replay-v4"
+)
 MAX_GENERATION_BUNDLE_BYTES = MAX_NATIVE_CHECK_BYTES
 MAX_CIRCUIT_SPEC_BYTES = 16 * 1024 * 1024
 MAX_SCHEMATIC_BYTES = 64 * 1024 * 1024
@@ -92,6 +106,9 @@ MAX_AI_QUORUM_INPUT_BYTES = 32 * 1024 * 1024
 MAX_AI_QUORUM_TOTAL_INPUT_BYTES = 128 * 1024 * 1024
 MAX_AI_QUORUM_REPORT_BYTES = 16 * 1024 * 1024
 MAX_AI_QUORUM_MEMBERS = 100
+MAX_CATALOG_PROVENANCE_TOTAL_INPUT_BYTES = (
+    MAX_PROVENANCE_BYTES + MAXIMUM_RECEIPT_BYTES + MAX_CATALOG_RAW_BYTES
+)
 MAX_CHILD_STDOUT_BYTES = 1 * 1024 * 1024
 MAX_CHILD_STDERR_BYTES = 1 * 1024 * 1024
 
@@ -104,6 +121,14 @@ MANIFEST_NAME = "manifest.json"
 
 _BUNDLE_IDENTITY_DOMAIN = b"pcbex:circuit-generation-kicad-handoff-bundle-v1\0"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_WINDOWS_RESERVED_NUMERIC_SUFFIXES = (
+    "123456789\N{SUPERSCRIPT ONE}\N{SUPERSCRIPT TWO}\N{SUPERSCRIPT THREE}"
+)
+_WINDOWS_RESERVED_LEAF_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+    | {f"COM{suffix}" for suffix in _WINDOWS_RESERVED_NUMERIC_SUFFIXES}
+    | {f"LPT{suffix}" for suffix in _WINDOWS_RESERVED_NUMERIC_SUFFIXES}
+)
 _MAX_JSON_DEPTH = 128
 _MAX_JSON_NODES = 1_000_000
 _GENERATION_KEYS = frozenset(
@@ -920,6 +945,124 @@ def _ai_quorum_path_sequence(value: Any, label: str) -> tuple[Any, ...]:
 
 def _source_identity(raw: bytes) -> dict[str, Any]:
     return {"bytes": len(raw), "sha256": _sha256(raw)}
+
+
+def _is_portable_private_leaf(name: Any) -> bool:
+    """Return whether ``name`` is one safe leaf on POSIX and Windows."""
+
+    if (
+        not isinstance(name, str)
+        or not name
+        or name in {".", ".."}
+        or name[-1] in {" ", "."}
+        or any(ord(character) < 32 for character in name)
+        or any(character in '<>:"/\\|?*' for character in name)
+    ):
+        return False
+    windows_name = PureWindowsPath(name)
+    windows_stem = name.partition(".")[0].rstrip(" ").upper()
+    return (
+        not windows_name.drive
+        and not windows_name.root
+        and windows_name.parts == (name,)
+        and windows_name.name == name
+        and windows_stem not in _WINDOWS_RESERVED_LEAF_STEMS
+    )
+
+
+def _catalog_generation_provenance_evidence(
+    provenance_raw: bytes,
+    fetch_receipt_raw: bytes,
+    snapshot_raw: bytes,
+    generation_raw: bytes,
+    catalog_receipt: Mapping[str, Any],
+    *,
+    deadline: float,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    """Revalidate one captured catalog evidence set without trusting paths."""
+
+    source = catalog_receipt.get("source")
+    if not isinstance(source, Mapping) or set(source) != {
+        "kind",
+        "name",
+        "bytes",
+        "sha256",
+    }:
+        raise _fail("catalog generation provenance snapshot source is invalid")
+    source_kind = source.get("kind")
+    source_name = source.get("name")
+    if source_kind == "injected":
+        if source_name is not None:
+            raise _fail("catalog generation provenance snapshot source is invalid")
+        snapshot_source: bytes | Path = snapshot_raw
+        temporary_directory = None
+    elif source_kind == "file":
+        if not _is_portable_private_leaf(source_name):
+            raise _fail("catalog generation provenance snapshot source is invalid")
+        try:
+            temporary_directory = tempfile.TemporaryDirectory(
+                prefix="pcbex-handoff-catalog-provenance-",
+                dir=_trusted_temporary_root(),
+            )
+        except OSError:
+            raise _fail("catalog generation provenance workspace failed") from None
+        workspace = Path(temporary_directory.name)
+        snapshot_source = workspace / source_name
+        if snapshot_source.parent != workspace or snapshot_source.name != source_name:
+            try:
+                temporary_directory.cleanup()
+            except OSError:
+                raise _fail(
+                    "catalog generation provenance workspace cleanup failed"
+                ) from None
+            raise _fail("catalog generation provenance snapshot source is invalid")
+    else:
+        raise _fail("catalog generation provenance snapshot source is invalid")
+
+    try:
+        if temporary_directory is not None:
+            atomic_write_no_clobber(
+                snapshot_source,
+                snapshot_raw,
+                max_bytes=MAX_CATALOG_RAW_BYTES,
+            )
+            _remaining(deadline, clock)
+        validated = validate_catalog_generation_provenance(
+            provenance_raw,
+            fetch_receipt_raw,
+            snapshot_source,
+            generation_raw,
+        )
+    except CircuitHandoffBundleError:
+        raise
+    except (CatalogGenerationProvenanceError, BoundedIOError, OSError, TypeError):
+        raise _fail("catalog generation provenance replay failed closed") from None
+    finally:
+        if temporary_directory is not None:
+            try:
+                temporary_directory.cleanup()
+            except OSError:
+                raise _fail(
+                    "catalog generation provenance workspace cleanup failed"
+                ) from None
+    _remaining(deadline, clock)
+
+    if (
+        validated.get("schema_version") != PROVENANCE_SCHEMA_VERSION
+        or validated.get("adapter") != PROVENANCE_ADAPTER
+        or validated.get("fetch_receipt_sha256") != _sha256(fetch_receipt_raw)
+        or validated.get("snapshot_sha256") != _sha256(snapshot_raw)
+        or validated.get("generation_bundle_sha256") != _sha256(generation_raw)
+    ):
+        raise _fail("catalog generation provenance replay identity is invalid")
+    evidence = copy.deepcopy(dict(validated))
+    evidence["sources"] = {
+        "provenance": _source_identity(provenance_raw),
+        "fetch_receipt": _source_identity(fetch_receipt_raw),
+        "snapshot": _source_identity(snapshot_raw),
+    }
+    return evidence
 
 
 def _ai_replay_request_sha256(request_raw: bytes) -> str:
@@ -1976,6 +2119,121 @@ def circuit_handoff_bundle_ai_quorum_replay_result_json_schema() -> dict[str, An
     return schema
 
 
+def circuit_handoff_bundle_catalog_provenance_replay_result_json_schema() -> dict[str, Any]:
+    """Return the closed exact-chain plus catalog provenance replay schema."""
+
+    schema = copy.deepcopy(circuit_handoff_bundle_replay_result_json_schema())
+    schema["$id"] = (
+        "https://github.com/penguin425/pcbex/schemas/"
+        "circuit-generation-kicad-handoff-bundle-catalog-provenance-"
+        "replay-result-v4.json"
+    )
+    schema["title"] = (
+        "pcbex circuit handoff bundle catalog provenance replay result"
+    )
+    schema["required"].append("catalog_generation_provenance")
+    properties = schema["properties"]
+    properties["schema_version"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_RESULT_SCHEMA_VERSION
+    }
+    properties["verification_scope"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_SCOPE
+    }
+
+    validation = properties["validation"]
+    validation["required"].extend(
+        [
+            "ai_schematic_quorum_replayed",
+            "catalog_generation_provenance_replayed",
+        ]
+    )
+    validation_properties = validation["properties"]
+    validation_properties["catalog_input_erc_required"] = {"const": True}
+    validation_properties["catalog_input_erc_replayed"] = {"const": True}
+    validation_properties["native_kicad_erc_replayed"] = {"type": "boolean"}
+    validation_properties["ai_schematic_quorum_replayed"] = {"type": "boolean"}
+    validation_properties["catalog_generation_provenance_replayed"] = {
+        "const": True
+    }
+    schema.pop("oneOf", None)
+
+    native_schema = circuit_handoff_bundle_native_erc_replay_result_json_schema()
+    ai_schema = circuit_handoff_bundle_ai_quorum_replay_result_json_schema()
+    properties["native_kicad_erc"] = copy.deepcopy(
+        native_schema["properties"]["native_kicad_erc"]
+    )
+    properties["ai_schematic_quorum"] = copy.deepcopy(
+        ai_schema["properties"]["ai_schematic_quorum"]
+    )
+
+    provenance_schema = catalog_generation_provenance_json_schema()
+    provenance_required = list(provenance_schema["required"])
+    provenance_properties = copy.deepcopy(provenance_schema["properties"])
+    digest = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+
+    def source(maximum: int) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["bytes", "sha256"],
+            "properties": {
+                "bytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": maximum,
+                },
+                "sha256": copy.deepcopy(digest),
+            },
+        }
+
+    properties["catalog_generation_provenance"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [*provenance_required, "sources"],
+        "properties": {
+            **provenance_properties,
+            "sources": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["provenance", "fetch_receipt", "snapshot"],
+                "properties": {
+                    "provenance": source(MAX_PROVENANCE_BYTES),
+                    "fetch_receipt": source(MAXIMUM_RECEIPT_BYTES),
+                    "snapshot": source(MAX_CATALOG_RAW_BYTES),
+                },
+            },
+        },
+    }
+
+    def evidence_presence(field: str, replayed: str) -> dict[str, Any]:
+        return {
+            "oneOf": [
+                {
+                    "not": {"required": [field]},
+                    "properties": {
+                        "validation": {
+                            "properties": {replayed: {"const": False}}
+                        }
+                    },
+                },
+                {
+                    "required": [field],
+                    "properties": {
+                        "validation": {
+                            "properties": {replayed: {"const": True}}
+                        }
+                    },
+                },
+            ]
+        }
+
+    schema["allOf"] = [
+        evidence_presence("native_kicad_erc", "native_kicad_erc_replayed"),
+        evidence_presence("ai_schematic_quorum", "ai_schematic_quorum_replayed"),
+    ]
+    return schema
+
+
 def _preflight_archive_directory(archive_raw: bytes) -> None:
     """Bound the central directory before ``zipfile`` allocates its records."""
 
@@ -2606,10 +2864,55 @@ def _circuit_handoff_ai_quorum_replay_result(
     return result
 
 
+def _circuit_handoff_catalog_provenance_replay_result(
+    verification: Mapping[str, Any],
+    *,
+    catalog_input_erc_required: bool,
+    catalog_generation_provenance: Mapping[str, Any],
+    native_kicad_erc: Mapping[str, Any] | None,
+    ai_schematic_quorum: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if ai_schematic_quorum is not None:
+        result = _circuit_handoff_ai_quorum_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            ai_schematic_quorum=ai_schematic_quorum,
+            native_kicad_erc=native_kicad_erc,
+        )
+    elif native_kicad_erc is not None:
+        result = _circuit_handoff_native_erc_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            native_kicad_erc=native_kicad_erc,
+        )
+    else:
+        result = _circuit_handoff_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+        )
+    result["schema_version"] = (
+        CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_RESULT_SCHEMA_VERSION
+    )
+    result["verification_scope"] = (
+        CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_SCOPE
+    )
+    result["validation"]["ai_schematic_quorum_replayed"] = (
+        ai_schematic_quorum is not None
+    )
+    result["validation"]["catalog_generation_provenance_replayed"] = True
+    result["catalog_generation_provenance"] = copy.deepcopy(
+        dict(catalog_generation_provenance)
+    )
+    return result
+
+
 def replay_circuit_handoff_bundle(
     bundle: str | os.PathLike[str],
     pcbex: str | Sequence[str],
     *,
+    catalog_generation_provenance: str | os.PathLike[str] | None = None,
+    catalog_fetch_receipt: str | os.PathLike[str] | None = None,
+    catalog_snapshot: str | os.PathLike[str] | None = None,
     retained_native_kicad_erc_report: str | os.PathLike[str] | None = None,
     kicad_cli: str | os.PathLike[str] = "kicad-cli",
     native_kicad_erc_warning_policy: str | os.PathLike[str] | None = None,
@@ -2628,7 +2931,7 @@ def replay_circuit_handoff_bundle(
     expected_bundle_sha256: str | None = None,
     _clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """Verify a bundle and require its complete native chain to reproduce it."""
+    """Reproduce a bundle and any requested retained evidence under one deadline."""
 
     try:
         timeout = float(timeout_seconds)
@@ -2650,6 +2953,23 @@ def replay_circuit_handoff_bundle(
         raise _fail("native KiCad ERC approval requirement is invalid")
     if not isinstance(require_ai_quorum, bool):
         raise _fail("AI schematic quorum requirement is invalid")
+    catalog_requested = any(
+        source is not None
+        for source in (
+            catalog_generation_provenance,
+            catalog_fetch_receipt,
+            catalog_snapshot,
+        )
+    )
+    if catalog_requested and any(
+        source is None
+        for source in (
+            catalog_generation_provenance,
+            catalog_fetch_receipt,
+            catalog_snapshot,
+        )
+    ):
+        raise _fail("catalog generation provenance replay inputs are incomplete")
     kicad_cli_argument = _path_argument(kicad_cli, "kicad-cli argument")
     native_erc_requested = retained_native_kicad_erc_report is not None
     if not native_erc_requested and (
@@ -2709,7 +3029,51 @@ def replay_circuit_handoff_bundle(
     _remaining(deadline, _clock)
     generation = _strict_object(entries[GENERATION_BUNDLE_NAME], "generation bundle")
     catalog_input_erc_required = generation["catalog_receipt"] is not None
+    if catalog_requested and not catalog_input_erc_required:
+        raise _fail("catalog generation provenance requires a catalog-backed archive")
     _remaining(deadline, _clock)
+
+    catalog_provenance_raw: bytes | None = None
+    catalog_fetch_receipt_raw: bytes | None = None
+    catalog_snapshot_raw: bytes | None = None
+    catalog_caller_sources: list[tuple[Any, bytes, int, str]] = []
+    if catalog_requested:
+        assert catalog_generation_provenance is not None
+        assert catalog_fetch_receipt is not None
+        assert catalog_snapshot is not None
+        catalog_sources = (
+            (
+                catalog_generation_provenance,
+                MAX_PROVENANCE_BYTES,
+                "catalog generation provenance",
+            ),
+            (
+                catalog_fetch_receipt,
+                MAXIMUM_RECEIPT_BYTES,
+                "catalog fetch receipt",
+            ),
+            (catalog_snapshot, MAX_CATALOG_RAW_BYTES, "catalog snapshot"),
+        )
+        captured: list[bytes] = []
+        aggregate_bytes = 0
+        for path, maximum, label in catalog_sources:
+            try:
+                raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(f"{label} path is invalid") from None
+            if not raw:
+                raise _fail(f"{label} is empty")
+            aggregate_bytes += len(raw)
+            if aggregate_bytes > MAX_CATALOG_PROVENANCE_TOTAL_INPUT_BYTES:
+                raise _fail("catalog provenance inputs exceed their aggregate bound")
+            captured.append(raw)
+            catalog_caller_sources.append((path, raw, maximum, label))
+            _remaining(deadline, _clock)
+        (
+            catalog_provenance_raw,
+            catalog_fetch_receipt_raw,
+            catalog_snapshot_raw,
+        ) = captured
 
     native_report_raw: bytes | None = None
     warning_policy_raw: bytes | None = None
@@ -2847,7 +3211,7 @@ def replay_circuit_handoff_bundle(
                 raise _fail("native KiCad ERC warning policy changed during replay")
             _remaining(deadline, _clock)
 
-    if not ai_requested:
+    if not ai_requested and not catalog_requested:
         if native_kicad_erc is not None:
             return _circuit_handoff_native_erc_replay_result(
                 verification,
@@ -2859,65 +3223,112 @@ def replay_circuit_handoff_bundle(
             catalog_input_erc_required=catalog_input_erc_required,
         )
 
-    assert ai_report_raw is not None
-    assert ai_request_raw is not None
-    assert ai_policy_pack_raw is not None
-    assert ai_policy is not None
-    ai_schematic_quorum = _replay_ai_quorum(
-        entries[SCHEMATIC_NAME],
-        ai_report_raw,
-        ai_request_raw,
-        ai_policy_pack_raw,
-        approval_raws,
-        response_raws,
-        command,
-        policy=ai_policy,
-        require_quorum=require_ai_quorum,
-        deadline=deadline,
-        clock=_clock,
-    )
-    _remaining(deadline, _clock)
-
-    for path, expected_raw, maximum, label in ai_caller_sources:
-        try:
-            observed_raw = read_bytes(path, max_bytes=maximum)
-        except BoundedIOError:
-            raise _fail(f"{label} changed during replay") from None
-        if observed_raw != expected_raw:
-            raise _fail(f"{label} changed during replay")
+    ai_schematic_quorum: dict[str, Any] | None = None
+    if ai_requested:
+        assert ai_report_raw is not None
+        assert ai_request_raw is not None
+        assert ai_policy_pack_raw is not None
+        assert ai_policy is not None
+        ai_schematic_quorum = _replay_ai_quorum(
+            entries[SCHEMATIC_NAME],
+            ai_report_raw,
+            ai_request_raw,
+            ai_policy_pack_raw,
+            approval_raws,
+            response_raws,
+            command,
+            policy=ai_policy,
+            require_quorum=require_ai_quorum,
+            deadline=deadline,
+            clock=_clock,
+        )
         _remaining(deadline, _clock)
 
-    # The AI verifier runs after native ERC. Re-read the earlier sidecars so a
-    # later child cannot invalidate evidence that the combined v3 result keeps.
-    if native_report_raw is not None:
-        assert retained_native_kicad_erc_report is not None
-        try:
-            report_after_ai = read_bytes(
-                retained_native_kicad_erc_report,
-                max_bytes=MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
-            )
-        except BoundedIOError:
-            raise _fail("retained native KiCad ERC report changed during replay") from None
-        if report_after_ai != native_report_raw:
-            raise _fail("retained native KiCad ERC report changed during replay")
-        _remaining(deadline, _clock)
-        if native_kicad_erc_warning_policy is not None:
-            assert warning_policy_raw is not None
+        for path, expected_raw, maximum, label in ai_caller_sources:
             try:
-                warning_policy_after_ai = read_bytes(
-                    native_kicad_erc_warning_policy,
-                    max_bytes=MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                observed_raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(f"{label} changed during replay") from None
+            if observed_raw != expected_raw:
+                raise _fail(f"{label} changed during replay")
+            _remaining(deadline, _clock)
+
+        # The AI verifier runs after native ERC. Re-read the earlier sidecars so a
+        # later child cannot invalidate evidence that the combined result keeps.
+        if native_report_raw is not None:
+            assert retained_native_kicad_erc_report is not None
+            try:
+                report_after_ai = read_bytes(
+                    retained_native_kicad_erc_report,
+                    max_bytes=MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
                 )
             except BoundedIOError:
                 raise _fail(
-                    "native KiCad ERC warning policy changed during replay"
+                    "retained native KiCad ERC report changed during replay"
                 ) from None
-            if warning_policy_after_ai != warning_policy_raw:
-                raise _fail("native KiCad ERC warning policy changed during replay")
+            if report_after_ai != native_report_raw:
+                raise _fail("retained native KiCad ERC report changed during replay")
+            _remaining(deadline, _clock)
+            if native_kicad_erc_warning_policy is not None:
+                assert warning_policy_raw is not None
+                try:
+                    warning_policy_after_ai = read_bytes(
+                        native_kicad_erc_warning_policy,
+                        max_bytes=MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                    )
+                except BoundedIOError:
+                    raise _fail(
+                        "native KiCad ERC warning policy changed during replay"
+                    ) from None
+                if warning_policy_after_ai != warning_policy_raw:
+                    raise _fail(
+                        "native KiCad ERC warning policy changed during replay"
+                    )
+                _remaining(deadline, _clock)
+
+        if require_ai_quorum and not ai_schematic_quorum["quorum_met"]:
+            raise _fail("AI schematic quorum replay did not meet every threshold")
+
+    if catalog_requested:
+        assert catalog_provenance_raw is not None
+        assert catalog_fetch_receipt_raw is not None
+        assert catalog_snapshot_raw is not None
+        assert isinstance(generation["catalog_receipt"], Mapping)
+        for path, expected_raw, maximum, label in catalog_caller_sources:
+            try:
+                observed_raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(f"{label} changed during replay") from None
+            if observed_raw != expected_raw:
+                raise _fail(f"{label} changed during replay")
             _remaining(deadline, _clock)
 
-    if require_ai_quorum and not ai_schematic_quorum["quorum_met"]:
-        raise _fail("AI schematic quorum replay did not meet every threshold")
+        catalog_evidence = _catalog_generation_provenance_evidence(
+            catalog_provenance_raw,
+            catalog_fetch_receipt_raw,
+            catalog_snapshot_raw,
+            entries[GENERATION_BUNDLE_NAME],
+            generation["catalog_receipt"],
+            deadline=deadline,
+            clock=_clock,
+        )
+        for path, expected_raw, maximum, label in catalog_caller_sources:
+            try:
+                observed_raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(f"{label} changed during replay") from None
+            if observed_raw != expected_raw:
+                raise _fail(f"{label} changed during replay")
+            _remaining(deadline, _clock)
+        return _circuit_handoff_catalog_provenance_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            catalog_generation_provenance=catalog_evidence,
+            native_kicad_erc=native_kicad_erc,
+            ai_schematic_quorum=ai_schematic_quorum,
+        )
+
+    assert ai_schematic_quorum is not None
     return _circuit_handoff_ai_quorum_replay_result(
         verification,
         catalog_input_erc_required=catalog_input_erc_required,
@@ -3178,6 +3589,10 @@ def handoff_circuit_generation(
 
 __all__ = [
     "CIRCUIT_HANDOFF_BUNDLE_ADAPTER",
+    "CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_RESULT_SCHEMA_VERSION",
+    "CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_SCOPE",
+    "CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_RESULT_SCHEMA_VERSION",
+    "CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION",
@@ -3187,6 +3602,8 @@ __all__ = [
     "CIRCUIT_HANDOFF_BUNDLE_VERIFICATION_SCOPE",
     "CircuitHandoffBundleError",
     "build_circuit_handoff_archive",
+    "circuit_handoff_bundle_ai_quorum_replay_result_json_schema",
+    "circuit_handoff_bundle_catalog_provenance_replay_result_json_schema",
     "circuit_handoff_bundle_json_schema",
     "circuit_handoff_bundle_native_erc_replay_result_json_schema",
     "circuit_handoff_bundle_replay_result_json_schema",
