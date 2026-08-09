@@ -118,7 +118,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_success_is_closed_path_free_and_schema_valid(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             project = root / "caller-project.any"
             rules = root / "caller-rules.any"
@@ -175,7 +175,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_external_profile_retains_non_default_portable_basename(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             profile = root / "JLC-2L-production.rev7.json"
             profile_raw = b'{"schema_version":1}\n'
@@ -211,7 +211,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_builtin_and_physical_profile_results_are_closed(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             command = _write_fake_pcbex(root, package_raw)
             builtin = replay_manufacturing_package(
@@ -222,7 +222,7 @@ class ManufacturingReplayTests(unittest.TestCase):
             )
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             physical = root / "assembly physical v2.json"
             physical.write_bytes(b'{"schema_version":2}\n')
@@ -235,7 +235,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_profile_selections_are_exclusive_and_complete(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             profile = root / "profile.json"
             profile.write_bytes(b"{}")
@@ -264,7 +264,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_exact_mismatch_is_path_free(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             command = _write_fake_pcbex(root, package_raw, mismatch=True)
             with self.assertRaises(ManufacturingReplayError) as caught:
@@ -282,7 +282,7 @@ class ManufacturingReplayTests(unittest.TestCase):
         ):
             with self.subTest(configuration=configuration):
                 with tempfile.TemporaryDirectory() as directory:
-                    root = Path(directory)
+                    root = Path(directory).resolve(strict=True)
                     board, package, package_raw = self._sources(root)
                     resolved = {
                         key: (
@@ -303,7 +303,7 @@ class ManufacturingReplayTests(unittest.TestCase):
         ):
             with self.subTest(option=option):
                 with tempfile.TemporaryDirectory() as directory:
-                    root = Path(directory)
+                    root = Path(directory).resolve(strict=True)
                     board, package, package_raw = self._sources(root)
                     project = root / "project.input"
                     rules = root / "rules.input"
@@ -332,7 +332,7 @@ class ManufacturingReplayTests(unittest.TestCase):
     @unittest.skipUnless(hasattr(Path, "symlink_to"), "symlinks unsupported")
     def test_symlink_sources_and_fresh_output_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             linked = root / "linked.kicad_pcb"
             try:
@@ -344,7 +344,7 @@ class ManufacturingReplayTests(unittest.TestCase):
                 replay_manufacturing_package(linked, package, command)
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             command = _write_fake_pcbex(root, package_raw, symlink_output=True)
             with self.assertRaisesRegex(ManufacturingReplayError, "fresh package source is invalid"):
@@ -352,7 +352,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_portable_leaf_checks_reject_windows_and_separator_risks(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             package = root / "retained.zip"
             package.write_bytes(b"package")
             for name in (
@@ -377,7 +377,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_per_source_caps_and_aggregate_bound_are_enforced(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             command = _write_fake_pcbex(root, package_raw)
             original = replay_module.read_bytes
@@ -406,7 +406,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_child_timeout_has_strictly_larger_outer_supervisor_budget(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             observed: dict[str, object] = {}
 
@@ -453,7 +453,7 @@ class ManufacturingReplayTests(unittest.TestCase):
             self.skipTest("PCBEX_TEST_BINARY is not supplied")
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board = root / "board.kicad_pcb"
             retained = root / "retained.zip"
             marker = root / "orphan-marker"
@@ -508,7 +508,7 @@ class ManufacturingReplayTests(unittest.TestCase):
                 return self.first if self.calls == 1 else self.second
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             project = root / "project.source"
             rules = root / "rules.source"
@@ -545,7 +545,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_deadline_expiring_during_result_assembly_cannot_return_success(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             command = _write_fake_pcbex(root, package_raw)
             now = [0.0]
@@ -571,7 +571,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_complete_injected_argv_is_count_byte_and_windows_bounded(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, _package_raw = self._sources(root)
             profile = root / "profile-with-bound-name.json"
             profile.write_bytes(b"profile")
@@ -616,7 +616,7 @@ class ManufacturingReplayTests(unittest.TestCase):
 
     def test_invalid_deadlines_commands_and_child_failures_are_stable(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             board, package, package_raw = self._sources(root)
             for timeout in (True, 0, -1, float("inf"), 601):
                 with self.subTest(timeout=timeout), self.assertRaisesRegex(
@@ -714,7 +714,7 @@ class ManufacturingReplayTests(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "schema.json"
+            output = Path(directory).resolve(strict=True) / "schema.json"
             argv = [
                 "pcbex-agent",
                 "manufacturing-package-replay-result-schema",
