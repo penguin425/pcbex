@@ -1,4 +1,5 @@
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -132,6 +133,33 @@ fn run_binding(
     run(&args)
 }
 
+fn run_binding_echo(
+    spec: &Path,
+    schematic: &Path,
+    board: &Path,
+    output: &Path,
+    summary: bool,
+    require_approved: bool,
+) -> Output {
+    let mut args = vec![
+        "verify-circuit-kicad-board-binding".to_string(),
+        path(spec).to_string(),
+        path(schematic).to_string(),
+        path(board).to_string(),
+        "--output".into(),
+        path(output).into(),
+        if summary {
+            "--mcp-echo-report-summary".into()
+        } else {
+            "--mcp-echo-report".into()
+        },
+    ];
+    if require_approved {
+        args.push("--require-approved".into());
+    }
+    run(&args)
+}
+
 fn write_valid_inputs(directory: &Path) -> (PathBuf, PathBuf, PathBuf) {
     let spec = directory.join("circuit.json");
     let schematic = directory.join("design.kicad_sch");
@@ -211,6 +239,69 @@ fn verifies_board_binding_and_emits_closed_schema() {
 }
 
 #[test]
+fn emits_closed_digest_only_summary_and_preserves_full_echo() {
+    let directory = temp_dir("summary");
+    let (spec, schematic, board) = write_valid_inputs(&directory);
+    let summary_path = directory.join("summary.json");
+    let summary_result = run_binding_echo(&spec, &schematic, &board, &summary_path, true, true);
+    assert!(
+        summary_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&summary_result.stderr)
+    );
+    let summary: Value = serde_json::from_slice(&summary_result.stdout).unwrap();
+    let summary_object = summary.as_object().unwrap();
+    assert_eq!(summary_object.len(), 13);
+    assert_eq!(summary["schema_version"], 1);
+    assert_eq!(summary["report_schema_version"], 1);
+    assert_eq!(summary["approved"], true);
+    assert_eq!(summary["counts"]["errors"], 0);
+    for field in [
+        "board_source_sha256",
+        "board_electrical_sha256",
+        "circuit_kicad_handoff_sha256",
+        "binding_sha256",
+        "report_sha256",
+    ] {
+        assert_eq!(summary[field].as_str().unwrap().len(), 64, "{field}");
+    }
+    for field in [
+        "circuit_source_sha256",
+        "schematic_source_sha256",
+        "circuit_spec_sha256",
+        "circuit_check_sha256",
+        "schematic_sha256",
+        "policy_sha256",
+    ] {
+        assert_eq!(
+            summary["circuit_kicad_handoff"][field]
+                .as_str()
+                .unwrap()
+                .len(),
+            64,
+            "{field}"
+        );
+    }
+    let retained = fs::read(&summary_path).unwrap();
+    assert_eq!(summary["report_bytes"], retained.len() as u64);
+    assert_eq!(
+        summary["report_sha256"],
+        hex::encode(Sha256::digest(&retained))
+    );
+    let summary_text = String::from_utf8(summary_result.stdout).unwrap();
+    assert!(!summary_text.contains("/"));
+    assert!(!summary_text.contains("findings"));
+
+    let full_path = directory.join("full.json");
+    let full_result = run_binding_echo(&spec, &schematic, &board, &full_path, false, true);
+    assert!(full_result.status.success());
+    assert_eq!(full_result.stdout, fs::read(&full_path).unwrap());
+    let report: Value = serde_json::from_slice(&full_result.stdout).unwrap();
+    assert!(report.get("findings").is_some());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn retains_rejected_report_before_require_approved_failure() {
     let directory = temp_dir("rejected");
     let (spec, schematic, board) = write_valid_inputs(&directory);
@@ -236,6 +327,12 @@ fn retains_rejected_report_before_require_approved_failure() {
             .iter()
             .all(|finding| finding["code"] == "pad_net_mismatch")
     );
+    let summary_path = directory.join("rejected-summary.json");
+    let summary_result = run_binding_echo(&spec, &schematic, &board, &summary_path, true, false);
+    assert!(summary_result.status.success());
+    let summary: Value = serde_json::from_slice(&summary_result.stdout).unwrap();
+    assert_eq!(summary["approved"], false);
+    assert!(summary["counts"]["errors"].as_u64().unwrap() > 0);
     fs::remove_dir_all(directory).unwrap();
 }
 
@@ -264,6 +361,16 @@ fn preflights_output_before_missing_input_and_rejects_aliases() {
     ]);
     assert!(!no_echo.status.success());
     assert!(String::from_utf8_lossy(&no_echo.stderr).contains("requires --output"));
+
+    let no_summary_output = run(&[
+        "verify-circuit-kicad-board-binding".into(),
+        path(&spec).into(),
+        path(&schematic).into(),
+        path(&board).into(),
+        "--mcp-echo-report-summary".into(),
+    ]);
+    assert!(!no_summary_output.status.success());
+    assert!(String::from_utf8_lossy(&no_summary_output.stderr).contains("requires --output"));
 
     #[cfg(unix)]
     {

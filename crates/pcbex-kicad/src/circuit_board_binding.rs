@@ -35,6 +35,12 @@ pub const CIRCUIT_KICAD_BOARD_BINDING_ENGINE_VERSION: &str = env!("CARGO_PKG_VER
 pub const CIRCUIT_KICAD_BOARD_BINDING_MAX_BOARD_BYTES: u64 = 128 * 1024 * 1024;
 /// Maximum compact JSON size of a returned board-binding report.
 pub const CIRCUIT_KICAD_BOARD_BINDING_MAX_REPORT_BYTES: usize = 12 * 1024 * 1024;
+/// Maximum retained/rendered board-binding report size, including its one
+/// canonical trailing newline.
+pub const CIRCUIT_KICAD_BOARD_BINDING_MAX_RENDERED_REPORT_BYTES: usize =
+    CIRCUIT_KICAD_BOARD_BINDING_MAX_REPORT_BYTES + 1;
+/// Schema version of the compact board-binding summary bridge.
+pub const CIRCUIT_KICAD_BOARD_BINDING_SUMMARY_SCHEMA_VERSION: u32 = 1;
 
 const MAX_BINDING_NETS: usize = 100_000;
 const MAX_BINDING_FOOTPRINTS: usize = 4_096;
@@ -104,6 +110,47 @@ pub struct CircuitKicadBoardBindingReport {
     pub findings: Vec<CircuitKicadBoardBindingFinding>,
     pub counts: CircuitKicadBoardBindingFindingCounts,
     pub approved: bool,
+}
+
+/// Compact, path-free identity summary for a retained board-binding report.
+///
+/// The full report remains the public evidence schema.  This separate closed
+/// shape intentionally omits findings, messages, and reviews so subprocess
+/// bridges can authenticate a retained report without echoing unbounded
+/// human-readable data.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CircuitKicadBoardBindingReportSummary {
+    pub schema_version: u32,
+    pub report_schema_version: u32,
+    pub engine_version: String,
+    pub approved: bool,
+    pub counts: CircuitKicadBoardBindingFindingCounts,
+    pub board_source_bytes: u64,
+    pub board_source_sha256: String,
+    pub board_electrical_sha256: String,
+    pub circuit_kicad_handoff_sha256: String,
+    pub circuit_kicad_handoff: CircuitKicadBoardBindingHandoffSummary,
+    pub binding_sha256: String,
+    pub report_bytes: u64,
+    pub report_sha256: String,
+}
+
+/// The digest/byte identities retained from the nested circuit-to-schematic
+/// handoff.  Reviews and findings are deliberately not part of this summary.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CircuitKicadBoardBindingHandoffSummary {
+    pub schema_version: u32,
+    pub engine_version: String,
+    pub circuit_source_bytes: u64,
+    pub circuit_source_sha256: String,
+    pub schematic_source_bytes: u64,
+    pub schematic_source_sha256: String,
+    pub circuit_spec_sha256: String,
+    pub circuit_check_sha256: String,
+    pub schematic_sha256: String,
+    pub policy_sha256: String,
 }
 
 #[derive(Clone, Debug)]
@@ -223,12 +270,75 @@ pub fn verify_circuit_kicad_board_binding(
         counts,
         approved,
     };
-    if canonical_json(&report)?.len() > CIRCUIT_KICAD_BOARD_BINDING_MAX_REPORT_BYTES {
+    // Validate the exact retained representation, including its protocol
+    // newline, rather than only the JSON object bytes.
+    render_circuit_kicad_board_binding_report(&report)?;
+    Ok(report)
+}
+
+/// Render a board-binding report as compact canonical JSON with one trailing
+/// newline.  The newline is part of the retained report byte contract.
+pub fn render_circuit_kicad_board_binding_report(
+    report: &CircuitKicadBoardBindingReport,
+) -> Result<Vec<u8>, String> {
+    let mut rendered = canonical_json(report)?;
+    rendered.push(b'\n');
+    if rendered.len() > CIRCUIT_KICAD_BOARD_BINDING_MAX_RENDERED_REPORT_BYTES {
         return Err(format!(
-            "circuit-to-KiCad board-binding report exceeds {CIRCUIT_KICAD_BOARD_BINDING_MAX_REPORT_BYTES} bytes"
+            "circuit-to-KiCad board-binding rendered report exceeds {CIRCUIT_KICAD_BOARD_BINDING_MAX_RENDERED_REPORT_BYTES} bytes"
         ));
     }
-    Ok(report)
+    Ok(rendered)
+}
+
+/// Build the fixed compact summary used by CLI and subprocess bridges.
+///
+/// `rendered` must be the exact canonical bytes returned by
+/// [`render_circuit_kicad_board_binding_report`].  Requiring and checking the
+/// bytes here prevents a caller from publishing a digest for a differently
+/// formatted or newline-truncated report.
+pub fn circuit_kicad_board_binding_report_summary(
+    report: &CircuitKicadBoardBindingReport,
+    rendered: &[u8],
+) -> Result<CircuitKicadBoardBindingReportSummary, String> {
+    let expected = render_circuit_kicad_board_binding_report(report)?;
+    if rendered != expected {
+        return Err(
+            "circuit-to-KiCad board-binding report is not canonical normalized JSON".into(),
+        );
+    }
+    if rendered.is_empty() || rendered.last() != Some(&b'\n') {
+        return Err(
+            "circuit-to-KiCad board-binding report must include one trailing newline".into(),
+        );
+    }
+    let handoff = &report.circuit_kicad_handoff;
+    Ok(CircuitKicadBoardBindingReportSummary {
+        schema_version: CIRCUIT_KICAD_BOARD_BINDING_SUMMARY_SCHEMA_VERSION,
+        report_schema_version: report.schema_version,
+        engine_version: report.engine_version.clone(),
+        approved: report.approved,
+        counts: report.counts.clone(),
+        board_source_bytes: report.board_source_bytes,
+        board_source_sha256: report.board_source_sha256.clone(),
+        board_electrical_sha256: report.board_electrical_sha256.clone(),
+        circuit_kicad_handoff_sha256: report.circuit_kicad_handoff_sha256.clone(),
+        circuit_kicad_handoff: CircuitKicadBoardBindingHandoffSummary {
+            schema_version: handoff.schema_version,
+            engine_version: handoff.engine_version.clone(),
+            circuit_source_bytes: handoff.circuit_source_bytes,
+            circuit_source_sha256: handoff.circuit_source_sha256.clone(),
+            schematic_source_bytes: handoff.schematic_source_bytes,
+            schematic_source_sha256: handoff.schematic_source_sha256.clone(),
+            circuit_spec_sha256: handoff.circuit_spec_sha256.clone(),
+            circuit_check_sha256: handoff.circuit_check_sha256.clone(),
+            schematic_sha256: handoff.schematic_sha256.clone(),
+            policy_sha256: handoff.policy_sha256.clone(),
+        },
+        binding_sha256: report.binding_sha256.clone(),
+        report_bytes: rendered.len() as u64,
+        report_sha256: digest_hex(rendered),
+    })
 }
 
 fn parse_board_binding_document(source: &str) -> Result<BoardBindingDocument, String> {
@@ -1254,6 +1364,79 @@ mod tests {
             schema["$defs"]["handoff_report"]["additionalProperties"],
             false
         );
+    }
+
+    #[test]
+    fn compact_summary_is_closed_digest_only_and_counts_newline_bytes() {
+        let report = verify(BOARD);
+        let rendered = render_circuit_kicad_board_binding_report(&report).unwrap();
+        assert_eq!(rendered.last(), Some(&b'\n'));
+        let summary = circuit_kicad_board_binding_report_summary(&report, &rendered).unwrap();
+        let value = serde_json::to_value(&summary).unwrap();
+
+        let fields = value.as_object().unwrap();
+        assert_eq!(
+            fields.keys().collect::<Vec<_>>(),
+            [
+                "approved",
+                "binding_sha256",
+                "board_electrical_sha256",
+                "board_source_bytes",
+                "board_source_sha256",
+                "circuit_kicad_handoff",
+                "circuit_kicad_handoff_sha256",
+                "counts",
+                "engine_version",
+                "report_bytes",
+                "report_schema_version",
+                "report_sha256",
+                "schema_version",
+            ]
+            .iter()
+            .collect::<Vec<_>>()
+        );
+        assert_eq!(value["approved"], true);
+        assert_eq!(
+            value["schema_version"],
+            CIRCUIT_KICAD_BOARD_BINDING_SUMMARY_SCHEMA_VERSION
+        );
+        assert_eq!(
+            value["report_schema_version"],
+            CIRCUIT_KICAD_BOARD_BINDING_SCHEMA_VERSION
+        );
+        assert_eq!(value["report_bytes"], rendered.len() as u64);
+        assert_eq!(value["report_sha256"], digest_hex(&rendered));
+        assert_eq!(value["board_source_bytes"], BOARD.len() as u64);
+        assert_eq!(
+            value["circuit_kicad_handoff"]["circuit_source_bytes"],
+            SPEC.len() as u64
+        );
+        assert!(
+            value["circuit_kicad_handoff"]["circuit_check_sha256"]
+                .as_str()
+                .is_some_and(|digest| digest.len() == 64)
+        );
+        assert!(
+            String::from_utf8(rendered.clone())
+                .unwrap()
+                .lines()
+                .all(|line| !line.contains('/') && !line.contains('\\'))
+        );
+
+        let mut without_newline = rendered.clone();
+        without_newline.pop();
+        assert!(circuit_kicad_board_binding_report_summary(&report, &without_newline).is_err());
+
+        let rejected_board = BOARD.replace(
+            "(pad \"2\" smd rect (at 1 0) (size 1 1) (layers \"F.Cu\"))",
+            "(pad \"2\" smd rect (at 1 0) (size 1 1) (layers \"F.Cu\") (net 1 \"SIG\"))",
+        );
+        let rejected = verify(&rejected_board);
+        let rejected_rendered = render_circuit_kicad_board_binding_report(&rejected).unwrap();
+        let rejected_summary =
+            circuit_kicad_board_binding_report_summary(&rejected, &rejected_rendered).unwrap();
+        assert!(!rejected_summary.approved);
+        assert!(rejected_summary.counts.errors > 0);
     }
 
     #[test]

@@ -3342,7 +3342,19 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --timeout-seconds 120
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --kicad-board hardware/controller.kicad_pcb \
+  --board-binding-report build/circuit-kicad-board-binding.json \
+  --board-binding-policy electrical-policy.json \
+  --require-board-binding-approved \
+  --timeout-seconds 120
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-catalog-provenance-replay-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-board-binding-replay-result-schema
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
@@ -3470,6 +3482,41 @@ procurement or fabrication; authenticate the caller-selected pcbex, KiCad, or
 other toolchain; or approve a board, placement, layout, routing, PCB DRC/DFM,
 manufacturing package, or manufacturing operation.
 
+Version 1.454.0 optionally binds a retained KiCad board and compact retained
+board-binding report to the same exact replay. `--kicad-board` and
+`--board-binding-report` are an all-or-nothing pair; an optional
+`--board-binding-policy` is the exact custom policy source for the fresh replay, while omission
+selects the existing built-in electrical policy. `--require-board-binding-approved`
+is a final gate and is invalid without the pair. The board/report/policy are
+stable-read before the producer child under 128 MiB, 12 MiB canonical report
+(plus one trailing newline byte), and 4 MiB policy bounds (all three sources
+144 MiB plus one byte aggregate), respectively, and reread after the existing
+board-binding child. The unchanged
+six-entry ZIP and manifest reproduce first; native ERC, AI, and catalog
+assertions retain their prior order, then the existing
+`verify-circuit-kicad-board-binding` gate writes a private fresh report whose
+bytes must equal the retained report exactly. One aggregate monotonic
+`--timeout-seconds` deadline (default 120, maximum 600) covers all reads,
+children, report validation, rereads, and cleanup; its Rust board verifier has
+no independent timeout flag.
+
+Success emits the closed path-free v5 result with verification scope
+`deterministic-electrical-handoff-chain-board-binding-replay-v5` and a
+`board_binding` summary carrying compact decision/counts, board/report
+byte/SHA-256, and effective-policy, electrical, handoff, and binding
+identities; the object is closed schema-v1 with `counts`, `board`, `report`,
+optional raw replay-source `policy`, `policy_sha256`, and the electrical/
+handoff/binding SHA-256 identities.
+`validation.board_binding_replayed` is true. No raw sidecar bodies
+or host paths are returned, and board evidence is never embedded in the
+archive. Omitting all board options
+preserves v1–v4 result bytes, schemas, and archive bytes exactly. This is
+geometry-free electrical binding only: it does not approve placement or
+footprint geometry, copper/routing/zones, PCB DRC/DFM, Gerber/BOM/CPL,
+manufacturing/fabrication, procurement, supplier facts, or pcbex/KiCad/tool
+provenance. A geometry-only board edit can preserve the electrical digest while
+changing raw/binding identity and is not layout approval.
+
 Exact reproduction normally requires the supplied engine to report the same
 `engine_version` as the retained handoff. That is an output-match implication,
 not authentication: the caller-supplied binary and its version claim are not
@@ -3480,7 +3527,9 @@ v1.452 AI assertion can freshly verify a retained schema-v1 quorum under its
 supplied policy pack. The optional v1.453 assertion can freshly revalidate the
 retained historical catalog digest graph, but it does not authenticate its
 supplier or transport, establish live catalog facts, grant human approval,
-bind a PCB, run PCB DRC/DFM, or authorize manufacturing.
+bind or approve a PCB/layout, run placement/routing/PCB DRC/DFM, or authorize
+manufacturing. The optional v1.454 assertion binds only the retained board's
+geometry-free electrical subset and does not authenticate tool provenance.
 The existing offline `verify-circuit-handoff-bundle` and
 `extract-circuit-handoff-bundle` commands remain unchanged and never execute
 native content.
@@ -3488,8 +3537,9 @@ native content.
 The bundle itself proves a deterministic electrical handoff only. A separate
 v1.451 replay result may additionally prove an exact native KiCad ERC replay;
 a v1.452 result may add an exact schema-v1 AI quorum replay, with or without
-that native assertion; and a v1.453 result may add exact historical catalog
-provenance replay to either combination. None of these authorizes procurement,
+that native assertion; a v1.453 result may add exact historical catalog
+provenance replay to either combination; and a v1.454 result may add exact
+retained-board electrical binding. None of these authorizes procurement,
 PCB/layout/DRC/DFM approval, manufacturing, or fabrication. The caller-supplied
 pcbex and KiCad executables are not authenticated. See
 [`docs/CIRCUIT_HANDOFF_BUNDLE.md`](docs/CIRCUIT_HANDOFF_BUNDLE.md) for the
@@ -3591,8 +3641,14 @@ closed report; malformed or oversized inputs and output collisions fail within
 the bounded atomic contract.  Hierarchy, buses, multi-unit/nested handoffs,
 geometry, routing, DRC, and DFM are rejected or out of scope.  The MCP tool is
 `verify_circuit_kicad_board_binding` with the same raw input and output
-arguments.  This is not a new `pipeline-verify` phase; v1/v2 pipeline reports
-remain unchanged.
+arguments. The hidden `--mcp-echo-report-summary` bridge emits only compact
+numeric/digest identities after the full report is retained; it keeps the
+report out of the 1 MiB child-stdout path. This is not a new `pipeline-verify`
+phase; v1/v2 pipeline reports remain unchanged. Version 1.454 can replay a
+retained board and this retained report from the handoff bundle, but that
+optional result is still a
+geometry-free electrical binding and not placement/layout, DRC/DFM,
+manufacturing, fabrication, procurement, or toolchain approval.
 
 ## Bounded-input deterministic pipeline runner
 

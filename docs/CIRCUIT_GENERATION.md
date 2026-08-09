@@ -283,6 +283,46 @@ HTTP response; establish current inventory, price, or reservation; authorize
 procurement or fabrication; prove toolchain provenance; or approve a board,
 layout, or manufacturing operation.
 
+Version 1.454.0 (`v1.454.0`) optionally binds a retained KiCad board and
+retained compact board-binding report to that exact replay. `--kicad-board` and
+`--board-binding-report` are an all-or-nothing pair; `--board-binding-policy`
+is an optional exact custom-policy source for the fresh replay, and omission selects the existing
+built-in electrical policy. `--require-board-binding-approved` is a final gate
+only and is rejected without the retained board/report pair. The board is
+stable-read under the 128 MiB bound, the canonical report under 12 MiB plus one
+trailing newline byte, and the optional
+policy under 4 MiB (all three sources 144 MiB plus one byte aggregate) before
+any producer child; all are reread after board
+verification and must be byte-identical. A direct or ancestor link/reparse,
+empty or oversized file, replacement, or mutation fails closed.
+
+The unchanged canonical six-entry archive and manifest reproduce first. The
+existing optional native KiCad ERC, AI quorum, and catalog-provenance stages
+then retain their v1.451–v1.453 order, followed by the existing
+`verify-circuit-kicad-board-binding` gate against the exact reproduced circuit
+specification and schematic and the retained board/policy. The report is
+written privately and compared byte-for-byte, including its trailing newline;
+it is not echoed through the 1 MiB child-stdout channel. One aggregate
+monotonic `--timeout-seconds` deadline (default 120 seconds, maximum 600)
+covers all reads, children, report validation, rereads, and cleanup; the
+standalone Rust board command has no separate timeout option.
+
+Success emits closed path-free replay-result-v5 evidence with scope
+`deterministic-electrical-handoff-chain-board-binding-replay-v5` and a
+`board_binding` summary containing compact decision/counts, board/report
+byte/SHA-256, and effective-policy, electrical, handoff, and binding
+identities; the object is closed schema-v1 with `counts`, `board`, `report`,
+optional raw replay-source `policy`, `policy_sha256`, and those three remaining
+identities. `validation.board_binding_replayed`
+is true. Omission preserves
+v1–v4 result bytes and the unchanged ZIP; no
+board sidecar is embedded. This is geometry-free
+electrical identity binding only. It does not approve placement or footprint
+geometry, copper/routing/zones, PCB DRC/DFM, Gerber/BOM/CPL, manufacturing or
+fabrication, procurement, supplier facts, or pcbex/KiCad/toolchain provenance.
+Even a geometry-only source change that preserves the electrical digest changes
+raw/binding identity and is not a layout approval.
+
 The v1.417 [bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md)
 can recompute that standalone binding beside the unchanged `pipeline-verify`
 gate from one digest-bound snapshot plan. A generated design must still

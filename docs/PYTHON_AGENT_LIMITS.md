@@ -65,6 +65,24 @@ and reread again afterward. A file-origin snapshot is staged under its exact
 bound basename only in a private temporary directory. No catalog source is
 published, embedded in the archive, or returned by path.
 
+The optional v1.454 retained-board replay keeps the board and board-binding
+report outside the same unchanged ZIP and emits scope
+`deterministic-electrical-handoff-chain-board-binding-replay-v5` with a
+path-free `board_binding` result object. `--kicad-board` and
+`--board-binding-report` are required together; the board is limited to 128 MiB
+and the compact report to 12 MiB canonical JSON plus one trailing newline
+byte. An optional `--board-binding-policy` is
+limited to 4 MiB (all three sources are 144 MiB plus one byte in aggregate)
+and is the exact custom policy source for the fresh replay; omission selects the existing built-in
+policy. All
+supplied sources are nonempty stable regular files, captured before a producer
+child, staged only in a private temporary workspace, and reread byte-for-byte
+after the board verifier. The fresh report is read from its private output
+file and compared including its trailing newline; the hidden
+`--mcp-echo-report-summary` bridge sends only its closed numeric/digest summary
+through Python stdout, never the full report. No board/report/policy source is
+embedded in the archive or returned by path.
+
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent
 traversal is not accepted. The reader checks the advertised path identity and size, opens
@@ -119,6 +137,7 @@ limit before network access.
 | External AI provider adapter | configurable 1–600 seconds; default 120 | 32 MiB | configurable 1 byte–16 MiB; default 1 MiB | same as stdout |
 | Generic agent `pcbex` invocation | default 300 seconds | closed | 8 MiB | 1 MiB |
 | Circuit handoff chain/native ERC/AI quorum/catalog-provenance replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
+| Circuit handoff retained-board binding replay | same aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
 
@@ -146,6 +165,23 @@ and AI assertions, pre-validation rereads, private snapshot staging when
 required by its retained source descriptor, the offline v1.421 validation,
 post-validation rereads, and cleanup. The replay does not use a fresh current
 time or make a supplier/network request.
+A requested retained-board assertion uses that same deadline for its 128 MiB
+board, 12 MiB canonical report (+1 newline byte), and optional 4 MiB policy
+reads, complete producer replay, optional independent native/AI/catalog assertions,
+private staging,
+the existing geometry-free `verify-circuit-kicad-board-binding` child, fresh
+report validation, final source rereads, and cleanup. The standalone Rust
+board-binding command has no timeout flag; the Python supervisor passes only
+the remaining aggregate budget to the child. A retained but rejected report
+remains inspectable unless `--require-board-binding-approved` is requested,
+and that final gate is evaluated only after exact report comparison and all
+rereads.
+A monotonic deadline is checked after every bounded input read and no success
+is returned after it expires. Ordinary synchronous filesystem reads cannot be
+preempted in the middle of a kernel/FUSE/network-filesystem operation, so a
+stalled special backing filesystem can delay the error beyond the configured
+wall-clock duration; native child execution and cleanup remain actively
+bounded by the process supervisor.
 A catalog receipt makes the catalog-input ERC stage required. The replay writes
 only private temporary files and publishes no archive or extraction directory.
 
@@ -171,6 +207,11 @@ fetch-receipt, snapshot, and archived generation bytes, but does not
 authenticate a supplier, TLS session, or raw HTTP response; establish current
 inventory, price, or reservation; authorize procurement or fabrication; prove
 toolchain provenance; or approve a board, layout, or manufacturing operation.
+The v1.454 board option set similarly makes no layout or manufacturing
+decision: it revalidates only the retained raw board and compact report against
+the geometry-free electrical subset. It does not approve placement/footprint
+geometry, copper/routing/zones, PCB DRC/DFM, Gerber/BOM/CPL, manufacturing or
+fabrication, procurement, supplier facts, or pcbex/KiCad/toolchain provenance.
 The offline `verify-circuit-handoff-bundle` and
 `extract-circuit-handoff-bundle`
 paths remain native-child-free and retain their existing no-execution boundary.
