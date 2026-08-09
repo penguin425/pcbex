@@ -789,6 +789,11 @@
     {
       "id": "exact-ai-schematic-quorum-handoff-replay",
       "release": "v1.452.0",
+      "status": "released"
+    },
+    {
+      "id": "catalog-provenance-bound-exact-handoff-replay",
+      "release": "v1.453.0",
       "status": "current"
     }
   ]

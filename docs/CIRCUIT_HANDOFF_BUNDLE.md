@@ -52,6 +52,14 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   --timeout-seconds 120
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --catalog-generation-provenance build/catalog-generation-provenance.json \
+  --catalog-fetch-receipt build/catalog-fetch-receipt.json \
+  --catalog-snapshot build/catalog-snapshot.json \
+  --timeout-seconds 120
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 
@@ -66,6 +74,9 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-ai-quorum-replay-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-catalog-provenance-replay-result-schema
 ```
 
 The `verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`
@@ -285,6 +296,70 @@ the independent optional v1.451 assertion is also requested. PCB binding, PCB
 DRC/DFM, and manufacturing authorization likewise require their existing
 explicit gates.
 
+## Catalog-provenance-bound exact replay (v1.453)
+
+Supplying any catalog replay input selects one complete retained evidence set:
+
+- `--catalog-generation-provenance` for the exact v1.421 provenance sidecar;
+- `--catalog-fetch-receipt` for the exact v1.420 fetch receipt named by that
+  provenance; and
+- `--catalog-snapshot` for the exact normalized snapshot bound by both.
+
+All three inputs are required together. A partial set fails instead of falling
+back to an earlier replay mode, and the complete set is accepted only when the
+archive generation bundle is catalog-backed. The provenance and fetch receipt
+are each limited to 1 MiB, the snapshot is limited to 4 MiB, and their combined
+captured size is limited to 6 MiB. Empty, non-regular, linked, changed, or
+over-limit sources fail through the same bounded caller-file boundary as the
+archive and other optional sidecars.
+
+Execution stays within the one aggregate monotonic replay deadline. Canonical
+archive verification and optional expected-identity checks complete first, and
+the generation bundle must prove that catalog input ERC is required. The three
+catalog sources are then captured before any producer child. The unchanged
+six-entry archive must reproduce byte-for-byte. Optional native KiCad ERC runs
+next when independently requested, followed by optional AI quorum when its own
+complete input set is requested. The three catalog sources are reread before
+provenance validation;
+the existing `validate_catalog_generation_provenance` contract then
+revalidates the retained provenance, fetch receipt, normalized snapshot,
+embedded catalog-selection receipt, reconstructed pre-selection and resolved
+circuit specs, generation history/check, exact generation-bundle bytes, and
+generated SKiDL digest. File-origin snapshots are privately staged under the
+exact bound source basename; injected snapshots are validated directly from
+the captured bytes. The caller-visible sources are reread again after
+validation.
+
+This final validation is offline and historical. It performs no supplier or
+network request and evaluates the catalog graph at the fetch time retained in
+the receipt, rather than at the current clock. Success emits the closed schema
+identified by
+`circuit-generation-kicad-handoff-bundle-catalog-provenance-replay-result-v4.json`
+with `schema_version: 4` and exact scope
+`deterministic-electrical-handoff-chain-catalog-provenance-replay-v4`.
+`validation.catalog_generation_provenance_replayed` is true, catalog input ERC
+is required and replayed, and the `catalog_generation_provenance` object
+directly contains the 13 validated provenance-v1 fields plus `sources`; there
+is no intermediate `binding` key. The closed `sources.provenance`,
+`sources.fetch_receipt`, and `sources.snapshot` objects each contain only
+`bytes` and `sha256`. The result contains no caller path, raw provenance
+encoding, raw fetch-receipt body, or raw snapshot body.
+
+Native and AI assertions remain independent optional evidence. Their existing
+objects appear only when the corresponding assertion was requested, and the
+v4 validation booleans state whether each was replayed. Omitting all three
+catalog inputs returns the exact existing v1 result for producer replay alone,
+v2 with native ERC, or v3 with AI quorum (with or without native ERC). The
+archive and manifest remain the unchanged canonical six-entry v1 format;
+catalog evidence is never embedded in them.
+
+The v4 result proves exact offline linkage to retained historical evidence. It
+does **not** authenticate a supplier, TLS connection, endpoint, or raw HTTP
+response; prove current inventory, price, or reservation; authorize procurement
+or fabrication; authenticate pcbex, KiCad, or any other toolchain; or approve a
+board, placement, layout, routing, PCB DRC/DFM, manufacturing package, or
+manufacturing operation.
+
 ## Exact archive
 
 Success publishes exactly one no-clobber ZIP file with these ordered entries:
@@ -387,15 +462,13 @@ catalog-provenance authenticity, native KiCad ERC, board binding,
 placement/routing, PCB DRC/DFM, firmware, manufacturing data, or a factory
 order. A v1.451 native-enabled replay result adds only the exact native-KiCad
 assertion described above. A v1.452 result adds the exact schema-v1 AI quorum
-assertion described above and may include that native assertion; neither
-elevates the archive into a production authorization or grants any other
-approval. The generation bundle does not contain the original supplier
-snapshot, so procurement must separately validate the v1.421
-catalog-generation provenance against that snapshot. Use the existing
-live/artifact-bound AI review gates and the normal board, pipeline, and
-manufacturing gates explicitly downstream. In particular, an `approved: true`
-handoff manifest or native ERC decision must never be interpreted as permission
-to fabricate.
+assertion and may include that native assertion. A v1.453 result additionally
+revalidates the retained v1.421 catalog graph against caller-supplied historical
+sidecars. None elevates the archive into a production authorization or grants
+any other approval. Use the existing live/artifact-bound AI review gates and
+the normal board, pipeline, procurement, manufacturing, and fabrication gates
+explicitly downstream. In particular, an `approved: true` handoff manifest or
+native ERC decision must never be interpreted as permission to fabricate.
 
 The v1 archive is unsigned and its logical `bundle_sha256` covers the five
 manifest-described artifacts, not the outer ZIP or `manifest.json` bytes.
@@ -411,8 +484,12 @@ but both the supplied pcbex command and selected `kicad-cli` executable remain
 unauthenticated caller inputs and are not sandboxed. Offline verify/extract and
 v1 replay remain native-KiCad-free. v1.452 can cryptographically reverify a
 retained schema-v1 AI quorum, but it does not authenticate the supplied pcbex
-binary or obtain a human decision. No mode authenticates supplier/catalog
-provenance, binds a PCB, checks placement/routing/PCB DRC/DFM, or authorizes
-manufacturing. Use a trusted expected
-digest/signature, a protected toolchain, and the existing supplier-provenance,
-AI, board, pipeline, and manufacturing gates when those properties are required.
+binary or obtain a human decision. v1.453 can revalidate exact historical
+catalog linkage without authenticating the supplier, TLS transport, endpoint,
+or omitted raw HTTP response, and without establishing current inventory,
+price, or reservation. No replay mode authenticates its toolchain, binds or
+approves a PCB/layout, checks placement, routing, PCB DRC/DFM, approves
+manufacturing, or authorizes procurement or fabrication. Use a trusted
+expected digest/signature, a protected toolchain, and the existing supplier,
+AI, board, pipeline, procurement, manufacturing, and fabrication gates when
+those properties are required.

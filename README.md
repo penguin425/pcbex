@@ -3334,6 +3334,17 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-ai-quorum-replay-result-schema
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --catalog-generation-provenance build/catalog-generation-provenance.json \
+  --catalog-fetch-receipt build/catalog-fetch-receipt.json \
+  --catalog-snapshot build/catalog-snapshot.json \
+  --timeout-seconds 120
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-catalog-provenance-replay-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 ```
@@ -3426,6 +3437,39 @@ artifact-bound request schemas, provider calls, and tool provenance are outside
 this replay mode. AI quorum does not imply native KiCad ERC; that remains the
 independent optional v1.451 assertion.
 
+Version 1.453.0 optionally binds the retained v1.421 catalog-generation
+provenance, its exact fetch receipt, and its exact normalized snapshot to that
+same exact handoff replay. `--catalog-generation-provenance`,
+`--catalog-fetch-receipt`, and `--catalog-snapshot` are an all-or-nothing input
+set and are accepted only for an archive whose generation bundle contains a
+catalog receipt. The provenance and fetch receipt are limited to 1 MiB each,
+the snapshot to 4 MiB, and their aggregate to 6 MiB. They are stable-read under
+the existing aggregate deadline before producer replay and reread around the
+offline provenance validation. The unchanged six-entry archive must reproduce
+byte-for-byte first; optional native KiCad ERC and AI quorum assertions retain
+their independent v1.451/v1.452 order and gates.
+
+Success emits the closed, path-free schema-v4 result with verification scope
+`deterministic-electrical-handoff-chain-catalog-provenance-replay-v4`.
+`validation.catalog_generation_provenance_replayed` is true, the complete
+validated provenance graph is retained directly under
+`catalog_generation_provenance` as the 13 provenance-v1 fields plus `sources`;
+there is no intermediate `binding` object. Its `provenance`, `fetch_receipt`,
+and `snapshot` sources record only `{bytes, sha256}` identities. The schema ID
+basename is
+`circuit-generation-kicad-handoff-bundle-catalog-provenance-replay-result-v4.json`.
+Optional native and AI evidence remains present only when it was independently
+requested. Omitting all three catalog inputs preserves the exact v1, v2, or v3
+result selected by the existing replay options, and no catalog sidecar is
+embedded in the ZIP.
+
+This is historical, offline linkage to the retained fetch-time evidence only.
+It does not authenticate the supplier, TLS session, endpoint, or raw HTTP
+response; establish current inventory, price, or reservation; authorize
+procurement or fabrication; authenticate the caller-selected pcbex, KiCad, or
+other toolchain; or approve a board, placement, layout, routing, PCB DRC/DFM,
+manufacturing package, or manufacturing operation.
+
 Exact reproduction normally requires the supplied engine to report the same
 `engine_version` as the retained handoff. That is an output-match implication,
 not authentication: the caller-supplied binary and its version claim are not
@@ -3433,21 +3477,21 @@ authenticated. Without the optional v1.451 native report this command does not
 invoke real KiCad schematic ERC. With it, the command verifies only that exact
 retained native evidence under the caller-selected toolchain. The optional
 v1.452 AI assertion can freshly verify a retained schema-v1 quorum under its
-supplied policy pack, but it still does not query or authenticate supplier/
-catalog provenance, grant human approval, bind a PCB, run PCB DRC/DFM, or
-authorize manufacturing.
+supplied policy pack. The optional v1.453 assertion can freshly revalidate the
+retained historical catalog digest graph, but it does not authenticate its
+supplier or transport, establish live catalog facts, grant human approval,
+bind a PCB, run PCB DRC/DFM, or authorize manufacturing.
 The existing offline `verify-circuit-handoff-bundle` and
 `extract-circuit-handoff-bundle` commands remain unchanged and never execute
 native content.
 
 The bundle itself proves a deterministic electrical handoff only. A separate
 v1.451 replay result may additionally prove an exact native KiCad ERC replay;
-a v1.452 result may add an exact schema-v1 AI quorum replay, with or
-without that native assertion. None of these authorizes supplier selection,
-PCB/layout/DRC/DFM approval, or fabrication. The caller-supplied pcbex and
-KiCad executables are not authenticated. Procurement decisions must separately
-verify the retained catalog-generation provenance against its original
-snapshot. See
+a v1.452 result may add an exact schema-v1 AI quorum replay, with or without
+that native assertion; and a v1.453 result may add exact historical catalog
+provenance replay to either combination. None of these authorizes procurement,
+PCB/layout/DRC/DFM approval, manufacturing, or fabrication. The caller-supplied
+pcbex and KiCad executables are not authenticated. See
 [`docs/CIRCUIT_HANDOFF_BUNDLE.md`](docs/CIRCUIT_HANDOFF_BUNDLE.md) for the
 archive contract and downstream trust boundary.
 

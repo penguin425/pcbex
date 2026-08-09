@@ -17668,6 +17668,15 @@ fn enforce_manufacturing_workspace_quota(workspace: &Path, phase: &str) -> Resul
 }
 
 fn run_kicad_drc_to(board: &Path, report: &Path, environment: &Path) -> Result<()> {
+    run_kicad_drc_to_with_executable(board, report, environment, Path::new("kicad-cli"))
+}
+
+fn run_kicad_drc_to_with_executable(
+    board: &Path,
+    report: &Path,
+    environment: &Path,
+    executable: &Path,
+) -> Result<()> {
     let output_directory = environment.join("drc-output");
     fs::create_dir_all(&output_directory).with_context(|| {
         format!(
@@ -17700,7 +17709,7 @@ fn run_kicad_drc_to(board: &Path, report: &Path, environment: &Path) -> Result<(
         }
     }
 
-    let mut command = kicad_command(environment)?;
+    let mut command = kicad_command_with_executable(environment, executable)?;
     command
         .args(["pcb", "drc", "--exit-code-violations", "--output"])
         .arg(&staged_report)
@@ -17880,6 +17889,10 @@ fn kicad_cli_identity(environment: &Path) -> Result<KiCadIdentity> {
 }
 
 fn kicad_command(environment: &Path) -> Result<ProcessCommand> {
+    kicad_command_with_executable(environment, Path::new("kicad-cli"))
+}
+
+fn kicad_command_with_executable(environment: &Path, executable: &Path) -> Result<ProcessCommand> {
     let config = environment.join("config");
     let cache = environment.join("cache");
     let data = environment.join("data");
@@ -17887,7 +17900,7 @@ fn kicad_command(environment: &Path) -> Result<ProcessCommand> {
         fs::create_dir_all(directory)
             .with_context(|| format!("creating private KiCad directory {}", directory.display()))?;
     }
-    let mut command = ProcessCommand::new("kicad-cli");
+    let mut command = ProcessCommand::new(executable);
     command
         .env("XDG_CONFIG_HOME", config)
         .env("XDG_CACHE_HOME", cache)
@@ -18423,10 +18436,7 @@ mod tests {
     #[test]
     fn kicad_drc_failure_preserves_public_report() {
         use std::os::unix::fs::PermissionsExt;
-        use std::sync::Mutex;
 
-        static KICAD_PATH_LOCK: Mutex<()> = Mutex::new(());
-        let _lock = KICAD_PATH_LOCK.lock().unwrap();
         let workspace = tempfile::tempdir().unwrap();
         let fake_bin = workspace.path().join("bin");
         std::fs::create_dir(&fake_bin).unwrap();
@@ -18453,22 +18463,12 @@ exit 9
         let public_report = workspace.path().join("public.drc.rpt");
         fs::write(&public_report, b"known-good").unwrap();
         let environment = workspace.path().join("environment");
-        let previous_path = std::env::var_os("PATH");
-        unsafe {
-            std::env::set_var("PATH", fake_bin.as_os_str());
-        }
-        let result = run_kicad_drc_to(
+        let result = run_kicad_drc_to_with_executable(
             workspace.path().join("board.kicad_pcb").as_path(),
             &public_report,
             &environment,
+            &fake_kicad,
         );
-        unsafe {
-            if let Some(previous_path) = previous_path {
-                std::env::set_var("PATH", previous_path);
-            } else {
-                std::env::remove_var("PATH");
-            }
-        }
 
         let error = result.expect_err("fake KiCad DRC must fail");
         assert!(error.to_string().contains("synthetic DRC failure"));
