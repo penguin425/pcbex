@@ -1025,7 +1025,9 @@ class CircuitHandoffBundleV1452Tests(unittest.TestCase):
             electrical_policy = root / "electrical-policy.json"
             run("electrical-policy", "--output", electrical_policy)
             reviewer_material: list[tuple[Path, Path]] = []
-            trusted_keys = []
+            # These records contain public verification identities only; private
+            # signing keys remain in their separate mode-0600 temporary files.
+            reviewer_verification_identities = []
             for index in range(2):
                 private_key = root / f"reviewer-{index}.key"
                 public_key = root / f"reviewer-{index}.pub"
@@ -1037,7 +1039,7 @@ class CircuitHandoffBundleV1452Tests(unittest.TestCase):
                     public_key,
                 )
                 reviewer_material.append((private_key, public_key))
-                trusted_keys.append(
+                reviewer_verification_identities.append(
                     {
                         "signer_id": f"reviewer-{index}",
                         "public_key": public_key.read_text(encoding="utf-8").strip(),
@@ -1058,7 +1060,9 @@ class CircuitHandoffBundleV1452Tests(unittest.TestCase):
                     "text": "Power input treatment is intentional",
                 }
             ]
-            policy_pack_value["trusted_approval_keys"] = trusted_keys
+            policy_pack_value["trusted_approval_keys"] = (
+                reviewer_verification_identities
+            )
             policy_pack = root / "policy-pack.json"
             policy_pack.write_text(
                 json.dumps(policy_pack_value, indent=2),
