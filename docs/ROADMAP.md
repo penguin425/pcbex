@@ -163,6 +163,7 @@ auditable release.
 | v1.449.0 | Verified circuit handoff bundle consumer | Offline-verify the canonical six-entry v1.448 ZIP, complete digest/semantic graph, and optional external identities before safely extracting fixed names to a newly reserved no-clobber directory with a manifest-last commit boundary |
 | v1.450.0 | Exact circuit handoff chain replay | Re-run the complete deterministic handoff producer chain from a verified bundle and accept only byte-for-byte reproduction of the canonical archive, including catalog-input ERC when required, while keeping offline verify/extract and the archive format unchanged |
 | v1.451.0 | Native KiCad ERC handoff replay | Optionally bind a retained native KiCad ERC v1 or warning-policy v2 report to the exactly reproduced handoff schematic, freshly replay it with one nested deadline and path-free evidence, while leaving the six-entry archive and v1 replay result unchanged when omitted |
+| v1.452.0 | Exact AI schematic quorum handoff replay | Bind a non-session schema-v1 AI quorum to the exactly reproduced handoff schematic, require an exact retained report replay, optionally compose native KiCad ERC evidence, and emit closed path-free v3 evidence while preserving v1/v2 results when AI evidence is omitted |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -673,7 +674,7 @@ caller trust boundary and is not authenticated by this command. Supplier
 snapshot/provenance, AI reviewer quorum, real KiCad native ERC, board, pipeline,
 manufacturing, and fabrication authorization remain separate later gates.
 
-The current v1.451.0 milestone adds an optional native KiCad ERC assertion to
+The released v1.451.0 milestone adds an optional native KiCad ERC assertion to
 that exact replay. A retained schema-v1 report, or schema-v2 report plus its
 exact warning-policy bytes, is stable-read before producer replay and privately
 staged only after the canonical six-entry archive has been reproduced exactly.
@@ -687,3 +688,17 @@ v1.450 replay result and starts no KiCad child; the archive and manifest remain
 unchanged. The caller-selected `pcbex` and `kicad-cli` executables remain
 unauthenticated trust boundaries, and AI, supplier, board, pipeline,
 manufacturing, and fabrication authorization remain later gates.
+
+The current v1.452.0 milestone optionally composes a non-session schema-v1 AI
+schematic quorum with that exact handoff replay. The retained request, policy
+pack, signed approvals, review responses, and quorum report are stable-read
+under per-file and aggregate bounds. Only after the canonical six-entry archive
+is reproduced exactly does the existing Rust quorum verifier bind those
+sidecars to the exact reproduced schematic and generate a fresh report; success
+requires that report to equal the retained report byte for byte. Native KiCad
+ERC replay remains optional and, when supplied, is included in the same closed,
+path-free replay-result-v3 evidence. Omitting all AI evidence preserves the
+existing v1 result without native ERC and v2 result with native ERC. The
+caller-selected `pcbex` and optional `kicad-cli` executables remain
+unauthenticated trust boundaries; quorum success does not by itself authorize
+supplier, board, pipeline, manufacturing, or fabrication stages.

@@ -77,6 +77,10 @@ CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION = 2
 CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE = (
     "deterministic-electrical-handoff-chain-native-kicad-erc-replay-v2"
 )
+CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_RESULT_SCHEMA_VERSION = 3
+CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_SCOPE = (
+    "deterministic-electrical-handoff-chain-ai-schematic-quorum-replay-v3"
+)
 MAX_GENERATION_BUNDLE_BYTES = MAX_NATIVE_CHECK_BYTES
 MAX_CIRCUIT_SPEC_BYTES = 16 * 1024 * 1024
 MAX_SCHEMATIC_BYTES = 64 * 1024 * 1024
@@ -84,6 +88,10 @@ MAX_HANDOFF_REPORT_BYTES = 64 * 1024 * 1024
 MAX_HANDOFF_ARCHIVE_BYTES = 224 * 1024 * 1024
 MAX_NATIVE_KICAD_ERC_REPORT_BYTES = 32 * 1024 * 1024
 MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES = 1 * 1024 * 1024
+MAX_AI_QUORUM_INPUT_BYTES = 32 * 1024 * 1024
+MAX_AI_QUORUM_TOTAL_INPUT_BYTES = 128 * 1024 * 1024
+MAX_AI_QUORUM_REPORT_BYTES = 16 * 1024 * 1024
+MAX_AI_QUORUM_MEMBERS = 100
 MAX_CHILD_STDOUT_BYTES = 1 * 1024 * 1024
 MAX_CHILD_STDERR_BYTES = 1 * 1024 * 1024
 
@@ -617,11 +625,20 @@ def _run_native(
     step: str,
     deadline: float,
     clock: Callable[[], float],
+    process_timeout_seconds: float | None = None,
 ) -> bytes:
+    remaining = _remaining(deadline, clock)
+    process_timeout = (
+        remaining
+        if process_timeout_seconds is None
+        else min(remaining, process_timeout_seconds)
+    )
+    if not math.isfinite(process_timeout) or process_timeout <= 0:
+        raise _fail(f"native {step} process has no execution budget")
     try:
         result = run_bounded(
             argv,
-            timeout_seconds=_remaining(deadline, clock),
+            timeout_seconds=process_timeout,
             max_stdout_bytes=MAX_CHILD_STDOUT_BYTES,
             max_stderr_bytes=MAX_CHILD_STDERR_BYTES,
         )
@@ -840,6 +857,421 @@ def _replay_native_kicad_erc(
         raise _fail("native KiCad ERC replay staging failed") from None
     except OSError:
         raise _fail("native KiCad ERC replay workspace failed") from None
+
+
+def _ai_quorum_count(value: Any, label: str, *, positive: bool = False) -> int:
+    minimum = 1 if positive else 0
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value < minimum
+        or value > MAX_AI_QUORUM_MEMBERS
+    ):
+        raise _fail(f"AI schematic quorum {label} is invalid")
+    return value
+
+
+def _ai_quorum_thresholds(
+    minimum_approvals: Any,
+    minimum_distinct_providers: Any,
+    minimum_distinct_models: Any,
+) -> dict[str, int]:
+    policy = {
+        "minimum_approvals": _ai_quorum_count(
+            minimum_approvals,
+            "minimum approval count",
+            positive=True,
+        ),
+        "minimum_distinct_providers": _ai_quorum_count(
+            minimum_distinct_providers,
+            "minimum distinct provider count",
+            positive=True,
+        ),
+        "minimum_distinct_models": _ai_quorum_count(
+            minimum_distinct_models,
+            "minimum distinct model count",
+            positive=True,
+        ),
+    }
+    if (
+        policy["minimum_distinct_providers"] > policy["minimum_approvals"]
+        or policy["minimum_distinct_models"] > policy["minimum_approvals"]
+    ):
+        raise _fail("AI schematic quorum thresholds are inconsistent")
+    return policy
+
+
+def _ai_quorum_path_sequence(value: Any, label: str) -> tuple[Any, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (str, bytes, bytearray, os.PathLike)) or not isinstance(
+        value, Sequence
+    ):
+        raise _fail(f"AI schematic quorum {label} paths are invalid")
+    paths: list[Any] = []
+    for path in value:
+        if len(paths) == MAX_AI_QUORUM_MEMBERS:
+            raise _fail(f"AI schematic quorum {label} count is invalid")
+        paths.append(path)
+    if not paths:
+        raise _fail(f"AI schematic quorum {label} count is invalid")
+    return tuple(paths)
+
+
+def _source_identity(raw: bytes) -> dict[str, Any]:
+    return {"bytes": len(raw), "sha256": _sha256(raw)}
+
+
+def _ai_replay_request_sha256(request_raw: bytes) -> str:
+    request = _strict_object(request_raw, "AI review request")
+    if (
+        type(request.get("schema_version")) is not int
+        or request.get("schema_version") != 1
+        or "artifact_binding" in request
+    ):
+        raise _fail("AI review request is not replayable schema v1")
+    request_sha256 = _digest(
+        request.get("request_sha256"),
+        "AI review request",
+    )
+    assert isinstance(request_sha256, str)
+    return request_sha256
+
+
+def _ai_quorum_report_evidence(
+    report_raw: bytes,
+    request_raw: bytes,
+    policy_pack_raw: bytes,
+    approvals_raw: Sequence[bytes],
+    responses_raw: Sequence[bytes],
+    *,
+    expected_policy: Mapping[str, int],
+    quorum_required: bool,
+) -> dict[str, Any]:
+    request_sha256 = _ai_replay_request_sha256(request_raw)
+
+    report = _strict_object(report_raw, "AI schematic quorum report")
+    expected_report_keys = {
+        "schema_version",
+        "request_sha256",
+        "policy",
+        "counts",
+        "members",
+        "quorum_met",
+        "quorum_failures",
+    }
+    if (
+        set(report) != expected_report_keys
+        or type(report["schema_version"]) is not int
+        or report["schema_version"] != 1
+        or report["request_sha256"] != request_sha256
+    ):
+        raise _fail("AI schematic quorum report schema or request binding is invalid")
+
+    policy = report["policy"]
+    if not isinstance(policy, Mapping) or set(policy) != set(expected_policy):
+        raise _fail("AI schematic quorum report policy is invalid")
+    checked_policy = {
+        key: _ai_quorum_count(
+            policy[key],
+            key.replace("_", " "),
+            positive=True,
+        )
+        for key in expected_policy
+    }
+    if checked_policy != dict(expected_policy):
+        raise _fail("AI schematic quorum report policy is invalid")
+
+    count_keys = (
+        "members",
+        "approvals",
+        "rejections",
+        "distinct_providers",
+        "distinct_models",
+    )
+    counts = report["counts"]
+    members = report["members"]
+    if not isinstance(counts, Mapping) or set(counts) != set(count_keys):
+        raise _fail("AI schematic quorum report counts are invalid")
+    checked_counts = {
+        key: _ai_quorum_count(
+            counts[key],
+            f"{key.replace('_', ' ')} count",
+            positive=key == "members",
+        )
+        for key in count_keys
+    }
+    if (
+        not isinstance(members, list)
+        or not members
+        or len(members) > MAX_AI_QUORUM_MEMBERS
+        or len(members) != len(approvals_raw)
+        or len(members) != len(responses_raw)
+    ):
+        raise _fail("AI schematic quorum report members are invalid")
+
+    member_keys = {
+        "signer_id",
+        "public_key",
+        "response_sha256",
+        "provider",
+        "model",
+        "version",
+        "approved",
+        "gate_failures",
+    }
+    signer_ids: set[str] = set()
+    public_keys: set[str] = set()
+    response_digests: set[str] = set()
+    approved_count = 0
+    previous_signer_id: str | None = None
+    for member in members:
+        if not isinstance(member, Mapping) or set(member) != member_keys:
+            raise _fail("AI schematic quorum report member is invalid")
+        for field in ("signer_id", "provider", "model"):
+            value = member[field]
+            if not isinstance(value, str) or not value:
+                raise _fail("AI schematic quorum report member identity is invalid")
+        public_key = _digest(member["public_key"], "AI quorum public key")
+        response_sha256 = _digest(
+            member["response_sha256"],
+            "AI quorum response",
+        )
+        assert isinstance(public_key, str)
+        assert isinstance(response_sha256, str)
+        version = member["version"]
+        if version is not None and (
+            not isinstance(version, str) or not version
+        ):
+            raise _fail("AI schematic quorum report model version is invalid")
+        approved = member["approved"]
+        failures = member["gate_failures"]
+        if (
+            not isinstance(approved, bool)
+            or not isinstance(failures, list)
+            or any(not isinstance(item, str) or not item for item in failures)
+            or approved != (len(failures) == 0)
+        ):
+            raise _fail("AI schematic quorum report member decision is invalid")
+
+        signer_id = member["signer_id"]
+        if previous_signer_id is not None and signer_id <= previous_signer_id:
+            raise _fail("AI schematic quorum report member ordering is invalid")
+        previous_signer_id = signer_id
+        if (
+            signer_id in signer_ids
+            or public_key in public_keys
+            or response_sha256 in response_digests
+        ):
+            raise _fail("AI schematic quorum report member identity is duplicated")
+        signer_ids.add(signer_id)
+        public_keys.add(public_key)
+        response_digests.add(response_sha256)
+        if approved:
+            approved_count += 1
+
+    if (
+        checked_counts["members"] != len(members)
+        or checked_counts["approvals"] != approved_count
+        or checked_counts["rejections"] != len(members) - approved_count
+        or checked_counts["distinct_providers"] > approved_count
+        or checked_counts["distinct_models"] > approved_count
+        or checked_counts["distinct_models"]
+        < checked_counts["distinct_providers"]
+        or (
+            approved_count == 0
+            and (
+                checked_counts["distinct_providers"] != 0
+                or checked_counts["distinct_models"] != 0
+            )
+        )
+        or (
+            approved_count > 0
+            and (
+                checked_counts["distinct_providers"] == 0
+                or checked_counts["distinct_models"] == 0
+            )
+        )
+    ):
+        raise _fail("AI schematic quorum report counts do not match its members")
+
+    quorum_met = report["quorum_met"]
+    quorum_failures = report["quorum_failures"]
+    if not isinstance(quorum_met, bool) or not isinstance(quorum_failures, list):
+        raise _fail("AI schematic quorum report decision is invalid")
+    expected_failures: list[str] = []
+    for label, required, actual in (
+        (
+            "insufficient_approvals",
+            expected_policy["minimum_approvals"],
+            checked_counts["approvals"],
+        ),
+        (
+            "insufficient_distinct_providers",
+            expected_policy["minimum_distinct_providers"],
+            checked_counts["distinct_providers"],
+        ),
+        (
+            "insufficient_distinct_models",
+            expected_policy["minimum_distinct_models"],
+            checked_counts["distinct_models"],
+        ),
+    ):
+        if actual < required:
+            expected_failures.append(f"{label}:required={required}:actual={actual}")
+    if quorum_failures != expected_failures or quorum_met != (not expected_failures):
+        raise _fail("AI schematic quorum report decision is inconsistent")
+
+    return {
+        "schema_version": 1,
+        "quorum_met": quorum_met,
+        "quorum_required": quorum_required,
+        "request_sha256": request_sha256,
+        "policy": copy.deepcopy(dict(expected_policy)),
+        "counts": checked_counts,
+        "report": _source_identity(report_raw),
+        "sources": {
+            "request": _source_identity(request_raw),
+            "policy_pack": _source_identity(policy_pack_raw),
+            "members": [
+                {
+                    "approval": _source_identity(approval_raw),
+                    "response": _source_identity(response_raw),
+                }
+                for approval_raw, response_raw in zip(
+                    approvals_raw,
+                    responses_raw,
+                    strict=True,
+                )
+            ],
+        },
+    }
+
+
+def _replay_ai_quorum(
+    schematic_raw: bytes,
+    retained_report_raw: bytes,
+    request_raw: bytes,
+    policy_pack_raw: bytes,
+    approvals_raw: Sequence[bytes],
+    responses_raw: Sequence[bytes],
+    command: Sequence[str],
+    *,
+    policy: Mapping[str, int],
+    require_quorum: bool,
+    deadline: float,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="pcbex-handoff-ai-quorum-",
+            dir=_trusted_temporary_root(),
+        ) as directory:
+            root = Path(directory)
+            schematic_path = root / SCHEMATIC_NAME
+            request_path = root / "ai-review-request.json"
+            policy_pack_path = root / "ai-policy-pack.json"
+            report_path = root / "fresh-ai-quorum.json"
+            atomic_write_no_clobber(
+                schematic_path,
+                schematic_raw,
+                max_bytes=MAX_SCHEMATIC_BYTES,
+            )
+            atomic_write_no_clobber(
+                request_path,
+                request_raw,
+                max_bytes=MAX_AI_QUORUM_INPUT_BYTES,
+            )
+            atomic_write_no_clobber(
+                policy_pack_path,
+                policy_pack_raw,
+                max_bytes=MAX_AI_QUORUM_INPUT_BYTES,
+            )
+            staged_inputs: list[tuple[Path, bytes, int]] = [
+                (schematic_path, schematic_raw, MAX_SCHEMATIC_BYTES),
+                (request_path, request_raw, MAX_AI_QUORUM_INPUT_BYTES),
+                (policy_pack_path, policy_pack_raw, MAX_AI_QUORUM_INPUT_BYTES),
+            ]
+            approval_paths: list[Path] = []
+            response_paths: list[Path] = []
+            for index, (approval_raw, response_raw) in enumerate(
+                zip(approvals_raw, responses_raw, strict=True)
+            ):
+                approval_path = root / f"approval-{index:03d}.json"
+                response_path = root / f"response-{index:03d}.json"
+                atomic_write_no_clobber(
+                    approval_path,
+                    approval_raw,
+                    max_bytes=MAX_AI_QUORUM_INPUT_BYTES,
+                )
+                atomic_write_no_clobber(
+                    response_path,
+                    response_raw,
+                    max_bytes=MAX_AI_QUORUM_INPUT_BYTES,
+                )
+                approval_paths.append(approval_path)
+                response_paths.append(response_path)
+                staged_inputs.extend(
+                    (
+                        (approval_path, approval_raw, MAX_AI_QUORUM_INPUT_BYTES),
+                        (response_path, response_raw, MAX_AI_QUORUM_INPUT_BYTES),
+                    )
+                )
+            _remaining(deadline, clock)
+            argv = [
+                *command,
+                "verify-ai-quorum",
+                f"--schematic={schematic_path}",
+                f"--policy-pack={policy_pack_path}",
+                f"--minimum-approvals={policy['minimum_approvals']}",
+                "--minimum-distinct-providers="
+                f"{policy['minimum_distinct_providers']}",
+                f"--minimum-distinct-models={policy['minimum_distinct_models']}",
+                f"--output={report_path}",
+                *(f"--approval={path}" for path in approval_paths),
+                *(f"--response={path}" for path in response_paths),
+                "--",
+                str(request_path),
+            ]
+            outer_remaining = _remaining(deadline, clock)
+            cleanup_reserve = min(15.0, outer_remaining / 2.0)
+            stdout = _run_native(
+                argv,
+                step="AI schematic quorum replay",
+                deadline=deadline,
+                clock=clock,
+                process_timeout_seconds=outer_remaining - cleanup_reserve,
+            )
+            if stdout:
+                raise _fail("native AI schematic quorum replay stdout is invalid")
+            try:
+                fresh_report_raw = read_bytes(
+                    report_path,
+                    max_bytes=MAX_AI_QUORUM_REPORT_BYTES,
+                )
+            except BoundedIOError:
+                raise _fail("fresh AI schematic quorum report is invalid") from None
+            if not fresh_report_raw or fresh_report_raw != retained_report_raw:
+                raise _fail(
+                    "fresh AI schematic quorum replay did not reproduce the retained report"
+                )
+            for staged_path, expected_raw, maximum in staged_inputs:
+                if read_bytes(staged_path, max_bytes=maximum) != expected_raw:
+                    raise _fail("staged AI schematic quorum input changed during replay")
+            _remaining(deadline, clock)
+            return _ai_quorum_report_evidence(
+                fresh_report_raw,
+                request_raw,
+                policy_pack_raw,
+                approvals_raw,
+                responses_raw,
+                expected_policy=policy,
+                quorum_required=require_quorum,
+            )
+    except BoundedIOError:
+        raise _fail("AI schematic quorum replay staging failed") from None
+    except OSError:
+        raise _fail("AI schematic quorum replay workspace failed") from None
 
 
 def _artifact(name: str, raw: bytes) -> dict[str, Any]:
@@ -1349,6 +1781,198 @@ def circuit_handoff_bundle_native_erc_replay_result_json_schema() -> dict[str, A
             },
         ],
     }
+    return schema
+
+
+def circuit_handoff_bundle_ai_quorum_replay_result_json_schema() -> dict[str, Any]:
+    """Return the closed exact-chain plus AI schematic quorum replay schema."""
+
+    schema = copy.deepcopy(circuit_handoff_bundle_replay_result_json_schema())
+    schema["$id"] = (
+        "https://github.com/penguin425/pcbex/schemas/"
+        "circuit-generation-kicad-handoff-bundle-ai-quorum-replay-result-v3.json"
+    )
+    schema["title"] = "pcbex circuit handoff bundle AI quorum replay result"
+    schema["required"].append("ai_schematic_quorum")
+    properties = schema["properties"]
+    properties["schema_version"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_RESULT_SCHEMA_VERSION
+    }
+    properties["verification_scope"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_SCOPE
+    }
+    validation = properties["validation"]
+    validation["required"].append("ai_schematic_quorum_replayed")
+    validation["properties"]["ai_schematic_quorum_replayed"] = {"const": True}
+    validation["properties"]["native_kicad_erc_replayed"] = {"type": "boolean"}
+
+    digest = {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    source = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["bytes", "sha256"],
+        "properties": {
+            "bytes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_AI_QUORUM_INPUT_BYTES,
+            },
+            "sha256": digest,
+        },
+    }
+    report_source = copy.deepcopy(source)
+    report_source["properties"]["bytes"]["maximum"] = MAX_AI_QUORUM_REPORT_BYTES
+    policy = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "minimum_approvals",
+            "minimum_distinct_providers",
+            "minimum_distinct_models",
+        ],
+        "properties": {
+            "minimum_approvals": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_AI_QUORUM_MEMBERS,
+            },
+            "minimum_distinct_providers": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_AI_QUORUM_MEMBERS,
+            },
+            "minimum_distinct_models": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_AI_QUORUM_MEMBERS,
+            },
+        },
+    }
+    counts = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "members",
+            "approvals",
+            "rejections",
+            "distinct_providers",
+            "distinct_models",
+        ],
+        "properties": {
+            "members": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_AI_QUORUM_MEMBERS,
+            },
+            "approvals": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_AI_QUORUM_MEMBERS,
+            },
+            "rejections": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_AI_QUORUM_MEMBERS,
+            },
+            "distinct_providers": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_AI_QUORUM_MEMBERS,
+            },
+            "distinct_models": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": MAX_AI_QUORUM_MEMBERS,
+            },
+        },
+    }
+    pair = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["approval", "response"],
+        "properties": {
+            "approval": copy.deepcopy(source),
+            "response": copy.deepcopy(source),
+        },
+    }
+    properties["ai_schematic_quorum"] = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "schema_version",
+            "quorum_met",
+            "quorum_required",
+            "request_sha256",
+            "policy",
+            "counts",
+            "report",
+            "sources",
+        ],
+        "properties": {
+            "schema_version": {"const": 1},
+            "quorum_met": {"type": "boolean"},
+            "quorum_required": {"type": "boolean"},
+            "request_sha256": digest,
+            "policy": policy,
+            "counts": counts,
+            "report": report_source,
+            "sources": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["request", "policy_pack", "members"],
+                "properties": {
+                    "request": copy.deepcopy(source),
+                    "policy_pack": copy.deepcopy(source),
+                    "members": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_AI_QUORUM_MEMBERS,
+                        "items": pair,
+                    },
+                },
+            },
+        },
+        "oneOf": [
+            {"properties": {"quorum_required": {"const": False}}},
+            {
+                "properties": {
+                    "quorum_required": {"const": True},
+                    "quorum_met": {"const": True},
+                }
+            },
+        ],
+    }
+    properties["native_kicad_erc"] = copy.deepcopy(
+        circuit_handoff_bundle_native_erc_replay_result_json_schema()["properties"][
+            "native_kicad_erc"
+        ]
+    )
+    schema["allOf"] = [
+        {
+            "oneOf": [
+                {
+                    "not": {"required": ["native_kicad_erc"]},
+                    "properties": {
+                        "validation": {
+                            "properties": {
+                                "native_kicad_erc_replayed": {"const": False}
+                            }
+                        }
+                    },
+                },
+                {
+                    "required": ["native_kicad_erc"],
+                    "properties": {
+                        "validation": {
+                            "properties": {
+                                "native_kicad_erc_replayed": {"const": True}
+                            }
+                        }
+                    },
+                },
+            ]
+        }
+    ]
     return schema
 
 
@@ -1955,6 +2579,33 @@ def _circuit_handoff_native_erc_replay_result(
     return result
 
 
+def _circuit_handoff_ai_quorum_replay_result(
+    verification: Mapping[str, Any],
+    *,
+    catalog_input_erc_required: bool,
+    ai_schematic_quorum: Mapping[str, Any],
+    native_kicad_erc: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if native_kicad_erc is None:
+        result = _circuit_handoff_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+        )
+    else:
+        result = _circuit_handoff_native_erc_replay_result(
+            verification,
+            catalog_input_erc_required=catalog_input_erc_required,
+            native_kicad_erc=native_kicad_erc,
+        )
+    result["schema_version"] = (
+        CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_RESULT_SCHEMA_VERSION
+    )
+    result["verification_scope"] = CIRCUIT_HANDOFF_BUNDLE_AI_QUORUM_REPLAY_SCOPE
+    result["validation"]["ai_schematic_quorum_replayed"] = True
+    result["ai_schematic_quorum"] = copy.deepcopy(dict(ai_schematic_quorum))
+    return result
+
+
 def replay_circuit_handoff_bundle(
     bundle: str | os.PathLike[str],
     pcbex: str | Sequence[str],
@@ -1963,6 +2614,15 @@ def replay_circuit_handoff_bundle(
     kicad_cli: str | os.PathLike[str] = "kicad-cli",
     native_kicad_erc_warning_policy: str | os.PathLike[str] | None = None,
     require_native_kicad_erc_approved: bool = False,
+    retained_ai_quorum_report: str | os.PathLike[str] | None = None,
+    ai_review_request: str | os.PathLike[str] | None = None,
+    ai_policy_pack: str | os.PathLike[str] | None = None,
+    ai_approvals: Sequence[str | os.PathLike[str]] | None = None,
+    ai_responses: Sequence[str | os.PathLike[str]] | None = None,
+    minimum_ai_approvals: int | None = None,
+    minimum_distinct_ai_providers: int | None = None,
+    minimum_distinct_ai_models: int | None = None,
+    require_ai_quorum: bool = False,
     timeout_seconds: float = 120.0,
     expected_archive_sha256: str | None = None,
     expected_bundle_sha256: str | None = None,
@@ -1988,6 +2648,8 @@ def replay_circuit_handoff_bundle(
         raise _fail("aggregate timeout is invalid")
     if not isinstance(require_native_kicad_erc_approved, bool):
         raise _fail("native KiCad ERC approval requirement is invalid")
+    if not isinstance(require_ai_quorum, bool):
+        raise _fail("AI schematic quorum requirement is invalid")
     kicad_cli_argument = _path_argument(kicad_cli, "kicad-cli argument")
     native_erc_requested = retained_native_kicad_erc_report is not None
     if not native_erc_requested and (
@@ -1996,6 +2658,41 @@ def replay_circuit_handoff_bundle(
         or kicad_cli_argument != "kicad-cli"
     ):
         raise _fail("native KiCad ERC options require a retained report")
+    approval_paths = _ai_quorum_path_sequence(ai_approvals, "approval")
+    response_paths = _ai_quorum_path_sequence(ai_responses, "response")
+    ai_requested = any(
+        (
+            retained_ai_quorum_report is not None,
+            ai_review_request is not None,
+            ai_policy_pack is not None,
+            ai_approvals is not None,
+            ai_responses is not None,
+            require_ai_quorum,
+            minimum_ai_approvals is not None,
+            minimum_distinct_ai_providers is not None,
+            minimum_distinct_ai_models is not None,
+        )
+    )
+    ai_policy: dict[str, int] | None = None
+    if ai_requested:
+        if (
+            retained_ai_quorum_report is None
+            or ai_review_request is None
+            or ai_policy_pack is None
+            or not approval_paths
+            or not response_paths
+            or len(approval_paths) != len(response_paths)
+        ):
+            raise _fail("AI schematic quorum replay inputs are incomplete")
+        ai_policy = _ai_quorum_thresholds(
+            2 if minimum_ai_approvals is None else minimum_ai_approvals,
+            (
+                2
+                if minimum_distinct_ai_providers is None
+                else minimum_distinct_ai_providers
+            ),
+            2 if minimum_distinct_ai_models is None else minimum_distinct_ai_models,
+        )
     try:
         command = _normalize_command(pcbex, label="pcbex command")
         archive_raw = read_bytes(bundle, max_bytes=MAX_HANDOFF_ARCHIVE_BYTES)
@@ -2040,6 +2737,67 @@ def replay_circuit_handoff_bundle(
                 raise _fail("native KiCad ERC warning policy is empty")
             _remaining(deadline, _clock)
 
+    ai_report_raw: bytes | None = None
+    ai_request_raw: bytes | None = None
+    ai_policy_pack_raw: bytes | None = None
+    approval_raws: tuple[bytes, ...] = ()
+    response_raws: tuple[bytes, ...] = ()
+    ai_caller_sources: list[tuple[Any, bytes, int, str]] = []
+    if ai_requested:
+        assert retained_ai_quorum_report is not None
+        assert ai_review_request is not None
+        assert ai_policy_pack is not None
+        try:
+            ai_report_raw = read_bytes(
+                retained_ai_quorum_report,
+                max_bytes=MAX_AI_QUORUM_REPORT_BYTES,
+            )
+        except BoundedIOError:
+            raise _fail("retained AI schematic quorum report path is invalid") from None
+        if not ai_report_raw:
+            raise _fail("retained AI schematic quorum report is empty")
+        _remaining(deadline, _clock)
+
+        source_paths: list[tuple[Any, str]] = [
+            (ai_review_request, "AI review request"),
+            (ai_policy_pack, "AI policy pack"),
+            *((path, "AI signed approval") for path in approval_paths),
+            *((path, "AI review response") for path in response_paths),
+        ]
+        source_raws: list[bytes] = []
+        aggregate_bytes = 0
+        for path, label in source_paths:
+            try:
+                raw = read_bytes(path, max_bytes=MAX_AI_QUORUM_INPUT_BYTES)
+            except BoundedIOError:
+                raise _fail(f"{label} path is invalid") from None
+            if not raw:
+                raise _fail(f"{label} is empty")
+            aggregate_bytes += len(raw)
+            if aggregate_bytes > MAX_AI_QUORUM_TOTAL_INPUT_BYTES:
+                raise _fail("AI schematic quorum inputs exceed their aggregate bound")
+            source_raws.append(raw)
+            ai_caller_sources.append(
+                (path, raw, MAX_AI_QUORUM_INPUT_BYTES, label)
+            )
+            _remaining(deadline, _clock)
+        ai_request_raw = source_raws[0]
+        ai_policy_pack_raw = source_raws[1]
+        member_count = len(approval_paths)
+        approval_raws = tuple(source_raws[2 : 2 + member_count])
+        response_raws = tuple(source_raws[2 + member_count :])
+        _ai_replay_request_sha256(ai_request_raw)
+        ai_caller_sources.insert(
+            0,
+            (
+                retained_ai_quorum_report,
+                ai_report_raw,
+                MAX_AI_QUORUM_REPORT_BYTES,
+                "retained AI schematic quorum report",
+            ),
+        )
+        _remaining(deadline, _clock)
+
     replayed_archive, replayed_manifest = build_circuit_handoff_archive(
         entries[GENERATION_BUNDLE_NAME],
         command,
@@ -2053,6 +2811,7 @@ def replay_circuit_handoff_bundle(
             "fresh handoff-chain replay did not reproduce the retained archive"
         )
     _remaining(deadline, _clock)
+    native_kicad_erc: dict[str, Any] | None = None
     if native_report_raw is not None:
         native_kicad_erc = _replay_native_kicad_erc(
             entries[SCHEMATIC_NAME],
@@ -2087,14 +2846,83 @@ def replay_circuit_handoff_bundle(
             if warning_policy_after != warning_policy_raw:
                 raise _fail("native KiCad ERC warning policy changed during replay")
             _remaining(deadline, _clock)
-        return _circuit_handoff_native_erc_replay_result(
+
+    if not ai_requested:
+        if native_kicad_erc is not None:
+            return _circuit_handoff_native_erc_replay_result(
+                verification,
+                catalog_input_erc_required=catalog_input_erc_required,
+                native_kicad_erc=native_kicad_erc,
+            )
+        return _circuit_handoff_replay_result(
             verification,
             catalog_input_erc_required=catalog_input_erc_required,
-            native_kicad_erc=native_kicad_erc,
         )
-    return _circuit_handoff_replay_result(
+
+    assert ai_report_raw is not None
+    assert ai_request_raw is not None
+    assert ai_policy_pack_raw is not None
+    assert ai_policy is not None
+    ai_schematic_quorum = _replay_ai_quorum(
+        entries[SCHEMATIC_NAME],
+        ai_report_raw,
+        ai_request_raw,
+        ai_policy_pack_raw,
+        approval_raws,
+        response_raws,
+        command,
+        policy=ai_policy,
+        require_quorum=require_ai_quorum,
+        deadline=deadline,
+        clock=_clock,
+    )
+    _remaining(deadline, _clock)
+
+    for path, expected_raw, maximum, label in ai_caller_sources:
+        try:
+            observed_raw = read_bytes(path, max_bytes=maximum)
+        except BoundedIOError:
+            raise _fail(f"{label} changed during replay") from None
+        if observed_raw != expected_raw:
+            raise _fail(f"{label} changed during replay")
+        _remaining(deadline, _clock)
+
+    # The AI verifier runs after native ERC. Re-read the earlier sidecars so a
+    # later child cannot invalidate evidence that the combined v3 result keeps.
+    if native_report_raw is not None:
+        assert retained_native_kicad_erc_report is not None
+        try:
+            report_after_ai = read_bytes(
+                retained_native_kicad_erc_report,
+                max_bytes=MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
+            )
+        except BoundedIOError:
+            raise _fail("retained native KiCad ERC report changed during replay") from None
+        if report_after_ai != native_report_raw:
+            raise _fail("retained native KiCad ERC report changed during replay")
+        _remaining(deadline, _clock)
+        if native_kicad_erc_warning_policy is not None:
+            assert warning_policy_raw is not None
+            try:
+                warning_policy_after_ai = read_bytes(
+                    native_kicad_erc_warning_policy,
+                    max_bytes=MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                )
+            except BoundedIOError:
+                raise _fail(
+                    "native KiCad ERC warning policy changed during replay"
+                ) from None
+            if warning_policy_after_ai != warning_policy_raw:
+                raise _fail("native KiCad ERC warning policy changed during replay")
+            _remaining(deadline, _clock)
+
+    if require_ai_quorum and not ai_schematic_quorum["quorum_met"]:
+        raise _fail("AI schematic quorum replay did not meet every threshold")
+    return _circuit_handoff_ai_quorum_replay_result(
         verification,
         catalog_input_erc_required=catalog_input_erc_required,
+        ai_schematic_quorum=ai_schematic_quorum,
+        native_kicad_erc=native_kicad_erc,
     )
 
 

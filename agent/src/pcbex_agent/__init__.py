@@ -24,6 +24,7 @@ from .circuit_generation import (
 from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
     build_circuit_handoff_archive,
+    circuit_handoff_bundle_ai_quorum_replay_result_json_schema,
     circuit_handoff_bundle_json_schema,
     circuit_handoff_bundle_native_erc_replay_result_json_schema,
     circuit_handoff_bundle_replay_result_json_schema,
@@ -69,6 +70,7 @@ __all__ = [
     "run_provider_command",
     "circuit_generation_json_schema",
     "circuit_handoff_bundle_json_schema",
+    "circuit_handoff_bundle_ai_quorum_replay_result_json_schema",
     "circuit_handoff_bundle_native_erc_replay_result_json_schema",
     "circuit_handoff_bundle_replay_result_json_schema",
     "circuit_handoff_bundle_result_json_schema",

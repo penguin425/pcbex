@@ -41,6 +41,19 @@ handoff-chain replay, staged as exact bytes only in private temporary storage,
 and reread from the caller-visible paths after KiCad exits. A mutation, alias,
 non-regular file, linked path, empty input, or over-limit input fails closed.
 
+The optional v1.452 handoff AI-quorum replay likewise keeps every sidecar
+outside the ZIP. Its retained quorum report and freshly generated comparison
+report are each limited to 16 MiB. The schema-v1 review request, organization
+policy pack, every signed approval, and every paired response are each limited
+to 32 MiB and to 128 MiB in aggregate, excluding the retained/fresh report.
+One to 100 approval/response pairs are accepted. The complete set is
+stable-read before producer replay. The exact schematic, request, policy pack,
+approvals, and responses are staged under fixed private names only after the
+six-entry archive reproduces exactly (and after optional native ERC); the fresh
+private report is compared with the retained bytes in memory. Every
+caller-visible sidecar is reread before success. When both assertions are
+enabled, the native report and policy are reread again after the AI verifier.
+
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent
 traversal is not accepted. The reader checks the advertised path identity and size, opens
@@ -94,7 +107,7 @@ limit before network access.
 |---|---:|---:|---:|---:|
 | External AI provider adapter | configurable 1–600 seconds; default 120 | 32 MiB | configurable 1 byte–16 MiB; default 1 MiB | same as stdout |
 | Generic agent `pcbex` invocation | default 300 seconds | closed | 8 MiB | 1 MiB |
-| Circuit handoff chain/native ERC replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
+| Circuit handoff chain/native ERC/AI quorum replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
 
@@ -109,6 +122,13 @@ receives only the remaining time; the deadline is not reset for the
 catalog-input ERC, resolved ERC, schematic writer, or semantic handoff stages.
 The nested Rust native verifier receives a shorter internal duration that
 reserves outer cleanup time and applies it directly to the KiCad process tree.
+A requested AI assertion uses the same deadline for all AI sidecar reads,
+private staging, the existing `verify-ai-quorum --schematic` child, exact
+retained/fresh report comparison, closed report validation, final source
+rereads, and cleanup. The verifier child receives the remaining duration minus
+an outer cleanup reserve. `--require-ai-quorum` is evaluated only after the
+complete evidence replay and rereads, so a valid below-threshold report remains
+inspectable when the final gate is not requested.
 A catalog receipt makes the catalog-input ERC stage required. The replay writes
 only private temporary files and publishes no archive or extraction directory.
 
@@ -122,6 +142,12 @@ replay uses pcbex's semantic `verify-circuit-kicad-handoff` gate without real
 KiCad schematic ERC. v1.451 runs real `kicad-cli sch erc` only when the caller
 explicitly supplies `--native-kicad-erc-report`; both `--pcbex` and
 `--kicad-cli` are unauthenticated, unsandboxed caller-selected executables. The
+v1.452 AI option set makes no provider or network call: it passes the exact
+privately staged schema-v1 request, policy pack, approval/response pairs, and
+reproduced schematic to the existing Rust quorum verifier. That verifier's
+live schematic boundary compares imported semantic IR, not irrelevant raw
+source formatting. Session-bound and routed quorums, artifact-bound request
+schemas, and tool provenance remain outside this replay contract. The
 offline `verify-circuit-handoff-bundle` and `extract-circuit-handoff-bundle`
 paths remain native-child-free and retain their existing no-execution boundary.
 

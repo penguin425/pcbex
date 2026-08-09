@@ -248,6 +248,22 @@ path emits a closed path-free v2 result that binds the exact report, run,
 decision, counts, and optional policy identities under the same aggregate
 deadline. Exact replay is not toolchain authentication, AI/human approval,
 board approval, or manufacturing authorization.
+Version 1.452.0 adds an independent optional AI schematic quorum assertion.
+A complete non-session schema-v1 request, retained quorum report, organization
+policy pack, and order-paired signed approvals/responses are bounded and
+stable-read before producer replay. After the six-entry archive reproduces
+exactly (and after optional native ERC), the existing `verify-ai-quorum
+--schematic` gate reruns against the exact privately staged schematic and
+verifier inputs. Its fresh report must match the retained bytes exactly; all
+sidecars are then reread before the optional final quorum requirement is
+enforced.
+Success emits a closed path-free v3 result with explicit threshold, count,
+decision, report, and source identities. Omitting every AI option preserves
+the exact v1 or native-enabled v2 result, and no sidecar is added to the archive.
+The schema-v1 binding compares imported schematic semantics rather than raw
+source formatting. Session/routing modes, tool provenance, native KiCad
+authorization, board approval, and manufacturing authorization remain separate
+boundaries.
 The v1.417 [bounded-input deterministic runner](DETERMINISTIC_PIPELINE_RUNNER.md)
 can recompute that standalone binding beside the unchanged `pipeline-verify`
 gate from one digest-bound snapshot plan. A generated design must still
