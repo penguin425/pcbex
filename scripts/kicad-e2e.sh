@@ -971,3 +971,121 @@ error = Path(sys.argv[2])
 assert error.read_bytes(), "tampered manufacturing replay produced no diagnostic"
 assert not result.read_bytes(), "tampered manufacturing replay unexpectedly emitted success JSON"
 PY
+
+# v1.463 closes the circuit/schematic-to-board producer gap. Build the small
+# checked-in two-part circuit twice, require byte-identical three-file bundles,
+# then pass its placed-but-unrouted board through the existing autorouter and
+# KiCad's native PCB parser. The embedded footprints deliberately do not
+# resolve host libraries, so the native report retains exactly those warnings
+# rather than claiming a clean DRC result.
+board_writer_schematic="$output_directory/circuit-board-writer.generated.kicad_sch"
+board_writer_first="$output_directory/circuit-board-writer.first"
+board_writer_second="$output_directory/circuit-board-writer.second"
+board_writer_routed="$output_directory/circuit-board-writer.routed.kicad_pcb"
+board_writer_routed_drc="$output_directory/circuit-board-writer.routed.drc"
+"$pcbex_binary" write-circuit-spec-kicad-schematic \
+  examples/circuit-board-spec-v2.json \
+  --output "$board_writer_schematic"
+for bundle in "$board_writer_first" "$board_writer_second"; do
+  "$pcbex_binary" generate-circuit-kicad-board \
+    examples/circuit-board-spec-v2.json "$board_writer_schematic" \
+    --footprint-closure examples/circuit-board-footprint-closure-v1.json \
+    --construction-profile examples/circuit-board-construction-profile-v1.json \
+    --physical-profile examples/circuit-board-physical-profile-v1.json \
+    --output-dir "$bundle"
+  test "$(find "$bundle" -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3
+  test "$(find "$bundle" -mindepth 1 -maxdepth 1 | wc -l)" -eq 3
+  jq -e '.approved == true and .counts.errors == 0' \
+    "$bundle/board-binding.json" >/dev/null
+  jq -e '
+    .approved == true and
+    .board_state == "placed_but_unrouted" and
+    .routing_performed == false and
+    .drc_claimed == false and
+    .dfm_claimed == false
+  ' "$bundle/manifest.json" >/dev/null
+done
+for artifact in board.kicad_pcb board-binding.json manifest.json; do
+  cmp "$board_writer_first/$artifact" "$board_writer_second/$artifact"
+done
+"$pcbex_binary" route-kicad "$board_writer_first/board.kicad_pcb" \
+  --physical-profile examples/circuit-board-physical-profile-v1.json \
+  --grid-mm 0.1 --width-mm 0.25 --clearance-mm 0.2 \
+  --via-diameter-mm 0.66 --via-drill-mm 0.3 \
+  --bend-cost 5 --via-cost 50 \
+  --output "$board_writer_routed"
+test -s "$board_writer_routed"
+"$kicad_cli_binary" pcb drc "$board_writer_routed" \
+  --output "$board_writer_routed_drc"
+test -s "$board_writer_routed_drc"
+
+# Exercise the legacy layer-table ordinals that KiCad 10 uses for a four-layer
+# board. The profile stays at the same total thickness and changes only its
+# exact alternating stackup.
+board_writer_four_layer_profile="$output_directory/circuit-board-writer.four-layer.json"
+board_writer_four_layer="$output_directory/circuit-board-writer.four-layer"
+board_writer_four_layer_drc="$output_directory/circuit-board-writer.four-layer.drc"
+python3 - \
+  examples/circuit-board-construction-profile-v1.json \
+  "$board_writer_four_layer_profile" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1])
+destination = Path(sys.argv[2])
+profile = json.loads(source.read_text(encoding="utf-8"))
+profile["id"] = "pcbex-four-layer-fr4-v1"
+profile["stackup"] = [
+    {"kind": "copper", "layer": "F.Cu", "thickness_nm": 35000},
+    {"kind": "dielectric", "material": "FR4", "thickness_nm": 400000,
+     "dielectric_constant_millionths": 4100000},
+    {"kind": "copper", "layer": "In1.Cu", "thickness_nm": 35000},
+    {"kind": "dielectric", "material": "FR4", "thickness_nm": 660000,
+     "dielectric_constant_millionths": 4100000},
+    {"kind": "copper", "layer": "In2.Cu", "thickness_nm": 35000},
+    {"kind": "dielectric", "material": "FR4", "thickness_nm": 400000,
+     "dielectric_constant_millionths": 4100000},
+    {"kind": "copper", "layer": "B.Cu", "thickness_nm": 35000},
+]
+destination.write_text(
+    json.dumps(profile, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+"$pcbex_binary" generate-circuit-kicad-board \
+  examples/circuit-board-spec-v2.json "$board_writer_schematic" \
+  --footprint-closure examples/circuit-board-footprint-closure-v1.json \
+  --construction-profile "$board_writer_four_layer_profile" \
+  --physical-profile examples/circuit-board-physical-profile-v1.json \
+  --output-dir "$board_writer_four_layer"
+grep -F '(2 "In1.Cu" signal)' "$board_writer_four_layer/board.kicad_pcb" >/dev/null
+grep -F '(4 "In2.Cu" signal)' "$board_writer_four_layer/board.kicad_pcb" >/dev/null
+"$kicad_cli_binary" pcb drc "$board_writer_four_layer/board.kicad_pcb" \
+  --output "$board_writer_four_layer_drc"
+test -s "$board_writer_four_layer_drc"
+python3 - \
+  "$board_writer_routed_drc" 0 \
+  "$board_writer_four_layer_drc" 2 <<'PY'
+from pathlib import Path
+import sys
+
+arguments = sys.argv[1:]
+assert len(arguments) % 2 == 0
+for offset in range(0, len(arguments), 2):
+    report = Path(arguments[offset]).read_text(encoding="utf-8")
+    expected_unconnected = int(arguments[offset + 1])
+    categories = [
+        line.split("]", 1)[0] + "]"
+        for line in report.splitlines()
+        if line.startswith("[")
+    ]
+    assert categories.count("[lib_footprint_issues]") == 2, categories
+    assert categories.count("[unconnected_items]") == expected_unconnected, categories
+    assert set(categories) <= {"[lib_footprint_issues]", "[unconnected_items]"}, categories
+    assert "footprint library 'Resistor_SMD'" in report
+    assert "footprint library 'Package'" in report
+    assert "** Found 2 DRC violations **" in report
+    assert f"** Found {expected_unconnected} unconnected pads **" in report
+    assert "** Found 0 Footprint errors **" in report
+PY

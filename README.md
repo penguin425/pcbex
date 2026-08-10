@@ -3767,6 +3767,49 @@ orchestration beyond the explicit writer call remain outside the v1 boundary.
 See [`docs/CIRCUIT_KICAD_SCHEMATIC_WRITER.md`](docs/CIRCUIT_KICAD_SCHEMATIC_WRITER.md)
 for the exact contract.
 
+## Deterministic circuit-spec v2 to KiCad board writer
+
+Version 1.463 closes the producer gap between that schematic writer and the
+existing board consumers. It creates a new placed-but-unrouted board from
+explicit local artifacts instead of requiring a GUI-authored template:
+
+```sh
+pcbex generate-circuit-kicad-board \
+  circuit-spec-v2.json hardware/generated.kicad_sch \
+  --footprint-closure footprint-closure.json \
+  --construction-profile board-construction-profile.json \
+  --physical-profile physical-profile.json \
+  --output-dir build/generated-board
+```
+
+The closed footprint artifact embeds exact bounded `.kicad_mod` sources and
+must cover the circuit's footprint identifiers and pad numbers exactly. The v1
+writer reproduces only its strictly validated circle/oval/rectangular pad
+subset; source artwork, courtyard, arbitrary local rules, and custom or
+trapezoid pads are omitted or rejected. The closed construction profile binds
+a two-to-32-copper-layer stackup and deterministic routing/placement defaults.
+The existing physical profile is accepted through a reproducible safe subset:
+an empty or full rectangular outline, front-side fixed placements at cardinal
+rotations without fixed keepout extents, and track/via/zone keepouts without
+per-keepout routing overrides. The writer reruns the circuit/schematic handoff under the fixed
+default electrical policy, performs deterministic placement, reimports the
+final bytes, and requires the existing three-way board-binding report to be
+approved. Repeated invocations of the same compiled pcbex executable on one
+supported target are byte-identical; cross-target floating-point identity and
+binary/toolchain provenance are not claimed.
+
+A new no-clobber output directory contains exactly `board.kicad_pcb`,
+`board-binding.json`, and a path-free `manifest.json` binding every raw and
+canonical input plus both retained outputs. On Unix its parent must be owned by
+the effective user and not group- or other-writable. The guarded rename and
+identity checks do not protect against another process acting as that same OS
+principal; a reported post-publication failure can leave an output directory
+that must not be consumed. The command does not resolve host
+libraries, fetch supplier data, route copper, run DRC/DFM, manufacture,
+authorize procurement/fabrication, or place an order. MCP and Action parity
+are deferred. See
+[`docs/CIRCUIT_KICAD_BOARD_WRITER.md`](docs/CIRCUIT_KICAD_BOARD_WRITER.md).
+
 ## Circuit-spec v2 to KiCad handoff verification
 
 When a KiCad schematic is authored separately, pcbex can verify it against an

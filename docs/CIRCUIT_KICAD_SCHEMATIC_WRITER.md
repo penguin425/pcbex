@@ -149,6 +149,8 @@ This writer creates a logical handoff artifact, not a production layout. It
 does not support hierarchy, buses, multi-unit symbols, external library
 resolution, graphical symbol fidelity, editing or merging an existing
 schematic, PCB placement/routing, DRC/DFM, manufacturing export, MCP/Action
-implicit pipeline orchestration, or pipeline approval. Downstream designs must
-still pass the normal schematic, board-binding, pipeline, manufacturing, and
-approval gates.
+implicit pipeline orchestration, or pipeline approval. The explicit v1.463
+[KiCad board writer](CIRCUIT_KICAD_BOARD_WRITER.md) can consume this schematic
+together with closed footprint, construction, and physical profiles; it does
+not change the schematic writer contract. Downstream designs must still pass
+the normal board-binding, pipeline, manufacturing, and approval gates.

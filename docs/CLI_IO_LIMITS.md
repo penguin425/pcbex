@@ -42,6 +42,25 @@ Output-directory creation is also outside the per-file transaction. A command ma
 therefore retain already completed evidence files when a later publication or
 quality gate fails, as documented by that command.
 
+The v1.463 `generate-circuit-kicad-board` producer uses a stricter directory
+contract. Circuit-spec input remains capped at 16 MiB, schematic input at
+64 MiB, footprint-closure JSON at 96 MiB with at most 256 embedded sources,
+4 MiB per footprint and 64 MiB decoded aggregate, the construction profile at
+1 MiB, and the physical profile at 4 MiB. It captures those five regular UTF-8 sources before
+generation and rereads them before publication. The requested output directory
+must be new and must not alias an input. A private sibling stage is checked for
+the exact three regular files `board.kicad_pcb`, `board-binding.json`, and
+`manifest.json`, then renamed without replacing the destination. The generated
+board remains under the generic 128 MiB ceiling; the binding report keeps its
+existing 12 MiB-plus-LF bound. Publication is one directory rename, not a
+transaction with any later routing, DRC, or manufacturing command. Unix also
+requires the canonical output parent to be owned by the effective user and not
+group- or other-writable, and rechecks that policy and the pinned parent around
+the rename. Windows retains real directory handles and performs corresponding
+identity checks. Mutation by another process under the same OS identity remains
+outside this boundary. A failure after the rename can leave the directory in
+place; such an ambiguously finalized directory must not be consumed.
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

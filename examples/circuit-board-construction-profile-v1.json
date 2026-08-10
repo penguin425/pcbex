@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "id": "pcbex-two-layer-fr4-v1",
+  "revision": 1,
+  "board_thickness_nm": 1600000,
+  "stackup": [
+    {
+      "kind": "copper",
+      "layer": "F.Cu",
+      "thickness_nm": 35000
+    },
+    {
+      "kind": "dielectric",
+      "material": "FR4",
+      "thickness_nm": 1530000,
+      "dielectric_constant_millionths": 4100000
+    },
+    {
+      "kind": "copper",
+      "layer": "B.Cu",
+      "thickness_nm": 35000
+    }
+  ],
+  "routing_defaults": {
+    "grid_nm": 100000,
+    "track_width_nm": 250000,
+    "clearance_nm": 200000,
+    "via_diameter_nm": 660000,
+    "via_drill_nm": 300000,
+    "bend_cost": 5,
+    "via_cost": 50
+  },
+  "placement_defaults": {
+    "grid_nm": 500000,
+    "component_clearance_nm": 250000,
+    "iterations": 1000,
+    "seed": 7
+  }
+}

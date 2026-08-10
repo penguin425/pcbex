@@ -532,6 +532,14 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "cargo +stable build --package pcbex --release --locked", boundaries
         )
         self.assertIn(
+            "cargo +stable test --package pcbex --test capabilities --release --locked board_producer",
+            boundaries,
+        )
+        self.assertIn(
+            "cargo +stable test --package pcbex --test circuit_kicad_board_writer --release --locked",
+            boundaries,
+        )
+        self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
         )
@@ -539,6 +547,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("rustup toolchain install stable --profile minimal", rust_windows)
         toolchain_step = boundaries.index(
             "- name: Configure Windows GNU firmware toolchain"
+        )
+        board_regressions_step = boundaries.index(
+            "- name: Run cross-platform deterministic board producer regressions"
         )
         self.assertIn("if: ${{ runner.os == 'Windows' }}", boundaries)
         self.assertIn("C:\\mingw64\\bin", boundaries)
@@ -574,6 +585,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         boundary_tests_step = boundaries.index(
             "- name: Run cross-platform boundary tests"
         )
+        self.assertLess(board_regressions_step, toolchain_step)
         self.assertLess(toolchain_step, fixture_step)
         self.assertLess(fixture_step, diagnostic_step)
         self.assertLess(diagnostic_step, accepted_step)
