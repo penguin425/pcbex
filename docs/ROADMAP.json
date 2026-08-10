@@ -824,6 +824,11 @@
     {
       "id": "dual-control-exact-fabrication-release-authorization",
       "release": "v1.459.0",
+      "status": "released"
+    },
+    {
+      "id": "mcp-fabrication-authorization-verification-parity",
+      "release": "v1.460.0",
       "status": "current"
     }
   ]

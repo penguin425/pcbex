@@ -171,6 +171,7 @@ auditable release.
 | v1.457.0 | Shared-board circuit-to-manufacturing replay | Extend exact circuit-handoff replay only when a complete v5 board-binding pair is present, reuse that one captured raw board for a private manufacturing-package replay, require the fresh ZIP to equal the retained ZIP byte-for-byte, and emit closed path-free v6 evidence under one outer deadline and one final union caller-source reread while preserving exact v1–v5 results when omitted and never treating reproduction as fabrication authorization |
 | v1.458.0 | Pipeline-bound circuit-to-manufacturing replay | Extend only a complete v6 replay with a pre-child captured plan/report/input closure, replay the deterministic pipeline last, cross-bind exact circuit/schematic/board/package bytes, effective policy, the complete canonical board-binding report, and canonical schematic/raw-board identities, preserve truthful rejected evidence, and emit closed path-free v7 under ordered subdeadlines and a final union plus firmware-directory reread while preserving exact v1–v6 results when omitted |
 | v1.459.0 | Dual-control exact fabrication release authorization | Freshly reproduce one approved factory-required deterministic pipeline, revalidate its exact manufacturing ZIP, passing factory receipt, and selected organization policy pack, then require domain-separated approvals from at least two dedicated trusted human keys over one bounded quantity/currency/value/window/challenge scope; retain full signed evidence without contacting a factory, placing an order, spending funds, or claiming factory authenticity or one-time use |
+| v1.460.0 | MCP fabrication authorization verification parity | Expose the v1.459 fresh verifier synchronously and through optional MCP Tasks, retain truthful authorized/not-authorized reports, and return a digest-authenticated bounded summary without exposing signing keys or embedding the complete authorization report |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -944,7 +945,7 @@ fresh producer beyond those already in v6, firmware rebuild, MCP/Action parity,
 network/factory call, toolchain authentication, fabrication/procurement
 authorization, or order placement.
 
-The current v1.459.0 milestone adds a separate Rust-native authorization
+The released v1.459.0 milestone adds a separate Rust-native authorization
 boundary rather than changing the v7 replay or deterministic-pipeline schemas.
 `sign-fabrication-approval` first re-runs one factory-required plan in-process,
 requires its retained report to reproduce byte-for-byte with `approved: true`,
@@ -971,5 +972,19 @@ organization policy pack remains an externally selected trust root, and a
 static challenge has no durable consumption ledger. The milestone therefore
 does not authenticate a factory or current quote, guarantee one-time use,
 contact a network, submit files, reserve inventory, place an order, execute
-fabrication, or authorize payment/spend. MCP verification and a focused
-verification-only Action remain follow-up milestones; signing stays CLI-only.
+fabrication, or authorize payment/spend.
+
+The current v1.460.0 milestone exposes only the fresh
+`verify_fabrication_authorization` boundary through MCP. Synchronous calls and
+optional Tasks invoke the existing CLI verifier against the original plan,
+retained pipeline report, manufacturing package, factory receipt, policy pack,
+and submitted approvals. The complete authorization report remains in the
+caller-selected no-clobber output file; MCP returns only a closed compact
+summary authenticated against the retained report's exact bytes and SHA-256.
+Valid `not_authorized` evidence is retained before an optional
+`require_authorized` gate reports failure.
+
+MCP never accepts a caller-selected evaluation time and does not expose
+`sign-fabrication-approval`, private keys, scope construction, network access,
+factory submission, ordering, payment, or challenge consumption. Signing stays
+CLI-only, and a focused verification-only Action remains a follow-up milestone.

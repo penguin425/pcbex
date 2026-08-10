@@ -55,6 +55,21 @@ output against the same replayed plan, captures the current time, and publishes
 a closed report within the generic 128 MiB output limit. A valid policy-level
 `not_authorized` decision is retained before `--require-authorized` fails;
 malformed, untrusted, mismatched, or mutated evidence produces no report.
+The v1.460 MCP verifier invokes this same bounded CLI path, then stable-reads
+the retained report within the same 128 MiB limit and compares its exact byte
+count, SHA-256, decision, scope, counts, plan/run digests, and raw manufacturing
+ZIP, factory-receipt source, and policy-pack source SHA-256 values with a closed
+23-field child snapshot. That snapshot does not expose the receipt provider,
+endpoint, or quote SHA-256, nor the policy canonical SHA-256, ID, or revision.
+The complete policy and approval envelopes are present in the retained output
+but never enter the MCP response. Real-stdio E2E asserts that representative
+responses stay below the 16 MiB frame ceiling; it does not synthesize a
+near-limit 128 MiB authorization report, so the two independently enforced
+ceilings should not be read as one adversarial cross-boundary test claim.
+Cancellation or TTL expiry never produces a successful authenticated-summary
+Task result. If the child completed atomic publication just before cancellation
+was observed, the no-clobber report may remain; the cancelled Task does not
+authenticate it, and a consumer must rerun verification into a new path.
 
 For signing, a valid response that fails an approval gate is still a legitimate
 signed rejection: the no-clobber approval is published before

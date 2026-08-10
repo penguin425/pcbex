@@ -35,6 +35,44 @@ const MAX_CIRCUIT_KICAD_SCHEMATIC_BYTES: u64 =
     pcbex_kicad::CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES as u64;
 static NEXT_TASK_ID: AtomicU64 = AtomicU64::new(1);
 
+#[cfg(test)]
+thread_local! {
+    static AFTER_FABRICATION_REPORT_READ_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+    static AFTER_FABRICATION_SUMMARY_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_after_fabrication_report_read_hook(hook: impl FnOnce() + 'static) {
+    AFTER_FABRICATION_REPORT_READ_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn invoke_after_fabrication_report_read_hook() {
+    let hook = AFTER_FABRICATION_REPORT_READ_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(test)]
+fn set_after_fabrication_summary_hook(hook: impl FnOnce() + 'static) {
+    AFTER_FABRICATION_SUMMARY_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn invoke_after_fabrication_summary_hook() {
+    let hook = AFTER_FABRICATION_SUMMARY_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum Lifecycle {
     #[default]
@@ -461,6 +499,7 @@ impl McpServer {
                     | "verify_circuit_kicad_board_binding"
                     | "pipeline_verify"
                     | "run_deterministic_pipeline"
+                    | "verify_fabrication_authorization"
                     | "compile_deterministic_pipeline_plan"
                     | "run_native_kicad_erc"
                     | "run_native_kicad_drc"
@@ -1043,6 +1082,35 @@ fn tool_definitions(tasks_supported: bool) -> Vec<Value> {
                     "plan": {"type": "string"},
                     "output": {"type": "string"},
                     "require_approved": {"type": "boolean", "default": false}
+                }
+            }),
+            false,
+            true,
+            tasks_supported.then_some("optional"),
+        ),
+        tool(
+            "verify_fabrication_authorization",
+            "Verify fabrication authorization",
+            "Verification-only: freshly replay exact fabrication evidence and verify a dedicated human authorization quorum, retaining truthful not-authorized reports before an optional gate fails; never sign approvals or place factory orders.",
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "plan", "retained_report", "manufacturing_package",
+                    "factory_receipt", "policy_pack", "approvals", "output"
+                ],
+                "properties": {
+                    "plan": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "retained_report": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "manufacturing_package": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "factory_receipt": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "policy_pack": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "approvals": {
+                        "type": "array", "minItems": 1, "maxItems": 100,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+                    },
+                    "output": {"type": "string", "minLength": 1, "maxLength": 4096},
+                    "require_authorized": {"type": "boolean", "default": false}
                 }
             }),
             false,
@@ -4895,6 +4963,9 @@ fn call_tool(
         "run_deterministic_pipeline" => {
             run_deterministic_pipeline_tool(arguments, cancellation)?
         }
+        "verify_fabrication_authorization" => {
+            verify_fabrication_authorization_tool(arguments, cancellation)?
+        }
         "compile_deterministic_pipeline_plan" => {
             compile_deterministic_pipeline_plan_tool(arguments, cancellation)?
         }
@@ -5997,6 +6068,94 @@ fn run_deterministic_pipeline_tool(
     ))
 }
 
+fn verify_fabrication_authorization_tool(
+    arguments: Map<String, Value>,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    reject_unknown(
+        &arguments,
+        &[
+            "plan",
+            "retained_report",
+            "manufacturing_package",
+            "factory_receipt",
+            "policy_pack",
+            "approvals",
+            "output",
+            "require_authorized",
+        ],
+    )?;
+    let plan = required_fabrication_path(&arguments, "plan")?;
+    let retained_report = required_fabrication_path(&arguments, "retained_report")?;
+    let manufacturing_package = required_fabrication_path(&arguments, "manufacturing_package")?;
+    let factory_receipt = required_fabrication_path(&arguments, "factory_receipt")?;
+    let policy_pack = required_fabrication_path(&arguments, "policy_pack")?;
+    let approvals = required_string_array(&arguments, "approvals", false)?;
+    if approvals.len() > 100 {
+        return Err(json!({"detail": "approvals must contain 1 to 100 entries"}));
+    }
+    for approval in &approvals {
+        validate_fabrication_path(approval, "approvals entries")?;
+    }
+    let output = required_fabrication_path(&arguments, "output")?;
+
+    // Use attached option values and terminate option parsing before the
+    // positional plan so literal paths beginning with '-' cannot be treated
+    // as CLI switches.
+    let mut command = vec![
+        "verify-fabrication-authorization".to_string(),
+        format!("--report={retained_report}"),
+        format!("--manufacturing-package={manufacturing_package}"),
+        format!("--factory-receipt={factory_receipt}"),
+        format!("--policy-pack={policy_pack}"),
+    ];
+    command.extend(
+        approvals
+            .iter()
+            .map(|approval| format!("--approval={approval}")),
+    );
+    command.extend([
+        format!("--output={output}"),
+        // The child emits this compact summary after atomically retaining the
+        // full report and before applying the optional authorization gate.
+        "--mcp-echo-report-summary".to_string(),
+    ]);
+    optional_flag(
+        &arguments,
+        "require_authorized",
+        "--require-authorized",
+        &mut command,
+    )?;
+    command.extend(["--".to_string(), plan]);
+
+    // Never let a report from an earlier call masquerade as current evidence.
+    require_absent_outputs([Some(output.as_str())])?;
+    let execution = execute(&command, cancellation)?;
+    authenticated_fabrication_authorization_result(execution, output, cancellation)
+}
+
+fn authenticated_fabrication_authorization_result(
+    execution: Execution,
+    output: String,
+    cancellation: Option<&AtomicBool>,
+) -> std::result::Result<Value, Value> {
+    ensure_task_not_cancelled(cancellation)?;
+    let report_summary =
+        trusted_fabrication_authorization_summary(&execution, Path::new(&output), cancellation);
+    #[cfg(test)]
+    invoke_after_fabrication_summary_hook();
+    ensure_task_not_cancelled(cancellation)?;
+    let execution = require_retained_json(
+        execution,
+        &report_summary,
+        "fabrication authorization report summary",
+    );
+    Ok(execution_result(
+        execution,
+        json!({"output": output, "report_summary": report_summary}),
+    ))
+}
+
 fn compile_deterministic_pipeline_plan_tool(
     arguments: Map<String, Value>,
     cancellation: Option<&AtomicBool>,
@@ -6106,14 +6265,14 @@ fn run_native_kicad_erc_tool(
             ) {
                 Ok(report) => report,
                 Err(error) => {
-                    ensure_native_kicad_not_cancelled(cancellation)?;
+                    ensure_task_not_cancelled(cancellation)?;
                     return Ok(native_kicad_execution_failure(
                         error,
                         json!({"output": output, "report_summary": Value::Null}),
                     ));
                 }
             };
-            ensure_native_kicad_not_cancelled(cancellation)?;
+            ensure_task_not_cancelled(cancellation)?;
             let rendered =
                 match crate::native_kicad_erc::render_native_kicad_erc_warning_report(&report) {
                     Ok(rendered) => rendered,
@@ -6124,7 +6283,7 @@ fn run_native_kicad_erc_tool(
                         ));
                     }
                 };
-            ensure_native_kicad_not_cancelled(cancellation)?;
+            ensure_task_not_cancelled(cancellation)?;
             if let Err(error) =
                 crate::persist_atomic_new_file_bytes(prepared, output_path, &rendered)
             {
@@ -6161,14 +6320,14 @@ fn run_native_kicad_erc_tool(
             ) {
                 Ok(report) => report,
                 Err(error) => {
-                    ensure_native_kicad_not_cancelled(cancellation)?;
+                    ensure_task_not_cancelled(cancellation)?;
                     return Ok(native_kicad_execution_failure(
                         error,
                         json!({"output": output, "report_summary": Value::Null}),
                     ));
                 }
             };
-            ensure_native_kicad_not_cancelled(cancellation)?;
+            ensure_task_not_cancelled(cancellation)?;
             let rendered = match crate::native_kicad_erc::render_native_kicad_erc_report(&report) {
                 Ok(rendered) => rendered,
                 Err(error) => {
@@ -6178,7 +6337,7 @@ fn run_native_kicad_erc_tool(
                     ));
                 }
             };
-            ensure_native_kicad_not_cancelled(cancellation)?;
+            ensure_task_not_cancelled(cancellation)?;
             if let Err(error) =
                 crate::persist_atomic_new_file_bytes(prepared, output_path, &rendered)
             {
@@ -6299,14 +6458,14 @@ fn run_native_kicad_drc_tool(
     ) {
         Ok(report) => report,
         Err(error) => {
-            ensure_native_kicad_not_cancelled(cancellation)?;
+            ensure_task_not_cancelled(cancellation)?;
             return Ok(native_kicad_execution_failure(
                 error,
                 json!({"input": input, "output": output, "report_summary": Value::Null}),
             ));
         }
     };
-    ensure_native_kicad_not_cancelled(cancellation)?;
+    ensure_task_not_cancelled(cancellation)?;
     let rendered = match crate::native_kicad_drc::render_native_kicad_drc_report(&report) {
         Ok(rendered) => rendered,
         Err(error) => {
@@ -6316,7 +6475,7 @@ fn run_native_kicad_drc_tool(
             ));
         }
     };
-    ensure_native_kicad_not_cancelled(cancellation)?;
+    ensure_task_not_cancelled(cancellation)?;
     if let Err(error) = crate::persist_atomic_new_file_bytes(prepared, output_path, &rendered) {
         return Ok(native_kicad_execution_failure(
             error,
@@ -6389,14 +6548,16 @@ fn native_kicad_execution_failure(error: anyhow::Error, fields: Value) -> Value 
     )
 }
 
-fn ensure_native_kicad_not_cancelled(
-    cancellation: Option<&AtomicBool>,
-) -> std::result::Result<(), Value> {
-    if cancellation.is_some_and(|cancelled| cancelled.load(Ordering::SeqCst)) {
+fn ensure_task_not_cancelled(cancellation: Option<&AtomicBool>) -> std::result::Result<(), Value> {
+    if task_is_cancelled(cancellation) {
         Err(json!({"detail": "task execution cancelled"}))
     } else {
         Ok(())
     }
+}
+
+fn task_is_cancelled(cancellation: Option<&AtomicBool>) -> bool {
+    cancellation.is_some_and(|cancelled| cancelled.load(Ordering::SeqCst))
 }
 
 fn verify_native_kicad_erc_report_tool(
@@ -6459,7 +6620,7 @@ fn verify_native_kicad_erc_report_tool(
 
     let (execution, report_summary) = match replay {
         Ok(Ok((summary, approved))) => {
-            ensure_native_kicad_not_cancelled(cancellation)?;
+            ensure_task_not_cancelled(cancellation)?;
             let mut stdout = serde_json::to_vec(&summary)
                 .expect("native KiCad ERC replay summary always serializes");
             stdout.push(b'\n');
@@ -6490,7 +6651,7 @@ fn verify_native_kicad_erc_report_tool(
                 stdout,
                 stderr: bounded_process_message(stderr.as_bytes()),
             };
-            ensure_native_kicad_not_cancelled(cancellation)?;
+            ensure_task_not_cancelled(cancellation)?;
             let report_summary = trusted_native_kicad_erc_summary(&execution, retained_report_path);
             let execution = require_retained_json(
                 execution,
@@ -6500,7 +6661,7 @@ fn verify_native_kicad_erc_report_tool(
             (execution, report_summary)
         }
         Ok(Err(error)) | Err(error) => {
-            ensure_native_kicad_not_cancelled(cancellation)?;
+            ensure_task_not_cancelled(cancellation)?;
             (
                 Execution {
                     success: false,
@@ -13579,6 +13740,328 @@ fn trusted_deterministic_pipeline_summary(execution: &Execution, path: &Path) ->
     summary
 }
 
+/// Authenticate the fabrication verifier's compact stdout bridge against the
+/// exact retained report bytes and a full semantic replay of that report.
+///
+/// The report may contain up to 100 signed approvals and can reach the shared
+/// 128 MiB file ceiling, so it must never cross MCP.  Only the closed summary
+/// below is returned after every field, digest, count, constant, nested
+/// evidence binding, and retained signature has been independently checked.
+fn trusted_fabrication_authorization_summary(
+    execution: &Execution,
+    path: &Path,
+    cancellation: Option<&AtomicBool>,
+) -> Value {
+    const SUMMARY_FIELDS: [&str; 23] = [
+        "schema_version",
+        "status",
+        "fabrication_authorized",
+        "authorization_id",
+        "challenge",
+        "quantity",
+        "currency",
+        "maximum_total_minor_units",
+        "valid_from_unix",
+        "expires_at_unix",
+        "evaluated_at_unix",
+        "approvals",
+        "rejections",
+        "gate_failure_count",
+        "plan_sha256",
+        "run_sha256",
+        "manufacturing_package_sha256",
+        "factory_receipt_sha256",
+        "policy_pack_sha256",
+        "quote_authenticity_verified",
+        "challenge_one_time_use_enforced",
+        "report_bytes",
+        "report_sha256",
+    ];
+    const MAXIMUM_QUANTITY: u64 = 1_000_000;
+    const MAXIMUM_TOTAL_MINOR_UNITS: u64 = 9_007_199_254_740_991;
+    const MAXIMUM_VALIDITY_SECONDS: u64 = 604_800;
+    const MAXIMUM_APPROVALS: u64 = 100;
+    const MAXIMUM_GATE_FAILURES: u64 = 4;
+
+    if task_is_cancelled(cancellation)
+        || execution.stdout.len() > MAX_MCP_PROCESS_MESSAGE_BYTES
+        || has_duplicate_json_keys(&execution.stdout)
+    {
+        return Value::Null;
+    }
+    let summary = serde_json::from_slice::<Value>(&execution.stdout).unwrap_or(Value::Null);
+    let Some(object) = summary.as_object() else {
+        return Value::Null;
+    };
+    if object.len() != SUMMARY_FIELDS.len()
+        || SUMMARY_FIELDS
+            .iter()
+            .any(|field| !object.contains_key(*field))
+    {
+        return Value::Null;
+    }
+
+    let Some(schema_version) = object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .filter(|value| {
+            *value
+                == u64::from(
+                    crate::fabrication_authorization::FABRICATION_AUTHORIZATION_REPORT_SCHEMA_VERSION,
+                )
+        })
+    else {
+        return Value::Null;
+    };
+    let Some(status) = object
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|value| matches!(*value, "fabrication_authorized" | "not_authorized"))
+    else {
+        return Value::Null;
+    };
+    let Some(fabrication_authorized) = object
+        .get("fabrication_authorized")
+        .and_then(Value::as_bool)
+    else {
+        return Value::Null;
+    };
+    let Some(authorization_id) = object
+        .get("authorization_id")
+        .and_then(Value::as_str)
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && (value.as_bytes()[0].is_ascii_lowercase()
+                    || value.as_bytes()[0].is_ascii_digit())
+                && value.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'-')
+                })
+        })
+    else {
+        return Value::Null;
+    };
+    let Some(challenge) = object
+        .get("challenge")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value))
+    else {
+        return Value::Null;
+    };
+    let Some(quantity) = object
+        .get("quantity")
+        .and_then(Value::as_u64)
+        .filter(|value| (1..=MAXIMUM_QUANTITY).contains(value))
+    else {
+        return Value::Null;
+    };
+    let Some(currency) = object
+        .get("currency")
+        .and_then(Value::as_str)
+        .filter(|value| value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_uppercase()))
+    else {
+        return Value::Null;
+    };
+    let Some(maximum_total_minor_units) = object
+        .get("maximum_total_minor_units")
+        .and_then(Value::as_u64)
+        .filter(|value| (1..=MAXIMUM_TOTAL_MINOR_UNITS).contains(value))
+    else {
+        return Value::Null;
+    };
+    let Some(valid_from_unix) = object.get("valid_from_unix").and_then(Value::as_u64) else {
+        return Value::Null;
+    };
+    let Some(expires_at_unix) = object
+        .get("expires_at_unix")
+        .and_then(Value::as_u64)
+        .filter(|expires| {
+            expires
+                .checked_sub(valid_from_unix)
+                .is_some_and(|duration| (1..=MAXIMUM_VALIDITY_SECONDS).contains(&duration))
+        })
+    else {
+        return Value::Null;
+    };
+    let Some(evaluated_at_unix) = object.get("evaluated_at_unix").and_then(Value::as_u64) else {
+        return Value::Null;
+    };
+    let Some(approvals) = object
+        .get("approvals")
+        .and_then(Value::as_u64)
+        .filter(|value| *value <= MAXIMUM_APPROVALS)
+    else {
+        return Value::Null;
+    };
+    let Some(rejections) = object
+        .get("rejections")
+        .and_then(Value::as_u64)
+        .filter(|value| *value <= MAXIMUM_APPROVALS)
+    else {
+        return Value::Null;
+    };
+    let Some(approval_count) = approvals
+        .checked_add(rejections)
+        .filter(|value| (1..=MAXIMUM_APPROVALS).contains(value))
+    else {
+        return Value::Null;
+    };
+    let Some(gate_failure_count) = object
+        .get("gate_failure_count")
+        .and_then(Value::as_u64)
+        .filter(|value| *value <= MAXIMUM_GATE_FAILURES)
+    else {
+        return Value::Null;
+    };
+    let Some(plan_sha256) = object
+        .get("plan_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value))
+    else {
+        return Value::Null;
+    };
+    let Some(run_sha256) = object
+        .get("run_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value))
+    else {
+        return Value::Null;
+    };
+    let Some(manufacturing_package_sha256) = object
+        .get("manufacturing_package_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value))
+    else {
+        return Value::Null;
+    };
+    let Some(factory_receipt_sha256) = object
+        .get("factory_receipt_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value))
+    else {
+        return Value::Null;
+    };
+    let Some(policy_pack_sha256) = object
+        .get("policy_pack_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value))
+    else {
+        return Value::Null;
+    };
+    let Some(quote_authenticity_verified) = object
+        .get("quote_authenticity_verified")
+        .and_then(Value::as_bool)
+        .filter(|value| !*value)
+    else {
+        return Value::Null;
+    };
+    let Some(challenge_one_time_use_enforced) = object
+        .get("challenge_one_time_use_enforced")
+        .and_then(Value::as_bool)
+        .filter(|value| !*value)
+    else {
+        return Value::Null;
+    };
+    let Some(report_bytes) = object
+        .get("report_bytes")
+        .and_then(Value::as_u64)
+        .filter(|value| (1..=crate::bounded_io::MAX_FILE_BYTES).contains(value))
+    else {
+        return Value::Null;
+    };
+    let Some(report_sha256) = object
+        .get("report_sha256")
+        .and_then(Value::as_str)
+        .filter(|value| is_lowercase_sha256(value))
+    else {
+        return Value::Null;
+    };
+
+    let expected_status = if fabrication_authorized {
+        "fabrication_authorized"
+    } else {
+        "not_authorized"
+    };
+    if status != expected_status
+        || fabrication_authorized != (gate_failure_count == 0)
+        || (fabrication_authorized && rejections != 0)
+    {
+        return Value::Null;
+    }
+
+    if task_is_cancelled(cancellation) {
+        return Value::Null;
+    }
+    let Ok(retained) = crate::bounded_io::read_with_limit(path, crate::bounded_io::MAX_FILE_BYTES)
+    else {
+        return Value::Null;
+    };
+    #[cfg(test)]
+    invoke_after_fabrication_report_read_hook();
+    if task_is_cancelled(cancellation) || retained.len() as u64 != report_bytes {
+        return Value::Null;
+    }
+    if sha256_hex(&retained) != report_sha256 || task_is_cancelled(cancellation) {
+        return Value::Null;
+    }
+    if has_duplicate_json_keys(&retained) || task_is_cancelled(cancellation) {
+        return Value::Null;
+    }
+    let Ok(report) = serde_json::from_slice::<
+        crate::fabrication_authorization::FabricationAuthorizationReport,
+    >(&retained) else {
+        return Value::Null;
+    };
+    if task_is_cancelled(cancellation) {
+        return Value::Null;
+    }
+
+    // Re-run the retained policy and signature verification at the report's
+    // recorded evaluation instant.  Exact equality checks every non-summary
+    // semantic field too, without returning policy contents, approvals,
+    // reasons, tickets, or any other sensitive report body over MCP.
+    let Ok(reverified) = crate::fabrication_authorization::verify_fabrication_authorization(
+        &report.evidence,
+        &report.policy_pack,
+        &report.signed_approvals,
+        report.evaluated_at_unix,
+    ) else {
+        return Value::Null;
+    };
+    if task_is_cancelled(cancellation)
+        || reverified != report
+        || u64::from(report.schema_version) != schema_version
+        || report.status != status
+        || report.fabrication_authorized != fabrication_authorized
+        || report.scope.authorization_id != authorization_id
+        || report.scope.challenge != challenge
+        || u64::from(report.scope.quantity) != quantity
+        || report.scope.currency != currency
+        || report.scope.maximum_total_minor_units != maximum_total_minor_units
+        || report.scope.valid_from_unix != valid_from_unix
+        || report.scope.expires_at_unix != expires_at_unix
+        || report.evaluated_at_unix != evaluated_at_unix
+        || u64::from(report.approvals) != approvals
+        || u64::from(report.rejections) != rejections
+        || report.signed_approvals.len() as u64 != approval_count
+        || report.gate_failures.len() as u64 != gate_failure_count
+        || report.evidence.pipeline.plan_sha256 != plan_sha256
+        || report.evidence.pipeline.run_sha256 != run_sha256
+        || report.evidence.manufacturing_package.sha256 != manufacturing_package_sha256
+        || report.evidence.factory_receipt.receipt.sha256 != factory_receipt_sha256
+        || report.evidence.policy_pack.source.sha256 != policy_pack_sha256
+        || report.evidence.factory_receipt.quote_authenticity_verified
+            != quote_authenticity_verified
+        || report.challenge_one_time_use_enforced != challenge_one_time_use_enforced
+    {
+        return Value::Null;
+    }
+
+    summary
+}
+
 /// Verify the compact stdout bridge emitted by the deterministic pipeline
 /// intent compiler against stable, bounded reads of the current intent and
 /// atomically retained plan.  The compiler has no rejected report to return;
@@ -14237,6 +14720,29 @@ fn required_string(
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .ok_or_else(|| json!({"detail": format!("{name} must be a non-empty string")}))
+}
+
+fn required_fabrication_path(
+    arguments: &Map<String, Value>,
+    name: &str,
+) -> std::result::Result<String, Value> {
+    let value = required_string(arguments, name)?;
+    validate_fabrication_path(&value, name)?;
+    Ok(value)
+}
+
+fn validate_fabrication_path(value: &str, name: &str) -> std::result::Result<(), Value> {
+    if value.chars().count() > 4096 {
+        Err(json!({
+            "detail": format!("{name} must contain at most 4096 characters")
+        }))
+    } else if value.bytes().any(|byte| byte <= 0x1f || byte == 0x7f) {
+        Err(json!({
+            "detail": format!("{name} must not contain NUL or ASCII control characters")
+        }))
+    } else {
+        Ok(())
+    }
 }
 
 fn optional_string(
@@ -15115,7 +15621,7 @@ mod tests {
             .handle_message(request(2, "tools/list", json!({})))
             .unwrap();
         let tools = response["result"]["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 152);
+        assert_eq!(tools.len(), 153);
         let named = |name: &str| {
             tools
                 .iter()
@@ -15327,6 +15833,69 @@ mod tests {
         assert_eq!(
             named("run_deterministic_pipeline")["annotations"]["destructiveHint"],
             true
+        );
+        let fabrication = named("verify_fabrication_authorization");
+        assert_eq!(
+            fabrication["inputSchema"]["required"],
+            json!([
+                "plan",
+                "retained_report",
+                "manufacturing_package",
+                "factory_receipt",
+                "policy_pack",
+                "approvals",
+                "output"
+            ])
+        );
+        assert_eq!(fabrication["inputSchema"]["additionalProperties"], false);
+        assert_eq!(
+            fabrication["inputSchema"]["properties"]["approvals"]["minItems"],
+            1
+        );
+        assert_eq!(
+            fabrication["inputSchema"]["properties"]["approvals"]["maxItems"],
+            100
+        );
+        assert_eq!(
+            fabrication["inputSchema"]["properties"]["approvals"]["items"]["minLength"],
+            1
+        );
+        assert_eq!(
+            fabrication["inputSchema"]["properties"]["approvals"]["items"]["maxLength"],
+            4096
+        );
+        assert_eq!(
+            fabrication["inputSchema"]["properties"]["require_authorized"]["default"],
+            false
+        );
+        assert_eq!(fabrication["execution"]["taskSupport"], "optional");
+        assert_eq!(fabrication["annotations"]["readOnlyHint"], false);
+        assert_eq!(fabrication["annotations"]["destructiveHint"], true);
+        assert_eq!(fabrication["annotations"]["idempotentHint"], true);
+        assert_eq!(fabrication["annotations"]["openWorldHint"], false);
+        let fabrication_properties = fabrication["inputSchema"]["properties"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            fabrication_properties,
+            BTreeSet::from([
+                "plan",
+                "retained_report",
+                "manufacturing_package",
+                "factory_receipt",
+                "policy_pack",
+                "approvals",
+                "output",
+                "require_authorized",
+            ])
+        );
+        assert!(
+            tools
+                .iter()
+                .all(|tool| tool["name"] != "sign_fabrication_approval")
         );
         assert_eq!(
             named("compile_deterministic_pipeline_plan")["inputSchema"]["required"],
@@ -16224,6 +16793,77 @@ mod tests {
     }
 
     #[test]
+    fn fabrication_authorization_rejects_closed_argument_and_path_violations() {
+        fn valid_arguments() -> Map<String, Value> {
+            json!({
+                "plan": "plan.json",
+                "retained_report": "pipeline-report.json",
+                "manufacturing_package": "manufacturing.zip",
+                "factory_receipt": "factory-receipt.json",
+                "policy_pack": "policy-pack.json",
+                "approvals": ["approval-a.json", "approval-b.json"],
+                "output": "authorization.json"
+            })
+            .as_object()
+            .unwrap()
+            .clone()
+        }
+
+        let mut unknown = valid_arguments();
+        unknown.insert("private_key".into(), json!("private.key"));
+        unknown.insert("scope".into(), json!({"quantity": 10}));
+        unknown.insert("evaluated_at_unix".into(), json!(1));
+        unknown.insert("timeout_seconds".into(), json!(30));
+        unknown.insert("approval_data".into(), json!({}));
+
+        let mut wrong_plan_type = valid_arguments();
+        wrong_plan_type.insert("plan".into(), json!(7));
+        let mut empty_plan = valid_arguments();
+        empty_plan.insert("plan".into(), json!(""));
+        let mut long_plan = valid_arguments();
+        long_plan.insert("plan".into(), json!("x".repeat(4097)));
+        let mut controlled_plan = valid_arguments();
+        controlled_plan.insert("plan".into(), json!("plan\n.json"));
+        let mut wrong_approvals_type = valid_arguments();
+        wrong_approvals_type.insert("approvals".into(), json!("approval.json"));
+        let mut empty_approvals = valid_arguments();
+        empty_approvals.insert("approvals".into(), json!([]));
+        let mut excessive_approvals = valid_arguments();
+        excessive_approvals.insert("approvals".into(), json!(vec!["approval.json"; 101]));
+        let mut empty_approval = valid_arguments();
+        empty_approval.insert("approvals".into(), json!([""]));
+        let mut long_approval = valid_arguments();
+        long_approval.insert("approvals".into(), json!(["x".repeat(4097)]));
+        let mut nul_approval = valid_arguments();
+        nul_approval.insert("approvals".into(), json!(["approval\0.json"]));
+        let mut wrong_gate_type = valid_arguments();
+        wrong_gate_type.insert("require_authorized".into(), json!("yes"));
+        let mut missing_output = valid_arguments();
+        missing_output.remove("output");
+
+        for (label, arguments) in [
+            ("unknown", unknown),
+            ("wrong plan type", wrong_plan_type),
+            ("empty plan", empty_plan),
+            ("long plan", long_plan),
+            ("controlled plan", controlled_plan),
+            ("wrong approvals type", wrong_approvals_type),
+            ("empty approvals", empty_approvals),
+            ("excessive approvals", excessive_approvals),
+            ("empty approval", empty_approval),
+            ("long approval", long_approval),
+            ("NUL approval", nul_approval),
+            ("wrong require gate type", wrong_gate_type),
+            ("missing output", missing_output),
+        ] {
+            assert!(
+                verify_fabrication_authorization_tool(arguments, None).is_err(),
+                "{label} was accepted"
+            );
+        }
+    }
+
+    #[test]
     fn successful_tool_process_requires_a_retained_json_artifact() {
         let execution = Execution {
             success: true,
@@ -16383,6 +17023,341 @@ mod tests {
             trusted_deterministic_pipeline_summary(&execution, &report_path),
             Value::Null
         );
+    }
+
+    fn fabrication_authorization_report_fixture() -> (
+        crate::fabrication_authorization::FabricationAuthorizationReport,
+        Vec<u8>,
+        Value,
+    ) {
+        use crate::fabrication_authorization::{
+            FabricationApprovalDecision, FabricationAuthorizationEvidence,
+            FabricationAuthorizationScope, FabricationFactoryReceiptEvidence,
+            FabricationPipelineEvidence, FabricationPolicyPackEvidence, sign_fabrication_approval,
+            verify_fabrication_authorization,
+        };
+        use crate::policy_pack::{FabricationAuthorizationPolicy, TrustedApprovalKey};
+        use pcbex_kicad::ExactArtifactIdentity;
+
+        fn identity(seed: char, bytes: u64) -> ExactArtifactIdentity {
+            ExactArtifactIdentity {
+                bytes,
+                sha256: seed.to_string().repeat(64),
+            }
+        }
+
+        let mut policy = crate::policy_pack::parse_policy_pack(include_str!(
+            "../../../examples/acme-policy-pack.json"
+        ))
+        .unwrap();
+        policy.fabrication_authorization_policy = Some(FabricationAuthorizationPolicy {
+            minimum_approvals: 2,
+            maximum_validity_seconds: 3_600,
+            trusted_keys: vec![
+                TrustedApprovalKey {
+                    signer_id: "fabrication-a".into(),
+                    public_key: hex::encode(
+                        ed25519_dalek::SigningKey::from_bytes(&[41; 32])
+                            .verifying_key()
+                            .to_bytes(),
+                    ),
+                },
+                TrustedApprovalKey {
+                    signer_id: "fabrication-b".into(),
+                    public_key: hex::encode(
+                        ed25519_dalek::SigningKey::from_bytes(&[42; 32])
+                            .verifying_key()
+                            .to_bytes(),
+                    ),
+                },
+            ],
+        });
+        crate::policy_pack::validate_policy_pack(&policy).unwrap();
+        let evidence = FabricationAuthorizationEvidence {
+            pipeline: FabricationPipelineEvidence {
+                plan_source: identity('1', 100),
+                plan_sha256: "2".repeat(64),
+                retained_report: identity('3', 200),
+                run_sha256: "4".repeat(64),
+            },
+            manufacturing_package: identity('5', 300),
+            factory_receipt: FabricationFactoryReceiptEvidence {
+                receipt: identity('6', 400),
+                provider: crate::factory::FactoryProvider::Generic,
+                endpoint: "https://factory.example/quote".into(),
+                quote_sha256: "7".repeat(64),
+                quote_authenticity_verified: false,
+            },
+            policy_pack: FabricationPolicyPackEvidence {
+                source: identity('8', 500),
+                canonical_sha256: crate::policy_pack::policy_pack_sha256(&policy).unwrap(),
+                id: policy.id.clone(),
+                revision: policy.revision,
+            },
+        };
+        let scope = FabricationAuthorizationScope {
+            authorization_id: "fab-2026-001".into(),
+            challenge: "9".repeat(64),
+            quantity: 25,
+            currency: "USD".into(),
+            maximum_total_minor_units: 125_000,
+            valid_from_unix: 1_000,
+            expires_at_unix: 1_600,
+        };
+        let signed = [
+            ("fabrication-a", [41; 32], "FAB-41"),
+            ("fabrication-b", [42; 32], "FAB-42"),
+        ]
+        .into_iter()
+        .map(|(signer_id, key, ticket)| {
+            sign_fabrication_approval(
+                &evidence,
+                &policy,
+                &scope,
+                FabricationApprovalDecision::Approve,
+                "Approved within the exact fabrication scope.",
+                ticket,
+                signer_id,
+                &key,
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+        let report = verify_fabrication_authorization(&evidence, &policy, &signed, 1_200).unwrap();
+        let rendered = format!("{}\n", serde_json::to_string_pretty(&report).unwrap()).into_bytes();
+        let summary = json!({
+            "schema_version": report.schema_version,
+            "status": report.status,
+            "fabrication_authorized": report.fabrication_authorized,
+            "authorization_id": report.scope.authorization_id,
+            "challenge": report.scope.challenge,
+            "quantity": report.scope.quantity,
+            "currency": report.scope.currency,
+            "maximum_total_minor_units": report.scope.maximum_total_minor_units,
+            "valid_from_unix": report.scope.valid_from_unix,
+            "expires_at_unix": report.scope.expires_at_unix,
+            "evaluated_at_unix": report.evaluated_at_unix,
+            "approvals": report.approvals,
+            "rejections": report.rejections,
+            "gate_failure_count": report.gate_failures.len(),
+            "plan_sha256": report.evidence.pipeline.plan_sha256,
+            "run_sha256": report.evidence.pipeline.run_sha256,
+            "manufacturing_package_sha256": report.evidence.manufacturing_package.sha256,
+            "factory_receipt_sha256": report.evidence.factory_receipt.receipt.sha256,
+            "policy_pack_sha256": report.evidence.policy_pack.source.sha256,
+            "quote_authenticity_verified": report.evidence.factory_receipt.quote_authenticity_verified,
+            "challenge_one_time_use_enforced": report.challenge_one_time_use_enforced,
+            "report_bytes": rendered.len(),
+            "report_sha256": sha256_hex(&rendered)
+        });
+        (report, rendered, summary)
+    }
+
+    #[test]
+    fn fabrication_authorization_summary_is_strict_and_semantically_authenticated() {
+        fn execution(summary: &Value, success: bool) -> Execution {
+            Execution {
+                success,
+                exit_code: Some(if success { 0 } else { 1 }),
+                stdout: serde_json::to_vec(summary).unwrap(),
+                stderr: if success {
+                    String::new()
+                } else {
+                    "fabrication authorization quorum did not authorize the exact scope".into()
+                },
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let report_path = directory.path().join("fabrication-authorization.json");
+        let (report, rendered, summary) = fabrication_authorization_report_fixture();
+        std::fs::write(&report_path, &rendered).unwrap();
+
+        assert_eq!(
+            trusted_fabrication_authorization_summary(
+                &execution(&summary, true),
+                &report_path,
+                None,
+            ),
+            summary
+        );
+        // The child emits and retains the summary before require_authorized
+        // turns a truthful not-authorized outcome into a nonzero exit.
+        assert_eq!(
+            trusted_fabrication_authorization_summary(
+                &execution(&summary, false),
+                &report_path,
+                None,
+            ),
+            summary
+        );
+
+        let mut mutations = Vec::new();
+        let mut unknown = summary.clone();
+        unknown["unexpected"] = json!(true);
+        mutations.push(("unknown field", unknown));
+        let mut missing = summary.clone();
+        missing.as_object_mut().unwrap().remove("challenge");
+        mutations.push(("missing field", missing));
+        let mut wrong_type = summary.clone();
+        wrong_type["quantity"] = json!("25");
+        mutations.push(("wrong type", wrong_type));
+        let mut out_of_range = summary.clone();
+        out_of_range["quantity"] = json!(0);
+        mutations.push(("range", out_of_range));
+        let mut digest = summary.clone();
+        digest["plan_sha256"] = json!("A".repeat(64));
+        mutations.push(("digest", digest));
+        let mut status = summary.clone();
+        status["status"] = json!("not_authorized");
+        mutations.push(("status", status));
+        let mut count = summary.clone();
+        count["approvals"] = json!(1);
+        mutations.push(("count", count));
+        let mut gate_count = summary.clone();
+        gate_count["gate_failure_count"] = json!(1);
+        mutations.push(("gate count", gate_count));
+        let mut quote_constant = summary.clone();
+        quote_constant["quote_authenticity_verified"] = json!(true);
+        mutations.push(("quote constant", quote_constant));
+        let mut challenge_constant = summary.clone();
+        challenge_constant["challenge_one_time_use_enforced"] = json!(true);
+        mutations.push(("challenge constant", challenge_constant));
+        let mut bytes = summary.clone();
+        bytes["report_bytes"] = json!(rendered.len() + 1);
+        mutations.push(("report bytes", bytes));
+        let mut report_digest = summary.clone();
+        report_digest["report_sha256"] = json!("f".repeat(64));
+        mutations.push(("report digest", report_digest));
+        let mut nested_digest = summary.clone();
+        nested_digest["factory_receipt_sha256"] = json!("e".repeat(64));
+        mutations.push(("nested evidence", nested_digest));
+
+        for (label, mutation) in mutations {
+            assert_eq!(
+                trusted_fabrication_authorization_summary(
+                    &execution(&mutation, true),
+                    &report_path,
+                    None,
+                ),
+                Value::Null,
+                "{label} mutation was trusted"
+            );
+        }
+
+        let compact = serde_json::to_string(&summary).unwrap();
+        let duplicate = format!("{{\"status\":\"fabrication_authorized\",{}", &compact[1..]);
+        let duplicate_execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stdout: duplicate.into_bytes(),
+            stderr: String::new(),
+        };
+        assert_eq!(
+            trusted_fabrication_authorization_summary(&duplicate_execution, &report_path, None,),
+            Value::Null
+        );
+        let oversized_execution = Execution {
+            success: true,
+            exit_code: Some(0),
+            stdout: vec![b' '; MAX_MCP_PROCESS_MESSAGE_BYTES + 1],
+            stderr: String::new(),
+        };
+        assert_eq!(
+            trusted_fabrication_authorization_summary(&oversized_execution, &report_path, None,),
+            Value::Null
+        );
+
+        let mut forged = serde_json::to_value(&report).unwrap();
+        forged["evidence"]["manufacturing_package"]["sha256"] = json!("e".repeat(64));
+        let forged_rendered =
+            format!("{}\n", serde_json::to_string_pretty(&forged).unwrap()).into_bytes();
+        std::fs::write(&report_path, &forged_rendered).unwrap();
+        let mut forged_summary = summary.clone();
+        forged_summary["manufacturing_package_sha256"] = json!("e".repeat(64));
+        forged_summary["report_bytes"] = json!(forged_rendered.len());
+        forged_summary["report_sha256"] = json!(sha256_hex(&forged_rendered));
+        assert_eq!(
+            trusted_fabrication_authorization_summary(
+                &execution(&forged_summary, true),
+                &report_path,
+                None,
+            ),
+            Value::Null
+        );
+
+        std::fs::remove_file(&report_path).unwrap();
+        assert_eq!(
+            trusted_fabrication_authorization_summary(
+                &execution(&summary, true),
+                &report_path,
+                None,
+            ),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn fabrication_authorization_authentication_observes_cancellation_boundaries() {
+        fn execution(summary: &Value) -> Execution {
+            Execution {
+                success: true,
+                exit_code: Some(0),
+                stdout: serde_json::to_vec(summary).unwrap(),
+                stderr: String::new(),
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let report_path = directory.path().join("fabrication-authorization.json");
+        let (_, rendered, summary) = fabrication_authorization_report_fixture();
+        std::fs::write(&report_path, &rendered).unwrap();
+        let output = report_path.display().to_string();
+
+        let sync = authenticated_fabrication_authorization_result(
+            execution(&summary),
+            output.clone(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(sync["ok"], true);
+        assert_eq!(sync["report_summary"], summary);
+
+        let pre_cancelled = AtomicBool::new(true);
+        let error = authenticated_fabrication_authorization_result(
+            execution(&summary),
+            output.clone(),
+            Some(&pre_cancelled),
+        )
+        .unwrap_err();
+        assert_eq!(error["detail"], "task execution cancelled");
+
+        let during_read = Arc::new(AtomicBool::new(false));
+        let cancel_during_read = Arc::clone(&during_read);
+        set_after_fabrication_report_read_hook(move || {
+            cancel_during_read.store(true, Ordering::SeqCst);
+        });
+        let error = authenticated_fabrication_authorization_result(
+            execution(&summary),
+            output.clone(),
+            Some(&during_read),
+        )
+        .unwrap_err();
+        assert_eq!(error["detail"], "task execution cancelled");
+
+        let after_summary = Arc::new(AtomicBool::new(false));
+        let cancel_after_summary = Arc::clone(&after_summary);
+        set_after_fabrication_summary_hook(move || {
+            cancel_after_summary.store(true, Ordering::SeqCst);
+        });
+        let error = authenticated_fabrication_authorization_result(
+            execution(&summary),
+            output,
+            Some(&after_summary),
+        )
+        .unwrap_err();
+        assert_eq!(error["detail"], "task execution cancelled");
+        assert_eq!(std::fs::read(&report_path).unwrap(), rendered);
     }
 
     #[test]
@@ -16910,6 +17885,35 @@ mod tests {
             std::fs::read(&compiler_output).unwrap(),
             br#"{"schema_version":1}"#
         );
+
+        let authorization_output = directory.path().join("old-authorization.json");
+        std::fs::write(&authorization_output, br#"{"status":"stale"}"#).unwrap();
+        let error = verify_fabrication_authorization_tool(
+            json!({
+                "plan": "missing-plan.json",
+                "retained_report": "missing-pipeline-report.json",
+                "manufacturing_package": "missing-manufacturing.zip",
+                "factory_receipt": "missing-factory-receipt.json",
+                "policy_pack": "missing-policy-pack.json",
+                "approvals": ["missing-approval.json"],
+                "output": authorization_output
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            error["detail"]
+                .as_str()
+                .unwrap()
+                .contains("stale MCP evidence")
+        );
+        assert_eq!(
+            std::fs::read(&authorization_output).unwrap(),
+            br#"{"status":"stale"}"#
+        );
     }
 
     #[test]
@@ -17205,6 +18209,7 @@ mod tests {
             "verify_circuit_kicad_board_binding",
             "pipeline_verify",
             "run_deterministic_pipeline",
+            "verify_fabrication_authorization",
             "compile_deterministic_pipeline_plan",
         ]
         .into_iter()

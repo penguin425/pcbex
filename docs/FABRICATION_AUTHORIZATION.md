@@ -1,9 +1,10 @@
 # Offline fabrication release authorization
 
-Version 1.459 adds a Rust-native, CLI-only dual-control boundary for releasing
-one exact manufacturing package to a separately controlled fabrication
-handoff. It does not submit that package, place an order, reserve inventory,
-execute payment, or contact a network service.
+Version 1.459 adds a Rust-native dual-control CLI boundary for releasing one
+exact manufacturing package to a separately controlled fabrication handoff.
+Version 1.460 exposes fresh verification, but never signing or private-key
+access, through MCP. Neither version submits that package, places an order,
+reserves inventory, executes payment, or contacts a network service.
 
 The authorization starts from an existing factory-required deterministic
 pipeline plan and retained report. pcbex runs that plan again in-process and
@@ -158,6 +159,70 @@ Both schema outputs and operational artifacts are no-clobber. Reports do not
 copy filesystem paths from inputs and never contain private keys; the explicit
 human reason and ticket remain signed caller text.
 
+## MCP verification parity
+
+Version 1.460 exposes the closed MCP tool
+`verify_fabrication_authorization`. It accepts the same plan, retained pipeline
+report, manufacturing ZIP, factory receipt, policy pack, one to 100 signed
+approvals, and new output path as the CLI verifier. Calls may run synchronously
+or as optional MCP Tasks. The tool never accepts a private key, signer or
+decision fields, a caller-selected evaluation time, or inline artifact bytes;
+`sign-fabrication-approval` remains CLI-only.
+
+Every call starts the existing CLI verifier as a bounded shell-free child. The
+child freshly reproduces and revalidates the original artifacts, samples the
+current time after its final source rereads, and atomically writes the complete
+authorization report. A report may be as large as 128 MiB, so MCP does not
+embed it. Instead, the child emits a compact path-free summary after
+publication. The MCP bridge stable-reads the output, rejects duplicate-key or
+malformed report/summary JSON, verifies the exact report byte count and
+SHA-256, parses the complete typed report, and reruns its policy and signature
+evaluation at the report's recorded `evaluated_at_unix` before accepting the
+summary's exact correspondence to that report.
+
+The compact snapshot has exactly 23 fields:
+
+- schema, status, and `fabrication_authorized`;
+- authorization ID, challenge, quantity, currency, maximum value, and validity
+  window;
+- `evaluated_at_unix`, approval/rejection counts, and gate-failure count;
+- plan and run digests plus the raw manufacturing ZIP, factory-receipt source,
+  and policy-pack source SHA-256 values;
+- quote-authenticity and challenge-one-time-use flags; and
+- retained report byte count and SHA-256.
+
+In particular, `manufacturing_package_sha256`, `factory_receipt_sha256`, and
+`policy_pack_sha256` name exact raw source identities. The snapshot does not
+directly return the receipt provider, endpoint, or quote SHA-256, nor the policy
+canonical SHA-256, ID, or revision. Those fields, the complete policy, approval
+envelopes, signatures, reasons, and tickets remain in the retained report and
+are checked by the full replay rather than copied into the MCP response.
+
+`ok: true` means that fresh verification completed and produced an
+authenticated report; it does not by itself mean that fabrication was
+authorized. Callers must inspect
+`structuredContent.report_summary.fabrication_authorized`, or set
+`require_authorized: true`. A valid submitted rejection, insufficient quorum,
+or expired/not-yet-valid window still leaves a truthful `not_authorized` report
+before that optional gate returns an MCP error. Task queue time is part of real
+elapsed time, so a scope may truthfully expire before a queued task is
+evaluated.
+
+`evaluated_at_unix` is an integrity-checked snapshot of when that child made its
+decision, not a trusted timestamp or proof that the authorization is still
+current when a later consumer acts. The output locator is operational metadata,
+not an authorization artifact. Consumers must rerun this verifier from the
+original sources and submitted approvals at the actual release boundary; a
+retained summary or report is not reusable current authority.
+
+Task cancellation and TTL expiry stop the bounded child and leave the Task in
+the cancelled terminal state; later child completion cannot turn that Task into
+a successful authenticated-summary result. If the child won the race and
+atomically published its no-clobber report before cancellation was observed,
+the file may remain rather than being deleted. That file is not authenticated
+by the cancelled Task and must be treated only as a snapshot pending a fresh
+verification into a new output path.
+
 ## Receipt and authority limits
 
 The existing factory receipt is locally normalized evidence. The verifier
@@ -178,8 +243,9 @@ expiration prevent accidental cross-scope reuse, but a static offline verifier
 cannot know whether an authorization was already consumed. One-time use,
 revocation, procurement authorization, supplier authenticity, live inventory,
 and spend enforcement require a durable trusted ledger and a separate order
-executor. Those capabilities, MCP verification, and a verification-only GitHub
-Action are intentionally outside v1.459.
+executor. Those capabilities remain outside v1.460. MCP verification is
+available, but a verification-only GitHub Action is intentionally deferred to
+a later milestone.
 
 The verifier can veto only a valid rejection included in its submitted
 approval set. It cannot discover a withheld decision or treat a later
