@@ -829,6 +829,11 @@
     {
       "id": "mcp-fabrication-authorization-verification-parity",
       "release": "v1.460.0",
+      "status": "released"
+    },
+    {
+      "id": "focused-fabrication-authorization-verification-action",
+      "release": "v1.461.0",
       "status": "current"
     }
   ]

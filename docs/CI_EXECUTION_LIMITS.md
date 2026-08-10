@@ -187,11 +187,30 @@ runner workspace; they do not turn local verification and the GitHub artifact
 service upload into one atomic operation against a concurrent same-user
 writer.
 
-A composite action cannot set `timeout-minutes` on its caller's job. Its three
-supervised commands remain individually finite (10, 30, and 40 minutes), but
-artifact and SARIF service actions are governed by the calling job. Public
-consumers that need a tighter aggregate must set a job timeout; the repository
-smoke job uses 45 minutes.
+The focused boardless fabrication-authorization Action validates five explicit
+pipeline/package/receipt/policy inputs plus 1–100 signed approvals, builds the
+release binary with locked dependencies for at most 30 minutes, and supervises
+the Action wrapper for at most 15 minutes. The wrapper gives the Rust verifier
+a 10-minute child ceiling. Its artifact boundary accepts exactly one depth-one regular report,
+with 128 MiB per-file and aggregate limits, and repeats direct-input and report
+authentication immediately before optional upload. `require-authorized` is
+never forwarded to the child; it is enforced only in the final always-running
+gate so truthful negative evidence is retained first.
+
+The complete report contains policy and human approval material. Upload is
+enabled by default for auditable CI evidence but can be disabled when those
+contents are sensitive. This Action is not a signing, fabrication-network,
+ordering, payment, or current-authority boundary, and the release does not
+claim a near-limit 128 MiB end-to-end upload stress test. Publication
+revalidation and the artifact-service upload are not one atomic transaction
+against a concurrent same-user writer; the checks assume an isolated runner
+workspace.
+
+The root composite Action described earlier cannot set `timeout-minutes` on
+its caller's job. Its three supervised commands remain individually finite
+(10, 30, and 40 minutes), but artifact and SARIF service actions are governed
+by the calling job. Public consumers that need a tighter aggregate must set a
+job timeout; the repository smoke job uses 45 minutes.
 
 ## Release audit
 

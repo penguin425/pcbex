@@ -3920,9 +3920,12 @@ This authorizes only release of those exact bytes and signed limits to a
 separately controlled fabrication handoff. The receipt is not factory-signed,
 the opaque quote is not a typed order contract, the policy pack is an externally
 selected trust root, and the challenge has no durable consumption state. No
-network call, upload, order, inventory reservation, fabrication execution,
-payment, spend authority, or Action is added. Version 1.460 exposes fresh
-verification—but never signing or private-key access—through MCP. See
+network call, order, inventory reservation, fabrication execution, payment, or
+spend authority is added. Version 1.460 exposes fresh verification—but never
+signing or private-key access—through MCP. Version 1.461 exposes that verifier
+as a standalone boardless composite Action; it may retain or optionally upload
+the audit report, but it still cannot sign, contact a factory, or act on an
+order. See
 [`docs/FABRICATION_AUTHORIZATION.md`](docs/FABRICATION_AUTHORIZATION.md) for the
 closed schemas, bounds, verification order, and non-claims.
 
@@ -3958,6 +3961,30 @@ digest-authenticated report was retained; callers must still inspect
 `report_summary.fabrication_authorized`. A queued Task may cross the signed
 time window and truthfully retain `not_authorized` evidence. The response does
 not embed policy bodies, signed envelopes, signatures, reasons, or tickets.
+
+The focused Action uses the same original sources and keeps
+`require-authorized` as its final post-retention gate:
+
+```yaml
+- name: Verify fabrication release authorization
+  uses: penguin425/pcbex/actions/fabrication-authorization@v1.461.0
+  with:
+    plan: pipeline-plan.json
+    retained-report: pipeline-report.json
+    manufacturing-package: manufacturing.zip
+    factory-receipt: factory-receipt.json
+    policy-pack: organization-policy-pack.json
+    approval-files: |
+      fabrication-a.approval.json
+      fabrication-b.approval.json
+    require-authorized: "true"
+```
+
+It publishes only bounded scalar metadata plus the fixed report path. The full
+report can contain policy bodies, public keys, approval envelopes, reasons, and
+tickets; set `upload-artifact: "false"` when those should not be uploaded. See
+[`docs/FABRICATION_AUTHORIZATION_ACTION.md`](docs/FABRICATION_AUTHORIZATION_ACTION.md)
+for the exact 26-output contract, bounds, sequencing, and cancellation limits.
 
 The authorization report is an audit snapshot, not an outer-signed trusted
 timestamp. A release consumer must freshly rerun the verifier from the original

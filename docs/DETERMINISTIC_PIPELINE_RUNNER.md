@@ -370,7 +370,7 @@ membership. The standalone API/CLI/schema and the Rust plan/report schemas are
 unchanged. This new surface has no MCP or Composite Action parity and adds no
 fresh producer, firmware build, network/factory call, or fabrication authority.
 
-## Fabrication release authorization (v1.459.0 CLI / v1.460.0 MCP verification)
+## Fabrication release authorization (v1.459.0 CLI / v1.460.0 MCP / v1.461.0 Action)
 
 The standalone Rust CLI can now use a stricter subset of runner evidence as an
 offline authorization prerequisite. The plan must explicitly select an
@@ -405,8 +405,13 @@ same CLI verifier and samples no caller-provided time. The complete report is
 retained at a new no-clobber output path; a compact summary is accepted only
 after its exact byte count, SHA-256, decision, scope, and evidence identities
 match a stable read of that output. Signing and private-key access remain
-CLI-only, and this release adds no Action, runner phase, network, factory
-submission, order, or payment boundary.
+CLI-only. Version 1.461 routes the same fresh verifier through a standalone
+boardless composite Action, retains one fixed bounded report, and applies
+`require-authorized` only after optional artifact upload. It does not change
+the runner, add a pipeline phase, contact a fabrication API, submit to a
+factory, place an order, or add a payment boundary. The Action may still
+download its toolchain and upload the retained GitHub artifact. See
+[`FABRICATION_AUTHORIZATION_ACTION.md`](FABRICATION_AUTHORIZATION_ACTION.md).
 
 ## MCP parity
 
