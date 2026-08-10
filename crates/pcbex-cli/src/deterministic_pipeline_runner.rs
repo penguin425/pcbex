@@ -752,7 +752,7 @@ pub(crate) fn run_deterministic_pipeline(
             plan.schema_version
         );
     }
-    let stage = create_private_pipeline_stage(&std::env::temp_dir())?;
+    let stage = create_private_pipeline_stage(&tempfile::env::temp_dir())?;
     let mut failures = FailureCollector::new();
     let mut evidence = Vec::new();
 
@@ -1613,7 +1613,14 @@ pub(crate) fn reject_symlink_components(path: &Path, role: &str) -> Result<(), S
     };
     let mut current = PathBuf::new();
     for component in absolute.components() {
-        current.push(component.as_os_str());
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::CurDir => continue,
+            Component::ParentDir | Component::Normal(_) => current.push(component.as_os_str()),
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(format!("{role}: input path contains a symlink component"));
@@ -1951,6 +1958,25 @@ mod tests {
         let stage = create_private_pipeline_stage(&linked_parent).unwrap();
         let canonical_parent = std::fs::canonicalize(&real_parent).unwrap();
         assert_eq!(stage.path().parent(), Some(canonical_parent.as_path()));
+        let input = stage.path().join("input");
+        crate::bounded_io::write(&input, b"input").unwrap();
+        assert_eq!(
+            crate::bounded_io::read_with_limit(&input, 16).unwrap(),
+            b"input"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn private_stage_accepts_a_canonical_windows_temp_prefix() {
+        let workspace = tempfile::tempdir().unwrap();
+        let canonical_parent = std::fs::canonicalize(workspace.path()).unwrap();
+        assert!(matches!(
+            canonical_parent.components().next(),
+            Some(Component::Prefix(_))
+        ));
+
+        let stage = create_private_pipeline_stage(workspace.path()).unwrap();
         let input = stage.path().join("input");
         crate::bounded_io::write(&input, b"input").unwrap();
         assert_eq!(
