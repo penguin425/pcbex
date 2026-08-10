@@ -151,6 +151,18 @@ binding/pipeline-gate rejections. It does not reproduce a Rust report whose
 rejection was itself caused by a missing, linked, empty, oversized,
 digest-mismatched, or inexact firmware source.
 
+The composed v1.458 replay reuses those exact v1.456 capture and size limits
+inside the handoff command. A plan/report pair is accepted only with the full
+v6 board-binding/manufacturing input set, and all pipeline sources are captured
+before the first producer child. Circuit, schematic, board, and package bytes
+are matched to the earlier archive/v5/v6 captures without a second caller read;
+the effective policy digest and canonical nested board-binding report are also
+matched. The final caller-source union includes the plan, retained report,
+every selected role, and every firmware file. After the fixed-file rereads it
+rescans the firmware directory and still requires exactly the eight names, so
+a late extra file cannot evade the closure check. Returned v7 evidence remains
+path-free and contains neither role bodies nor the retained report body.
+
 Inputs must be regular files. Direct symbolic links, symbolic links in any
 lexical ancestor, and Windows reparse points are rejected; lexical `..` parent
 traversal is not accepted. The reader checks the advertised path identity and size, opens
@@ -297,6 +309,17 @@ bytes, the outer replay performs one final union reread of all caller-visible
 handoff, optional assertion, board-binding, and manufacturing sources. No
 later child starts after an earlier assertion or required board-approval gate
 fails, and no v6 success is returned after either deadline expires.
+
+When v1.458 pipeline composition is selected, the outer replay reserves half
+of the remaining time before manufacturing for the downstream pipeline rather
+than using the v1.457 final-reread reserve. After manufacturing completes, the
+pipeline stage receives a deadline earlier than the outer authority by up to
+30 seconds or half of its remaining budget. That reserve covers canonical
+cross-binding, the complete final union reread, firmware-directory closure,
+result construction, and cleanup. The pipeline helper does not start a new
+deadline; it consumes the supplied absolute subdeadline while retaining its
+own process cleanup reserve. No v7 success is returned after any of the three
+ordered deadline boundaries expires.
 
 The deterministic-pipeline replay starts its own monotonic deadline before
 reading the plan. That deadline covers the plan and retained-report captures,

@@ -169,6 +169,7 @@ auditable release.
 | v1.455.0 | Fresh manufacturing-package replay | Capture one board, retained manufacturing ZIP, optional explicit KiCad project/rules sidecars, and one optional manufacturing profile under closed bounds; run the existing `fabricate` producer privately with explicit pcbex/KiCad commands and nested aggregate deadlines, accept only a byte-identical fresh ZIP, reread every staged and caller-visible source, and emit closed path-free `manufacturing-package-fresh-replay-v1` evidence without changing pipeline/MCP/Action or authorizing fabrication |
 | v1.456.0 | Fresh deterministic-pipeline report replay | Capture one closed plan, one retained report, every present source in the fixed 16-role contract, and all seven firmware siblings; run the existing deterministic-pipeline runner privately through a caller-selected pcbex command, require exact retained/fresh report bytes including the final LF, reread staged and caller-visible sources, emit closed path-free `deterministic-pipeline-fresh-replay-v1` evidence with verification distinct from the retained approval decision, close the residual bounded Darwin exited-group observation race, and make native firmware smoke execution plus short-lived Windows Job assignment portable without leaking private paths into evidence |
 | v1.457.0 | Shared-board circuit-to-manufacturing replay | Extend exact circuit-handoff replay only when a complete v5 board-binding pair is present, reuse that one captured raw board for a private manufacturing-package replay, require the fresh ZIP to equal the retained ZIP byte-for-byte, and emit closed path-free v6 evidence under one outer deadline and one final union caller-source reread while preserving exact v1–v5 results when omitted and never treating reproduction as fabrication authorization |
+| v1.458.0 | Pipeline-bound circuit-to-manufacturing replay | Extend only a complete v6 replay with a pre-child captured plan/report/input closure, replay the deterministic pipeline last, cross-bind exact circuit/schematic/board/package bytes, effective policy, the complete canonical board-binding report, and canonical schematic/raw-board identities, preserve truthful rejected evidence, and emit closed path-free v7 under ordered subdeadlines and a final union plus firmware-directory reread while preserving exact v1–v6 results when omitted |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -865,7 +866,7 @@ It never resends the group signal, and every live, existing, unauthorized, or
 deadline-ambiguous group remains a cleanup failure that takes precedence over
 the original child failure.
 
-The current v1.457.0 milestone composes the v1.454 exact circuit-to-board
+The released v1.457.0 milestone composes the v1.454 exact circuit-to-board
 electrical binding with the v1.455 exact manufacturing-package producer replay.
 Manufacturing options are accepted only with the complete v5 board-binding
 pair: one `--kicad-board` and one `--board-binding-report`, with the optional
@@ -915,3 +916,29 @@ provenance, a supplier, factory, or network receipt; establish current parts or
 fabrication availability; submit an archive; authorize layout, procurement,
 manufacturing, fabrication, deployment, or ordering; add MCP/Action/pipeline
 schema parity; or generate/build firmware.
+
+The current v1.458.0 milestone closes the next composition gap by binding one
+exact retained deterministic-pipeline report to the complete v1.457 chain. A
+plan/report pair is accepted only with every v6 board/manufacturing input, and
+the plan, report, selected role files, and exact-eight firmware bundle are
+captured before any producer. After archive, board-binding, and manufacturing
+replay, the pipeline runs last from those captured bytes.
+
+The v7 result requires raw circuit/schematic/board/manufacturing-package
+identity equality, effective policy equality, byte-for-byte canonical equality
+of the complete nested board-binding report, and matching canonical schematic
+and raw-board pipeline identities. Supplied review content and plan-relative
+filename spelling remain evidence under test so a genuine rejected report can
+be reproduced; when a report claims approval, strict review equality and board
+basename equality are independently enforced. Exact verification therefore
+remains separate from the retained approval decision.
+
+Manufacturing and pipeline execution receive ordered, strictly earlier
+absolute deadlines under the existing outer handoff deadline. A final union
+reread covers every earlier and pipeline caller source and rescans the firmware
+directory for exact membership. The closed path-free v7 scope is
+`deterministic-electrical-handoff-chain-manufacturing-pipeline-replay-v7`, and
+omitting the plan/report pair preserves v1–v6 bytes. This milestone adds no
+fresh producer beyond those already in v6, firmware rebuild, MCP/Action parity,
+network/factory call, toolchain authentication, fabrication/procurement
+authorization, or order placement.

@@ -764,6 +764,159 @@ def reject_paths(value):
 reject_paths(result)
 PY
 
+# Bind the same real v6 chain to a freshly retained deterministic-pipeline
+# report. Seed the non-shared analysis/firmware inputs from the existing real
+# CI fixture, replace every shared artifact with this exact handoff/board/ZIP,
+# then compile and run a fresh plan. The supplied review and derived analysis
+# intentionally describe the seed design, so the exact report is rejected;
+# v7 must preserve that truthful decision while cross-binding all shared bytes
+# and the complete nested board-binding report.
+pipeline_seed="$output_directory/multilayer.composed.pipeline-seed"
+pipeline_seed_summary="$output_directory/multilayer.composed.pipeline-seed.json"
+pipeline_case="$output_directory/multilayer.composed.pipeline"
+pipeline_plan="$pipeline_case/plan.json"
+pipeline_report="$pipeline_case/report.json"
+pipeline_replay_result="$output_directory/multilayer.composed.pipeline-replay.json"
+python3 scripts/deterministic_pipeline_ci.py \
+  --pcbex "$pcbex_binary" \
+  --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci \
+  --output-dir "$pipeline_seed" \
+  --timeout-seconds 300 \
+  >"$pipeline_seed_summary"
+mkdir "$pipeline_case"
+cp "$pipeline_seed/accepted/intent.json" "$pipeline_case/intent.json"
+cp "$pipeline_seed/accepted/electrical-policy.json" \
+  "$pipeline_case/electrical-policy.json"
+cp "$pipeline_seed/accepted/electrical-review.json" \
+  "$pipeline_case/electrical-review.json"
+cp -R "$pipeline_seed/accepted/analysis" "$pipeline_case/analysis"
+cp -R "$pipeline_seed/accepted/firmware" "$pipeline_case/firmware"
+cp "$composed_handoff_extract/circuit-spec-v2.json" \
+  "$pipeline_case/circuit-spec-v2.json"
+cp "$composed_handoff_extract/circuit-spec.kicad_sch" \
+  "$pipeline_case/design.kicad_sch"
+cp "$upgraded_multilayer" "$pipeline_case/design.kicad_pcb"
+cp "$retained_manufacturing_zip" "$pipeline_case/manufacturing.zip"
+(
+  cd "$pipeline_case"
+  "$pcbex_binary" compile-deterministic-pipeline-plan \
+    intent.json --output plan.json
+  "$pcbex_binary" run-deterministic-pipeline \
+    plan.json --output report.json
+)
+pipeline_report_sha_before="$(sha256sum "$pipeline_report" | awk '{print $1}')"
+pipeline_report_bytes_before="$(wc -c <"$pipeline_report" | tr -d '[:space:]')"
+PYTHONPATH=agent/src python3 -m pcbex_agent replay-circuit-handoff-bundle \
+  "$composed_handoff_zip" \
+  --pcbex "$pcbex_binary" \
+  --kicad-board "$upgraded_multilayer" \
+  --board-binding-report "$composed_board_binding_report" \
+  --manufacturing-package "$retained_manufacturing_zip" \
+  --manufacturing-kicad-cli "$kicad_cli_binary" \
+  --deterministic-pipeline-plan "$pipeline_plan" \
+  --deterministic-pipeline-report "$pipeline_report" \
+  --timeout-seconds 480 \
+  >"$pipeline_replay_result"
+test "$(sha256sum "$pipeline_report" | awk '{print $1}')" = \
+  "$pipeline_report_sha_before"
+test "$(wc -c <"$pipeline_report" | tr -d '[:space:]')" = \
+  "$pipeline_report_bytes_before"
+python3 - \
+  "$pipeline_replay_result" \
+  "$pipeline_plan" \
+  "$pipeline_report" \
+  "$composed_board_binding_report" \
+  "$retained_manufacturing_zip" \
+  "$upgraded_multilayer" \
+  "$output_directory" <<'PY'
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+(
+    result_path,
+    plan_path,
+    report_path,
+    binding_path,
+    package_path,
+    board_path,
+    output_directory,
+) = map(Path, sys.argv[1:])
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+result = json.loads(result_path.read_text(encoding="utf-8"))
+plan = json.loads(plan_path.read_text(encoding="utf-8"))
+report = json.loads(report_path.read_text(encoding="utf-8"))
+binding = json.loads(binding_path.read_text(encoding="utf-8"))
+
+assert result["schema_version"] == 7
+assert result["verification_scope"] == (
+    "deterministic-electrical-handoff-chain-manufacturing-pipeline-replay-v7"
+)
+assert result["verified"] is True
+for flag in (
+    "deterministic_pipeline_replayed",
+    "pipeline_circuit_spec_matched",
+    "pipeline_schematic_matched",
+    "pipeline_effective_policy_matched",
+    "pipeline_board_matched",
+    "pipeline_manufacturing_package_matched",
+    "pipeline_board_binding_matched",
+):
+    assert result["validation"][flag] is True
+
+pipeline = result["deterministic_pipeline"]
+assert pipeline["schema_version"] == 1
+assert pipeline["verification_scope"] == "deterministic-pipeline-fresh-replay-v1"
+assert pipeline["verified"] is True
+assert pipeline["plan"]["source"] == identity(plan_path)
+assert pipeline["report"]["retained"] == identity(report_path)
+assert pipeline["report"]["fresh"] == identity(report_path)
+assert pipeline["report"]["identical"] is True
+assert pipeline["report"]["approved"] is False
+assert report["approved"] is False
+assert report["binding"] == binding
+assert result["board_binding"]["report"] == identity(binding_path)
+assert result["board_binding"]["board"] == identity(board_path)
+assert result["manufacturing_package"]["package"] == {
+    "retained": identity(package_path),
+    "fresh": identity(package_path),
+    "identical": True,
+}
+
+case_root = plan_path.parent
+for role, expected in (
+    ("circuit_spec", "circuit-spec-v2.json"),
+    ("schematic", "design.kicad_sch"),
+    ("board", "design.kicad_pcb"),
+    ("manufacturing_package", "manufacturing.zip"),
+):
+    descriptor = plan[role]
+    source = case_root / descriptor["path"]
+    assert source.name == expected
+    assert {"bytes": descriptor["bytes"], "sha256": descriptor["sha256"]} == identity(source)
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(result)
+PY
+
 # A one-byte change in a retained ZIP must fail closed. Mutate compressed
 # member data in place so ZIP structure and the retained path remain
 # unchanged; fresh regeneration must then reject it at exact package

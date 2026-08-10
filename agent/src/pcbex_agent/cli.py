@@ -59,6 +59,7 @@ from .circuit_handoff_bundle import (
     circuit_handoff_bundle_ai_quorum_replay_result_json_schema,
     circuit_handoff_bundle_board_binding_replay_result_json_schema,
     circuit_handoff_bundle_manufacturing_replay_result_json_schema,
+    circuit_handoff_bundle_pipeline_replay_result_json_schema,
     circuit_handoff_bundle_catalog_provenance_replay_result_json_schema,
     circuit_handoff_bundle_json_schema,
     circuit_handoff_bundle_native_erc_replay_result_json_schema,
@@ -415,6 +416,24 @@ def main() -> None:
         "--manufacturing-physical-profile", type=Path
     )
     replay_handoff.add_argument(
+        "--deterministic-pipeline-plan",
+        type=Path,
+        help=(
+            "closed deterministic-pipeline plan whose shared circuit, board, "
+            "and package inputs must match the complete manufacturing replay"
+        ),
+    )
+    replay_handoff.add_argument(
+        "--deterministic-pipeline-report",
+        type=Path,
+        help="retained deterministic-pipeline report to reproduce exactly",
+    )
+    replay_handoff.add_argument(
+        "--require-deterministic-pipeline-approved",
+        action="store_true",
+        help="fail after exact cross-bound replay when the pipeline is rejected",
+    )
+    replay_handoff.add_argument(
         "--ai-quorum-report",
         type=Path,
         help=(
@@ -507,6 +526,14 @@ def main() -> None:
     handoff_manufacturing_replay_result_schema.add_argument(
         "-o", "--output", type=Path
     )
+    handoff_pipeline_replay_result_schema = sub.add_parser(
+        "circuit-handoff-bundle-pipeline-replay-result-schema",
+        help=(
+            "write the closed exact-chain plus board-bound manufacturing and "
+            "deterministic-pipeline replay schema"
+        ),
+    )
+    handoff_pipeline_replay_result_schema.add_argument("-o", "--output", type=Path)
     catalog_snapshot_schema = sub.add_parser(
         "catalog-snapshot-schema",
         help="write the closed local catalog-snapshot JSON Schema",
@@ -979,6 +1006,23 @@ def main() -> None:
                     manufacturing_options["manufacturing_kicad_cli"] = (
                         args.manufacturing_kicad_cli
                     )
+            pipeline_options = {}
+            if (
+                args.deterministic_pipeline_plan is not None
+                or args.deterministic_pipeline_report is not None
+                or args.require_deterministic_pipeline_approved
+            ):
+                pipeline_options = {
+                    "deterministic_pipeline_plan": (
+                        args.deterministic_pipeline_plan
+                    ),
+                    "retained_deterministic_pipeline_report": (
+                        args.deterministic_pipeline_report
+                    ),
+                    "require_deterministic_pipeline_approved": (
+                        args.require_deterministic_pipeline_approved
+                    ),
+                }
             ai_options = {}
             if (
                 args.ai_quorum_report is not None
@@ -1024,6 +1068,7 @@ def main() -> None:
                 **native_options,
                 **board_options,
                 **manufacturing_options,
+                **pipeline_options,
                 **ai_options,
                 timeout_seconds=args.timeout_seconds,
                 expected_archive_sha256=args.expected_archive_sha256,
@@ -1203,6 +1248,29 @@ def main() -> None:
             raise SystemExit(
                 "circuit handoff manufacturing replay schema failed: "
                 f"{error}"
+            ) from error
+    elif args.command == "circuit-handoff-bundle-pipeline-replay-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_pipeline_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(
+                f"circuit handoff pipeline replay schema failed: {error}"
             ) from error
     elif args.command == "fetch-catalog-snapshot":
         try:

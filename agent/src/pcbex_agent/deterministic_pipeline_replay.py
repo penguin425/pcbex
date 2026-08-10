@@ -10,6 +10,7 @@ removed with the private workspace.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 import hashlib
 import json
 import math
@@ -246,6 +247,31 @@ _PIPELINE_PHASE_NAMES = {
 
 class DeterministicPipelineReplayError(ValueError):
     """A stable, path-free deterministic-pipeline replay failure."""
+
+
+@dataclass(frozen=True)
+class _DeterministicPipelineReplayCapture:
+    """One immutable plan/report/input snapshot for composed replay."""
+
+    plan_source: str
+    report_source: str
+    plan_raw: bytes
+    retained_raw: bytes
+    plan_identity: dict[str, Any]
+    retained_identity: dict[str, Any]
+    plan_value: dict[str, Any]
+    plan_digest: str
+    descriptors: tuple[tuple[str, dict[str, Any]], ...]
+    staged_sources: tuple[
+        tuple[str, Path, bytes, int, str, dict[str, Any]], ...
+    ]
+    role_sources: tuple[tuple[str, bytes], ...]
+    evidence: tuple[dict[str, Any], ...]
+    input_identity: dict[str, Any]
+    plan_stage_name: str
+    firmware_source_directory: Path
+    firmware_relative_parent: PurePosixPath
+    caller_sources: tuple[tuple[str | Path, bytes, int, str], ...]
 
 
 class _DuplicateJSONKey(ValueError):
@@ -1249,6 +1275,371 @@ def deterministic_pipeline_replay_result_json_schema() -> dict[str, Any]:
     }
 
 
+def _capture_deterministic_pipeline_replay_inputs(
+    plan: str | os.PathLike[str],
+    retained_report: str | os.PathLike[str],
+    *,
+    deadline: float,
+    clock: Callable[[], float],
+) -> _DeterministicPipelineReplayCapture:
+    """Capture the closed plan, report, and every selected input once."""
+
+    plan_source = _freeze_path(plan, "deterministic pipeline plan")
+    report_source = _freeze_path(retained_report, "retained pipeline report")
+    if _same_file(plan_source, report_source):
+        raise _fail("deterministic pipeline plan and report must be distinct")
+
+    plan_raw = _read_nonempty(plan_source, MAXIMUM_PLAN_BYTES, "plan")
+    plan_identity = _identity(plan_raw)
+    plan_value, descriptors = _parse_plan(plan_raw)
+    plan_digest = _semantic_plan_digest(plan_value)
+    if sum(descriptor["bytes"] for _role, descriptor in descriptors) > (
+        MAXIMUM_TOTAL_INPUT_BYTES
+    ):
+        raise _fail("deterministic pipeline inputs exceed their aggregate bound")
+    _remaining(deadline, clock)
+
+    retained_raw = _read_nonempty(
+        report_source, MAXIMUM_REPORT_BYTES, "retained report"
+    )
+    retained_identity = _identity(retained_raw)
+    _remaining(deadline, clock)
+
+    caller_root = Path(plan_source).parent
+    firmware_descriptor = dict(descriptors)["firmware_manifest"]
+    firmware_manifest_source = _source_path(
+        caller_root, firmware_descriptor["path"]
+    )
+    if firmware_manifest_source.name != "manifest.json":
+        raise _fail("firmware manifest basename must be manifest.json")
+    firmware_source_directory = firmware_manifest_source.parent
+    _firmware_entry_names(firmware_source_directory)
+    _remaining(deadline, clock)
+
+    relative_keys = {
+        descriptor["path"].casefold() for _role, descriptor in descriptors
+    }
+    plan_stage_name = _stage_name(relative_keys)
+    staged_sources: list[
+        tuple[str, Path, bytes, int, str, dict[str, Any]]
+    ] = []
+    role_sources: list[tuple[str, bytes]] = []
+    caller_sources: list[tuple[str | Path, bytes, int, str]] = []
+    evidence: list[dict[str, Any]] = []
+    total_input_bytes = 0
+
+    for role, descriptor in descriptors:
+        caller_path = _source_path(caller_root, descriptor["path"])
+        raw = _read_nonempty(caller_path, _ROLE_LIMITS[role], role)
+        observed = _identity(raw)
+        if (
+            observed["bytes"] != descriptor["bytes"]
+            or observed["sha256"] != descriptor["sha256"]
+        ):
+            raise _fail(f"{role} source does not match its plan descriptor")
+        total_input_bytes += len(raw)
+        if total_input_bytes > MAXIMUM_TOTAL_INPUT_BYTES:
+            raise _fail("deterministic pipeline inputs exceed their aggregate bound")
+        evidence.append(_capture_identity(raw, role, descriptor["path"]))
+        staged_sources.append(
+            (
+                descriptor["path"],
+                caller_path,
+                raw,
+                _ROLE_LIMITS[role],
+                role,
+                observed,
+            )
+        )
+        role_sources.append((role, raw))
+        caller_sources.append((caller_path, raw, _ROLE_LIMITS[role], role))
+        _remaining(deadline, clock)
+
+    firmware_relative_parent = PurePosixPath(firmware_descriptor["path"]).parent
+    for name in _FIRMWARE_ARTIFACTS:
+        caller_path = firmware_source_directory / name
+        raw = _read_nonempty(
+            caller_path, _FIRMWARE_ARTIFACT_LIMIT, f"firmware artifact {name}"
+        )
+        relative = (
+            name
+            if str(firmware_relative_parent) == "."
+            else f"{firmware_relative_parent.as_posix()}/{name}"
+        )
+        total_input_bytes += len(raw)
+        if total_input_bytes > MAXIMUM_TOTAL_INPUT_BYTES:
+            raise _fail("deterministic pipeline inputs exceed their aggregate bound")
+        observed = _identity(raw)
+        evidence.append(
+            _capture_identity(raw, f"firmware_artifact:{name}", relative)
+        )
+        staged_sources.append(
+            (
+                relative,
+                caller_path,
+                raw,
+                _FIRMWARE_ARTIFACT_LIMIT,
+                f"firmware artifact {name}",
+                observed,
+            )
+        )
+        caller_sources.append(
+            (
+                caller_path,
+                raw,
+                _FIRMWARE_ARTIFACT_LIMIT,
+                f"firmware artifact {name}",
+            )
+        )
+        _remaining(deadline, clock)
+
+    input_identity = _input_set_identity(evidence)
+    _firmware_entry_names(firmware_source_directory)
+    for _relative, caller_path, _raw, maximum, label, expected in staged_sources:
+        _verify_capture(caller_path, expected, maximum, label)
+        _remaining(deadline, clock)
+    _verify_capture(plan_source, plan_identity, MAXIMUM_PLAN_BYTES, "plan source")
+    _verify_capture(
+        report_source,
+        retained_identity,
+        MAXIMUM_REPORT_BYTES,
+        "retained report source",
+    )
+    _remaining(deadline, clock)
+
+    caller_sources.insert(
+        0,
+        (report_source, retained_raw, MAXIMUM_REPORT_BYTES, "retained report source"),
+    )
+    caller_sources.insert(
+        0,
+        (plan_source, plan_raw, MAXIMUM_PLAN_BYTES, "plan source"),
+    )
+    return _DeterministicPipelineReplayCapture(
+        plan_source=plan_source,
+        report_source=report_source,
+        plan_raw=plan_raw,
+        retained_raw=retained_raw,
+        plan_identity=plan_identity,
+        retained_identity=retained_identity,
+        plan_value=plan_value,
+        plan_digest=plan_digest,
+        descriptors=tuple(descriptors),
+        staged_sources=tuple(staged_sources),
+        role_sources=tuple(role_sources),
+        evidence=tuple(evidence),
+        input_identity=input_identity,
+        plan_stage_name=plan_stage_name,
+        firmware_source_directory=firmware_source_directory,
+        firmware_relative_parent=firmware_relative_parent,
+        caller_sources=tuple(caller_sources),
+    )
+
+
+def _replay_captured_deterministic_pipeline(
+    capture: _DeterministicPipelineReplayCapture,
+    command: Sequence[str],
+    *,
+    deadline: float,
+    clock: Callable[[], float],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Freshly replay one immutable capture under an absolute deadline."""
+
+    fresh_identity: dict[str, Any] | None = None
+    report_value: dict[str, Any] | None = None
+    trusted_root = _trusted_temporary_root()
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="pcbex-deterministic-pipeline-replay-", dir=trusted_root
+        ) as temporary:
+            workspace = Path(temporary)
+            input_root = workspace / "inputs"
+            fresh_directory = workspace / "result"
+            staged_plan = input_root / capture.plan_stage_name
+            fresh_report = fresh_directory / "fresh-report.json"
+            planned_staging_paths = [
+                workspace,
+                input_root,
+                fresh_directory,
+                staged_plan,
+                fresh_report,
+            ]
+            planned_staging_paths.extend(
+                _source_path(input_root, relative)
+                for relative, _caller, _raw, _maximum, _label, _identity_value in (
+                    capture.staged_sources
+                )
+            )
+            _validate_private_staging_paths(planned_staging_paths)
+            input_root.mkdir(mode=0o700)
+            fresh_directory.mkdir(mode=0o700)
+            atomic_write_no_clobber(
+                staged_plan, capture.plan_raw, max_bytes=MAXIMUM_PLAN_BYTES
+            )
+
+            staged: list[tuple[Path, bytes, int, str, dict[str, Any]]] = []
+            for relative, caller_path, raw, maximum, label, expected in (
+                capture.staged_sources
+            ):
+                staged_path = _source_path(input_root, relative)
+                staged_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                atomic_write_no_clobber(staged_path, raw, max_bytes=maximum)
+                staged.append((staged_path, raw, maximum, label, expected))
+                _remaining(deadline, clock)
+
+            _firmware_entry_names(capture.firmware_source_directory)
+            _firmware_entry_names(
+                _source_path(input_root, dict(capture.descriptors)["firmware_manifest"]["path"])
+                .parent
+            )
+            for staged_path, _raw, maximum, label, expected in staged:
+                _verify_capture(staged_path, expected, maximum, f"staged {label}")
+                _remaining(deadline, clock)
+            for _relative, caller_path, _raw, maximum, label, expected in (
+                capture.staged_sources
+            ):
+                _verify_capture(caller_path, expected, maximum, label)
+                _remaining(deadline, clock)
+            _verify_capture(
+                capture.plan_source,
+                capture.plan_identity,
+                MAXIMUM_PLAN_BYTES,
+                "plan source",
+            )
+            _verify_capture(
+                capture.report_source,
+                capture.retained_identity,
+                MAXIMUM_REPORT_BYTES,
+                "retained report source",
+            )
+
+            argv = _validate_final_argv(
+                [
+                    *command,
+                    "run-deterministic-pipeline",
+                    str(staged_plan),
+                    "--output",
+                    str(fresh_report),
+                    "--mcp-echo-report-summary",
+                ]
+            )
+            outer_remaining = _remaining(deadline, clock)
+            cleanup_and_reread_reserve = min(30.0, outer_remaining / 2.0)
+            process_cleanup_timeout = cleanup_and_reread_reserve / 2.0
+            process_timeout = outer_remaining - cleanup_and_reread_reserve
+            if (
+                not math.isfinite(process_timeout)
+                or process_timeout <= 0
+                or not math.isfinite(process_cleanup_timeout)
+                or process_cleanup_timeout <= 0
+            ):
+                raise _fail("deterministic pipeline child has no execution budget")
+            try:
+                completed = run_bounded(
+                    argv,
+                    timeout_seconds=process_timeout,
+                    cleanup_timeout_seconds=process_cleanup_timeout,
+                    max_stdout_bytes=MAXIMUM_CHILD_STDOUT_BYTES,
+                    max_stderr_bytes=MAXIMUM_CHILD_STDERR_BYTES,
+                )
+            except BoundedProcessError:
+                raise _fail("deterministic pipeline child process failed") from None
+            if completed.returncode != 0:
+                raise _fail("deterministic pipeline child rejected the replay")
+            summary = _parse_child_summary(completed.stdout)
+            _remaining(deadline, clock)
+
+            fresh_raw = _read_nonempty(
+                fresh_report, MAXIMUM_REPORT_BYTES, "fresh report"
+            )
+            fresh_identity = _identity(fresh_raw)
+            if fresh_raw != capture.retained_raw:
+                raise _fail(
+                    "fresh deterministic pipeline replay did not reproduce the retained report"
+                )
+            report_value = _parse_fresh_report(
+                fresh_raw,
+                capture.plan_identity,
+                capture.plan_digest,
+                list(capture.evidence),
+                summary,
+            )
+            _remaining(deadline, clock)
+
+            for staged_path, _raw, maximum, label, expected in staged:
+                _verify_capture(staged_path, expected, maximum, f"staged {label}")
+                _remaining(deadline, clock)
+            for _relative, caller_path, _raw, maximum, label, expected in (
+                capture.staged_sources
+            ):
+                _verify_capture(caller_path, expected, maximum, label)
+                _remaining(deadline, clock)
+            _firmware_entry_names(capture.firmware_source_directory)
+            _firmware_entry_names(
+                _source_path(input_root, dict(capture.descriptors)["firmware_manifest"]["path"])
+                .parent
+            )
+            _verify_capture(
+                capture.plan_source,
+                capture.plan_identity,
+                MAXIMUM_PLAN_BYTES,
+                "plan source",
+            )
+            _verify_capture(
+                staged_plan,
+                capture.plan_identity,
+                MAXIMUM_PLAN_BYTES,
+                "staged plan source",
+            )
+            _verify_capture(
+                capture.report_source,
+                capture.retained_identity,
+                MAXIMUM_REPORT_BYTES,
+                "retained report source",
+            )
+            _verify_capture(
+                fresh_report, fresh_identity, MAXIMUM_REPORT_BYTES, "fresh report source"
+            )
+            _remaining(deadline, clock)
+    except DeterministicPipelineReplayError:
+        raise
+    except (BoundedIOError, BoundedProcessError, OSError, TypeError, ValueError):
+        raise _fail("deterministic pipeline replay workspace failed") from None
+
+    assert fresh_identity is not None
+    assert report_value is not None
+    result = {
+        "schema_version": DETERMINISTIC_PIPELINE_REPLAY_RESULT_SCHEMA_VERSION,
+        "verification_scope": DETERMINISTIC_PIPELINE_REPLAY_SCOPE,
+        "verified": True,
+        "engine_version": report_value["engine_version"],
+        "plan": {
+            "source": capture.plan_identity,
+            "plan_sha256": report_value["plan_sha256"],
+            "factory_required": capture.plan_value["require_factory"],
+        },
+        "report": {
+            "retained": capture.retained_identity,
+            "fresh": fresh_identity,
+            "run_sha256": report_value["run_sha256"],
+            "approved": report_value["approved"],
+            "failure_count": len(report_value["failures"]),
+            "identical": True,
+        },
+        "inputs": capture.input_identity,
+        "validation": {
+            "plan_captured_before_replay": True,
+            "inputs_captured_before_replay": True,
+            "fresh_report_reproduced": True,
+            "retained_report_identical": True,
+            "staged_inputs_unchanged": True,
+            "caller_inputs_unchanged": True,
+        },
+    }
+    _remaining(deadline, clock)
+    return result, report_value
+
+
 def replay_deterministic_pipeline(
     plan: str | os.PathLike[str],
     retained_report: str | os.PathLike[str],
@@ -1277,264 +1668,29 @@ def replay_deterministic_pipeline(
         raise _fail("aggregate timeout is invalid")
 
     plan_source = _freeze_path(plan, "deterministic pipeline plan")
-    report_source = _freeze_path(retained_report, "retained pipeline report")
+    report_source = _freeze_path(
+        retained_report, "retained deterministic pipeline report"
+    )
     if _same_file(plan_source, report_source):
         raise _fail("deterministic pipeline plan and report must be distinct")
     command = _normalize_command(pcbex)
-    plan_raw = _read_nonempty(plan_source, MAXIMUM_PLAN_BYTES, "plan")
-    plan_identity = _identity(plan_raw)
-    plan_value, descriptors = _parse_plan(plan_raw)
-    plan_digest = _semantic_plan_digest(plan_value)
-    if sum(descriptor["bytes"] for _role, descriptor in descriptors) > (
-        MAXIMUM_TOTAL_INPUT_BYTES
-    ):
-        raise _fail("deterministic pipeline inputs exceed their aggregate bound")
-    _remaining(deadline, _clock)
-    retained_raw = _read_nonempty(
-        report_source, MAXIMUM_REPORT_BYTES, "retained report"
-    )
-    retained_identity = _identity(retained_raw)
-    _remaining(deadline, _clock)
-
-    caller_root = Path(plan_source).parent
-    firmware_descriptor = dict(descriptors)["firmware_manifest"]
-    firmware_manifest_source = _source_path(
-        caller_root, firmware_descriptor["path"]
-    )
-    if firmware_manifest_source.name != "manifest.json":
-        raise _fail("firmware manifest basename must be manifest.json")
-    firmware_source_directory = firmware_manifest_source.parent
-    _firmware_entry_names(firmware_source_directory)
-
-    relative_keys = {descriptor["path"].casefold() for _role, descriptor in descriptors}
-    plan_stage_name = _stage_name(relative_keys)
-    captures: list[tuple[Path, Path, int, str, dict[str, Any]]] = []
-    evidence: list[dict[str, Any]] = []
-
-    trusted_root = _trusted_temporary_root()
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="pcbex-deterministic-pipeline-replay-", dir=trusted_root
-        ) as temporary:
-            workspace = Path(temporary)
-            input_root = workspace / "inputs"
-            fresh_directory = workspace / "result"
-            staged_plan = input_root / plan_stage_name
-            fresh_report = fresh_directory / "fresh-report.json"
-            firmware_relative_parent = PurePosixPath(
-                firmware_descriptor["path"]
-            ).parent
-            planned_staging_paths = [
-                workspace,
-                input_root,
-                fresh_directory,
-                staged_plan,
-                fresh_report,
-            ]
-            planned_staging_paths.extend(
-                _source_path(input_root, descriptor["path"])
-                for _role, descriptor in descriptors
-            )
-            planned_staging_paths.extend(
-                _source_path(
-                    input_root,
-                    name
-                    if str(firmware_relative_parent) == "."
-                    else f"{firmware_relative_parent.as_posix()}/{name}",
-                )
-                for name in _FIRMWARE_ARTIFACTS
-            )
-            _validate_private_staging_paths(planned_staging_paths)
-            input_root.mkdir(mode=0o700)
-            fresh_directory.mkdir(mode=0o700)
-            atomic_write_no_clobber(
-                staged_plan, plan_raw, max_bytes=MAXIMUM_PLAN_BYTES
-            )
-
-            total_input_bytes = 0
-            for role, descriptor in descriptors:
-                caller_path = _source_path(caller_root, descriptor["path"])
-                raw = _read_nonempty(caller_path, _ROLE_LIMITS[role], role)
-                observed = _identity(raw)
-                if (
-                    observed["bytes"] != descriptor["bytes"]
-                    or observed["sha256"] != descriptor["sha256"]
-                ):
-                    raise _fail(f"{role} source does not match its plan descriptor")
-                staged_path = _source_path(input_root, descriptor["path"])
-                staged_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                atomic_write_no_clobber(
-                    staged_path, raw, max_bytes=_ROLE_LIMITS[role]
-                )
-                total_input_bytes += len(raw)
-                if total_input_bytes > MAXIMUM_TOTAL_INPUT_BYTES:
-                    raise _fail("deterministic pipeline inputs exceed their aggregate bound")
-                captured = _capture_identity(raw, role, descriptor["path"])
-                evidence.append(captured)
-                captures.append(
-                    (caller_path, staged_path, _ROLE_LIMITS[role], role, observed)
-                )
-                _remaining(deadline, _clock)
-
-            for name in _FIRMWARE_ARTIFACTS:
-                caller_path = firmware_source_directory / name
-                raw = _read_nonempty(
-                    caller_path, _FIRMWARE_ARTIFACT_LIMIT, f"firmware artifact {name}"
-                )
-                relative = (
-                    name
-                    if str(firmware_relative_parent) == "."
-                    else f"{firmware_relative_parent.as_posix()}/{name}"
-                )
-                staged_path = _source_path(input_root, relative)
-                staged_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                atomic_write_no_clobber(
-                    staged_path, raw, max_bytes=_FIRMWARE_ARTIFACT_LIMIT
-                )
-                total_input_bytes += len(raw)
-                if total_input_bytes > MAXIMUM_TOTAL_INPUT_BYTES:
-                    raise _fail("deterministic pipeline inputs exceed their aggregate bound")
-                observed = _identity(raw)
-                evidence.append(
-                    _capture_identity(raw, f"firmware_artifact:{name}", relative)
-                )
-                captures.append(
-                    (
-                        caller_path,
-                        staged_path,
-                        _FIRMWARE_ARTIFACT_LIMIT,
-                        f"firmware artifact {name}",
-                        observed,
-                    )
-                )
-                _remaining(deadline, _clock)
-
-            input_identity = _input_set_identity(evidence)
-            _firmware_entry_names(firmware_source_directory)
-            _firmware_entry_names(
-                _source_path(input_root, firmware_descriptor["path"]).parent
-            )
-            for caller_path, staged_path, maximum, label, expected in captures:
-                _verify_capture(caller_path, expected, maximum, label)
-                _verify_capture(staged_path, expected, maximum, f"staged {label}")
-                _remaining(deadline, _clock)
-            _verify_capture(
-                plan_source, plan_identity, MAXIMUM_PLAN_BYTES, "plan source"
-            )
-            _verify_capture(
-                report_source,
-                retained_identity,
-                MAXIMUM_REPORT_BYTES,
-                "retained report source",
-            )
-
-            argv = _validate_final_argv(
-                [
-                    *command,
-                    "run-deterministic-pipeline",
-                    str(staged_plan),
-                    "--output",
-                    str(fresh_report),
-                    "--mcp-echo-report-summary",
-                ]
-            )
-            outer_remaining = _remaining(deadline, _clock)
-            cleanup_and_reread_reserve = min(30.0, outer_remaining / 2.0)
-            process_cleanup_timeout = cleanup_and_reread_reserve / 2.0
-            process_timeout = outer_remaining - cleanup_and_reread_reserve
-            if (
-                not math.isfinite(process_timeout)
-                or process_timeout <= 0
-                or not math.isfinite(process_cleanup_timeout)
-                or process_cleanup_timeout <= 0
-            ):
-                raise _fail("deterministic pipeline child has no execution budget")
-            try:
-                completed = run_bounded(
-                    argv,
-                    timeout_seconds=process_timeout,
-                    cleanup_timeout_seconds=process_cleanup_timeout,
-                    max_stdout_bytes=MAXIMUM_CHILD_STDOUT_BYTES,
-                    max_stderr_bytes=MAXIMUM_CHILD_STDERR_BYTES,
-                )
-            except BoundedProcessError:
-                raise _fail("deterministic pipeline child process failed") from None
-            if completed.returncode != 0:
-                raise _fail("deterministic pipeline child rejected the replay")
-            summary = _parse_child_summary(completed.stdout)
-            _remaining(deadline, _clock)
-
-            fresh_raw = _read_nonempty(
-                fresh_report, MAXIMUM_REPORT_BYTES, "fresh report"
-            )
-            fresh_identity = _identity(fresh_raw)
-            if fresh_raw != retained_raw:
-                raise _fail(
-                    "fresh deterministic pipeline replay did not reproduce the retained report"
-                )
-            report_value = _parse_fresh_report(
-                fresh_raw, plan_identity, plan_digest, evidence, summary
-            )
-            _remaining(deadline, _clock)
-
-            for caller_path, staged_path, maximum, label, expected in captures:
-                _verify_capture(staged_path, expected, maximum, f"staged {label}")
-                _verify_capture(caller_path, expected, maximum, label)
-                _remaining(deadline, _clock)
-            _firmware_entry_names(firmware_source_directory)
-            _firmware_entry_names(
-                _source_path(input_root, firmware_descriptor["path"]).parent
-            )
-            _verify_capture(
-                plan_source, plan_identity, MAXIMUM_PLAN_BYTES, "plan source"
-            )
-            _verify_capture(
-                staged_plan, plan_identity, MAXIMUM_PLAN_BYTES, "staged plan source"
-            )
-            _verify_capture(
-                report_source,
-                retained_identity,
-                MAXIMUM_REPORT_BYTES,
-                "retained report source",
-            )
-            _verify_capture(
-                fresh_report, fresh_identity, MAXIMUM_REPORT_BYTES, "fresh report source"
-            )
-            _remaining(deadline, _clock)
+        capture = _capture_deterministic_pipeline_replay_inputs(
+            plan_source,
+            report_source,
+            deadline=deadline,
+            clock=_clock,
+        )
+        result, _report_value = _replay_captured_deterministic_pipeline(
+            capture,
+            command,
+            deadline=deadline,
+            clock=_clock,
+        )
     except DeterministicPipelineReplayError:
         raise
     except (BoundedIOError, BoundedProcessError, OSError, TypeError, ValueError):
-        raise _fail("deterministic pipeline replay workspace failed") from None
-
-    result = {
-        "schema_version": DETERMINISTIC_PIPELINE_REPLAY_RESULT_SCHEMA_VERSION,
-        "verification_scope": DETERMINISTIC_PIPELINE_REPLAY_SCOPE,
-        "verified": True,
-        "engine_version": report_value["engine_version"],
-        "plan": {
-            "source": plan_identity,
-            "plan_sha256": report_value["plan_sha256"],
-            "factory_required": plan_value["require_factory"],
-        },
-        "report": {
-            "retained": retained_identity,
-            "fresh": fresh_identity,
-            "run_sha256": report_value["run_sha256"],
-            "approved": report_value["approved"],
-            "failure_count": len(report_value["failures"]),
-            "identical": True,
-        },
-        "inputs": input_identity,
-        "validation": {
-            "plan_captured_before_replay": True,
-            "inputs_captured_before_replay": True,
-            "fresh_report_reproduced": True,
-            "retained_report_identical": True,
-            "staged_inputs_unchanged": True,
-            "caller_inputs_unchanged": True,
-        },
-    }
-    _remaining(deadline, _clock)
+        raise _fail("deterministic pipeline replay failed") from None
     return result
 
 

@@ -345,6 +345,31 @@ factory response, make an AI/supplier/network/factory request, change the Rust
 plan/report or pipeline schemas, add MCP or Action integration, submit a
 package, or authorize deployment, procurement, fabrication, or ordering.
 
+## Circuit/manufacturing composition (v1.458.0)
+
+The handoff replay can reuse the standalone adapter internally when both
+`--deterministic-pipeline-plan` and `--deterministic-pipeline-report` accompany
+the complete v6 board/manufacturing input set. It captures the plan, retained
+report, every selected role, and the exact-eight firmware bundle before any
+producer runs, then invokes the deterministic runner only after the archive,
+board-binding report, and manufacturing ZIP have reproduced exactly.
+
+The v7 result cross-binds raw circuit/schematic/board/package bytes, the
+effective policy identity, the complete canonical nested board-binding report,
+and the pipeline's canonical schematic/raw-board identities to those earlier
+stages. A reproduced downstream rejection remains `verified: true` with
+`approved: false`; supplied review and filename failures are evidence under
+test. For `approved: true`, the composition independently requires a strict
+review match and matching manufacturing board basename. The optional approval
+flag fails after exact replay rather than changing the decision.
+
+The composition passes absolute subdeadlines into the captured manufacturing
+and pipeline helpers instead of starting new clocks. A final union reread
+covers every earlier and pipeline caller source and rechecks firmware-directory
+membership. The standalone API/CLI/schema and the Rust plan/report schemas are
+unchanged. This new surface has no MCP or Composite Action parity and adds no
+fresh producer, firmware build, network/factory call, or fabrication authority.
+
 ## MCP parity
 
 The MCP server exposes `run_deterministic_pipeline` with the same explicit

@@ -3653,6 +3653,43 @@ supplier acceptance, current inventory, layout approval, submission, or
 authorization to procure, manufacture, fabricate, deploy, or order. It adds no
 MCP, Action, deterministic-pipeline, or firmware-generation contract.
 
+Version 1.458.0 can additionally bind one retained deterministic-pipeline
+report to that complete v6 chain:
+
+```sh
+pcbex-agent replay-circuit-handoff-bundle handoff.zip \
+  --pcbex pcbex \
+  --kicad-board design.kicad_pcb \
+  --board-binding-report board-binding.json \
+  --manufacturing-package manufacturing.zip \
+  --deterministic-pipeline-plan pipeline-plan.json \
+  --deterministic-pipeline-report pipeline-report.json
+```
+
+The plan/report pair is all-or-nothing and is valid only with the complete v6
+board/manufacturing inputs. Before any producer starts, the adapter captures
+the plan, retained report, every selected role, and the exact-eight firmware
+directory. It then reproduces the archive, board-binding report, and
+manufacturing ZIP before replaying the deterministic pipeline last. The plan's
+raw circuit, schematic, board, and manufacturing ZIP must match the earlier
+stages; its effective policy digest and complete nested board-binding report
+must also match exactly. Canonical schematic and raw board identities are
+cross-checked independently.
+
+Success emits closed path-free schema v7 with scope
+`deterministic-electrical-handoff-chain-manufacturing-pipeline-replay-v7`.
+`verified` means the retained evidence was reproduced and cross-bound; it does
+not turn a reproduced `approved: false` pipeline into approval. Review or board
+basename failures may therefore remain visible rejected evidence. For an
+`approved: true` report, those two invariants are checked explicitly to reject
+an approved result that contradicts either invariant. The optional
+`--require-deterministic-pipeline-approved` gate fails only after exact replay.
+One outer deadline, strictly earlier manufacturing and pipeline subdeadlines,
+and a final union reread (including firmware-directory closure) cover the
+whole composition. Omitting the plan/report pair preserves exact v1–v6 result
+serialization. This adds no factory submission, fabrication/procurement
+authorization, toolchain authentication, MCP/Action contract, or network call.
+
 Exact reproduction normally requires the supplied engine to report the same
 `engine_version` as the retained handoff. That is an output-match implication,
 not authentication: the caller-supplied binary and its version claim are not
@@ -3676,7 +3713,8 @@ a v1.452 result may add an exact schema-v1 AI quorum replay, with or without
 that native assertion; a v1.453 result may add exact historical catalog
 provenance replay to either combination; and a v1.454 result may add exact
 retained-board electrical binding. A v1.457 result can additionally reproduce
-the exact retained manufacturing ZIP from the same raw board. None of these
+the exact retained manufacturing ZIP from the same raw board; a v1.458 result
+can bind that v6 chain to an exact deterministic-pipeline report. None of these
 authenticates the selected tools or authorizes procurement, PCB/layout
 approval, manufacturing, or fabrication. See
 [`docs/CIRCUIT_HANDOFF_BUNDLE.md`](docs/CIRCUIT_HANDOFF_BUNDLE.md) for the
