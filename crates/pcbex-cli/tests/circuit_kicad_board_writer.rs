@@ -9,6 +9,12 @@ fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_pcbex"))
 }
 
+fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let canonical = fs::canonicalize(directory.path()).unwrap();
+    (directory, canonical)
+}
+
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -67,10 +73,10 @@ fn generate(schematic: &Path, output_dir: &Path, closure: &Path) -> Output {
 
 #[test]
 fn generates_deterministic_exact_board_bundle_and_downstream_consumers_accept_it() {
-    let workspace = tempfile::tempdir().unwrap();
-    let schematic = write_schematic(workspace.path());
-    let first = workspace.path().join("first");
-    let second = workspace.path().join("second");
+    let (_workspace_guard, workspace) = canonical_tempdir();
+    let schematic = write_schematic(&workspace);
+    let first = workspace.join("first");
+    let second = workspace.join("second");
     let closure = example("circuit-board-footprint-closure-v1.json");
     assert_success(generate(&schematic, &first, &closure));
     assert_success(generate(&schematic, &second, &closure));
@@ -103,7 +109,7 @@ fn generates_deterministic_exact_board_bundle_and_downstream_consumers_accept_it
     assert_eq!(manifest["drc_claimed"], false);
     assert_eq!(manifest["dfm_claimed"], false);
 
-    let replay = workspace.path().join("fresh-binding.json");
+    let replay = workspace.join("fresh-binding.json");
     assert_success(
         Command::new(binary())
             .args([
@@ -123,7 +129,7 @@ fn generates_deterministic_exact_board_bundle_and_downstream_consumers_accept_it
         fs::read(first.join("board-binding.json")).unwrap()
     );
 
-    let routed = workspace.path().join("routed.kicad_pcb");
+    let routed = workspace.join("routed.kicad_pcb");
     assert_success(
         Command::new(binary())
             .args([
@@ -157,22 +163,22 @@ fn generates_deterministic_exact_board_bundle_and_downstream_consumers_accept_it
 
 #[test]
 fn rejects_tampered_closure_before_publishing_a_directory() {
-    let workspace = tempfile::tempdir().unwrap();
-    let schematic = write_schematic(workspace.path());
+    let (_workspace_guard, workspace) = canonical_tempdir();
+    let schematic = write_schematic(&workspace);
     let mut closure: Value = serde_json::from_slice(
         &fs::read(example("circuit-board-footprint-closure-v1.json")).unwrap(),
     )
     .unwrap();
     closure["footprints"][0]["source_sha256"] = Value::String("0".repeat(64));
-    let tampered = workspace.path().join("tampered-closure.json");
+    let tampered = workspace.join("tampered-closure.json");
     fs::write(&tampered, serde_json::to_vec(&closure).unwrap()).unwrap();
-    let output_dir = workspace.path().join("rejected");
+    let output_dir = workspace.join("rejected");
     let output = generate(&schematic, &output_dir, &tampered);
     assert!(!output.status.success());
     assert!(!output_dir.exists());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !stderr.contains(path(workspace.path())),
+        !stderr.contains(path(&workspace)),
         "error leaked caller path: {stderr}"
     );
 }

@@ -9,6 +9,12 @@ fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_pcbex"))
 }
 
+fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let canonical = fs::canonicalize(directory.path()).unwrap();
+    (directory, canonical)
+}
+
 fn run_board_producer(
     circuit_spec: &Path,
     schematic: &Path,
@@ -374,12 +380,12 @@ fn board_producer_parser_requires_every_closed_input() {
 
 #[test]
 fn board_producer_preflights_output_before_inputs_without_leaking_paths() {
-    let directory = tempfile::tempdir().unwrap();
-    let output_dir = directory.path().join("existing-output");
+    let (_directory_guard, directory) = canonical_tempdir();
+    let output_dir = directory.join("existing-output");
     fs::create_dir(&output_dir).unwrap();
     let sentinel = output_dir.join("sentinel");
     fs::write(&sentinel, b"preserve\n").unwrap();
-    let missing = directory.path().join("missing");
+    let missing = directory.join("missing");
     let output = Command::new(binary())
         .arg("generate-circuit-kicad-board")
         .arg(&missing)
@@ -398,14 +404,14 @@ fn board_producer_preflights_output_before_inputs_without_leaking_paths() {
     assert_eq!(fs::read(sentinel).unwrap(), b"preserve\n");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("board output directory already exists"));
-    assert!(!stderr.contains(&directory.path().display().to_string()));
+    assert!(!stderr.contains(&directory.display().to_string()));
 }
 
 #[test]
 fn failed_board_input_capture_removes_the_private_stage() {
-    let directory = tempfile::tempdir().unwrap();
-    let missing = directory.path().join("missing");
-    let output_dir = directory.path().join("new-output");
+    let (_directory_guard, directory) = canonical_tempdir();
+    let missing = directory.join("missing");
+    let output_dir = directory.join("new-output");
     let output = Command::new(binary())
         .arg("generate-circuit-kicad-board")
         .arg(&missing)
@@ -422,10 +428,8 @@ fn failed_board_input_capture_removes_the_private_stage() {
         .unwrap();
     assert!(!output.status.success());
     assert!(!output_dir.exists());
-    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 0);
-    assert!(
-        !String::from_utf8_lossy(&output.stderr).contains(&directory.path().display().to_string())
-    );
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(&directory.display().to_string()));
 }
 
 #[cfg(unix)]
@@ -433,11 +437,11 @@ fn failed_board_input_capture_removes_the_private_stage() {
 fn board_producer_rejects_a_shared_writable_output_parent() {
     use std::os::unix::fs::PermissionsExt;
 
-    let directory = tempfile::tempdir().unwrap();
-    let shared = directory.path().join("shared");
+    let (_directory_guard, directory) = canonical_tempdir();
+    let shared = directory.join("shared");
     fs::create_dir(&shared).unwrap();
     fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
-    let missing = directory.path().join("missing");
+    let missing = directory.join("missing");
     let output_dir = shared.join("new-output");
     let output = Command::new(binary())
         .arg("generate-circuit-kicad-board")
@@ -458,23 +462,23 @@ fn board_producer_rejects_a_shared_writable_output_parent() {
     assert_eq!(fs::read_dir(&shared).unwrap().count(), 0);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("board output parent must not be writable by group or other users"));
-    assert!(!stderr.contains(&directory.path().display().to_string()));
+    assert!(!stderr.contains(&directory.display().to_string()));
 }
 
 #[test]
 fn board_producer_does_not_treat_distinct_equal_length_inputs_as_aliases() {
-    let directory = tempfile::tempdir().unwrap();
+    let (_directory_guard, directory) = canonical_tempdir();
     let paths = [
-        directory.path().join("circuit.json"),
-        directory.path().join("schematic.kicad_sch"),
-        directory.path().join("closure.json"),
-        directory.path().join("construction.json"),
-        directory.path().join("physical.json"),
+        directory.join("circuit.json"),
+        directory.join("schematic.kicad_sch"),
+        directory.join("closure.json"),
+        directory.join("construction.json"),
+        directory.join("physical.json"),
     ];
     for (index, path) in paths.iter().enumerate() {
         fs::write(path, format!("invalid-{index}\n")).unwrap();
     }
-    let output_dir = directory.path().join("output");
+    let output_dir = directory.join("output");
     let output = run_board_producer(
         &paths[0],
         &paths[1],
@@ -487,23 +491,23 @@ fn board_producer_does_not_treat_distinct_equal_length_inputs_as_aliases() {
     assert!(!output_dir.exists());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stderr.contains("inputs must not alias"));
-    assert!(!stderr.contains(&directory.path().display().to_string()));
+    assert!(!stderr.contains(&directory.display().to_string()));
 }
 
 #[test]
 fn board_producer_rejects_hard_linked_input_aliases() {
-    let directory = tempfile::tempdir().unwrap();
-    let circuit = directory.path().join("circuit.json");
-    let schematic = directory.path().join("schematic.kicad_sch");
-    let closure = directory.path().join("closure.json");
-    let construction = directory.path().join("construction.json");
-    let physical = directory.path().join("physical.json");
+    let (_directory_guard, directory) = canonical_tempdir();
+    let circuit = directory.join("circuit.json");
+    let schematic = directory.join("schematic.kicad_sch");
+    let closure = directory.join("closure.json");
+    let construction = directory.join("construction.json");
+    let physical = directory.join("physical.json");
     fs::write(&circuit, b"invalid\n").unwrap();
     fs::hard_link(&circuit, &schematic).unwrap();
     fs::write(&closure, b"x\n").unwrap();
     fs::write(&construction, b"yy\n").unwrap();
     fs::write(&physical, b"zzz\n").unwrap();
-    let output_dir = directory.path().join("output");
+    let output_dir = directory.join("output");
     let output = run_board_producer(
         &circuit,
         &schematic,
@@ -516,7 +520,7 @@ fn board_producer_rejects_hard_linked_input_aliases() {
     assert!(!output_dir.exists());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("circuit specification and KiCad schematic inputs must not alias"));
-    assert!(!stderr.contains(&directory.path().display().to_string()));
+    assert!(!stderr.contains(&directory.display().to_string()));
 }
 
 #[test]
