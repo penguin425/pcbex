@@ -150,7 +150,9 @@ summary = {
 }
 if config.get("summary_override"):
     summary.update(config["summary_override"])
-print(json.dumps(summary, separators=(",", ":")))
+sys.stdout.buffer.write(
+    json.dumps(summary, separators=(",", ":")).encode("utf-8") + b"\n"
+)
 raise SystemExit(int(config.get("returncode", 0)))
 ''',
         encoding="utf-8",
