@@ -346,6 +346,26 @@ fabrication availability; independently approve a PCB layout; authorize
 procurement, manufacturing, fabrication, deployment, or ordering; add
 MCP/Action/pipeline schema parity; or generate/build firmware.
 
+## Deterministic-pipeline composition (v1.458)
+
+Version 1.458 optionally extends the complete v6 replay with one exact retained
+deterministic-pipeline report. The all-or-nothing plan/report pair is captured
+before the handoff producer and the pipeline runs only after the same raw board
+has reproduced the v5 binding and exact retained manufacturing ZIP. Its plan
+package bytes must equal both the retained and fresh ZIP identities, and its
+complete nested board-binding report must equal the independently replayed v5
+report in canonical bytes.
+
+The resulting closed v7 scope is
+`deterministic-electrical-handoff-chain-manufacturing-pipeline-replay-v7`.
+Pipeline rejection remains visible evidence unless the explicit approval gate
+is requested; `verified` does not mean `approved`. Manufacturing and pipeline
+receive ordered, strictly earlier subdeadlines under the original handoff
+deadline, followed by one union caller-source reread and an exact firmware
+directory closure check. Omitting the plan/report pair preserves v6 bytes.
+This composition does not publish the private regenerated ZIP, authenticate
+tools, call a factory, authorize fabrication/procurement, or place an order.
+
 Component metadata is read from KiCad `property` fields and legacy `fp_text`
 fields. `Reference` and `Value` are required for a manufacturing row. `MPN`,
 `LCSC`, `JLCPCB`, `DigiKey`, and equivalent normalized property names are

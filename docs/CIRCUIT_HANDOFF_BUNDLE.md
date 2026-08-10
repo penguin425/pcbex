@@ -553,6 +553,77 @@ layout beyond the exact reproduced producer evidence; authorize procurement,
 manufacturing, fabrication, deployment, or ordering; add MCP/Action/pipeline
 schema parity; or generate and build firmware.
 
+## Pipeline-bound manufacturing replay (v1.458)
+
+Version 1.458.0 accepts `--deterministic-pipeline-plan` and
+`--deterministic-pipeline-report` only as a complete pair and only when every
+v6 board-binding/manufacturing input is also present. The optional
+`--require-deterministic-pipeline-approved` flag is invalid without that full
+composition. A partial set fails before any producer child starts. Omitting all
+pipeline options takes the untouched v1–v6 branches and preserves their result
+bytes and field order exactly.
+
+The adapter captures the closed plan, retained report, each descriptor-exact
+role source, and all seven siblings of the exact-eight firmware bundle before
+the handoff producer runs. It freezes caller PathLike values once, preserves
+the plan's relative tree for private staging, applies the standalone v1.456
+per-file and 512 MiB aggregate bounds, and records every caller source for the
+final reread. The canonical six-entry archive, optional assertions, exact v5
+board binding, and exact v6 manufacturing ZIP reproduce in their existing
+order. The deterministic pipeline then runs last from the captured bytes.
+
+The v7 cross-binding requires:
+
+- plan circuit and schematic bytes equal the archive entries exactly;
+- plan board bytes equal the v5 raw-board identity;
+- plan manufacturing-package bytes equal both the retained and freshly
+  reproduced v6 ZIP identities;
+- the pipeline's complete nested board-binding object, re-rendered as canonical
+  JSON plus its protocol LF, equals the independently reproduced v5 report
+  byte-for-byte;
+- the nested effective electrical-policy SHA-256 equals the v5 policy identity;
+  and
+- the pipeline's canonical imported-schematic identity and raw-board identity
+  equal the matched handoff and board identities.
+
+The supplied electrical review and plan-relative path spelling remain evidence
+under test rather than unconditional cross-binding gates. A genuine pipeline
+can therefore reproduce a rejected report caused by a malformed/mismatched
+review or board basename. When the retained report says `approved: true`, v7
+additionally requires the supplied review to be a strict, semantically valid
+match for the nested schematic review and the board descriptor basename to
+match the manufacturing replay's board name. This conditional check rejects an
+approved result that contradicts either invariant while preserving exact
+rejected evidence. `verified: true` and the reproduced `approved` decision are
+deliberately separate. The explicit approval flag turns a false decision into
+an API/CLI failure only after exact replay and cross-binding.
+
+One outer monotonic deadline covers every capture, child, cleanup, comparison,
+and final reread. Manufacturing receives an earlier deadline with half the
+remaining budget reserved for the downstream pipeline. Pipeline execution in
+turn receives an earlier deadline reserving up to 30 seconds or half its
+remaining time for final validation and cleanup. After the pipeline returns,
+the adapter rereads the union of archive, optional assertion, board,
+manufacturing, plan/report, role, and firmware files and rechecks the exact
+firmware-directory membership so a late extra entry cannot escape the fixed
+file rereads.
+
+Success emits the closed, path-free schema-v7 result with exact scope
+`deterministic-electrical-handoff-chain-manufacturing-pipeline-replay-v7`.
+It embeds the unchanged closed standalone deterministic-pipeline replay result
+and sets `deterministic_pipeline_replayed`, circuit/schematic/raw-board/package,
+effective-policy, and complete-board-binding validation flags to true. It does
+not return plan paths, source bodies, report bodies, failure text, child
+streams, or private outputs.
+
+This composition proves exact offline evidence reproduction and shared
+artifact identity under caller-selected tools. It does not freshly execute the
+producers represented by the deterministic report, rebuild firmware, make a
+supplier/factory/network request, authenticate pcbex/KiCad/compiler/toolchain
+provenance, approve a rejected pipeline, publish manufacturing artifacts,
+authorize fabrication/procurement/deployment, or place an order. MCP and
+Composite Action parity remain separate future integrations.
+
 ## Exact archive
 
 Success publishes exactly one no-clobber ZIP file with these ordered entries:

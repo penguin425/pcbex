@@ -21,7 +21,7 @@ import io
 import json
 import math
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import stat
 import struct
@@ -39,6 +39,7 @@ from .bounded_io import (
     validate_no_clobber_path,
 )
 from .bounded_process import BoundedProcessError, run_bounded
+from . import deterministic_pipeline_replay as _deterministic_pipeline_replay
 from . import manufacturing_replay as _manufacturing_replay
 from .catalog import (
     MAX_CATALOG_RAW_BYTES,
@@ -103,6 +104,10 @@ CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_SCOPE = (
 CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_RESULT_SCHEMA_VERSION = 6
 CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_SCOPE = (
     "deterministic-electrical-handoff-chain-manufacturing-package-replay-v6"
+)
+CIRCUIT_HANDOFF_BUNDLE_PIPELINE_REPLAY_RESULT_SCHEMA_VERSION = 7
+CIRCUIT_HANDOFF_BUNDLE_PIPELINE_REPLAY_SCOPE = (
+    "deterministic-electrical-handoff-chain-manufacturing-pipeline-replay-v7"
 )
 MAX_GENERATION_BUNDLE_BYTES = MAX_NATIVE_CHECK_BYTES
 MAX_CIRCUIT_SPEC_BYTES = 16 * 1024 * 1024
@@ -2826,6 +2831,51 @@ def circuit_handoff_bundle_manufacturing_replay_result_json_schema() -> dict[str
     return schema
 
 
+def circuit_handoff_bundle_pipeline_replay_result_json_schema() -> dict[str, Any]:
+    """Return the closed v6 plus deterministic-pipeline replay schema."""
+
+    schema = copy.deepcopy(
+        circuit_handoff_bundle_manufacturing_replay_result_json_schema()
+    )
+    schema["$id"] = (
+        "https://github.com/penguin425/pcbex/schemas/"
+        "circuit-generation-kicad-handoff-bundle-manufacturing-pipeline-"
+        "replay-result-v7.json"
+    )
+    schema["title"] = (
+        "pcbex circuit handoff bundle manufacturing-pipeline replay result"
+    )
+    schema["required"].append("deterministic_pipeline")
+    properties = schema["properties"]
+    properties["schema_version"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_PIPELINE_REPLAY_RESULT_SCHEMA_VERSION
+    }
+    properties["verification_scope"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_PIPELINE_REPLAY_SCOPE
+    }
+    validation = properties["validation"]
+    for replay_flag in (
+        "deterministic_pipeline_replayed",
+        "pipeline_circuit_spec_matched",
+        "pipeline_schematic_matched",
+        "pipeline_effective_policy_matched",
+        "pipeline_board_matched",
+        "pipeline_manufacturing_package_matched",
+        "pipeline_board_binding_matched",
+    ):
+        validation["required"].append(replay_flag)
+        validation["properties"][replay_flag] = {"const": True}
+
+    standalone = (
+        _deterministic_pipeline_replay.deterministic_pipeline_replay_result_json_schema()
+    )
+    properties["deterministic_pipeline"] = {
+        key: copy.deepcopy(standalone[key])
+        for key in ("type", "additionalProperties", "required", "properties")
+    }
+    return schema
+
+
 def _preflight_archive_directory(archive_raw: bytes) -> None:
     """Bound the central directory before ``zipfile`` allocates its records."""
 
@@ -3567,6 +3617,167 @@ def _circuit_handoff_manufacturing_replay_result(
     return result
 
 
+def _circuit_handoff_pipeline_replay_result(
+    manufacturing_result: Mapping[str, Any],
+    *,
+    deterministic_pipeline: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = copy.deepcopy(dict(manufacturing_result))
+    result["schema_version"] = (
+        CIRCUIT_HANDOFF_BUNDLE_PIPELINE_REPLAY_RESULT_SCHEMA_VERSION
+    )
+    result["verification_scope"] = CIRCUIT_HANDOFF_BUNDLE_PIPELINE_REPLAY_SCOPE
+    for validation in (
+        "deterministic_pipeline_replayed",
+        "pipeline_circuit_spec_matched",
+        "pipeline_schematic_matched",
+        "pipeline_effective_policy_matched",
+        "pipeline_board_matched",
+        "pipeline_manufacturing_package_matched",
+        "pipeline_board_binding_matched",
+    ):
+        result["validation"][validation] = True
+    result["deterministic_pipeline"] = copy.deepcopy(
+        dict(deterministic_pipeline)
+    )
+    return result
+
+
+def _validate_pipeline_handoff_cross_binding(
+    capture: _deterministic_pipeline_replay._DeterministicPipelineReplayCapture,
+    report: Mapping[str, Any],
+    entries: Mapping[str, bytes],
+    board_binding: Mapping[str, Any],
+    board_binding_report_raw: bytes,
+    manufacturing_package: Mapping[str, Any],
+) -> None:
+    """Require the fresh pipeline evidence to use the exact v6 artifacts."""
+
+    role_sources = dict(capture.role_sources)
+    required_roles = {
+        "circuit_spec",
+        "schematic",
+        "electrical_review",
+        "board",
+        "manufacturing_package",
+    }
+    if not required_roles.issubset(role_sources):
+        raise _fail("deterministic pipeline capture is missing a shared artifact")
+    if role_sources["circuit_spec"] != entries[CIRCUIT_SPEC_NAME]:
+        raise _fail("deterministic pipeline circuit specification does not match handoff")
+    if role_sources["schematic"] != entries[SCHEMATIC_NAME]:
+        raise _fail("deterministic pipeline schematic does not match handoff")
+
+    board_identity = board_binding.get("board")
+    if (
+        not isinstance(board_identity, Mapping)
+        or board_identity.get("bytes") != len(role_sources["board"])
+        or board_identity.get("sha256") != _sha256(role_sources["board"])
+    ):
+        raise _fail("deterministic pipeline board does not match board binding")
+
+    package = manufacturing_package.get("package")
+    package_identity = _source_identity(role_sources["manufacturing_package"])
+    if (
+        not isinstance(package, Mapping)
+        or package.get("retained") != package_identity
+        or package.get("fresh") != package_identity
+        or package.get("identical") is not True
+    ):
+        raise _fail(
+            "deterministic pipeline manufacturing package does not match replay"
+        )
+    binding = report.get("binding")
+    pipeline = report.get("pipeline")
+    if not isinstance(binding, Mapping) or not isinstance(pipeline, Mapping):
+        raise _fail("deterministic pipeline has no cross-bindable gate evidence")
+    handoff = binding.get("circuit_kicad_handoff")
+    if not isinstance(handoff, Mapping):
+        raise _fail("deterministic pipeline has no cross-bindable handoff evidence")
+    try:
+        rendered_binding = _compact_json(dict(binding)) + b"\n"
+    except CircuitGenerationError:
+        raise _fail("deterministic pipeline board binding is not canonical") from None
+    if rendered_binding != board_binding_report_raw:
+        raise _fail(
+            "deterministic pipeline board binding report does not match replay"
+        )
+
+    binding_pairs = (
+        ("board_source_bytes", board_identity.get("bytes")),
+        ("board_source_sha256", board_identity.get("sha256")),
+        (
+            "board_electrical_sha256",
+            board_binding.get("board_electrical_sha256"),
+        ),
+        (
+            "circuit_kicad_handoff_sha256",
+            board_binding.get("circuit_kicad_handoff_sha256"),
+        ),
+        ("binding_sha256", board_binding.get("binding_sha256")),
+    )
+    if any(binding.get(field) != expected for field, expected in binding_pairs):
+        raise _fail("deterministic pipeline board binding does not match replay")
+    if handoff.get("policy_sha256") != board_binding.get("policy_sha256"):
+        raise _fail("deterministic pipeline electrical policy does not match replay")
+    if (
+        handoff.get("circuit_source_bytes") != len(entries[CIRCUIT_SPEC_NAME])
+        or handoff.get("circuit_source_sha256")
+        != _sha256(entries[CIRCUIT_SPEC_NAME])
+        or handoff.get("schematic_source_bytes") != len(entries[SCHEMATIC_NAME])
+        or handoff.get("schematic_source_sha256")
+        != _sha256(entries[SCHEMATIC_NAME])
+    ):
+        raise _fail("deterministic pipeline handoff source identity is inconsistent")
+
+    identities = pipeline.get("identities")
+    if (
+        not isinstance(identities, Mapping)
+        or identities.get("schematic_sha256")
+        != handoff.get("schematic_sha256")
+        or identities.get("board_sha256") != _sha256(role_sources["board"])
+    ):
+        raise _fail("deterministic pipeline gate source identity is inconsistent")
+
+    if report.get("approved") is True:
+        review = _strict_object(
+            role_sources["electrical_review"],
+            "deterministic pipeline electrical review",
+        )
+        try:
+            _deterministic_pipeline_replay._validate_electrical_review(
+                review,
+                "deterministic pipeline electrical review",
+                str(report.get("engine_version", "")),
+            )
+            _validate_review(review)
+        except (
+            CircuitGenerationError,
+            _deterministic_pipeline_replay.DeterministicPipelineReplayError,
+            TypeError,
+            ValueError,
+        ):
+            raise _fail(
+                "approved deterministic pipeline electrical review is invalid"
+            ) from None
+        if handoff.get("schematic_review") != review:
+            raise _fail(
+                "approved deterministic pipeline electrical review does not match"
+            )
+
+        board_descriptor = dict(capture.descriptors).get("board")
+        manufacturing_board = manufacturing_package.get("board")
+        if (
+            not isinstance(board_descriptor, Mapping)
+            or not isinstance(manufacturing_board, Mapping)
+            or PurePosixPath(str(board_descriptor.get("path", ""))).name
+            != manufacturing_board.get("name")
+        ):
+            raise _fail(
+                "approved deterministic pipeline board name does not match"
+            )
+
+
 def replay_circuit_handoff_bundle(
     bundle: str | os.PathLike[str],
     pcbex: str | Sequence[str],
@@ -3591,6 +3802,9 @@ def replay_circuit_handoff_bundle(
     manufacturing_fab: str | None = None,
     manufacturing_fab_profile: str | os.PathLike[str] | None = None,
     manufacturing_physical_profile: str | os.PathLike[str] | None = None,
+    deterministic_pipeline_plan: str | os.PathLike[str] | None = None,
+    retained_deterministic_pipeline_report: str | os.PathLike[str] | None = None,
+    require_deterministic_pipeline_approved: bool = False,
     retained_ai_quorum_report: str | os.PathLike[str] | None = None,
     ai_review_request: str | os.PathLike[str] | None = None,
     ai_policy_pack: str | os.PathLike[str] | None = None,
@@ -3627,6 +3841,8 @@ def replay_circuit_handoff_bundle(
         raise _fail("native KiCad ERC approval requirement is invalid")
     if not isinstance(require_ai_quorum, bool):
         raise _fail("AI schematic quorum requirement is invalid")
+    if not isinstance(require_deterministic_pipeline_approved, bool):
+        raise _fail("deterministic pipeline approval requirement is invalid")
     if (
         require_board_binding_approved is not _BOARD_BINDING_REQUIREMENT_UNSET
         and not isinstance(require_board_binding_approved, bool)
@@ -3666,6 +3882,22 @@ def replay_circuit_handoff_bundle(
         raise _fail(
             "manufacturing replay requires a retained package and complete "
             "board binding replay inputs"
+        )
+    deterministic_pipeline_requested = any(
+        source is not None
+        for source in (
+            deterministic_pipeline_plan,
+            retained_deterministic_pipeline_report,
+        )
+    ) or require_deterministic_pipeline_approved
+    if deterministic_pipeline_requested and (
+        deterministic_pipeline_plan is None
+        or retained_deterministic_pipeline_report is None
+        or not manufacturing_requested
+    ):
+        raise _fail(
+            "deterministic pipeline replay requires a complete plan/report pair "
+            "and manufacturing replay inputs"
         )
     if (
         sum(
@@ -3801,6 +4033,18 @@ def replay_circuit_handoff_bundle(
             if board_binding_policy is not None:
                 board_binding_policy = _manufacturing_replay._freeze_path(
                     board_binding_policy, "board binding policy source"
+                )
+            if deterministic_pipeline_plan is not None:
+                deterministic_pipeline_plan = _manufacturing_replay._freeze_path(
+                    deterministic_pipeline_plan,
+                    "deterministic pipeline plan source",
+                )
+            if retained_deterministic_pipeline_report is not None:
+                retained_deterministic_pipeline_report = (
+                    _manufacturing_replay._freeze_path(
+                        retained_deterministic_pipeline_report,
+                        "retained deterministic pipeline report source",
+                    )
                 )
             if retained_ai_quorum_report is not None:
                 retained_ai_quorum_report = _manufacturing_replay._freeze_path(
@@ -3994,6 +4238,25 @@ def replay_circuit_handoff_bundle(
             )
         except _manufacturing_replay.ManufacturingReplayError:
             raise _fail("manufacturing replay inputs are invalid") from None
+        _remaining(deadline, _clock)
+
+    deterministic_pipeline_capture: (
+        _deterministic_pipeline_replay._DeterministicPipelineReplayCapture | None
+    ) = None
+    if deterministic_pipeline_requested:
+        assert deterministic_pipeline_plan is not None
+        assert retained_deterministic_pipeline_report is not None
+        try:
+            deterministic_pipeline_capture = (
+                _deterministic_pipeline_replay._capture_deterministic_pipeline_replay_inputs(
+                    deterministic_pipeline_plan,
+                    retained_deterministic_pipeline_report,
+                    deadline=deadline,
+                    clock=_clock,
+                )
+            )
+        except _deterministic_pipeline_replay.DeterministicPipelineReplayError:
+            raise _fail("deterministic pipeline replay inputs are invalid") from None
         _remaining(deadline, _clock)
 
     ai_report_raw: bytes | None = None
@@ -4196,8 +4459,12 @@ def replay_circuit_handoff_bundle(
             raise _fail("manufacturing replay has no reproduced board binding")
 
         outer_remaining = _remaining(deadline, _clock)
-        final_reread_reserve = min(15.0, outer_remaining / 2.0)
-        manufacturing_deadline = deadline - final_reread_reserve
+        downstream_reserve = (
+            outer_remaining / 2.0
+            if deterministic_pipeline_requested
+            else min(15.0, outer_remaining / 2.0)
+        )
+        manufacturing_deadline = deadline - downstream_reserve
         try:
             if manufacturing_deadline <= float(_clock()):
                 raise _fail("manufacturing replay has no execution budget")
@@ -4268,6 +4535,8 @@ def replay_circuit_handoff_bundle(
             for source in manufacturing_capture.caller_sources
             if source[3] != "board"
         )
+        if deterministic_pipeline_capture is not None:
+            final_sources.extend(deterministic_pipeline_capture.caller_sources)
         for path, expected_raw, maximum, label in final_sources:
             try:
                 observed_raw = read_bytes(path, max_bytes=maximum)
@@ -4282,7 +4551,71 @@ def replay_circuit_handoff_bundle(
             manufacturing_package=manufacturing_package,
         )
         _remaining(deadline, _clock)
-        return composed
+        if deterministic_pipeline_capture is None:
+            return composed
+
+        pipeline_remaining = _remaining(deadline, _clock)
+        final_union_reread_reserve = min(30.0, pipeline_remaining / 2.0)
+        pipeline_deadline = deadline - final_union_reread_reserve
+        try:
+            if pipeline_deadline <= float(_clock()):
+                raise _fail("deterministic pipeline replay has no execution budget")
+        except (TypeError, ValueError, OverflowError):
+            raise _fail("aggregate deadline clock is invalid") from None
+        try:
+            deterministic_pipeline, pipeline_report = (
+                _deterministic_pipeline_replay._replay_captured_deterministic_pipeline(
+                    deterministic_pipeline_capture,
+                    command,
+                    deadline=pipeline_deadline,
+                    clock=_clock,
+                )
+            )
+        except _deterministic_pipeline_replay.DeterministicPipelineReplayError:
+            raise _fail("deterministic pipeline replay failed") from None
+        _remaining(deadline, _clock)
+
+        _validate_pipeline_handoff_cross_binding(
+            deterministic_pipeline_capture,
+            pipeline_report,
+            entries,
+            board_binding,
+            board_binding_report_raw,
+            manufacturing_package,
+        )
+        _remaining(deadline, _clock)
+
+        for path, expected_raw, maximum, label in final_sources:
+            try:
+                observed_raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(
+                    f"{label} changed during deterministic pipeline replay"
+                ) from None
+            if observed_raw != expected_raw:
+                raise _fail(f"{label} changed during deterministic pipeline replay")
+            _remaining(deadline, _clock)
+        try:
+            _deterministic_pipeline_replay._firmware_entry_names(
+                deterministic_pipeline_capture.firmware_source_directory
+            )
+        except _deterministic_pipeline_replay.DeterministicPipelineReplayError:
+            raise _fail(
+                "deterministic pipeline firmware bundle changed during replay"
+            ) from None
+        _remaining(deadline, _clock)
+
+        pipeline_composed = _circuit_handoff_pipeline_replay_result(
+            composed,
+            deterministic_pipeline=deterministic_pipeline,
+        )
+        _remaining(deadline, _clock)
+        if (
+            require_deterministic_pipeline_approved
+            and deterministic_pipeline["report"]["approved"] is not True
+        ):
+            raise _fail("deterministic pipeline replay approval was not granted")
+        return pipeline_composed
 
     if not ai_requested and not catalog_requested:
         board_binding = finish_board_binding()
@@ -4721,6 +5054,8 @@ __all__ = [
     "CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_SCOPE",
+    "CIRCUIT_HANDOFF_BUNDLE_PIPELINE_REPLAY_RESULT_SCHEMA_VERSION",
+    "CIRCUIT_HANDOFF_BUNDLE_PIPELINE_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION",
@@ -4733,6 +5068,7 @@ __all__ = [
     "circuit_handoff_bundle_ai_quorum_replay_result_json_schema",
     "circuit_handoff_bundle_board_binding_replay_result_json_schema",
     "circuit_handoff_bundle_manufacturing_replay_result_json_schema",
+    "circuit_handoff_bundle_pipeline_replay_result_json_schema",
     "circuit_handoff_bundle_catalog_provenance_replay_result_json_schema",
     "circuit_handoff_bundle_json_schema",
     "circuit_handoff_bundle_native_erc_replay_result_json_schema",

@@ -814,6 +814,11 @@
     {
       "id": "circuit-handoff-manufacturing-package-replay",
       "release": "v1.457.0",
+      "status": "released"
+    },
+    {
+      "id": "pipeline-bound-circuit-manufacturing-replay",
+      "release": "v1.458.0",
       "status": "current"
     }
   ]
