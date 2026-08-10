@@ -851,7 +851,7 @@ def _firmware_compiler_arguments(platform: str | None = None) -> list[str]:
 
     platform = os.name if platform is None else platform
     if platform == "nt":
-        return ["--cc", "clang", "--cxx", "clang++"]
+        return ["--cc", "gcc", "--cxx", "g++"]
     return []
 
 

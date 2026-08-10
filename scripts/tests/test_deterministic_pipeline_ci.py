@@ -23,13 +23,13 @@ import deterministic_pipeline_ci as fixture  # noqa: E402
 
 
 class DeterministicPipelineCiTests(unittest.TestCase):
-    def test_windows_fixture_selects_installed_gcc_compatible_clang_names(self):
+    def test_windows_fixture_selects_installed_gnu_compiler_names(self):
         self.assertEqual(
             fixture._firmware_compiler_arguments("nt"),
-            ["--cc", "clang", "--cxx", "clang++"],
+            ["--cc", "gcc", "--cxx", "g++"],
         )
         self.assertEqual(fixture._firmware_compiler_arguments("posix"), [])
-        expected = ["--cc", "clang", "--cxx", "clang++"] if os.name == "nt" else []
+        expected = ["--cc", "gcc", "--cxx", "g++"] if os.name == "nt" else []
         self.assertEqual(fixture._firmware_compiler_arguments(), expected)
 
     def test_resolves_relative_executable_and_rejects_symlink(self):

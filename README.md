@@ -4119,9 +4119,8 @@ fixtures with the just-built real Rust binary and checks exact-replay scope,
 all validation flags, approval, byte identity, and the retained digest. The
 macOS and Windows boundary matrix independently builds a release binary and
 repeats both real accepted/rejected replays; the Windows fixture explicitly
-selects the runner-provided GCC-compatible `clang` and `clang++` executables
-instead of the Unix-only default names. This adds no composite-Action input or
-output.
+selects the runner-provided GNU `gcc` and `g++` executables instead of the
+Unix-only default names. This adds no composite-Action input or output.
 
 The supplied pcbex command remains an unauthenticated, unsandboxed trust
 boundary, and reports containing a different engine version do not become
