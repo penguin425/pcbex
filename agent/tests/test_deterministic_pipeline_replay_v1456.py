@@ -822,23 +822,25 @@ class DeterministicPipelineReplayTests(unittest.TestCase):
 
     def test_windows_private_staging_path_length_is_rejected_before_writes(self):
         long_path = Path("/") / ("x" * 300)
+        short_path = Path("/tmp/replay.json")
+        boundary_path = Path("boundary")
         with mock.patch.object(replay_module.os, "name", "nt"):
             with self.assertRaisesRegex(
                 DeterministicPipelineReplayError, "staging path is too long"
             ):
                 replay_module._validate_private_staging_paths([long_path])
 
-            replay_module._validate_private_staging_paths([Path("/tmp/replay.json")])
+            replay_module._validate_private_staging_paths([short_path])
             with mock.patch.object(
                 replay_module.os.path, "abspath", return_value="x" * 259
             ):
-                replay_module._validate_private_staging_paths([Path("boundary")])
+                replay_module._validate_private_staging_paths([boundary_path])
             with mock.patch.object(
                 replay_module.os.path, "abspath", return_value="x" * 260
             ), self.assertRaisesRegex(
                 DeterministicPipelineReplayError, "staging path is too long"
             ):
-                replay_module._validate_private_staging_paths([Path("boundary")])
+                replay_module._validate_private_staging_paths([boundary_path])
 
     def test_child_failure_missing_or_symlink_output_is_stable_and_path_free(self):
         configurations = (
