@@ -845,6 +845,15 @@ def _scan_output_tree(root: Path) -> None:
             raise FixtureError(f"fixture output contains a special file: {relative}")
 
 
+def _firmware_compiler_arguments(platform: str | None = None) -> list[str]:
+    """Select GCC-compatible compiler names available on the runner image."""
+
+    platform = os.name if platform is None else platform
+    if platform == "nt":
+        return ["--cc", "clang", "--cxx", "clang++"]
+    return []
+
+
 def _build_fixture(
     pcbex: Path,
     fixture_dir: Path,
@@ -918,6 +927,7 @@ def _build_fixture(
             "design.kicad_sch",
             "--mcu-reference",
             "U1",
+            *_firmware_compiler_arguments(),
             "--output-dir",
             "firmware",
         ],

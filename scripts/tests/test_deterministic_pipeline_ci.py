@@ -23,6 +23,13 @@ import deterministic_pipeline_ci as fixture  # noqa: E402
 
 
 class DeterministicPipelineCiTests(unittest.TestCase):
+    def test_windows_fixture_selects_installed_gcc_compatible_clang_names(self):
+        self.assertEqual(
+            fixture._firmware_compiler_arguments("nt"),
+            ["--cc", "clang", "--cxx", "clang++"],
+        )
+        self.assertEqual(fixture._firmware_compiler_arguments("posix"), [])
+
     def test_resolves_relative_executable_and_rejects_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

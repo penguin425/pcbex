@@ -240,7 +240,9 @@ opposite `approved` decisions, and checks the retained report SHA-256 against
 the fixture summary. It also fixes the v1 replay scope and all six completed
 validation flags. The accepted replay exercises the optional post-result
 `--require-approved` gate. This is validation inside the existing repository
-job, not a new composite-Action surface.
+job, not a new composite-Action surface. The Windows fixture explicitly selects
+the runner-provided GCC-compatible `clang` and `clang++` names because the Unix
+defaults `cc` and `c++` are not portable executable names.
 
 This check keeps plan schema v1 and deterministic report schema v1. The plan
 schema's portable-path pattern and shared runtime validator now also reject
