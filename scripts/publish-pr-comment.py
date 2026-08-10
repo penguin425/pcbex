@@ -733,7 +733,11 @@ def _download_https_redirect_safe(url: str, api_host: str, token: str, opener: A
         if redirect_count == 0 and parsed.netloc.lower() != api_host.lower():
             raise PublisherError("artifact download must start at the GitHub API host")
         headers = {
-            "Accept": "application/octet-stream",
+            "Accept": (
+                "application/vnd.github+json"
+                if redirect_count == 0
+                else "application/octet-stream"
+            ),
             "User-Agent": "pcbex-trusted-pr-comment-publisher",
         }
         # GitHub API auth is sent only to the API host.  A signed object-store

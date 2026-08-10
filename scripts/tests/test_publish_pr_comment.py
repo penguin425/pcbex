@@ -436,7 +436,13 @@ class PublishPrCommentTests(unittest.TestCase):
         )
         self.assertEqual(data, b"archive")
         self.assertEqual(opener.requests[0].get_header("Authorization"), "Bearer secret-token")
+        self.assertEqual(
+            opener.requests[0].get_header("Accept"), "application/vnd.github+json"
+        )
         self.assertIsNone(opener.requests[1].get_header("Authorization"))
+        self.assertEqual(
+            opener.requests[1].get_header("Accept"), "application/octet-stream"
+        )
 
 
 if __name__ == "__main__":
