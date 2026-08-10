@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -1547,7 +1547,14 @@ fn reject_symlink_components(path: &Path) -> Result<()> {
     };
     let mut current = PathBuf::new();
     for component in absolute.components() {
-        current.push(component.as_os_str());
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::CurDir => continue,
+            Component::ParentDir | Component::Normal(_) => current.push(component.as_os_str()),
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 bail!(
@@ -2172,6 +2179,19 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use zip::ZipArchive;
+
+    #[cfg(windows)]
+    #[test]
+    fn output_symlink_preflight_accepts_canonical_windows_prefix() {
+        let directory = tempdir().unwrap();
+        let canonical = std::fs::canonicalize(directory.path()).unwrap();
+        assert!(matches!(
+            canonical.components().next(),
+            Some(Component::Prefix(_))
+        ));
+
+        reject_symlink_components(&canonical).unwrap();
+    }
 
     fn part(
         reference: &str,
