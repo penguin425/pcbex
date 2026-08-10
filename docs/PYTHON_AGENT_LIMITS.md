@@ -104,6 +104,21 @@ command and the complete injected argv are each limited to 256 arguments and
 32,768 aggregate UTF-8 bytes. The rendered Windows command line, including its
 terminating null, is additionally limited to 32,767 UTF-16 code units.
 
+The composed v1.457 handoff-to-manufacturing replay requires the complete v5
+board-binding inputs and one retained package. It keeps the existing 224 MiB
+handoff-archive ceiling, the 128 MiB board / 12 MiB canonical report plus one
+newline / 4 MiB policy ceilings and 144 MiB plus one byte board-binding
+aggregate, and the v1.455 manufacturing per-file and 512 MiB aggregate bounds.
+The board PathLike is frozen before its first read and the raw bytes are
+captured only once; the manufacturing capture reuses them but still counts
+their size in its aggregate input budget. Newly supplied manufacturing
+PathLikes are likewise frozen exactly once. Project/rules and profile/package
+sources are captured before the handoff producer child, and all regenerated
+files stay within private temporary workspaces. The v6 result contains only
+bounded identities and closed nested evidence under scope
+`deterministic-electrical-handoff-chain-manufacturing-package-replay-v6`,
+never paths or payloads.
+
 The standalone v1.456 deterministic-pipeline replay captures one plan up to
 4 MiB and one retained report up to 128 MiB before native execution. It parses
 the plan's closed 16-role shape itself, captures every present descriptor under
@@ -267,6 +282,21 @@ deadline during non-preemptible post-commit work. The Python consumer accepts
 only a successful child, exact fresh archive bytes, all final rereads, and a
 deadline check after temporary cleanup and immediately before return, so it
 cannot report replay success after expiry.
+
+The composed v1.457 replay uses the handoff command's single outer monotonic
+deadline rather than starting a second independent authority. It covers all
+handoff, optional native/AI/catalog, board-binding, and manufacturing captures;
+every child and cleanup boundary; exact report/archive/ZIP comparisons;
+shared raw-board identity checks; result construction; and the final success
+check. Immediately before package replay, Python reserves the smaller of 15
+seconds or half the outer remaining budget for the composed final rereads and
+cleanup, then passes a strictly earlier deadline into the captured v1.455
+replay. The latter retains its own bounded `fabricate` process-tree cleanup
+reserve within that subdeadline. After it verifies staged inputs and exact ZIP
+bytes, the outer replay performs one final union reread of all caller-visible
+handoff, optional assertion, board-binding, and manufacturing sources. No
+later child starts after an earlier assertion or required board-approval gate
+fails, and no v6 success is returned after either deadline expires.
 
 The deterministic-pipeline replay starts its own monotonic deadline before
 reading the plan. That deadline covers the plan and retained-report captures,

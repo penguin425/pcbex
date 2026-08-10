@@ -19,6 +19,8 @@ SPEC.loader.exec_module(release_audit)
 
 
 class ReleaseAuditTests(unittest.TestCase):
+    CHECK_SHA = "a" * 40
+
     def roadmap(self):
         return {
             "schema_version": 1,
@@ -27,6 +29,23 @@ class ReleaseAuditTests(unittest.TestCase):
                 {"id": "audit", "release": "v1.1.0", "status": "current"},
             ],
         }
+
+    def required_check_runs(self):
+        return [
+            {
+                "id": index,
+                "name": name,
+                "head_sha": self.CHECK_SHA,
+                "app": {"id": release_audit.GITHUB_ACTIONS_APP_ID},
+                "status": "completed",
+                "conclusion": "success",
+            }
+            for index, name in enumerate(sorted(release_audit.REQUIRED_CHECKS), 1)
+        ]
+
+    @staticmethod
+    def check_run_pages(check_runs):
+        return [{"total_count": len(check_runs), "check_runs": check_runs}]
 
     def test_accepts_a_closed_ordered_roadmap(self):
         self.assertEqual(
@@ -188,6 +207,186 @@ class ReleaseAuditTests(unittest.TestCase):
         with mock.patch.object(release_audit, "run", return_value=duplicate):
             with self.assertRaises(release_audit.AuditError):
                 release_audit.github_release_by_tag("owner/repo", "v1.1.0")
+
+    def test_fetches_latest_github_actions_check_runs_with_bounds(self):
+        pages = self.check_run_pages(self.required_check_runs())
+        deadline = mock.Mock()
+        with mock.patch.object(
+            release_audit, "run", return_value=json.dumps(pages)
+        ) as command:
+            release_audit.github_required_check_runs(
+                "owner/repo", self.CHECK_SHA, deadline=deadline
+            )
+        command.assert_called_once_with(
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            (
+                f"repos/owner/repo/commits/{self.CHECK_SHA}/check-runs"
+                f"?app_id={release_audit.GITHUB_ACTIONS_APP_ID}"
+                "&filter=latest&per_page=100"
+            ),
+            max_stdout_bytes=release_audit.MAX_CHECK_RUNS_RESPONSE_BYTES,
+            deadline=deadline,
+        )
+        deadline.remaining.assert_called_once_with()
+
+    def test_check_required_runs_flag_gates_the_expected_commit(self):
+        arguments = [
+            "release-audit.py",
+            "--repository",
+            "owner/repo",
+            "--tag",
+            "v1.1.0",
+            "--expected-sha",
+            self.CHECK_SHA,
+            "--allow-draft",
+            "--skip-download",
+            "--check-required-runs",
+        ]
+        with (
+            mock.patch.object(release_audit.sys, "argv", arguments),
+            mock.patch.object(release_audit, "workspace_version", return_value="1.1.0"),
+            mock.patch.object(release_audit, "read_text", return_value="{}"),
+            mock.patch.object(
+                release_audit, "validate_roadmap", return_value=["v1.1.0"]
+            ),
+            mock.patch.object(
+                release_audit,
+                "run",
+                side_effect=["", f"{self.CHECK_SHA}\n"],
+            ),
+            mock.patch.object(release_audit, "github_release_by_tag", return_value={}),
+            mock.patch.object(release_audit, "validate_release"),
+            mock.patch.object(release_audit, "github_required_check_runs") as checks,
+        ):
+            self.assertEqual(release_audit.main(), 0)
+        checks.assert_called_once()
+        self.assertEqual(checks.call_args.args, ("owner/repo", self.CHECK_SHA))
+        self.assertIsInstance(checks.call_args.kwargs["deadline"], release_audit.Deadline)
+
+    def test_accepts_exact_successful_required_check_runs(self):
+        runs = self.required_check_runs()
+        runs.append(
+            {
+                "id": 100,
+                "name": "Unrelated",
+                "head_sha": self.CHECK_SHA,
+            }
+        )
+        release_audit.validate_required_check_runs(
+            self.check_run_pages(runs), self.CHECK_SHA
+        )
+
+    def test_rejects_missing_or_duplicate_required_check_runs(self):
+        runs = self.required_check_runs()
+        with self.assertRaisesRegex(release_audit.AuditError, "exactly one"):
+            release_audit.validate_required_check_runs(
+                self.check_run_pages(runs[:-1]), self.CHECK_SHA
+            )
+
+        duplicate = dict(runs[0], id=99)
+        with self.assertRaisesRegex(release_audit.AuditError, "exactly one"):
+            release_audit.validate_required_check_runs(
+                self.check_run_pages([*runs, duplicate]), self.CHECK_SHA
+            )
+
+        duplicate_id = dict(runs[0], name="Unrelated")
+        with self.assertRaisesRegex(release_audit.AuditError, "duplicate check-run id"):
+            release_audit.validate_required_check_runs(
+                self.check_run_pages([*runs, duplicate_id]), self.CHECK_SHA
+            )
+
+    def test_rejects_failed_or_in_progress_required_check_runs(self):
+        for replacement, message in (
+            ({"status": "completed", "conclusion": "failure"}, "did not succeed"),
+            ({"status": "in_progress", "conclusion": None}, "not completed"),
+        ):
+            with self.subTest(replacement=replacement):
+                runs = self.required_check_runs()
+                runs[0].update(replacement)
+                with self.assertRaisesRegex(release_audit.AuditError, message):
+                    release_audit.validate_required_check_runs(
+                        self.check_run_pages(runs), self.CHECK_SHA
+                    )
+
+    def test_rejects_wrong_or_malformed_required_check_run_app(self):
+        for app in ({"id": 1}, {"id": True}, None, []):
+            with self.subTest(app=app):
+                runs = self.required_check_runs()
+                runs[0]["app"] = app
+                with self.assertRaises(release_audit.AuditError):
+                    release_audit.validate_required_check_runs(
+                        self.check_run_pages(runs), self.CHECK_SHA
+                    )
+
+    def test_rejects_check_runs_for_another_commit(self):
+        runs = self.required_check_runs()
+        runs[0]["head_sha"] = "b" * 40
+        with self.assertRaisesRegex(release_audit.AuditError, "expected SHA"):
+            release_audit.validate_required_check_runs(
+                self.check_run_pages(runs), self.CHECK_SHA
+            )
+
+    def test_rejects_malformed_check_run_response_objects(self):
+        runs = self.required_check_runs()
+        malformed = (
+            None,
+            {},
+            [],
+            [None],
+            [{"total_count": len(runs), "check_runs": runs, "extra": True}],
+            [{"total_count": len(runs), "check_runs": [None]}],
+            [{"total_count": len(runs), "check_runs": {}}],
+        )
+        for pages in malformed:
+            with self.subTest(pages=pages):
+                with self.assertRaises(release_audit.AuditError):
+                    release_audit.validate_required_check_runs(pages, self.CHECK_SHA)
+
+    def test_rejects_invalid_or_inconsistent_check_run_counts(self):
+        runs = self.required_check_runs()
+        malformed = (
+            [{"total_count": True, "check_runs": runs}],
+            [{"total_count": -1, "check_runs": runs}],
+            [{"total_count": len(runs) + 1, "check_runs": runs}],
+            [
+                {"total_count": len(runs), "check_runs": runs[:2]},
+                {"total_count": len(runs) + 1, "check_runs": runs[2:]},
+            ],
+        )
+        for pages in malformed:
+            with self.subTest(pages=pages):
+                with self.assertRaises(release_audit.AuditError):
+                    release_audit.validate_required_check_runs(pages, self.CHECK_SHA)
+
+    def test_rejects_oversized_check_run_pages_and_lists(self):
+        runs = self.required_check_runs()
+        too_many_pages = [
+            {"total_count": len(runs), "check_runs": []}
+            for _ in range(release_audit.MAX_CHECK_RUN_PAGES + 1)
+        ]
+        with self.assertRaisesRegex(release_audit.AuditError, "bounded"):
+            release_audit.validate_required_check_runs(
+                too_many_pages, self.CHECK_SHA
+            )
+
+        oversized_list = [
+            dict(runs[0], id=index + 1, name=f"check-{index}")
+            for index in range(release_audit.MAX_CHECK_RUNS_PER_PAGE + 1)
+        ]
+        with self.assertRaisesRegex(release_audit.AuditError, "exceeds"):
+            release_audit.validate_required_check_runs(
+                [{"total_count": len(oversized_list), "check_runs": oversized_list}],
+                self.CHECK_SHA,
+            )
+
+        with self.assertRaisesRegex(release_audit.AuditError, "total_count"):
+            release_audit.validate_required_check_runs(
+                [{"total_count": release_audit.MAX_CHECK_RUNS + 1, "check_runs": []}],
+                self.CHECK_SHA,
+            )
 
     def test_validates_checksums_and_spdx_documents(self):
         tag = "v1.1.0"

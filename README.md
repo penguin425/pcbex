@@ -583,6 +583,12 @@ claim. This standalone replay does not alter pipeline evidence, invoke MCP or
 an Action, submit to a factory, authorize fabrication/procurement, or place an
 order.
 
+Version 1.457 can also compose this exact package replay with the circuit
+handoff's complete v5 board binding. That mode reuses one captured raw board
+for both stages and cross-checks its byte identity; it does not accept a second
+manufacturing board. See [Atomic saved-circuit handoff](#atomic-saved-circuit-handoff)
+for the v6 command and its additional trust boundary.
+
 Submit that exact archive to a deployment-owned JLCPCB, PCBWay, or generic
 quote/DFM adapter without putting credentials in argv:
 
@@ -3428,6 +3434,23 @@ PYTHONPATH=agent/src python3 -m pcbex_agent \
   circuit-handoff-bundle-board-binding-replay-result-schema
 
 PYTHONPATH=agent/src python3 -m pcbex_agent \
+  replay-circuit-handoff-bundle build/circuit-handoff.zip \
+  --pcbex target/release/pcbex \
+  --kicad-board hardware/controller.kicad_pcb \
+  --board-binding-report build/circuit-kicad-board-binding.json \
+  --require-board-binding-approved \
+  --manufacturing-package manufacturing/manufacturing.zip \
+  --manufacturing-kicad-cli kicad-cli \
+  --manufacturing-kicad-project hardware/controller.kicad_pro \
+  --manufacturing-kicad-rules hardware/controller.kicad_dru \
+  --manufacturing-fab-profile hardware/acme-dfm.json \
+  --timeout-seconds 120 \
+  > build/circuit-manufacturing-replay.json
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  circuit-handoff-bundle-manufacturing-replay-result-schema
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
   extract-circuit-handoff-bundle build/circuit-handoff.zip \
   --output-dir build/verified-circuit-handoff
 ```
@@ -3588,6 +3611,48 @@ manufacturing/fabrication, procurement, supplier facts, or pcbex/KiCad/tool
 provenance. A geometry-only board edit can preserve the electrical digest while
 changing raw/binding identity and is not layout approval.
 
+The board-binding importer follows KiCad's native net dialect boundary. Board
+versions before `20251028` retain strict numeric ID/name declarations; newer
+KiCad 10 files require quoted name-only net fields and no legacy table. Modern
+net inventory is collected from pads, routing, vias, zones, and connected
+graphics, while mixed dialects, unquoted names, unknown net contexts, and
+undeclared legacy IDs fail closed. Connected fields are accepted only at their
+native board/footprint ancestry, legacy zone `net_name` must match its numeric
+ID, and obsolete modern `net_name` fields are rejected. KiCad 10's quoted empty
+track/via net denotes the implicit unconnected net and is not added to the
+semantic inventory. Equivalent legacy and modern boards retain the same
+geometry-free electrical digest while their raw/binding identities remain
+distinct.
+
+Version 1.457.0 optionally composes the complete v5 board-binding replay with
+the v1.455 manufacturing-package replay. `--manufacturing-package` is valid
+only with both `--kicad-board` and `--board-binding-report`; project/rules
+sidecars and at most one built-in DFM, external DFM, or physical profile may be
+supplied with the `--manufacturing-*` options. There is no second board input:
+the raw board is captured once, reused for both replay stages, and its byte
+count and SHA-256 must match both the v5 binding and nested package result.
+
+The unchanged handoff ZIP and exact board-binding report reproduce before the
+private `fabricate` run. When `--require-board-binding-approved` is set, an
+exact rejected binding stops before manufacturing; without it, rejection
+remains visible evidence. Success additionally requires a freshly generated
+`manufacturing.zip` to match the retained ZIP byte-for-byte. One outer
+monotonic deadline covers capture, all children, nested cleanup, cross-binding,
+the nested replay's staged-source checks, one final union reread of every
+caller-visible source, and result construction; the nested manufacturing replay
+receives a strictly shorter remaining budget.
+
+The closed, path-free v6 result uses scope
+`deterministic-electrical-handoff-chain-manufacturing-package-replay-v6`,
+retains the complete closed `manufacturing-package-fresh-replay-v1` evidence,
+and records successful package replay and shared-board identity matching.
+Omitting every manufacturing option preserves exact v1–v5 result bytes and
+schemas, as well as the unchanged six-entry archive. This proves deterministic
+reproduction under caller-selected tools, not toolchain provenance, factory or
+supplier acceptance, current inventory, layout approval, submission, or
+authorization to procure, manufacture, fabricate, deploy, or order. It adds no
+MCP, Action, deterministic-pipeline, or firmware-generation contract.
+
 Exact reproduction normally requires the supplied engine to report the same
 `engine_version` as the retained handoff. That is an output-match implication,
 not authentication: the caller-supplied binary and its version claim are not
@@ -3610,9 +3675,10 @@ v1.451 replay result may additionally prove an exact native KiCad ERC replay;
 a v1.452 result may add an exact schema-v1 AI quorum replay, with or without
 that native assertion; a v1.453 result may add exact historical catalog
 provenance replay to either combination; and a v1.454 result may add exact
-retained-board electrical binding. None of these authorizes procurement,
-PCB/layout/DRC/DFM approval, manufacturing, or fabrication. The caller-supplied
-pcbex and KiCad executables are not authenticated. See
+retained-board electrical binding. A v1.457 result can additionally reproduce
+the exact retained manufacturing ZIP from the same raw board. None of these
+authenticates the selected tools or authorizes procurement, PCB/layout
+approval, manufacturing, or fabrication. See
 [`docs/CIRCUIT_HANDOFF_BUNDLE.md`](docs/CIRCUIT_HANDOFF_BUNDLE.md) for the
 archive contract and downstream trust boundary.
 

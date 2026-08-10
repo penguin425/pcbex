@@ -166,6 +166,16 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("group: release-${{ github.ref }}", document)
         self.assertRegex(document, r"(?m)^  cancel-in-progress:\s*false\s*$")
 
+    def test_release_publication_requires_successful_required_check_runs(self):
+        document = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        jobs = _job_blocks(document)
+        audit = jobs["audit"]
+        publish = jobs["publish"]
+        self.assertRegex(audit, r"(?m)^      checks:\s*read\s*$")
+        self.assertIn("--check-required-runs", audit)
+        self.assertNotIn("--check-protection", audit)
+        self.assertRegex(publish, r"(?m)^    needs:\s*audit\s*$")
+
     def test_composite_action_supervises_commands_and_gates_publication(self):
         document = ACTION.read_text(encoding="utf-8")
         self.assertGreaterEqual(document.count("scripts/ci_runtime.py\" exec"), 3)

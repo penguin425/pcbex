@@ -6,7 +6,7 @@ if [[ $# -ne 2 ]]; then
   exit 2
 fi
 
-pcbex_binary=$1
+pcbex_binary="$(realpath "$1")"
 output_directory=$2
 fixtures=(
   examples/simple.kicad_pcb
@@ -616,6 +616,131 @@ assert result["package"] == {
     "identical": True,
 }
 assert result["validation"] == {
+    "inputs_captured": True,
+    "package_reproduced": True,
+    "staged_inputs_unchanged": True,
+    "caller_inputs_unchanged": True,
+}
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(result)
+PY
+
+# Compose the retained manufacturing ZIP with an exact circuit-handoff replay
+# and the same upgraded board. The board intentionally need not be approved by
+# this unrelated sample circuit: v6 reproduces the retained board-binding
+# decision, then proves the manufacturing package was freshly reproduced from
+# those exact board bytes without turning verification into authorization.
+composed_requirements="$output_directory/multilayer.composed.requirements.txt"
+composed_generation="$output_directory/multilayer.composed.generation.json"
+composed_handoff_zip="$output_directory/multilayer.composed.handoff.zip"
+composed_handoff_extract="$output_directory/multilayer.composed.handoff"
+composed_handoff_log="$output_directory/multilayer.composed.handoff.log"
+composed_extract_result="$output_directory/multilayer.composed.extract.json"
+composed_board_binding_report="$output_directory/multilayer.composed.board-binding.json"
+composed_replay_result="$output_directory/multilayer.composed.replay.json"
+printf '%s\n' 'Generate the deterministic circuit-spec-v2 example.' \
+  >"$composed_requirements"
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
+  "$composed_requirements" \
+  --output "$composed_generation" \
+  --pcbex "$pcbex_binary" \
+  --max-attempts 1 \
+  --timeout-seconds 120 \
+  --provider-command python3 -c \
+  'import sys; from pathlib import Path; sys.stdout.buffer.write(Path(sys.argv[1]).read_bytes())' \
+  examples/circuit-spec-v2.json
+PYTHONPATH=agent/src python3 -m pcbex_agent handoff-circuit \
+  "$composed_generation" \
+  --output "$composed_handoff_zip" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 120 \
+  >"$composed_handoff_log"
+PYTHONPATH=agent/src python3 -m pcbex_agent extract-circuit-handoff-bundle \
+  "$composed_handoff_zip" \
+  --output-dir "$composed_handoff_extract" \
+  >"$composed_extract_result"
+"$pcbex_binary" verify-circuit-kicad-board-binding \
+  "$composed_handoff_extract/circuit-spec-v2.json" \
+  "$composed_handoff_extract/circuit-spec.kicad_sch" \
+  "$upgraded_multilayer" \
+  --output "$composed_board_binding_report"
+PYTHONPATH=agent/src python3 -m pcbex_agent replay-circuit-handoff-bundle \
+  "$composed_handoff_zip" \
+  --pcbex "$pcbex_binary" \
+  --kicad-board "$upgraded_multilayer" \
+  --board-binding-report "$composed_board_binding_report" \
+  --manufacturing-package "$retained_manufacturing_zip" \
+  --manufacturing-kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 300 \
+  >"$composed_replay_result"
+retained_manufacturing_sha_after_composition="$(sha256sum "$retained_manufacturing_zip" | awk '{print $1}')"
+retained_manufacturing_bytes_after_composition="$(wc -c <"$retained_manufacturing_zip" | tr -d '[:space:]')"
+test "$retained_manufacturing_sha_after_composition" = "$retained_manufacturing_sha_before"
+test "$retained_manufacturing_bytes_after_composition" = "$retained_manufacturing_bytes_before"
+python3 - \
+  "$composed_replay_result" \
+  "$composed_board_binding_report" \
+  "$retained_manufacturing_zip" \
+  "$upgraded_multilayer" \
+  "$output_directory" <<'PY'
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+result_path, binding_path, package_path, board_path, output_directory = map(
+    Path, sys.argv[1:]
+)
+result = json.loads(result_path.read_text(encoding="utf-8"))
+binding = json.loads(binding_path.read_text(encoding="utf-8"))
+board = board_path.read_bytes()
+board_identity = {
+    "bytes": len(board),
+    "sha256": hashlib.sha256(board).hexdigest(),
+}
+package = package_path.read_bytes()
+package_identity = {
+    "bytes": len(package),
+    "sha256": hashlib.sha256(package).hexdigest(),
+}
+
+assert result["schema_version"] == 6
+assert result["verification_scope"] == (
+    "deterministic-electrical-handoff-chain-manufacturing-package-replay-v6"
+)
+assert result["verified"] is True
+assert result["validation"]["board_binding_replayed"] is True
+assert result["validation"]["manufacturing_package_replayed"] is True
+assert result["validation"]["manufacturing_board_identity_matched"] is True
+assert binding["approved"] is False
+assert result["board_binding"]["approved"] is binding["approved"]
+assert result["board_binding"]["approval_required"] is False
+assert result["board_binding"]["board"] == board_identity
+manufacturing = result["manufacturing_package"]
+assert manufacturing["schema_version"] == 1
+assert manufacturing["verification_scope"] == "manufacturing-package-fresh-replay-v1"
+assert manufacturing["verified"] is True
+assert manufacturing["board"] == {"name": board_path.name, **board_identity}
+assert manufacturing["package"] == {
+    "retained": package_identity,
+    "fresh": package_identity,
+    "identical": True,
+}
+assert manufacturing["validation"] == {
     "inputs_captured": True,
     "package_reproduced": True,
     "staged_inputs_unchanged": True,

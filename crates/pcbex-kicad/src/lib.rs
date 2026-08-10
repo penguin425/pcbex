@@ -1654,7 +1654,7 @@ fn polygon_size(polygon: &[Point]) -> Option<(i64, i64)> {
 
 fn footprint_is_locked(values: &[Sexp]) -> bool {
     values.iter().any(|item| match item {
-        Sexp::Atom(value) => value == "locked",
+        Sexp::Atom(value) | Sexp::QuotedAtom(value) => value == "locked",
         Sexp::List(child) => {
             atom(child.first()) == Some("locked")
                 && !matches!(atom(child.get(1)), Some("no") | Some("false"))
@@ -4165,7 +4165,13 @@ fn edge_child_point(list: &[Sexp], name: &str) -> Result<Option<Point>, String> 
 }
 fn atom(value: Option<&Sexp>) -> Option<&str> {
     match value? {
-        Sexp::Atom(x) => Some(x),
+        Sexp::Atom(x) | Sexp::QuotedAtom(x) => Some(x),
+        _ => None,
+    }
+}
+fn quoted_atom(value: Option<&Sexp>) -> Option<&str> {
+    match value? {
+        Sexp::QuotedAtom(x) => Some(x),
         _ => None,
     }
 }

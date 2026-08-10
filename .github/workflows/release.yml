@@ -193,6 +193,7 @@ jobs:
       # GitHub requires contents:write to read draft releases and their assets.
       # The audit script itself performs only read/download operations.
       contents: write
+      checks: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -206,7 +207,8 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --tag "$GITHUB_REF_NAME" \
             --expected-sha "$GITHUB_SHA" \
-            --allow-draft
+            --allow-draft \
+            --check-required-runs
 
   publish:
     name: Publish release

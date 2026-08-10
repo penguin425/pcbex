@@ -58,6 +58,7 @@ from .circuit_handoff_bundle import (
     CircuitHandoffBundleError,
     circuit_handoff_bundle_ai_quorum_replay_result_json_schema,
     circuit_handoff_bundle_board_binding_replay_result_json_schema,
+    circuit_handoff_bundle_manufacturing_replay_result_json_schema,
     circuit_handoff_bundle_catalog_provenance_replay_result_json_schema,
     circuit_handoff_bundle_json_schema,
     circuit_handoff_bundle_native_erc_replay_result_json_schema,
@@ -394,6 +395,26 @@ def main() -> None:
         help="fail after exact board-binding replay when the retained evidence is rejected",
     )
     replay_handoff.add_argument(
+        "--manufacturing-package",
+        type=Path,
+        help=(
+            "retained manufacturing ZIP to reproduce from the same board used "
+            "by the required board-binding replay"
+        ),
+    )
+    replay_handoff.add_argument(
+        "--manufacturing-kicad-cli",
+        help="trusted KiCad CLI used only by the composed manufacturing replay",
+    )
+    replay_handoff.add_argument("--manufacturing-kicad-project", type=Path)
+    replay_handoff.add_argument("--manufacturing-kicad-rules", type=Path)
+    manufacturing_profile = replay_handoff.add_mutually_exclusive_group()
+    manufacturing_profile.add_argument("--manufacturing-fab")
+    manufacturing_profile.add_argument("--manufacturing-fab-profile", type=Path)
+    manufacturing_profile.add_argument(
+        "--manufacturing-physical-profile", type=Path
+    )
+    replay_handoff.add_argument(
         "--ai-quorum-report",
         type=Path,
         help=(
@@ -474,6 +495,16 @@ def main() -> None:
         help="write the closed exact-chain plus board-binding replay schema",
     )
     handoff_board_binding_replay_result_schema.add_argument(
+        "-o", "--output", type=Path
+    )
+    handoff_manufacturing_replay_result_schema = sub.add_parser(
+        "circuit-handoff-bundle-manufacturing-replay-result-schema",
+        help=(
+            "write the closed exact-chain plus board-bound manufacturing "
+            "package replay schema"
+        ),
+    )
+    handoff_manufacturing_replay_result_schema.add_argument(
         "-o", "--output", type=Path
     )
     catalog_snapshot_schema = sub.add_parser(
@@ -922,6 +953,32 @@ def main() -> None:
                         args.require_board_binding_approved
                     ),
                 }
+            manufacturing_options = {}
+            if (
+                args.manufacturing_package is not None
+                or args.manufacturing_kicad_cli is not None
+                or args.manufacturing_kicad_project is not None
+                or args.manufacturing_kicad_rules is not None
+                or args.manufacturing_fab is not None
+                or args.manufacturing_fab_profile is not None
+                or args.manufacturing_physical_profile is not None
+            ):
+                manufacturing_options = {
+                    "retained_manufacturing_package": args.manufacturing_package,
+                    "manufacturing_kicad_project": (
+                        args.manufacturing_kicad_project
+                    ),
+                    "manufacturing_kicad_rules": args.manufacturing_kicad_rules,
+                    "manufacturing_fab": args.manufacturing_fab,
+                    "manufacturing_fab_profile": args.manufacturing_fab_profile,
+                    "manufacturing_physical_profile": (
+                        args.manufacturing_physical_profile
+                    ),
+                }
+                if args.manufacturing_kicad_cli is not None:
+                    manufacturing_options["manufacturing_kicad_cli"] = (
+                        args.manufacturing_kicad_cli
+                    )
             ai_options = {}
             if (
                 args.ai_quorum_report is not None
@@ -966,6 +1023,7 @@ def main() -> None:
                 **catalog_options,
                 **native_options,
                 **board_options,
+                **manufacturing_options,
                 **ai_options,
                 timeout_seconds=args.timeout_seconds,
                 expected_archive_sha256=args.expected_archive_sha256,
@@ -1121,6 +1179,30 @@ def main() -> None:
         except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
             raise SystemExit(
                 f"circuit handoff board binding replay schema failed: {error}"
+            ) from error
+    elif args.command == "circuit-handoff-bundle-manufacturing-replay-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    circuit_handoff_bundle_manufacturing_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, CircuitHandoffBundleError) as error:
+            raise SystemExit(
+                "circuit handoff manufacturing replay schema failed: "
+                f"{error}"
             ) from error
     elif args.command == "fetch-catalog-snapshot":
         try:

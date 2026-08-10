@@ -49,6 +49,11 @@ MAX_ARCHIVE_BYTES = 128 * MIB
 MAX_CHECKSUM_BYTES = 4096
 MAX_SBOM_BYTES = 16 * MIB
 MAX_RELEASE_ASSET_BYTES = 640 * MIB
+MAX_CHECK_RUN_PAGES = 10
+MAX_CHECK_RUNS_PER_PAGE = 100
+MAX_CHECK_RUNS = MAX_CHECK_RUN_PAGES * MAX_CHECK_RUNS_PER_PAGE
+MAX_CHECK_RUNS_RESPONSE_BYTES = 8 * MIB
+MAX_CHECK_RUN_NAME_BYTES = 1024
 RELEASE_AUDIT_DEADLINE_SECONDS = 8 * 60
 
 
@@ -393,8 +398,130 @@ def validate_actions_permissions(permissions: Any) -> None:
         raise AuditError("GitHub Actions selected_actions_url is invalid")
 
 
+def validate_required_check_runs(pages: Any, expected_sha: str) -> None:
+    """Validate a bounded ``filter=latest`` check-runs response for a commit."""
+
+    if (
+        not isinstance(expected_sha, str)
+        or re.fullmatch(r"[0-9a-f]{40}", expected_sha) is None
+    ):
+        raise AuditError(
+            "expected check-runs SHA must be a lowercase 40-character hex SHA"
+        )
+    if (
+        not isinstance(pages, list)
+        or not pages
+        or len(pages) > MAX_CHECK_RUN_PAGES
+    ):
+        raise AuditError("check-runs response must be a bounded non-empty page list")
+
+    total_count: int | None = None
+    check_runs: list[dict[str, Any]] = []
+    seen_ids: set[int] = set()
+    for page in pages:
+        if not isinstance(page, dict) or set(page) != {"total_count", "check_runs"}:
+            raise AuditError("check-runs page has an unexpected shape")
+        page_total_count = page["total_count"]
+        page_check_runs = page["check_runs"]
+        if (
+            type(page_total_count) is not int
+            or page_total_count < 0
+            or page_total_count > MAX_CHECK_RUNS
+        ):
+            raise AuditError("check-runs total_count is invalid or exceeds the bound")
+        if total_count is None:
+            total_count = page_total_count
+        elif page_total_count != total_count:
+            raise AuditError("check-runs pages disagree on total_count")
+        if (
+            not isinstance(page_check_runs, list)
+            or len(page_check_runs) > MAX_CHECK_RUNS_PER_PAGE
+        ):
+            raise AuditError("check-runs page list is invalid or exceeds the bound")
+
+        for check_run in page_check_runs:
+            if not isinstance(check_run, dict):
+                raise AuditError("check-runs entry must be an object")
+            run_id = check_run.get("id")
+            name = check_run.get("name")
+            head_sha = check_run.get("head_sha")
+            if type(run_id) is not int or run_id <= 0:
+                raise AuditError("check-run id must be a positive integer")
+            if run_id in seen_ids:
+                raise AuditError(f"duplicate check-run id: {run_id}")
+            seen_ids.add(run_id)
+            if (
+                not isinstance(name, str)
+                or not name
+                or len(name.encode("utf-8")) > MAX_CHECK_RUN_NAME_BYTES
+            ):
+                raise AuditError("check-run name is invalid or exceeds the bound")
+            if head_sha != expected_sha:
+                raise AuditError(f"check-run {name!r} does not bind to expected SHA")
+            check_runs.append(check_run)
+
+    if total_count is None or len(check_runs) != total_count:
+        raise AuditError("check-runs total_count does not match the returned list")
+    if len(check_runs) > MAX_CHECK_RUNS:
+        raise AuditError("check-runs response exceeds the aggregate bound")
+
+    required_by_name: dict[str, list[dict[str, Any]]] = {}
+    for check_run in check_runs:
+        name = check_run["name"]
+        if name in REQUIRED_CHECKS:
+            required_by_name.setdefault(name, []).append(check_run)
+
+    for context in sorted(REQUIRED_CHECKS):
+        matching = required_by_name.get(context, [])
+        if len(matching) != 1:
+            raise AuditError(
+                f"required check {context!r} must have exactly one latest check-run"
+            )
+        check_run = matching[0]
+        app = check_run.get("app")
+        if not isinstance(app, dict) or type(app.get("id")) is not int:
+            raise AuditError(f"required check {context!r} has an invalid app")
+        if app["id"] != GITHUB_ACTIONS_APP_ID:
+            raise AuditError(
+                f"required check {context!r} is not pinned to GitHub Actions"
+            )
+        if check_run.get("status") != "completed":
+            raise AuditError(f"required check {context!r} is not completed")
+        if check_run.get("conclusion") != "success":
+            raise AuditError(f"required check {context!r} did not succeed")
+
+
 def github_json(endpoint: str, *, deadline: Deadline | None = None) -> Any:
     return json.loads(run("gh", "api", endpoint, deadline=deadline))
+
+
+def github_required_check_runs(
+    repository: str,
+    expected_sha: str,
+    *,
+    deadline: Deadline | None = None,
+) -> None:
+    run_options: dict[str, Any] = {
+        "max_stdout_bytes": MAX_CHECK_RUNS_RESPONSE_BYTES,
+    }
+    if deadline is not None:
+        run_options["deadline"] = deadline
+    pages = json.loads(
+        run(
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            (
+                f"repos/{repository}/commits/{expected_sha}/check-runs"
+                f"?app_id={GITHUB_ACTIONS_APP_ID}&filter=latest&per_page=100"
+            ),
+            **run_options,
+        )
+    )
+    if deadline is not None:
+        deadline.remaining()
+    validate_required_check_runs(pages, expected_sha)
 
 
 def github_release_by_tag(
@@ -439,6 +566,7 @@ def main() -> int:
     parser.add_argument("--expected-sha", help="commit expected behind the tag")
     parser.add_argument("--allow-draft", action="store_true")
     parser.add_argument("--check-protection", action="store_true")
+    parser.add_argument("--check-required-runs", action="store_true")
     parser.add_argument("--skip-download", action="store_true")
     args = parser.parse_args()
 
@@ -512,6 +640,12 @@ def main() -> int:
                 deadline=deadline,
             )
             validate_actions_permissions(actions_permissions)
+        if args.check_required_runs:
+            github_required_check_runs(
+                args.repository,
+                expected_sha,
+                deadline=deadline,
+            )
         deadline.remaining()
     except (
         AuditError,

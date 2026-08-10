@@ -8,6 +8,7 @@
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Sexp {
     Atom(String),
+    QuotedAtom(String),
     List(Vec<Sexp>),
 }
 
@@ -15,7 +16,7 @@ impl Sexp {
     pub(crate) fn as_list(&self) -> Option<&[Sexp]> {
         match self {
             Self::List(values) => Some(values),
-            Self::Atom(_) => None,
+            Self::Atom(_) | Self::QuotedAtom(_) => None,
         }
     }
 }
@@ -367,7 +368,7 @@ fn parse_with_limits(
                 if stack.is_empty() && root_mode == RootMode::Document && root_count != 0 {
                     return Err("trailing tokens in KiCad document".to_string());
                 }
-                let value = Sexp::Atom(atom);
+                let value = Sexp::QuotedAtom(atom);
                 if let Some(frame) = stack.last_mut() {
                     add_direct_element(
                         &mut frame.direct_elements,
@@ -595,11 +596,11 @@ mod tests {
         assert_eq!(
             roots,
             vec![Sexp::List(vec![
-                Sexp::Atom("(".into()),
-                Sexp::Atom(")".into()),
-                Sexp::Atom(String::new()),
-                Sexp::Atom("日本語".into()),
-                Sexp::Atom("\\\"".into()),
+                Sexp::QuotedAtom("(".into()),
+                Sexp::QuotedAtom(")".into()),
+                Sexp::QuotedAtom(String::new()),
+                Sexp::QuotedAtom("日本語".into()),
+                Sexp::QuotedAtom("\\\"".into()),
             ])]
         );
         let escaped =
@@ -607,8 +608,8 @@ mod tests {
         assert_eq!(
             escaped,
             vec![Sexp::List(vec![
-                Sexp::Atom("a\"b".into()),
-                Sexp::Atom("c\\d".into()),
+                Sexp::QuotedAtom("a\"b".into()),
+                Sexp::QuotedAtom("c\\d".into()),
             ])]
         );
     }
