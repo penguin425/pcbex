@@ -7,6 +7,7 @@ use std::{
     io::{BufRead, BufReader, Cursor, Read, Write},
     path::{Path, PathBuf},
     process::{ChildStdin, ChildStdout, Command, Output, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
@@ -682,6 +683,242 @@ fn passing_runner_plan(directory: &Path) -> PathBuf {
     let path = directory.join("deterministic-pipeline-plan.json");
     write_json(&path, &plan);
     path
+}
+
+struct FabricationCliFixture {
+    plan: PathBuf,
+    report: PathBuf,
+    manufacturing_package: PathBuf,
+    factory_receipt: PathBuf,
+    policy_pack: PathBuf,
+    private_a: PathBuf,
+    private_b: PathBuf,
+    valid_from_unix: u64,
+    expires_at_unix: u64,
+}
+
+fn write_approval_keypair(directory: &Path, name: &str) -> (PathBuf, PathBuf) {
+    let private_key = directory.join(format!("{name}.key"));
+    let public_key = directory.join(format!("{name}.pub"));
+    let output = Command::new(binary())
+        .arg("approval-keygen")
+        .arg("--private-key")
+        .arg(&private_key)
+        .arg("--public-key")
+        .arg(&public_key)
+        .output()
+        .unwrap();
+    assert_success(&output, "approval-keygen for fabrication fixture");
+    (private_key, public_key)
+}
+
+fn make_runner_clean_analysis_with_policy(
+    directory: &Path,
+    board: &Path,
+    policy_pack: &Path,
+) -> (PathBuf, PathBuf, PathBuf) {
+    let output = Command::new(binary())
+        .arg("analyze-kicad")
+        .arg(board)
+        .arg("--policy-pack")
+        .arg(policy_pack)
+        .arg("--output-dir")
+        .arg(directory)
+        .arg("--fail-on-violations")
+        .output()
+        .unwrap();
+    assert_success(&output, "runner analyze-kicad with fabrication policy");
+    let manifest_path = directory.join("run.json");
+    let checks_path = directory.join("checks.json");
+    let quality_path = directory.join("quality.json");
+    let manifest = read_json(&manifest_path);
+    assert_eq!(manifest["input"]["sha256"], sha256_file(board));
+    assert_eq!(manifest["result"]["clean"], true);
+    assert_eq!(manifest["result"]["violations"], 0);
+    assert_eq!(manifest["result"]["unrouted_nets"], 0);
+    assert_eq!(
+        manifest["policy_pack_file"]["sha256"],
+        sha256_file(policy_pack)
+    );
+    assert_eq!(
+        manifest["configuration"]["organization_policy_pack"],
+        "acme-production-v1"
+    );
+    (manifest_path, checks_path, quality_path)
+}
+
+fn fabrication_cli_fixture(directory: &Path) -> FabricationCliFixture {
+    let (private_a, public_a) = write_approval_keypair(directory, "fabrication-a");
+    let (private_b, public_b) = write_approval_keypair(directory, "fabrication-b");
+    let mut policy = read_json(&example("acme-policy-pack.json"));
+    policy["fabrication_authorization_policy"] = json!({
+        "minimum_approvals": 2,
+        "maximum_validity_seconds": 7_200,
+        "trusted_keys": [
+            {
+                "signer_id": "fabrication-a",
+                "public_key": fs::read_to_string(&public_a).unwrap().trim()
+            },
+            {
+                "signer_id": "fabrication-b",
+                "public_key": fs::read_to_string(&public_b).unwrap().trim()
+            }
+        ]
+    });
+    let policy_pack = directory.join("fabrication-policy-pack.json");
+    write_json(&policy_pack, &policy);
+    let validation = Command::new(binary())
+        .arg("validate-policy-pack")
+        .arg(&policy_pack)
+        .output()
+        .unwrap();
+    assert_success(&validation, "validate fabrication policy pack");
+
+    let circuit_spec = directory.join("circuit-spec-v2.json");
+    let schematic = directory.join("design.kicad_sch");
+    let board = directory.join("design.routed.kicad_pcb");
+    fs::write(&circuit_spec, RUNNER_CIRCUIT_SPEC).unwrap();
+    fs::write(&schematic, runner_schematic()).unwrap();
+    fs::write(&board, RUNNER_BOARD).unwrap();
+    let (electrical_policy, electrical_review, schematic_sha256) =
+        make_approved_electrical_review(directory, &schematic);
+    let analysis_directory = directory.join("fabrication-analysis");
+    let (analysis_manifest, analysis_checks, quality) =
+        make_runner_clean_analysis_with_policy(&analysis_directory, &board, &policy_pack);
+    let manufacturing_package = directory.join("fabrication-manufacturing.zip");
+    write_manufacturing_package(&manufacturing_package, &board);
+    let factory_receipt = directory.join("fabrication-factory-receipt.json");
+    write_factory_receipt(&factory_receipt, &manufacturing_package);
+    let firmware_manifest = write_firmware_manifest(directory, &schematic_sha256);
+
+    let plan_value = json!({
+        "schema_version": 1,
+        "circuit_spec": plan_descriptor(directory, &circuit_spec),
+        "schematic": plan_descriptor(directory, &schematic),
+        "electrical_policy": plan_descriptor(directory, &electrical_policy),
+        "electrical_review": plan_descriptor(directory, &electrical_review),
+        "board": plan_descriptor(directory, &board),
+        "analysis_manifest": plan_descriptor(directory, &analysis_manifest),
+        "analysis_checks": plan_descriptor(directory, &analysis_checks),
+        "quality": plan_descriptor(directory, &quality),
+        "analysis_project": null,
+        "analysis_rules": null,
+        "analysis_dfm_profile": null,
+        "analysis_policy_pack": plan_descriptor(directory, &policy_pack),
+        "analysis_physical_profile": null,
+        "manufacturing_package": plan_descriptor(directory, &manufacturing_package),
+        "firmware_manifest": plan_descriptor(directory, &firmware_manifest),
+        "factory_receipt": plan_descriptor(directory, &factory_receipt),
+        "require_factory": true,
+    });
+    let plan = directory.join("fabrication-deterministic-pipeline-plan.json");
+    write_json(&plan, &plan_value);
+    let report = directory.join("fabrication-deterministic-pipeline-report.json");
+    let runner = Command::new(binary())
+        .arg("run-deterministic-pipeline")
+        .arg(&plan)
+        .arg("--output")
+        .arg(&report)
+        .arg("--require-approved")
+        .output()
+        .unwrap();
+    assert_success(&runner, "factory-required deterministic pipeline");
+    let report_value = read_json(&report);
+    assert_eq!(report_value["approved"], true);
+    assert_eq!(report_value["pipeline"]["schema_version"], 2);
+    assert_eq!(report_value["pipeline"]["passed"], true);
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    FabricationCliFixture {
+        plan,
+        report,
+        manufacturing_package,
+        factory_receipt,
+        policy_pack,
+        private_a,
+        private_b,
+        valid_from_unix: now.saturating_sub(60),
+        expires_at_unix: now.checked_add(3_600).unwrap(),
+    }
+}
+
+fn sign_fabrication_decision(
+    fixture: &FabricationCliFixture,
+    private_key: &Path,
+    signer_id: &str,
+    decision: &str,
+    output: &Path,
+) -> Output {
+    Command::new(binary())
+        .arg("sign-fabrication-approval")
+        .arg(&fixture.plan)
+        .arg("--report")
+        .arg(&fixture.report)
+        .arg("--manufacturing-package")
+        .arg(&fixture.manufacturing_package)
+        .arg("--factory-receipt")
+        .arg(&fixture.factory_receipt)
+        .arg("--policy-pack")
+        .arg(&fixture.policy_pack)
+        .arg("--private-key")
+        .arg(private_key)
+        .arg("--signer-id")
+        .arg(signer_id)
+        .arg("--decision")
+        .arg(decision)
+        .arg("--authorization-id")
+        .arg("fixture-fabrication-release")
+        .arg("--challenge")
+        .arg("ab".repeat(32))
+        .arg("--quantity")
+        .arg("25")
+        .arg("--currency")
+        .arg("USD")
+        .arg("--maximum-total-minor-units")
+        .arg("125000")
+        .arg("--valid-from-unix")
+        .arg(fixture.valid_from_unix.to_string())
+        .arg("--expires-at-unix")
+        .arg(fixture.expires_at_unix.to_string())
+        .arg("--reason")
+        .arg(format!("Independent decision by {signer_id}"))
+        .arg("--ticket")
+        .arg(format!("FAB-{signer_id}"))
+        .arg("--output")
+        .arg(output)
+        .output()
+        .unwrap()
+}
+
+fn verify_fabrication_decisions(
+    fixture: &FabricationCliFixture,
+    approvals: &[&Path],
+    output: &Path,
+    require_authorized: bool,
+) -> Output {
+    let mut command = Command::new(binary());
+    command
+        .arg("verify-fabrication-authorization")
+        .arg(&fixture.plan)
+        .arg("--report")
+        .arg(&fixture.report)
+        .arg("--manufacturing-package")
+        .arg(&fixture.manufacturing_package)
+        .arg("--factory-receipt")
+        .arg(&fixture.factory_receipt)
+        .arg("--policy-pack")
+        .arg(&fixture.policy_pack);
+    for approval in approvals {
+        command.arg("--approval").arg(approval);
+    }
+    command.arg("--output").arg(output);
+    if require_authorized {
+        command.arg("--require-authorized");
+    }
+    command.output().unwrap()
 }
 
 fn missing_inputs(directory: &Path) -> PipelineInputs {
@@ -1941,6 +2178,45 @@ fn assert_schema_objects_are_closed(value: &Value) {
             }
         }
         _ => {}
+    }
+}
+
+fn assert_schema_objects_are_closed_or_constrained_maps(value: &Value) -> usize {
+    match value {
+        Value::Object(object) => {
+            let mut constrained_maps = 0;
+            if object.get("type") == Some(&Value::String("object".into()))
+                && object.contains_key("properties")
+            {
+                match object.get("additionalProperties") {
+                    Some(Value::Bool(false)) => {}
+                    Some(Value::Object(_)) => {
+                        let allowed_names = object
+                            .get("propertyNames")
+                            .and_then(|names| names.get("enum"))
+                            .and_then(Value::as_array)
+                            .expect("typed map must restrict names to a closed enum");
+                        assert!(!allowed_names.is_empty());
+                        assert!(
+                            !allowed_names.iter().any(|name| name == "arbitrary-key"),
+                            "typed map unexpectedly permits an arbitrary property name"
+                        );
+                        constrained_maps += 1;
+                    }
+                    other => panic!("object schema is not closed: {other:?} in {value}"),
+                }
+            }
+            constrained_maps
+                + object
+                    .values()
+                    .map(assert_schema_objects_are_closed_or_constrained_maps)
+                    .sum::<usize>()
+        }
+        Value::Array(values) => values
+            .iter()
+            .map(assert_schema_objects_are_closed_or_constrained_maps)
+            .sum(),
+        _ => 0,
     }
 }
 
@@ -3279,5 +3555,406 @@ fn deterministic_pipeline_schemas_are_closed_and_no_clobber() {
             .output()
             .unwrap();
         assert!(!collision.status.success());
+    }
+}
+
+#[test]
+fn fabrication_authorization_cli_retains_truthful_dual_control_results_and_rejects_tampering() {
+    let temporary = tempfile::tempdir().unwrap();
+    let fixture = fabrication_cli_fixture(temporary.path());
+    let approval_a = temporary.path().join("fabrication-a-approval.json");
+    let approval_b = temporary.path().join("fabrication-b-approval.json");
+
+    let signed_a = sign_fabrication_decision(
+        &fixture,
+        &fixture.private_a,
+        "fabrication-a",
+        "approve",
+        &approval_a,
+    );
+    assert_success(&signed_a, "sign fabrication approval A");
+    let signed_b = sign_fabrication_decision(
+        &fixture,
+        &fixture.private_b,
+        "fabrication-b",
+        "approve",
+        &approval_b,
+    );
+    assert_success(&signed_b, "sign fabrication approval B");
+
+    let approval_a_value = read_json(&approval_a);
+    let approval_b_value = read_json(&approval_b);
+    assert_eq!(approval_a_value["schema_version"], 1);
+    assert_eq!(approval_a_value["decision"], "approve");
+    assert_eq!(approval_a_value["signer_id"], "fabrication-a");
+    assert_eq!(approval_a_value["algorithm"], "ed25519");
+    assert_eq!(approval_a_value["scope"]["challenge"], "ab".repeat(32));
+    assert_eq!(
+        approval_a_value["evidence"]["factory_receipt"]["quote_authenticity_verified"],
+        false
+    );
+    assert_eq!(approval_a_value["evidence"], approval_b_value["evidence"]);
+    assert_eq!(approval_a_value["scope"], approval_b_value["scope"]);
+    assert_eq!(
+        keys(&approval_a_value["evidence"]),
+        BTreeSet::from([
+            "factory_receipt",
+            "manufacturing_package",
+            "pipeline",
+            "policy_pack",
+        ])
+    );
+    assert_eq!(
+        keys(&approval_a_value["evidence"]["factory_receipt"]),
+        BTreeSet::from([
+            "endpoint",
+            "provider",
+            "quote_authenticity_verified",
+            "quote_sha256",
+            "receipt",
+        ])
+    );
+    fn assert_path_free(value: &Value) {
+        match value {
+            Value::Object(object) => {
+                assert!(
+                    !object.contains_key("path"),
+                    "path leaked into evidence: {value}"
+                );
+                for nested in object.values() {
+                    assert_path_free(nested);
+                }
+            }
+            Value::Array(values) => {
+                for nested in values {
+                    assert_path_free(nested);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_path_free(&approval_a_value["evidence"]);
+
+    let authorized_path = temporary.path().join("fabrication-authorized.json");
+    let authorized = verify_fabrication_decisions(
+        &fixture,
+        &[approval_b.as_path(), approval_a.as_path()],
+        &authorized_path,
+        true,
+    );
+    assert_success(&authorized, "verify dual-control fabrication authorization");
+    let authorized_report = read_json(&authorized_path);
+    assert_eq!(
+        keys(&authorized_report),
+        BTreeSet::from([
+            "approvals",
+            "challenge_one_time_use_enforced",
+            "evaluated_at_unix",
+            "evidence",
+            "fabrication_authorized",
+            "gate_failures",
+            "members",
+            "policy_pack",
+            "rejections",
+            "schema_version",
+            "scope",
+            "signed_approvals",
+            "status",
+        ])
+    );
+    assert_eq!(authorized_report["schema_version"], 1);
+    assert_eq!(authorized_report["status"], "fabrication_authorized");
+    assert_eq!(authorized_report["fabrication_authorized"], true);
+    assert_eq!(authorized_report["approvals"], 2);
+    assert_eq!(authorized_report["rejections"], 0);
+    assert_eq!(authorized_report["gate_failures"], json!([]));
+    assert_eq!(authorized_report["challenge_one_time_use_enforced"], false);
+    assert_eq!(
+        authorized_report["policy_pack"],
+        read_json(&fixture.policy_pack)
+    );
+    assert_eq!(
+        authorized_report["signed_approvals"],
+        json!([approval_a_value, approval_b_value])
+    );
+    assert_eq!(
+        authorized_report["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|member| member["signer_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["fabrication-a", "fabrication-b"]
+    );
+    assert!(
+        authorized_report["signed_approvals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|approval| approval["signature"].as_str().unwrap().len() == 128)
+    );
+
+    let rejection_b = temporary.path().join("fabrication-b-rejection.json");
+    let rejected = sign_fabrication_decision(
+        &fixture,
+        &fixture.private_b,
+        "fabrication-b",
+        "reject",
+        &rejection_b,
+    );
+    assert_success(&rejected, "sign fabrication rejection B");
+    let rejection_value = read_json(&rejection_b);
+    let rejected_report_path = temporary.path().join("fabrication-rejected.json");
+    let rejected_gate = verify_fabrication_decisions(
+        &fixture,
+        &[approval_a.as_path(), rejection_b.as_path()],
+        &rejected_report_path,
+        true,
+    );
+    assert!(!rejected_gate.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_gate.stderr)
+            .contains("fabrication authorization quorum did not authorize the exact scope")
+    );
+    let rejected_report = read_json(&rejected_report_path);
+    assert_eq!(rejected_report["status"], "not_authorized");
+    assert_eq!(rejected_report["fabrication_authorized"], false);
+    assert_eq!(rejected_report["approvals"], 1);
+    assert_eq!(rejected_report["rejections"], 1);
+    assert_eq!(
+        rejected_report["gate_failures"],
+        json!([
+            "human_rejection:count=1",
+            "insufficient_fabrication_approvals:required=2:actual=1"
+        ])
+    );
+    assert_eq!(
+        rejected_report["signed_approvals"],
+        json!([read_json(&approval_a), rejection_value])
+    );
+
+    let insufficient_report_path = temporary.path().join("fabrication-insufficient.json");
+    let insufficient_gate = verify_fabrication_decisions(
+        &fixture,
+        &[approval_a.as_path()],
+        &insufficient_report_path,
+        true,
+    );
+    assert!(!insufficient_gate.status.success());
+    let insufficient_report = read_json(&insufficient_report_path);
+    assert_eq!(insufficient_report["status"], "not_authorized");
+    assert_eq!(insufficient_report["fabrication_authorized"], false);
+    assert_eq!(insufficient_report["approvals"], 1);
+    assert_eq!(insufficient_report["rejections"], 0);
+    assert_eq!(
+        insufficient_report["gate_failures"],
+        json!(["insufficient_fabrication_approvals:required=2:actual=1"])
+    );
+    assert_eq!(
+        insufficient_report["signed_approvals"],
+        json!([read_json(&approval_a)])
+    );
+
+    let mut signature_tamper = read_json(&approval_a);
+    let signature = signature_tamper["signature"].as_str().unwrap();
+    let first = if signature.starts_with('0') { "1" } else { "0" };
+    signature_tamper["signature"] = Value::String(format!("{first}{}", &signature[1..]));
+    let signature_tamper_path = temporary.path().join("fabrication-signature-tamper.json");
+    write_json(&signature_tamper_path, &signature_tamper);
+    let signature_tamper_report = temporary.path().join("signature-tamper-report.json");
+    let signature_failure = verify_fabrication_decisions(
+        &fixture,
+        &[signature_tamper_path.as_path(), approval_b.as_path()],
+        &signature_tamper_report,
+        false,
+    );
+    assert!(!signature_failure.status.success());
+    assert!(!signature_tamper_report.exists());
+
+    let mut evidence_tamper = read_json(&approval_a);
+    evidence_tamper["evidence"]["pipeline"]["run_sha256"] = Value::String("0".repeat(64));
+    let evidence_tamper_path = temporary.path().join("fabrication-evidence-tamper.json");
+    write_json(&evidence_tamper_path, &evidence_tamper);
+    let evidence_tamper_report = temporary.path().join("evidence-tamper-report.json");
+    let evidence_failure = verify_fabrication_decisions(
+        &fixture,
+        &[evidence_tamper_path.as_path(), approval_b.as_path()],
+        &evidence_tamper_report,
+        false,
+    );
+    assert!(!evidence_failure.status.success());
+    assert!(!evidence_tamper_report.exists());
+
+    let package_source = fs::read(&fixture.manufacturing_package).unwrap();
+    let mut package_tamper = package_source.clone();
+    package_tamper.push(0);
+    fs::write(&fixture.manufacturing_package, package_tamper).unwrap();
+    let package_tamper_report = temporary.path().join("package-tamper-report.json");
+    let package_failure = verify_fabrication_decisions(
+        &fixture,
+        &[approval_a.as_path(), approval_b.as_path()],
+        &package_tamper_report,
+        false,
+    );
+    assert!(!package_failure.status.success());
+    assert!(!package_tamper_report.exists());
+    fs::write(&fixture.manufacturing_package, package_source).unwrap();
+
+    let sentinel = b"preserve existing authorization output\n";
+    let existing_output = temporary.path().join("existing-authorization.json");
+    fs::write(&existing_output, sentinel).unwrap();
+    let collision = verify_fabrication_decisions(
+        &fixture,
+        &[approval_a.as_path(), approval_b.as_path()],
+        &existing_output,
+        false,
+    );
+    assert!(!collision.status.success());
+    assert!(
+        String::from_utf8_lossy(&collision.stderr)
+            .contains("refusing to overwrite existing output")
+    );
+    assert_eq!(fs::read(&existing_output).unwrap(), sentinel);
+
+    let plan_source = fs::read(&fixture.plan).unwrap();
+    let aliased = sign_fabrication_decision(
+        &fixture,
+        &fixture.private_a,
+        "fabrication-a",
+        "approve",
+        &fixture.plan,
+    );
+    assert!(!aliased.status.success());
+    assert!(
+        String::from_utf8_lossy(&aliased.stderr)
+            .contains("pipeline output must not alias an input")
+    );
+    assert_eq!(fs::read(&fixture.plan).unwrap(), plan_source);
+
+    let firmware_output = temporary.path().join("firmware/authorization.json");
+    let firmware_collision = sign_fabrication_decision(
+        &fixture,
+        &fixture.private_a,
+        "fabrication-a",
+        "approve",
+        &firmware_output,
+    );
+    assert!(!firmware_collision.status.success());
+    assert!(
+        String::from_utf8_lossy(&firmware_collision.stderr)
+            .contains("must be outside the exact firmware bundle directory")
+    );
+    assert!(!firmware_output.exists());
+
+    let missing_private_key = temporary.path().join("missing-fabrication.key");
+    let public_preflight_output = temporary.path().join("untrusted-approval.json");
+    let public_preflight = sign_fabrication_decision(
+        &fixture,
+        &missing_private_key,
+        "untrusted-fabrication",
+        "approve",
+        &public_preflight_output,
+    );
+    assert!(!public_preflight.status.success());
+    let public_preflight_stderr = String::from_utf8_lossy(&public_preflight.stderr);
+    assert!(public_preflight_stderr.contains("is not trusted by the organization policy"));
+    assert!(!public_preflight_stderr.contains("reading fabrication approval private key"));
+    assert!(!public_preflight_output.exists());
+
+    let occupied_sign_output = temporary.path().join("occupied-sign-output.json");
+    fs::write(&occupied_sign_output, sentinel).unwrap();
+    let destination_preflight = sign_fabrication_decision(
+        &fixture,
+        &missing_private_key,
+        "fabrication-a",
+        "approve",
+        &occupied_sign_output,
+    );
+    assert!(!destination_preflight.status.success());
+    let destination_stderr = String::from_utf8_lossy(&destination_preflight.stderr);
+    assert!(destination_stderr.contains("refusing to overwrite existing output"));
+    assert!(!destination_stderr.contains("reading fabrication approval private key"));
+    assert_eq!(fs::read(&occupied_sign_output).unwrap(), sentinel);
+}
+
+#[test]
+fn fabrication_authorization_schemas_are_closed_bounded_and_no_clobber() {
+    let temporary = tempfile::tempdir().unwrap();
+    for (command, name) in [
+        (
+            "signed-fabrication-approval-schema",
+            "signed-fabrication-approval.schema.json",
+        ),
+        (
+            "fabrication-authorization-report-schema",
+            "fabrication-authorization-report.schema.json",
+        ),
+    ] {
+        let path = temporary.path().join(name);
+        let output = Command::new(binary())
+            .arg(command)
+            .arg("--output")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_success(&output, command);
+        let source = fs::read(&path).unwrap();
+        let schema = read_json(&path);
+        assert_eq!(
+            schema["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
+        );
+        assert_eq!(schema["additionalProperties"], false);
+
+        if command == "signed-fabrication-approval-schema" {
+            assert_schema_objects_are_closed(&schema);
+            assert_eq!(
+                schema["properties"]["scope"]["properties"]["challenge"]["pattern"],
+                "^[0-9a-f]{64}$"
+            );
+            assert_eq!(
+                schema["properties"]["signature"]["pattern"],
+                "^[0-9a-f]{128}$"
+            );
+            assert_eq!(
+                schema["properties"]["evidence"]["properties"]["factory_receipt"]["properties"]["quote_authenticity_verified"]
+                    ["const"],
+                false
+            );
+        } else {
+            assert_eq!(
+                schema["properties"]["status"]["enum"],
+                json!(["fabrication_authorized", "not_authorized"])
+            );
+            let constrained_maps = assert_schema_objects_are_closed_or_constrained_maps(&schema);
+            assert!(constrained_maps > 0);
+            let policy_schema = &schema["properties"]["policy_pack"];
+            assert_eq!(policy_schema["allOf"][0]["additionalProperties"], false);
+            assert_eq!(
+                policy_schema["allOf"][0]["properties"]["fabrication_authorization_policy"]["additionalProperties"],
+                false
+            );
+            assert_eq!(
+                policy_schema["allOf"][1]["required"],
+                json!(["fabrication_authorization_policy"])
+            );
+            assert_eq!(
+                schema["properties"]["signed_approvals"]["items"]["properties"]["signature"]["pattern"],
+                "^[0-9a-f]{128}$"
+            );
+            assert_eq!(
+                schema["properties"]["challenge_one_time_use_enforced"]["const"],
+                false
+            );
+        }
+
+        let collision = Command::new(binary())
+            .arg(command)
+            .arg("--output")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!collision.status.success());
+        assert_eq!(fs::read(&path).unwrap(), source);
     }
 }

@@ -819,6 +819,11 @@
     {
       "id": "pipeline-bound-circuit-manufacturing-replay",
       "release": "v1.458.0",
+      "status": "released"
+    },
+    {
+      "id": "dual-control-exact-fabrication-release-authorization",
+      "release": "v1.459.0",
       "status": "current"
     }
   ]

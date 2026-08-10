@@ -21,6 +21,14 @@ pub struct TrustedApprovalKey {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct FabricationAuthorizationPolicy {
+    pub minimum_approvals: u32,
+    pub maximum_validity_seconds: u64,
+    pub trusted_keys: Vec<TrustedApprovalKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrganizationPolicyPack {
     pub schema_version: u32,
     pub id: String,
@@ -34,6 +42,8 @@ pub struct OrganizationPolicyPack {
     pub trusted_approval_keys: Vec<TrustedApprovalKey>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trusted_human_escalation_keys: Vec<TrustedApprovalKey>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fabrication_authorization_policy: Option<FabricationAuthorizationPolicy>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -159,6 +169,56 @@ pub fn validate_policy_pack(pack: &OrganizationPolicyPack) -> Result<(), String>
         }
         if !keys.insert(&trusted.public_key) {
             return Err("a public key cannot hold both AI and human escalation trust roles".into());
+        }
+    }
+    if let Some(policy) = &pack.fabrication_authorization_policy {
+        if !(2..=100).contains(&policy.minimum_approvals) {
+            return Err(
+                "fabrication authorization minimum_approvals must be between 2 and 100".into(),
+            );
+        }
+        if !(1..=604_800).contains(&policy.maximum_validity_seconds) {
+            return Err(
+                "fabrication authorization maximum_validity_seconds must be between 1 and 604800"
+                    .into(),
+            );
+        }
+        if !(2..=100).contains(&policy.trusted_keys.len()) {
+            return Err(
+                "fabrication authorization trusted_keys must contain 2 to 100 entries".into(),
+            );
+        }
+        if policy.minimum_approvals as usize > policy.trusted_keys.len() {
+            return Err(
+                "fabrication authorization minimum_approvals cannot exceed trusted_keys".into(),
+            );
+        }
+        let mut fabrication_signers = HashSet::new();
+        let mut fabrication_keys = HashSet::new();
+        for trusted in &policy.trusted_keys {
+            validate_slug("trusted fabrication signer id", &trusted.signer_id)?;
+            validate_public_key(&trusted.public_key)?;
+            if !fabrication_signers.insert(&trusted.signer_id) {
+                return Err(format!(
+                    "duplicate trusted fabrication signer id {:?}",
+                    trusted.signer_id
+                ));
+            }
+            if signers.contains(&trusted.signer_id) || human_signers.contains(&trusted.signer_id) {
+                return Err(format!(
+                    "signer {:?} cannot hold both fabrication authorization and another trust role",
+                    trusted.signer_id
+                ));
+            }
+            if !fabrication_keys.insert(&trusted.public_key) {
+                return Err("duplicate trusted fabrication authorization public key".into());
+            }
+            if keys.contains(&trusted.public_key) {
+                return Err(
+                    "a public key cannot hold fabrication authorization and another trust role"
+                        .into(),
+                );
+            }
         }
     }
     Ok(())
@@ -401,6 +461,31 @@ pub fn policy_pack_json_schema() -> Value {
                         "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
                     }
                 }
+            },
+            "fabrication_authorization_policy": {
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "minimum_approvals", "maximum_validity_seconds", "trusted_keys"
+                ],
+                "properties": {
+                    "minimum_approvals": {
+                        "type": "integer", "minimum": 2, "maximum": 100
+                    },
+                    "maximum_validity_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 604800
+                    },
+                    "trusted_keys": {
+                        "type": "array", "minItems": 2, "maxItems": 100,
+                        "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["signer_id", "public_key"],
+                            "properties": {
+                                "signer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                                "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                            }
+                        }
+                    }
+                }
             }
         }
     })
@@ -491,7 +576,7 @@ fn validate_hex(value: &str, length: usize, label: &str) -> Result<(), String> {
     }
 }
 
-fn policy_pack_sha256(pack: &OrganizationPolicyPack) -> Result<String, String> {
+pub(crate) fn policy_pack_sha256(pack: &OrganizationPolicyPack) -> Result<String, String> {
     let bytes = serde_json::to_vec(pack)
         .map_err(|error| format!("serializing organization policy pack: {error}"))?;
     use sha2::{Digest, Sha256};
@@ -541,6 +626,12 @@ mod tests {
         assert_eq!(pack.id, "acme-production-v1");
         assert_eq!(pack.ai_requirements.len(), 2);
         assert!(pack.require_simulation_evidence);
+        assert!(pack.fabrication_authorization_policy.is_none());
+        assert!(
+            !serde_json::to_string(&pack)
+                .unwrap()
+                .contains("fabrication_authorization_policy")
+        );
     }
 
     #[test]
@@ -580,6 +671,89 @@ mod tests {
         assert_eq!(
             schema["properties"]["trusted_human_escalation_keys"]["items"]["additionalProperties"],
             false
+        );
+        assert_eq!(
+            schema["properties"]["fabrication_authorization_policy"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schema["properties"]["fabrication_authorization_policy"]["properties"]["trusted_keys"]
+                ["items"]["additionalProperties"],
+            false
+        );
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "fabrication_authorization_policy")
+        );
+    }
+
+    #[test]
+    fn validates_dedicated_fabrication_dual_control_policy() {
+        let keys = [
+            hex::encode(SigningKey::from_bytes(&[41; 32]).verifying_key().to_bytes()),
+            hex::encode(SigningKey::from_bytes(&[42; 32]).verifying_key().to_bytes()),
+        ];
+        let mut pack = sample();
+        pack.fabrication_authorization_policy = Some(FabricationAuthorizationPolicy {
+            minimum_approvals: 2,
+            maximum_validity_seconds: 3_600,
+            trusted_keys: vec![
+                TrustedApprovalKey {
+                    signer_id: "fabrication-a".into(),
+                    public_key: keys[0].clone(),
+                },
+                TrustedApprovalKey {
+                    signer_id: "fabrication-b".into(),
+                    public_key: keys[1].clone(),
+                },
+            ],
+        });
+        validate_policy_pack(&pack).unwrap();
+        let reparsed = parse_policy_pack(&serde_json::to_string(&pack).unwrap()).unwrap();
+        assert_eq!(reparsed, pack);
+        let ai_signer = pack.trusted_approval_keys[0].signer_id.clone();
+        let ai_key = pack.trusted_approval_keys[0].public_key.clone();
+
+        pack.fabrication_authorization_policy
+            .as_mut()
+            .unwrap()
+            .minimum_approvals = 3;
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("cannot exceed")
+        );
+        pack.fabrication_authorization_policy
+            .as_mut()
+            .unwrap()
+            .minimum_approvals = 2;
+        pack.fabrication_authorization_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .signer_id = ai_signer;
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("another trust role")
+        );
+        pack.fabrication_authorization_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .signer_id = "fabrication-a".into();
+        pack.fabrication_authorization_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .public_key = ai_key;
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("another trust role")
         );
     }
 

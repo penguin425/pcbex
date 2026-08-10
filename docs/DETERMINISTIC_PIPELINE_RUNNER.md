@@ -370,6 +370,34 @@ membership. The standalone API/CLI/schema and the Rust plan/report schemas are
 unchanged. This new surface has no MCP or Composite Action parity and adds no
 fresh producer, firmware build, network/factory call, or fabrication authority.
 
+## Fabrication release authorization (v1.459.0)
+
+The standalone Rust CLI can now use a stricter subset of runner evidence as an
+offline authorization prerequisite. The plan must explicitly select an
+`analysis_policy_pack`, set `require_factory: true`, and select a factory
+receipt. pcbex reruns the plan in-process, requires a byte-identical retained
+report with `approved: true`, and additionally requires pipeline schema v2 plus
+exactly one passing `factory-dfm` phase. Human approval cannot make a rejected
+runner report eligible.
+
+The authorization layer then reopens and independently validates the exact
+manufacturing ZIP, factory receipt, and organization policy pack whose
+identities appear in the fresh report. It signs the raw plan/report identities,
+semantic plan/run identities, package and receipt identities, normalized
+provider/endpoint and opaque quote digest, raw/canonical pack identities, and
+the bounded fabrication scope. The authorization layer final-rereads the plan,
+retained report, ZIP, receipt, pack, and submitted approvals and rechecks the
+output against the same in-memory replayed plan before publication; the
+verification clock is sampled only after those source rereads.
+
+This is a separate schema-v1 approval/report family. It does not add fields or
+phases to deterministic plan v1, deterministic report v1, pipeline v1/v2,
+factory receipt v1, or the Python handoff result v7. Valid policy rejection,
+quorum shortage, or temporal failure remains a `not_authorized` authorization
+report; invalid signatures or mixed evidence are operational errors. See
+[`FABRICATION_AUTHORIZATION.md`](FABRICATION_AUTHORIZATION.md) for the dedicated
+key policy, commands, bounds, and non-claims.
+
 ## MCP parity
 
 The MCP server exposes `run_deterministic_pipeline` with the same explicit

@@ -42,6 +42,20 @@ Output-directory creation is also outside the per-file transaction. A command ma
 therefore retain already completed evidence files when a later publication or
 quality gate fails, as documented by that command.
 
+Fabrication authorization uses the same no-clobber boundary. The deterministic
+plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
+the factory receipt and organization policy pack to 64 MiB each, and each
+signed fabrication approval to 1 MiB. Signing reserves its destination and
+freshly validates the approved factory-bound pipeline, exact ZIP/receipt/pack,
+scope, and dedicated trusted signer before reading the private key. Verification
+limits the approval set to 100. The runner snapshots the plan-selected inputs
+during its fresh replay; the authorization layer then final-rereads the plan,
+retained report, ZIP, receipt, pack, and submitted approvals, rechecks the
+output against the same replayed plan, captures the current time, and publishes
+a closed report within the generic 128 MiB output limit. A valid policy-level
+`not_authorized` decision is retained before `--require-authorized` fails;
+malformed, untrusted, mismatched, or mutated evidence produces no report.
+
 For signing, a valid response that fails an approval gate is still a legitimate
 signed rejection: the no-clobber approval is published before
 `--require-approved` returns failure. Any existing regular file, symbolic link,

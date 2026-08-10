@@ -405,6 +405,17 @@ integrity boundary, not a factory-authenticity or signature-verification
 boundary. A passing pipeline report by itself is not authorization to
 fabricate.
 
+Version 1.459 keeps that rule intact and adds a separate CLI-only human
+authorization artifact. It accepts only a freshly reproduced `approved: true`
+factory-bound deterministic report, independently revalidates the same ZIP,
+receipt, and plan-selected policy pack, and requires at least two dedicated
+domain-separated human signatures over a bounded quantity/value/time scope.
+The result authorizes only offline release of those exact bytes to another
+controlled handoff. It does not upgrade the unsigned receipt into factory
+authenticity, interpret the opaque quote as typed order terms, call the factory,
+place an order, or spend funds. See
+[`FABRICATION_AUTHORIZATION.md`](FABRICATION_AUTHORIZATION.md).
+
 ## Deterministic Pipeline CI check (v1.438.0)
 
 The repository's independent `Deterministic Pipeline` job runs on every normal

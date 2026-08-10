@@ -170,6 +170,7 @@ auditable release.
 | v1.456.0 | Fresh deterministic-pipeline report replay | Capture one closed plan, one retained report, every present source in the fixed 16-role contract, and all seven firmware siblings; run the existing deterministic-pipeline runner privately through a caller-selected pcbex command, require exact retained/fresh report bytes including the final LF, reread staged and caller-visible sources, emit closed path-free `deterministic-pipeline-fresh-replay-v1` evidence with verification distinct from the retained approval decision, close the residual bounded Darwin exited-group observation race, and make native firmware smoke execution plus short-lived Windows Job assignment portable without leaking private paths into evidence |
 | v1.457.0 | Shared-board circuit-to-manufacturing replay | Extend exact circuit-handoff replay only when a complete v5 board-binding pair is present, reuse that one captured raw board for a private manufacturing-package replay, require the fresh ZIP to equal the retained ZIP byte-for-byte, and emit closed path-free v6 evidence under one outer deadline and one final union caller-source reread while preserving exact v1–v5 results when omitted and never treating reproduction as fabrication authorization |
 | v1.458.0 | Pipeline-bound circuit-to-manufacturing replay | Extend only a complete v6 replay with a pre-child captured plan/report/input closure, replay the deterministic pipeline last, cross-bind exact circuit/schematic/board/package bytes, effective policy, the complete canonical board-binding report, and canonical schematic/raw-board identities, preserve truthful rejected evidence, and emit closed path-free v7 under ordered subdeadlines and a final union plus firmware-directory reread while preserving exact v1–v6 results when omitted |
+| v1.459.0 | Dual-control exact fabrication release authorization | Freshly reproduce one approved factory-required deterministic pipeline, revalidate its exact manufacturing ZIP, passing factory receipt, and selected organization policy pack, then require domain-separated approvals from at least two dedicated trusted human keys over one bounded quantity/currency/value/window/challenge scope; retain full signed evidence without contacting a factory, placing an order, spending funds, or claiming factory authenticity or one-time use |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -917,7 +918,7 @@ fabrication availability; submit an archive; authorize layout, procurement,
 manufacturing, fabrication, deployment, or ordering; add MCP/Action/pipeline
 schema parity; or generate/build firmware.
 
-The current v1.458.0 milestone closes the next composition gap by binding one
+The v1.458.0 milestone closes the next composition gap by binding one
 exact retained deterministic-pipeline report to the complete v1.457 chain. A
 plan/report pair is accepted only with every v6 board/manufacturing input, and
 the plan, report, selected role files, and exact-eight firmware bundle are
@@ -942,3 +943,33 @@ omitting the plan/report pair preserves v1–v6 bytes. This milestone adds no
 fresh producer beyond those already in v6, firmware rebuild, MCP/Action parity,
 network/factory call, toolchain authentication, fabrication/procurement
 authorization, or order placement.
+
+The current v1.459.0 milestone adds a separate Rust-native authorization
+boundary rather than changing the v7 replay or deterministic-pipeline schemas.
+`sign-fabrication-approval` first re-runs one factory-required plan in-process,
+requires its retained report to reproduce byte-for-byte with `approved: true`,
+and independently validates the exact manufacturing ZIP, passing normalized
+factory receipt, and exact organization policy pack selected by that report.
+Only then may a dedicated fabrication signer approve or reject one explicit
+authorization ID, random 32-byte challenge, quantity, uppercase currency,
+maximum total in minor units, validity window, reason, and ticket.
+
+The optional policy-pack field `fabrication_authorization_policy` requires two
+to 100 dedicated public keys, a minimum quorum of at least two, and a validity
+limit no greater than seven days. Signer IDs and public keys must be disjoint
+from AI-review and human-escalation roles. `verify-fabrication-authorization`
+freshly repeats the evidence replay and validates every signature under a new
+domain before retaining the complete policy pack and signer-sorted signed
+approvals. A valid submitted human rejection, insufficient quorum, inactive
+time, or a policy-window excess produces truthful `not_authorized` evidence;
+the optional final gate fails only after that report is atomically retained.
+
+This is an offline authorization to release only the exact signed package and
+scope to a separately controlled fabrication handoff. The normalized receipt
+has no factory signature and its raw response cannot be reconstructed, the
+organization policy pack remains an externally selected trust root, and a
+static challenge has no durable consumption ledger. The milestone therefore
+does not authenticate a factory or current quote, guarantee one-time use,
+contact a network, submit files, reserve inventory, place an order, execute
+fabrication, or authorize payment/spend. MCP verification and a focused
+verification-only Action remain follow-up milestones; signing stays CLI-only.
