@@ -167,6 +167,7 @@ auditable release.
 | v1.453.0 | Catalog-provenance-bound exact handoff replay | Revalidate an all-or-nothing retained provenance/fetch-receipt/snapshot graph after exact handoff replay, optionally compose independent native and AI evidence, and emit closed path-free v4 evidence while preserving the unchanged six-entry archive and exact v1/v2/v3 results when catalog evidence is omitted |
 | v1.454.0 | Retained-board electrical handoff replay | Bind an optional retained KiCad board and exact board-binding report, with an optional custom electrical-policy replay source, to the exactly reproduced handoff after prior optional assertions; emit closed path-free v5 `board_binding` evidence with bounded board/report plus raw replay-source and effective-policy identities while preserving v1–v4 result bytes and the unchanged six-entry archive, without claiming layout, DRC/DFM, manufacturing/fabrication, procurement, or tool provenance |
 | v1.455.0 | Fresh manufacturing-package replay | Capture one board, retained manufacturing ZIP, optional explicit KiCad project/rules sidecars, and one optional manufacturing profile under closed bounds; run the existing `fabricate` producer privately with explicit pcbex/KiCad commands and nested aggregate deadlines, accept only a byte-identical fresh ZIP, reread every staged and caller-visible source, and emit closed path-free `manufacturing-package-fresh-replay-v1` evidence without changing pipeline/MCP/Action or authorizing fabrication |
+| v1.456.0 | Fresh deterministic-pipeline report replay | Capture one closed plan, one retained report, every present source in the fixed 16-role contract, and all seven firmware siblings; run the existing deterministic-pipeline runner privately through a caller-selected pcbex command, require exact retained/fresh report bytes including the final LF, reread staged and caller-visible sources, emit closed path-free `deterministic-pipeline-fresh-replay-v1` evidence with verification distinct from the retained approval decision, close the residual bounded Darwin exited-group observation race, and make native firmware smoke execution plus short-lived Windows Job assignment portable without leaking private paths into evidence |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -293,13 +294,17 @@ Action expose the same opt-in policy path and leave older workflows unchanged.
 Static policy files do not establish organization authority, expiry, or
 distribution trust; those remain a separate signed-governance boundary.
 
-The v1.426.1 maintenance milestone closes a Darwin process-group
-cleanup race in the Python supervisor. A `killpg(SIGKILL)` `EPERM` is treated
-as benign only when `poll()` confirms and reaps the exited direct child and a
-single `killpg(pid, 0)` probe returns `ESRCH`, proving the group is gone. Live
-children, existing groups, unauthorized probes, non-Darwin platforms, and all
-other errors continue to fail closed as cleanup failures; the supervisor does
-not retry group termination after the probe.
+The v1.426.1 maintenance milestone introduced strict proof for a Darwin
+process-group cleanup race in the Python supervisor. The v1.456.0 hardening
+also covers the residual observation race seen when the child or zombie-only
+group transition lags the initial `killpg(SIGKILL)` `EPERM`. The direct-child
+kill fallback runs first, then bounded `poll()` and signal-zero observations
+continue for at most one second, clipped to the caller's active deadline. The
+pending error is treated as benign only when the child is reaped and
+`killpg(pid, 0)` returns `ESRCH`, proving the group is gone. Live children,
+existing groups, unauthorized probes that remain ambiguous at the deadline,
+non-Darwin platforms, and all other errors continue to fail closed; the
+supervisor never retries group termination.
 
 The v1.427.0 milestone exposes native KiCad schematic ERC as a root
 composite-Action gate independent of AI approval and deterministic-pipeline
@@ -765,7 +770,7 @@ facts, or pcbex/KiCad/tool provenance. Geometry-only source changes may leave
 the electrical digest unchanged while changing raw/binding identity and do not
 constitute layout approval.
 
-The current v1.455.0 milestone adds a standalone exact replay for one retained
+The released v1.455.0 milestone adds a standalone exact replay for one retained
 manufacturing package. The Python API is `replay_manufacturing_package`; the
 CLI and schema commands are `pcbex-agent replay-manufacturing-package` and
 `pcbex-agent manufacturing-package-replay-result-schema`. The replay captures
@@ -814,3 +819,47 @@ exact output equality does not establish their provenance. This standalone
 replay does not alter deterministic-pipeline schemas, add MCP or Action
 integration, submit to a factory, authorize fabrication/procurement, or place
 an order.
+
+The current v1.456.0 milestone adds a standalone exact replay for one retained
+deterministic-pipeline report. The Python API and CLI are
+`replay_deterministic_pipeline` and
+`pcbex-agent replay-deterministic-pipeline`; the closed result schema is exposed
+by `pcbex-agent deterministic-pipeline-replay-result-schema`. Before native
+execution the adapter captures the exact plan and retained report, every source
+selected by the plan's fixed 16-role contract, and the seven fixed firmware
+siblings. It preserves the plan's relative tree in one private workspace so
+the original plan bytes and identity-sensitive source names remain
+authoritative.
+
+The caller-selected pcbex command is invoked directly without a shell to run
+the existing `run-deterministic-pipeline` command against that private closure.
+Success requires the fresh report to equal the retained bytes exactly,
+including the canonical final LF. The adapter then rereads every staged and
+caller-visible source before returning a closed, path-free schema-v1 result
+with verification scope `deterministic-pipeline-fresh-replay-v1`. The result
+also requires the complete closed nested Rust report graph, strict integer
+bounds, and independently recomputed plan/run domain hashes. One aggregate
+deadline reserves up to 30 seconds (or half the remaining time), divided
+between bounded child cleanup and post-child validation/cleanup. The result
+binds the plan and retained/fresh report identities while keeping exact replay
+verification separate from the report's `approved` decision: an exactly
+reproduced downstream-gate rejection is verified evidence, not an approved
+pipeline. The private replay requires descriptor-exact regular inputs and an
+exact-eight firmware closure, so reports rejected for an input-boundary failure
+remain retained evidence outside this adapter's safe staging contract.
+
+The selected pcbex executable remains an unauthenticated, unsandboxed trust
+boundary, and exact equality requires an engine capable of reproducing the
+retained report bytes. This command does not invoke a circuit, KiCad,
+manufacturing-package, or firmware producer; run KiCad or `fabricate`; rebuild
+firmware; make an AI, supplier, network, or factory request; change existing
+runner/plan/report schemas; add MCP or Action integration; submit a package;
+or authorize fabrication, procurement, deployment, or ordering.
+
+The same release hardens the shared Python process supervisor on Darwin. If an
+initial process-group `SIGKILL` returns the platform's transient `EPERM`, the
+supervisor attempts the direct-child kill and uses only deadline-clipped
+`poll()` and signal-zero probes to wait for a positive `ESRCH` absence proof.
+It never resends the group signal, and every live, existing, unauthorized, or
+deadline-ambiguous group remains a cleanup failure that takes precedence over
+the original child failure.

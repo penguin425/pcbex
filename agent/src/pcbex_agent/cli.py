@@ -76,6 +76,11 @@ from .manufacturing_replay import (
     manufacturing_package_replay_result_json_schema,
     replay_manufacturing_package,
 )
+from .deterministic_pipeline_replay import (
+    DeterministicPipelineReplayError,
+    deterministic_pipeline_replay_result_json_schema,
+    replay_deterministic_pipeline,
+)
 from .skidl import (
     CircuitSpecError,
     assign_catalog_parts,
@@ -504,6 +509,26 @@ def main() -> None:
         help="write the closed catalog-to-generation provenance JSON Schema",
     )
     catalog_provenance_schema.add_argument("-o", "--output", type=Path)
+    deterministic_pipeline_replay = sub.add_parser(
+        "replay-deterministic-pipeline",
+        help="freshly rerun a closed plan and exactly verify its retained report",
+    )
+    deterministic_pipeline_replay.add_argument("plan", type=Path)
+    deterministic_pipeline_replay.add_argument("retained_report", type=Path)
+    deterministic_pipeline_replay.add_argument("--pcbex", default="pcbex")
+    deterministic_pipeline_replay.add_argument(
+        "--timeout-seconds", type=float, default=120.0
+    )
+    deterministic_pipeline_replay.add_argument(
+        "--require-approved",
+        action="store_true",
+        help="fail after exact replay when the retained pipeline was rejected",
+    )
+    deterministic_pipeline_replay_schema = sub.add_parser(
+        "deterministic-pipeline-replay-result-schema",
+        help="write the closed fresh deterministic-pipeline replay result schema",
+    )
+    deterministic_pipeline_replay_schema.add_argument("-o", "--output", type=Path)
     manufacturing_replay = sub.add_parser(
         "replay-manufacturing-package",
         help="freshly regenerate and exactly verify a retained manufacturing ZIP",
@@ -1152,6 +1177,46 @@ def main() -> None:
             CatalogGenerationProvenanceError,
         ) as error:
             raise SystemExit(f"catalog schema failed: {error}") from error
+    elif args.command == "replay-deterministic-pipeline":
+        try:
+            result = replay_deterministic_pipeline(
+                args.plan,
+                args.retained_report,
+                args.pcbex,
+                timeout_seconds=args.timeout_seconds,
+            )
+        except (OSError, BoundedIOError, DeterministicPipelineReplayError) as error:
+            raise SystemExit(
+                f"deterministic pipeline replay failed: {error}"
+            ) from error
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        if args.require_approved and not result["report"]["approved"]:
+            raise SystemExit(
+                "deterministic pipeline replay was exact but was not approved"
+            )
+    elif args.command == "deterministic-pipeline-replay-result-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    deterministic_pipeline_replay_result_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, DeterministicPipelineReplayError) as error:
+            raise SystemExit(
+                f"deterministic pipeline replay schema failed: {error}"
+            ) from error
     elif args.command == "replay-manufacturing-package":
         try:
             result = replay_manufacturing_package(

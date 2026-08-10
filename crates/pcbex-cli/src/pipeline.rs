@@ -33,7 +33,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 const MAX_SCHEMATIC_BYTES: u64 = 64 * 1024 * 1024;
@@ -1399,7 +1399,14 @@ fn reject_symlink_components(path: &Path, role: &str) -> Result<(), String> {
     };
     let mut current = PathBuf::new();
     for component in absolute.components() {
-        current.push(component.as_os_str());
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::CurDir => continue,
+            Component::ParentDir | Component::Normal(_) => current.push(component.as_os_str()),
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 return Err(format!("{role}: input path contains a symlink component"));
@@ -1887,6 +1894,19 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
     use tempfile::tempdir;
+
+    #[cfg(windows)]
+    #[test]
+    fn input_symlink_preflight_accepts_canonical_windows_prefix() {
+        let directory = tempdir().unwrap();
+        let canonical = std::fs::canonicalize(directory.path()).unwrap();
+        assert!(matches!(
+            canonical.components().next(),
+            Some(Component::Prefix(_))
+        ));
+
+        reject_symlink_components(&canonical, "test input").unwrap();
+    }
 
     fn all_inputs(path: &Path) -> PipelineInputs<'_> {
         PipelineInputs {

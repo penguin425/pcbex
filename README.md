@@ -685,8 +685,11 @@ pcbex generate-firmware design.kicad_sch --mcu-reference U1 \
 
 The bundle contains exactly seven source artifacts and a closed v2 manifest; a
 `--skip-build` source-only bundle is intentionally rejected by
-`pipeline-verify`. See the [firmware generator contract](docs/FIRMWARE_GENERATOR.md)
-for the staging, subprocess, and no-overwrite boundaries.
+`pipeline-verify`. Native smoke executables are launched through their exact
+private absolute paths while the manifest keeps stable path-free relative
+command evidence, so the same contract holds on Windows. See the [firmware
+generator contract](docs/FIRMWARE_GENERATOR.md) for the staging, subprocess,
+and no-overwrite boundaries.
 
 ## Component placement
 
@@ -4072,6 +4075,63 @@ Minimal Action opt-in:
     deterministic-pipeline-plan: hardware/pipeline-plan.json
     deterministic-pipeline-require-approved: "true"
 ```
+
+Version 1.456.0 adds a standalone Python replay for a retained deterministic-
+pipeline report. It captures the exact plan, retained report, every present
+source from the plan's fixed 16-role contract, and the seven fixed firmware
+siblings, then reconstructs their original relative tree in a private
+workspace. The selected pcbex command runs the existing runner there without a
+shell:
+
+```sh
+pcbex-agent replay-deterministic-pipeline \
+  pipeline-plan.json build/deterministic-pipeline-report.json \
+  --pcbex target/release/pcbex \
+  --require-approved \
+  > deterministic-pipeline-replay.json
+pcbex-agent deterministic-pipeline-replay-result-schema \
+  --output deterministic-pipeline-replay.schema.json
+```
+
+The fresh report must equal the retained file byte-for-byte, including its
+canonical trailing LF. Every staged and caller-visible source is reread before
+the path-free `deterministic-pipeline-fresh-replay-v1` result is returned. A
+result with `verified: true` establishes exact replay only; the separately
+reported `approved` value may still be false when a rejected report was
+reproduced exactly. `--require-approved` evaluates that separate decision only
+after printing the exact replay result, so a valid rejection remains available
+to the caller.
+
+The private closure requires every present descriptor source to be a nonempty,
+regular, descriptor-exact file and the firmware directory to be exact-eight.
+Consequently, rejected replay covers downstream binding/pipeline-gate
+rejections after that input boundary. A Rust report whose rejection itself was
+caused by a missing, linked, empty, oversized, digest-mismatched, or inexact
+firmware input is retained evidence but is outside this safe staging contract.
+
+One aggregate deadline starts before the first capture. Immediately before
+native replay, the adapter reserves up to 30 seconds (or half the remaining
+time), splits that reserve between an explicit process cleanup deadline and
+post-child rereads/temporary cleanup, and refuses success after expiry.
+
+The adapter validates the complete closed Rust report-v1 graph, including the
+nested board binding, KiCad handoff, electrical reviews, pipeline phases and
+evidence, strict integer bounds, and decision invariants. The existing
+`Deterministic Pipeline` CI job applies it to accepted and rejected retained
+fixtures with the just-built real Rust binary and checks exact-replay scope,
+all validation flags, approval, byte identity, and the retained digest. The
+macOS and Windows boundary matrix independently builds a release binary and
+repeats both real accepted/rejected replays; the Windows fixture explicitly
+selects the runner-provided GNU `gcc` and `g++` executables instead of the
+Unix-only default names. This adds no composite-Action input or output.
+
+The supplied pcbex command remains an unauthenticated, unsandboxed trust
+boundary, and reports containing a different engine version do not become
+equivalent by normalization. This standalone adapter does not run a circuit,
+KiCad, manufacturing, or firmware producer. It does not invoke KiCad or
+`fabricate`, rebuild firmware, make an AI/network/factory request, add MCP or
+Action integration, submit a package, or authorize deployment, procurement,
+fabrication, or ordering.
 
 ## Schematic electrical IR
 

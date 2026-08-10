@@ -718,7 +718,19 @@ fn run_build_evidence(
         compile_evidence.passed = false;
     }
     let smoke_evidence = if compile_evidence.passed {
-        run_process(output_dir, &smoke, options.timeout)
+        match fs::canonicalize(&binary) {
+            // Keep the stable relative command in retained evidence, but use
+            // the exact validated binary path for process creation. Windows
+            // resolves a relative application name before applying the
+            // child's requested current directory.
+            Ok(program) => run_process_with_program(
+                output_dir,
+                &smoke,
+                Some(program.as_path()),
+                options.timeout,
+            ),
+            Err(_) => command_evidence(smoke, true, false, None),
+        }
     } else {
         skipped_command(smoke)
     };
@@ -776,11 +788,23 @@ fn run_process(
     command: &[String],
     timeout: Duration,
 ) -> FirmwareCommandEvidence {
+    run_process_with_program(output_dir, command, None, timeout)
+}
+
+fn run_process_with_program(
+    output_dir: &Path,
+    command: &[String],
+    program: Option<&Path>,
+    timeout: Duration,
+) -> FirmwareCommandEvidence {
     let command = command.to_vec();
     if command.is_empty() {
         return command_evidence(command, true, false, None);
     }
-    let mut process = Command::new(&command[0]);
+    let mut process = match program {
+        Some(program) => Command::new(program),
+        None => Command::new(&command[0]),
+    };
     process.args(&command[1..]);
     process.current_dir(output_dir);
     let limits = ProcessLimits {
@@ -1209,6 +1233,36 @@ mod tests {
         assert!(validate_tool_name("../cc", "compiler").is_err());
         assert_eq!(c_string("温度"), r#""\346\270\251\345\272\246""#);
         assert_eq!(c_string("??/"), r#""\?\?/""#);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_explicit_smoke_program_preserves_relative_path_free_evidence() {
+        let temporary = tempfile::tempdir().unwrap();
+        let private_binary = temporary.path().join(".pcbex-relative-smoke.exe");
+        fs::copy(std::env::current_exe().unwrap(), &private_binary).unwrap();
+        let executable = fs::canonicalize(&private_binary).unwrap();
+        let evidence = vec![
+            r".\.pcbex-relative-smoke.exe".to_string(),
+            "--list".to_string(),
+        ];
+        assert!(
+            !std::env::current_dir()
+                .unwrap()
+                .join(".pcbex-relative-smoke.exe")
+                .exists()
+        );
+
+        let result = run_process_with_program(
+            temporary.path(),
+            &evidence,
+            Some(&executable),
+            Duration::from_secs(10),
+        );
+
+        assert!(result.passed);
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(result.command, evidence);
     }
 
     #[test]

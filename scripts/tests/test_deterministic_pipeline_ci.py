@@ -23,6 +23,15 @@ import deterministic_pipeline_ci as fixture  # noqa: E402
 
 
 class DeterministicPipelineCiTests(unittest.TestCase):
+    def test_windows_fixture_selects_installed_gnu_compiler_names(self):
+        self.assertEqual(
+            fixture._firmware_compiler_arguments("nt"),
+            ["--cc", "gcc", "--cxx", "g++"],
+        )
+        self.assertEqual(fixture._firmware_compiler_arguments("posix"), [])
+        expected = ["--cc", "gcc", "--cxx", "g++"] if os.name == "nt" else []
+        self.assertEqual(fixture._firmware_compiler_arguments(), expected)
+
     def test_resolves_relative_executable_and_rejects_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
@@ -266,6 +275,44 @@ class DeterministicPipelineCiTests(unittest.TestCase):
                     cwd=Path(temporary),
                     timeout_seconds=1,
                 )
+
+    def test_unexpected_runner_detail_is_bounded_and_names_failed_phase(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "report.json"
+            report.write_text(
+                json.dumps(
+                    {
+                        "approved": False,
+                        "failures": [
+                            "pipeline: hardware pipeline gate rejected with 1 failure(s)"
+                        ],
+                        "pipeline": {
+                            "phases": [
+                                {
+                                    "name": "firmware-build",
+                                    "passed": False,
+                                    "failures": ["firmware smoke failed"],
+                                }
+                            ]
+                        },
+                    },
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            detail = fixture._unexpected_runner_detail(
+                report,
+                b"deterministic hardware pipeline rejected\n",
+            )
+            self.assertLessEqual(len(detail), 2048)
+            parsed = json.loads(detail)
+            self.assertEqual(parsed["approved"], False)
+            self.assertEqual(parsed["failed_phases"][0]["name"], "firmware-build")
+            self.assertEqual(
+                parsed["failed_phases"][0]["failures"],
+                ["firmware smoke failed"],
+            )
+            self.assertIn("pipeline rejected", parsed["stderr"])
 
 
 if __name__ == "__main__":

@@ -62,15 +62,22 @@ rejected so host-local directories are not embedded in the published command
 evidence. Validation runs against disposable copies in a separate private
 directory, and pcbex rejects any tool that changes those source copies. The
 canonical source stage is never the compiler/interpreter working directory.
+Compiled C and C++ smoke binaries are resolved to their exact absolute private
+paths for process creation, including on Windows where application lookup
+precedes applying the child's working directory. The retained command remains
+the stable relative, path-free invocation.
 The compiler command line uses GCC/Clang-compatible flags; native MSVC `cl.exe`
 syntax is not supported by this v2 generator.
 `--timeout-seconds` selects a bounded 1–3600 second deadline per child
 (120 seconds by default). On Unix the child leads a fresh process group; on
-Windows it is assigned to a kill-on-close Job Object immediately after spawn,
-which leaves a short pre-assignment race. Timeout, output overflow, and
-direct-child completion terminate and reap ordinary managed descendants. This
-is not an operating-system sandbox: a Unix descendant can deliberately create
-a new session, and CPU, memory, filesystem, network, syscall, and privilege use
+Windows it is assigned to a kill-on-close Job Object immediately after spawn.
+If a very short-lived child exits before assignment completes, pcbex accepts
+that race only when `try_wait` proves the direct child is already reaped; a live
+or ambiguous child fails closed. That completed-child fallback has no
+descendant-cleanup guarantee. Timeout, output overflow, and direct-child
+completion otherwise terminate and reap ordinary managed descendants. This is
+not an operating-system sandbox: a Unix descendant can deliberately create a
+new session, and CPU, memory, filesystem, network, syscall, and privilege use
 remain outside this boundary. Use trusted toolchain executables inside a
 job-level sandbox when stronger containment matters. A failed compile, link,
 smoke test, or Python check is retained as failed

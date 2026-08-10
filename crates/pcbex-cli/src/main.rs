@@ -159,7 +159,7 @@ use sha2::{Digest, Sha256};
 use std::{
     convert::Infallible,
     io::{self, Write},
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Command as ProcessCommand,
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -17320,7 +17320,14 @@ fn reject_output_symlink_components(path: &Path, label: &str) -> Result<()> {
     };
     let mut current = PathBuf::new();
     for component in absolute.components() {
-        current.push(component.as_os_str());
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::CurDir => continue,
+            Component::ParentDir | Component::Normal(_) => current.push(component.as_os_str()),
+        }
         match fs::symlink_metadata(&current) {
             Ok(metadata) if metadata.file_type().is_symlink() => {
                 bail!(
@@ -18172,6 +18179,19 @@ fn ensure_clean(board: &Board) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn output_symlink_preflight_accepts_canonical_windows_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(directory.path()).unwrap();
+        assert!(matches!(
+            canonical.components().next(),
+            Some(Component::Prefix(_))
+        ));
+
+        reject_output_symlink_components(&canonical.join("result.json"), "test output").unwrap();
+    }
 
     fn parse_cli(arguments: &[&str]) -> std::result::Result<Cli, clap::Error> {
         let arguments = arguments

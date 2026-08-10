@@ -84,9 +84,12 @@ failure, or wait failure terminates and reaps the child before returning. Unix
 children run in a new process group; Windows children are assigned to a
 kill-on-close Job Object, so ordinary descendants created after assignment are
 terminated with the child. Windows assignment necessarily occurs just after
-`std::process` starts the child. This is not a CPU, memory, filesystem, network,
-syscall, or privilege sandbox, and a Unix descendant that deliberately creates
-a new session is outside the process-group guarantee.
+`std::process` starts the child. An assignment error is accepted only when
+`try_wait` proves that the direct child already exited; otherwise it fails
+closed and cleans up. The already-exited fallback cannot guarantee descendant
+cleanup. This is not a CPU, memory, filesystem, network, syscall, or privilege
+sandbox, and a Unix descendant that deliberately creates a new session is
+outside the process-group guarantee.
 
 KiCad DRC writes to a private staged report. pcbex publishes the report through
 the atomic file boundary only after the process succeeds and the staged report

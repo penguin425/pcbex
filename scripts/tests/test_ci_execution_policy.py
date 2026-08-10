@@ -18,7 +18,8 @@ EXPECTED_TIMEOUTS = {
         "deterministic-pipeline": 45,
         "rust": 45,
         "python": 20,
-        "python-boundaries": 20,
+        "python-boundaries": 45,
+        "rust-windows-boundaries": 30,
     },
     "codeql.yml": {"analyze": 30},
     "fuzz.yml": {"fuzz": 30},
@@ -198,6 +199,19 @@ class CiExecutionPolicyTests(unittest.TestCase):
             block,
         )
         self.assertIn("--output-dir build/deterministic-pipeline-ci", block)
+        self.assertIn("id: replay", block)
+        self.assertIn(
+            "python3 -m pcbex_agent.cli replay-deterministic-pipeline", block
+        )
+        self.assertIn(
+            "build/deterministic-pipeline-ci/accepted-replay.json", block
+        )
+        self.assertIn(
+            "build/deterministic-pipeline-ci/rejected-replay.json", block
+        )
+        self.assertIn("deterministic-pipeline-fresh-replay-v1", block)
+        self.assertIn('result["report"]["identical"] is not True', block)
+        self.assertIn("set(result[\"validation\"]) != expected_validation", block)
         for required in (
             "--timeout-seconds 1800",
             "--max-stdout-bytes 8388608",
@@ -248,6 +262,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertRegex(block, r"(?m)^        if: \$\{\{ always\(\) \}\}$")
         for outcome in (
             "PIPELINE_OUTCOME",
+            "REPLAY_OUTCOME",
             "SCAN_OUTCOME",
             "SUMMARY_OUTCOME",
             "UPLOAD_OUTCOME",
@@ -269,9 +284,110 @@ class CiExecutionPolicyTests(unittest.TestCase):
 
     def test_shared_runtime_boundaries_run_on_macos_and_windows(self):
         document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-        boundaries = _job_blocks(document)["python-boundaries"]
+        jobs = _job_blocks(document)
+        boundaries = jobs["python-boundaries"]
+        rust_windows = jobs["rust-windows-boundaries"]
         self.assertIn("macos-latest", boundaries)
         self.assertIn("windows-latest", boundaries)
+        self.assertRegex(
+            boundaries,
+            r"(?m)^          - runner: macos-latest\n"
+            r"            pcbex: target/release/pcbex$",
+        )
+        self.assertRegex(
+            boundaries,
+            r"(?m)^          - runner: windows-latest\n"
+            r"            pcbex: target/release/pcbex\.exe$",
+        )
+        self.assertEqual(boundaries.count("- runner:"), 2)
+        self.assertIn(
+            "rustup toolchain install stable --profile minimal", boundaries
+        )
+        self.assertIn(
+            "cargo +stable build --package pcbex --release --locked", boundaries
+        )
+        self.assertIn(
+            "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
+            rust_windows,
+        )
+        self.assertIn("runs-on: windows-latest", rust_windows)
+        self.assertIn("rustup toolchain install stable --profile minimal", rust_windows)
+        toolchain_step = boundaries.index(
+            "- name: Configure Windows GNU firmware toolchain"
+        )
+        self.assertIn("if: ${{ runner.os == 'Windows' }}", boundaries)
+        self.assertIn("C:\\mingw64\\bin", boundaries)
+        self.assertIn("@('gcc.exe', 'g++.exe')", boundaries)
+        self.assertIn("$env:GITHUB_PATH", boundaries)
+        self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
+        self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
+        self.assertIn(
+            "--fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci",
+            boundaries,
+        )
+        self.assertIn(
+            "--output-dir build/deterministic-pipeline-portability", boundaries
+        )
+        self.assertEqual(
+            boundaries.count(
+                "python -m pcbex_agent.cli replay-deterministic-pipeline"
+            ),
+            2,
+        )
+        fixture_step = boundaries.index(
+            "- name: Build real deterministic pipeline replay fixtures"
+        )
+        diagnostic_step = boundaries.index(
+            "- name: Diagnose Windows firmware fixture failure"
+        )
+        accepted_step = boundaries.index(
+            "- name: Replay accepted pipeline with the real release binary"
+        )
+        rejected_step = boundaries.index(
+            "- name: Replay rejected pipeline with the real release binary"
+        )
+        boundary_tests_step = boundaries.index(
+            "- name: Run cross-platform boundary tests"
+        )
+        self.assertLess(toolchain_step, fixture_step)
+        self.assertLess(fixture_step, diagnostic_step)
+        self.assertLess(diagnostic_step, accepted_step)
+        self.assertIn(
+            "if: ${{ failure() && runner.os == 'Windows' }}",
+            boundaries[diagnostic_step:accepted_step],
+        )
+        self.assertIn(
+            "build/deterministic-pipeline-portability/accepted/firmware",
+            boundaries[diagnostic_step:accepted_step],
+        )
+        self.assertIn(
+            "Get-Content -LiteralPath $manifest -Raw",
+            boundaries[diagnostic_step:accepted_step],
+        )
+        self.assertLess(accepted_step, rejected_step)
+        self.assertLess(rejected_step, boundary_tests_step)
+        accepted_block = boundaries[accepted_step:rejected_step]
+        rejected_block = boundaries[rejected_step:boundary_tests_step]
+        self.assertIn(
+            "build/deterministic-pipeline-portability/accepted/plan.json",
+            boundaries,
+        )
+        self.assertIn(
+            "build/deterministic-pipeline-portability/accepted/report.json",
+            boundaries,
+        )
+        self.assertIn(
+            "build/deterministic-pipeline-portability/rejected/plan.json",
+            boundaries,
+        )
+        self.assertIn(
+            "build/deterministic-pipeline-portability/rejected/report.json",
+            boundaries,
+        )
+        self.assertIn("--require-approved", accepted_block)
+        self.assertNotIn("--require-approved", rejected_block)
+        self.assertEqual(boundaries.count("--require-approved"), 1)
+        self.assertEqual(boundaries.count("--timeout-seconds 120"), 3)
         self.assertIn("scripts.tests.test_ci_runtime", boundaries)
 
     def test_ci_fixture_servers_are_registered_and_cleaned_up(self):

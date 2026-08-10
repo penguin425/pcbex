@@ -150,9 +150,9 @@ class BoundedProcessTests(unittest.TestCase):
             killpg_calls.append((pgid, sig))
             if sig == bounded_process.signal.SIGKILL:
                 self.assertEqual(len(processes), 1)
-                processes[0].wait(timeout=5)
                 raise PermissionError(errno.EPERM, "Operation not permitted")
             self.assertEqual(sig, 0)
+            self.assertIsNotNone(processes[0].returncode)
             raise ProcessLookupError(errno.ESRCH, "No such process")
 
         with (
@@ -186,6 +186,73 @@ class BoundedProcessTests(unittest.TestCase):
         os.name == "posix" and hasattr(os, "killpg"),
         "POSIX killpg is required",
     )
+    def test_darwin_exit_and_probe_races_are_bounded_then_absence_is_proven(self):
+        class ExitingProcess:
+            pid = 1234
+
+            def __init__(self):
+                self.poll_calls = 0
+                self.kill_calls = 0
+
+            def poll(self):
+                self.poll_calls += 1
+                return None if self.poll_calls == 1 else 0
+
+            def kill(self):
+                self.kill_calls += 1
+
+        process = ExitingProcess()
+        calls = []
+        zero_probes = 0
+
+        def killpg_with_transient_exit_race(pgid, sig):
+            nonlocal zero_probes
+            calls.append((pgid, sig))
+            if sig == bounded_process.signal.SIGKILL:
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            self.assertEqual(sig, 0)
+            zero_probes += 1
+            if zero_probes == 1:
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            raise ProcessLookupError(errno.ESRCH, "No such process")
+
+        with (
+            patch.object(bounded_process.sys, "platform", "darwin"),
+            patch.object(
+                bounded_process.os,
+                "killpg",
+                side_effect=killpg_with_transient_exit_race,
+            ),
+            patch.object(
+                bounded_process.time,
+                "monotonic",
+                side_effect=(0.0, 0.0, 0.01),
+            ),
+            patch.object(bounded_process.time, "sleep") as sleep,
+        ):
+            failures = bounded_process._kill_process_tree(
+                process,
+                None,
+                deadline=0.015,
+            )
+
+        self.assertEqual(failures, [])
+        self.assertEqual(process.kill_calls, 1)
+        self.assertEqual(
+            [sig for _, sig in calls],
+            [bounded_process.signal.SIGKILL, 0, 0],
+        )
+        self.assertEqual(sleep.call_count, 2)
+        self.assertEqual(
+            sleep.call_args_list[0].args,
+            (bounded_process._DARWIN_EXIT_RACE_POLL_SECONDS,),
+        )
+        self.assertAlmostEqual(sleep.call_args_list[1].args[0], 0.005)
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "killpg"),
+        "POSIX killpg is required",
+    )
     def test_darwin_live_group_eperm_remains_cleanup_failure(self):
         class LiveProcess:
             pid = 1234
@@ -202,6 +269,7 @@ class BoundedProcessTests(unittest.TestCase):
         process = LiveProcess()
         with (
             patch.object(bounded_process.sys, "platform", "darwin"),
+            patch.object(bounded_process, "_DARWIN_EXIT_RACE_SECONDS", 0.0),
             patch.object(
                 bounded_process.os,
                 "killpg",
@@ -242,6 +310,7 @@ class BoundedProcessTests(unittest.TestCase):
 
         with (
             patch.object(bounded_process.sys, "platform", "darwin"),
+            patch.object(bounded_process, "_DARWIN_EXIT_RACE_SECONDS", 0.0),
             patch.object(
                 bounded_process.os,
                 "killpg",
@@ -279,6 +348,7 @@ class BoundedProcessTests(unittest.TestCase):
 
         with (
             patch.object(bounded_process.sys, "platform", "darwin"),
+            patch.object(bounded_process, "_DARWIN_EXIT_RACE_SECONDS", 0.0),
             patch.object(
                 bounded_process.os,
                 "killpg",
@@ -499,8 +569,86 @@ class BoundedProcessTests(unittest.TestCase):
         command = _python("pass")
         with self.assertRaises(InvalidTimeout):
             run_bounded(command, timeout_seconds=0)
+        for value in (True, 0, -1, float("inf")):
+            with self.subTest(cleanup_timeout=value), self.assertRaises(
+                InvalidTimeout
+            ):
+                run_bounded(command, cleanup_timeout_seconds=value)
         with self.assertRaises(InvalidOutputLimit):
             run_bounded(command, max_stdout_bytes=-1)
+
+    def test_cleanup_timeout_is_forwarded_as_an_absolute_deadline(self):
+        real_cleanup = bounded_process._cleanup_process
+        observed: list[float] = []
+
+        def record_cleanup(*args, **kwargs):
+            deadline = kwargs["cleanup_deadline"]
+            self.assertIsInstance(deadline, float)
+            remaining = deadline - time.monotonic()
+            self.assertGreater(remaining, 0)
+            self.assertLessEqual(remaining, 0.5)
+            observed.append(remaining)
+            return real_cleanup(*args, **kwargs)
+
+        with patch.object(
+            bounded_process, "_cleanup_process", side_effect=record_cleanup
+        ):
+            result = run_bounded(
+                _python("pass"),
+                timeout_seconds=5,
+                cleanup_timeout_seconds=0.5,
+                max_stdout_bytes=1024,
+                max_stderr_bytes=1024,
+            )
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(len(observed), 1)
+
+    def test_cleanup_deadline_caps_reap_and_worker_waits(self):
+        class StuckProcess:
+            def __init__(self):
+                self.waits: list[float] = []
+
+            def poll(self):
+                return None
+
+            def kill(self):
+                return None
+
+            def wait(self, timeout):
+                self.waits.append(timeout)
+                time.sleep(timeout)
+                raise bounded_process.subprocess.TimeoutExpired(("stuck",), timeout)
+
+        class StuckThread:
+            def __init__(self):
+                self.joins: list[float] = []
+
+            def join(self, timeout):
+                self.joins.append(timeout)
+
+            def is_alive(self):
+                return True
+
+        process = StuckProcess()
+        thread = StuckThread()
+        started = time.monotonic()
+        error = bounded_process._cleanup_process(
+            process,
+            None,
+            bounded_process.threading.Event(),
+            (),
+            (thread,),
+            ("stuck",),
+            terminate_tree=False,
+            cleanup_deadline=started + 0.05,
+        )
+        elapsed = time.monotonic() - started
+        self.assertIsInstance(error, ProcessCleanupError)
+        self.assertLess(elapsed, 0.5)
+        self.assertGreaterEqual(len(process.waits), 1)
+        self.assertLessEqual(sum(process.waits), 0.055)
+        self.assertEqual(len(thread.joins), 1)
+        self.assertLessEqual(thread.joins[0], 0.005)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,8 @@ and are never cancelled during publication.
 | CI deterministic pipeline | 45 minutes |
 | CI Rust | 45 minutes |
 | CI Python | 20 minutes |
-| CI Python boundary matrix | 20 minutes |
+| CI Python boundary matrix | 45 minutes |
+| CI Rust Windows boundaries | 30 minutes |
 | CodeQL language matrix | 30 minutes |
 | Fuzz target matrix | 30 minutes |
 | KiCad end-to-end | 45 minutes |
@@ -40,7 +41,11 @@ check of the workflow inventory, exact job timeouts, concurrency, matrix
 parallelism, fuzz flags, serialized release policy, fixture-server cleanup,
 and composite-action publication gate. Adding a workflow or job therefore
 requires an explicit policy decision in the same change.
-The shared runtime boundary suite is also repeated on macOS and Windows.
+The shared runtime boundary suite is also repeated on macOS and Windows. The
+Windows-only Rust process regressions run as a separate required job in
+parallel with that matrix, and the aggregate `Python` check requires both jobs
+to succeed. This keeps the real Windows release build/replay and release-mode
+Rust process tests independent without serializing their compilation costs.
 
 ## Shared script runtime
 
@@ -225,6 +230,8 @@ OS resource sandbox. A third-party action or external tool can consume CPU,
 memory, network, or filesystem space until its job or process deadline, and an
 external writer can race between output-tree scans. POSIX descendants that
 deliberately create a new session are outside process-group cleanup; Windows
-has a small post-spawn Job Object assignment race. Deployments requiring live
+has a small post-spawn Job Object assignment race. Rust accepts an assignment
+failure only after observing that the direct child already exited, and that
+fallback does not claim descendant cleanup. Deployments requiring live
 CPU, memory, disk, syscall, or network enforcement must add runner-level
 cgroups, quotas, containers, or equivalent isolation.

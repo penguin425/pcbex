@@ -233,7 +233,21 @@ identities, counts, and decisions in the GitHub Job Summary, and uploads the
 retained reports as scanned artifacts. It does not embed full report bodies in
 workflow metadata.
 
-This check keeps plan schema v1 and deterministic report schema v1 unchanged.
+Version 1.456.0 additionally replays both retained accepted and rejected
+reports through the Python adapter and the just-built real Rust binary. The CI
+marker requires each replay to be verified and byte-identical, preserves the
+opposite `approved` decisions, and checks the retained report SHA-256 against
+the fixture summary. It also fixes the v1 replay scope and all six completed
+validation flags. The accepted replay exercises the optional post-result
+`--require-approved` gate. This is validation inside the existing repository
+job, not a new composite-Action surface. The Windows fixture explicitly selects
+the runner-provided GNU `gcc` and `g++` names because the Unix defaults `cc` and
+`c++` are not portable executable names.
+
+This check keeps plan schema v1 and deterministic report schema v1. The plan
+schema's portable-path pattern and shared runtime validator now also reject
+the Windows console device stems `CONIN$` and `CONOUT$`, matching the private
+cross-platform staging boundary without changing the schema version.
 The firmware phase validates the exact manifest and seven source-artifact
 evidence; it does not replay the build commands recorded by that manifest. The
 workflow performs no path discovery, LLM/network call, design mutation, factory
@@ -244,6 +258,92 @@ release audit verifies that the context is required and pinned to the GitHub
 Actions app (`app_id: 15368`). A pull-request-controlled workflow is not an
 authorization boundary against a malicious write collaborator; repository
 permissions and protected-branch policy remain required.
+
+## Exact retained-report replay (v1.456.0)
+
+Version 1.456.0 adds a standalone Python API and CLI around the existing Rust
+runner:
+
+```sh
+pcbex-agent replay-deterministic-pipeline \
+  pipeline-plan.json build/deterministic-pipeline-report.json \
+  --pcbex target/release/pcbex \
+  > deterministic-pipeline-replay.json
+pcbex-agent deterministic-pipeline-replay-result-schema \
+  --output deterministic-pipeline-replay.schema.json
+```
+
+`replay_deterministic_pipeline` stable-captures the exact plan and retained
+report, every source selected by the plan's fixed 16-role contract, and the
+seven fixed firmware siblings. It reconstructs the authorized relative tree
+in one private workspace without rewriting the plan, then directly invokes the
+caller-selected pcbex command to run the existing
+`run-deterministic-pipeline` authority. Flattening role paths or regenerating a
+plan would change the raw `plan_source_sha256`, semantic `plan_sha256`, evidence
+paths, and final `run_sha256`, so neither is permitted.
+
+The safe private closure is intentionally narrower than every report Rust can
+retain. Each present descriptor must name a nonempty regular file whose bytes
+and SHA-256 match the plan, and the firmware directory must contain exactly its
+manifest and seven fixed artifacts. Rejected replay therefore covers failures
+from the downstream binding or pipeline gates after that boundary. Reports
+whose rejection was caused by a missing, linked, empty, oversized,
+digest-mismatched, or inexact firmware input cannot be reconstructed by this
+adapter and fail before child execution.
+
+The child report is read only from a private destination and must equal the
+retained bytes exactly, including the one canonical trailing LF. Success then
+requires final byte-for-byte rereads of every staged source and every
+caller-visible plan, report, role, and firmware source. The fresh report body,
+role contents, filesystem paths, and child output are not returned. Instead,
+the adapter emits a closed path-free schema-v1 result with verification scope
+`deterministic-pipeline-fresh-replay-v1` and exact plan/report identities.
+The adapter independently recomputes the plan-v1 and run-v1 domain hashes,
+requires canonical bounded failure ordering and approval relationships, and
+accepts only a bounded SemVer engine string before returning it. It also
+validates the complete closed Rust report-v1 shape: the nested board binding,
+KiCad handoff, electrical reviews, pipeline identities, fixed phases, evidence,
+counts, decisions, and every integer bound are checked without relying on
+Python's Boolean/float-compatible equality.
+
+The result contains only `schema_version`, `verification_scope`, `verified`,
+the retained `engine_version`, a `plan` object, a `report` object, aggregate
+`inputs`, and completed `validation` flags. `plan` retains the raw source
+byte/SHA-256 identity, semantic `plan_sha256`, and `factory_required` decision.
+`report` retains the retained/fresh byte/SHA-256 identities, `run_sha256`,
+`approved`, bounded `failure_count`, and `identical: true`. `inputs` records
+only the captured count, aggregate bytes, and a domain-separated digest over
+the fixed role/path/byte/SHA identities. The validation object contains six
+constant-true fields: `plan_captured_before_replay`,
+`inputs_captured_before_replay`, `fresh_report_reproduced`,
+`retained_report_identical`, `staged_inputs_unchanged`, and
+`caller_inputs_unchanged`; it contains no copied path or diagnostic text.
+
+Replay verification and pipeline approval remain separate decisions. Exact
+reproduction of a rejected report may return `verified: true` with
+`approved: false`; verification must not be interpreted as approval. The
+caller-selected pcbex executable is unauthenticated and unsandboxed, and exact
+equality normally requires the producer-compatible engine because the retained
+engine version participates in the report and run identity.
+
+The CLI's optional `--require-approved` gate is evaluated only after the exact
+result has been printed. It can therefore fail the command for a reproduced
+rejection without turning that truthful rejected report into a replay failure
+or suppressing its path-free identity evidence. The Python API always returns
+the reproduced approval decision and leaves policy enforcement to its caller.
+
+One aggregate deadline starts before capture. Before invoking the runner, up
+to 30 seconds (or half the remaining time) is reserved and split evenly: one
+half caps process-tree termination, direct-child reaping, and pipe-worker
+joins; the other remains for report validation, rereads, and private-workspace
+cleanup. A final deadline check prevents success after expiry, while ordinary
+synchronous filesystem calls retain the documented non-preemptible limitation.
+
+This adapter invokes no circuit, KiCad, manufacturing-package, or firmware
+producer. It does not run KiCad or `fabricate`, rebuild firmware, re-fetch a
+factory response, make an AI/supplier/network/factory request, change the Rust
+plan/report or pipeline schemas, add MCP or Action integration, submit a
+package, or authorize deployment, procurement, fabrication, or ordering.
 
 ## MCP parity
 

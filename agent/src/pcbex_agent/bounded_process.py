@@ -5,7 +5,9 @@ be used by providers, executors, and repair loops without each caller having
 to reimplement process supervision.  ``run_bounded`` starts the command in a
 dedicated process group (POSIX) or Job Object (Windows), closes standard input
 when no input is supplied, and enforces one monotonic deadline that includes
-delivery of ``input_bytes``.
+delivery of ``input_bytes``. Callers that compose this runner into a larger
+deadline can also cap the termination/reap phase independently with
+``cleanup_timeout_seconds``.
 
 On Windows a Job Object is created and assigned immediately after spawn.  The
 assignment is necessarily post-spawn, so a process which exits in that small
@@ -36,6 +38,8 @@ DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 _CLEANUP_WAIT_SECONDS = 5.0
 _THREAD_JOIN_SECONDS = 1.0
+_DARWIN_EXIT_RACE_SECONDS = 1.0
+_DARWIN_EXIT_RACE_POLL_SECONDS = 0.01
 
 
 class BoundedProcessError(RuntimeError):
@@ -390,32 +394,59 @@ def _first_failure(
 
 
 def _darwin_exited_process_group_is_gone(
-    process: subprocess.Popen[bytes], error: OSError
+    process: subprocess.Popen[bytes],
+    error: OSError,
+    *,
+    proof_deadline: float | None = None,
 ) -> bool:
     """Return whether a Darwin ``killpg`` EPERM is an exited-group race.
 
-    Darwin can report EPERM while the direct child is exiting.  Treat that
-    result as benign only after ``poll`` has reaped the direct child and a
-    signal-zero probe proves that the process group no longer exists.  A live
-    child, an existing group, or any probe error remains a cleanup failure.
+    Darwin can report EPERM while the direct child is exiting.  Give that
+    kernel transition a small bounded window, but treat the result as benign
+    only after ``poll`` has reaped the direct child and a signal-zero probe
+    proves that the process group no longer exists.  A live child, an existing
+    group, or an ambiguous probe at the deadline remains a cleanup failure.
     """
 
     if sys.platform != "darwin" or error.errno != errno.EPERM:
         return False
-    try:
-        if process.poll() is None:
+    race_deadline = time.monotonic() + _DARWIN_EXIT_RACE_SECONDS
+    if proof_deadline is None:
+        proof_deadline = race_deadline
+    else:
+        proof_deadline = min(proof_deadline, race_deadline)
+    while True:
+        try:
+            exited = process.poll() is not None
+        except OSError:
             return False
-    except OSError:
-        return False
-    try:
-        os.killpg(process.pid, 0)
-    except OSError as probe_error:
-        return probe_error.errno == errno.ESRCH
-    return False
+        if exited:
+            try:
+                os.killpg(process.pid, 0)
+            except OSError as probe_error:
+                if probe_error.errno == errno.ESRCH:
+                    return True
+                if probe_error.errno != errno.EPERM:
+                    return False
+            else:
+                return False
+        now = time.monotonic()
+        if now >= proof_deadline:
+            return False
+        time.sleep(
+            min(_DARWIN_EXIT_RACE_POLL_SECONDS, proof_deadline - now)
+        )
 
 
-def _kill_process_tree(process: subprocess.Popen[bytes], job: Any) -> list[str]:
+def _kill_process_tree(
+    process: subprocess.Popen[bytes],
+    job: Any,
+    *,
+    deadline: float | None = None,
+) -> list[str]:
     failures: list[str] = []
+    posix_group_error: OSError | None = None
+    direct_child_error: OSError | None = None
     if job is not None:
         try:
             job.terminate()
@@ -430,14 +461,23 @@ def _kill_process_tree(process: subprocess.Popen[bytes], job: Any) -> list[str]:
         except ProcessLookupError:
             pass
         except OSError as exc:
-            if not _darwin_exited_process_group_is_gone(process, exc):
-                failures.append(f"could not terminate POSIX process group: {exc}")
+            posix_group_error = exc
     try:
         process.kill()
     except ProcessLookupError:
         pass
     except OSError as exc:
-        failures.append(f"could not terminate direct child: {exc}")
+        direct_child_error = exc
+    if posix_group_error is not None and not _darwin_exited_process_group_is_gone(
+        process,
+        posix_group_error,
+        proof_deadline=deadline,
+    ):
+        failures.append(
+            f"could not terminate POSIX process group: {posix_group_error}"
+        )
+    if direct_child_error is not None:
+        failures.append(f"could not terminate direct child: {direct_child_error}")
     return failures
 
 
@@ -460,27 +500,46 @@ def _cleanup_process(
     *,
     terminate_tree: bool = True,
     prior_termination_failures: Sequence[str] = (),
+    cleanup_deadline: float | None = None,
 ) -> ProcessCleanupError | None:
     if process is None:
         return None
     stop_event.set()
     termination_failures = list(prior_termination_failures)
     if terminate_tree:
-        termination_failures.extend(_kill_process_tree(process, job))
+        termination_failures.extend(
+            _kill_process_tree(
+                process,
+                job,
+                deadline=cleanup_deadline,
+            )
+        )
     cleanup_error = (
         ProcessCleanupError("; ".join(termination_failures), argv=argv)
         if termination_failures
         else None
     )
+
+    def wait_budget(maximum: float) -> float:
+        if cleanup_deadline is None:
+            return maximum
+        return min(maximum, max(0.0, cleanup_deadline - time.monotonic()))
+
     try:
-        process.wait(timeout=_CLEANUP_WAIT_SECONDS)
+        first_wait = wait_budget(_CLEANUP_WAIT_SECONDS)
+        if first_wait <= 0 and process.poll() is None:
+            raise subprocess.TimeoutExpired(argv, 0)
+        process.wait(timeout=first_wait)
     except subprocess.TimeoutExpired as exc:
         try:
             process.kill()
         except Exception:
             pass
         try:
-            process.wait(timeout=_CLEANUP_WAIT_SECONDS)
+            second_wait = wait_budget(_CLEANUP_WAIT_SECONDS)
+            if second_wait <= 0 and process.poll() is None:
+                raise subprocess.TimeoutExpired(argv, 0)
+            process.wait(timeout=second_wait)
         except Exception as wait_exc:
             cleanup_error = ProcessCleanupError(
                 f"could not reap child process: {wait_exc}",
@@ -492,7 +551,7 @@ def _cleanup_process(
             argv=argv,
         )
     for thread in threads:
-        thread.join(timeout=_THREAD_JOIN_SECONDS)
+        thread.join(timeout=wait_budget(_THREAD_JOIN_SECONDS))
     workers_alive = any(thread.is_alive() for thread in threads)
     if cleanup_error is None and workers_alive:
         cleanup_error = ProcessCleanupError(
@@ -639,6 +698,7 @@ def run_bounded(
     *,
     input_bytes: bytes | bytearray | memoryview | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    cleanup_timeout_seconds: float | None = None,
     max_stdin_bytes: int = DEFAULT_MAX_INPUT_BYTES,
     max_stdout_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
     max_stderr_bytes: int = DEFAULT_MAX_OUTPUT_BYTES,
@@ -651,7 +711,9 @@ def run_bounded(
     the child observes EOF immediately.  When bytes are supplied, they are
     delivered by a dedicated writer thread and the same monotonic deadline
     covers both delivery and child execution.  The input payload is checked
-    against ``max_stdin_bytes`` before it is copied or delivered.  A non-zero
+    against ``max_stdin_bytes`` before it is copied or delivered.
+    ``cleanup_timeout_seconds`` optionally caps the separate process-tree
+    termination, direct-child reap, and pipe-worker join phase. A non-zero
     child exit is a normal result; malformed arguments, input/output overflow,
     timeout, pipe errors, and unreaped children are represented by typed
     ``BoundedProcessError`` subclasses.
@@ -667,6 +729,23 @@ def run_bounded(
     if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
         raise InvalidTimeout(timeout_seconds, argv=normalized_argv)
     timeout_seconds = normalized_timeout
+    if cleanup_timeout_seconds is not None:
+        if isinstance(cleanup_timeout_seconds, bool) or not isinstance(
+            cleanup_timeout_seconds, (int, float)
+        ):
+            raise InvalidTimeout(cleanup_timeout_seconds, argv=normalized_argv)
+        try:
+            normalized_cleanup_timeout = float(cleanup_timeout_seconds)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise InvalidTimeout(
+                cleanup_timeout_seconds, argv=normalized_argv
+            ) from exc
+        if (
+            not math.isfinite(normalized_cleanup_timeout)
+            or normalized_cleanup_timeout <= 0
+        ):
+            raise InvalidTimeout(cleanup_timeout_seconds, argv=normalized_argv)
+        cleanup_timeout_seconds = normalized_cleanup_timeout
     stdin_limit = _validate_input_limit(max_stdin_bytes, normalized_argv)
     stdout_limit = _validate_limit(max_stdout_bytes, "stdout", normalized_argv)
     stderr_limit = _validate_limit(max_stderr_bytes, "stderr", normalized_argv)
@@ -776,7 +855,7 @@ def run_bounded(
                     # pass below instead of sending a second kill to a process
                     # group whose numeric id may already have been reused.
                     tree_termination_failures.extend(
-                        _kill_process_tree(process, job)
+                        _kill_process_tree(process, job, deadline=deadline)
                     )
                     tree_terminated = True
                 if (
@@ -811,6 +890,11 @@ def run_bounded(
         raise
     finally:
         if process is not None:
+            cleanup_deadline = (
+                None
+                if cleanup_timeout_seconds is None
+                else time.monotonic() + cleanup_timeout_seconds
+            )
             cleanup_error = _cleanup_process(
                 process,
                 job,
@@ -824,6 +908,7 @@ def run_bounded(
                 normalized_argv,
                 terminate_tree=not tree_terminated,
                 prior_termination_failures=tree_termination_failures,
+                cleanup_deadline=cleanup_deadline,
             )
             if job is not None:
                 try:

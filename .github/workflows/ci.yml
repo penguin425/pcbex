@@ -1272,6 +1272,85 @@ jobs:
           --pcbex target/release/pcbex
           --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci
           --output-dir build/deterministic-pipeline-ci
+      - name: Replay retained deterministic pipeline reports
+        id: replay
+        if: ${{ steps.pipeline.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          PYTHONPATH: agent/src
+        run: |
+          set -euo pipefail
+          python3 -m pcbex_agent.cli replay-deterministic-pipeline \
+            build/deterministic-pipeline-ci/accepted/plan.json \
+            build/deterministic-pipeline-ci/accepted/report.json \
+            --pcbex "$(pwd)/target/release/pcbex" \
+            --require-approved \
+            --timeout-seconds 120 \
+            > build/deterministic-pipeline-ci/accepted-replay.json
+          python3 -m pcbex_agent.cli replay-deterministic-pipeline \
+            build/deterministic-pipeline-ci/rejected/plan.json \
+            build/deterministic-pipeline-ci/rejected/report.json \
+            --pcbex "$(pwd)/target/release/pcbex" \
+            --timeout-seconds 120 \
+            > build/deterministic-pipeline-ci/rejected-replay.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path("build/deterministic-pipeline-ci")
+          summary = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+          accepted = json.loads(
+              (root / "accepted-replay.json").read_text(encoding="utf-8")
+          )
+          rejected = json.loads(
+              (root / "rejected-replay.json").read_text(encoding="utf-8")
+          )
+          expected_keys = {
+              "schema_version",
+              "verification_scope",
+              "verified",
+              "engine_version",
+              "plan",
+              "report",
+              "inputs",
+              "validation",
+          }
+          expected_validation = {
+              "plan_captured_before_replay",
+              "inputs_captured_before_replay",
+              "fresh_report_reproduced",
+              "retained_report_identical",
+              "staged_inputs_unchanged",
+              "caller_inputs_unchanged",
+          }
+          for label, result, expected_approved in (
+              ("accepted", accepted, True),
+              ("rejected", rejected, False),
+          ):
+              if set(result) != expected_keys:
+                  raise SystemExit(f"{label} replay result is not closed")
+              if result["verified"] is not True:
+                  raise SystemExit(f"{label} replay was not verified")
+              if (
+                  result["verification_scope"]
+                  != "deterministic-pipeline-fresh-replay-v1"
+              ):
+                  raise SystemExit(f"{label} replay scope changed")
+              if (
+                  set(result["validation"]) != expected_validation
+                  or not all(result["validation"].values())
+              ):
+                  raise SystemExit(f"{label} replay validation is incomplete")
+              if result["report"]["approved"] is not expected_approved:
+                  raise SystemExit(f"{label} replay approval decision changed")
+              if result["report"]["identical"] is not True:
+                  raise SystemExit(f"{label} replay was not byte-identical")
+              if (
+                  result["report"]["retained"]["sha256"]
+                  != summary[label]["report_sha256"]
+              ):
+                  raise SystemExit(f"{label} retained report identity changed")
+          PY
       - name: Scan deterministic pipeline outputs
         id: scan
         if: ${{ always() }}
@@ -1375,12 +1454,14 @@ jobs:
         if: ${{ always() }}
         env:
           PIPELINE_OUTCOME: ${{ steps.pipeline.outcome }}
+          REPLAY_OUTCOME: ${{ steps.replay.outcome }}
           SCAN_OUTCOME: ${{ steps.scan.outcome }}
           SUMMARY_OUTCOME: ${{ steps.summary.outcome }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
         run: |
           set -euo pipefail
           test "$PIPELINE_OUTCOME" = success
+          test "$REPLAY_OUTCOME" = success
           test "$SCAN_OUTCOME" = success
           test "$SUMMARY_OUTCOME" = success
           test "$UPLOAD_OUTCOME" = success
@@ -1417,7 +1498,7 @@ jobs:
 
   python:
     name: Python
-    needs: python-boundaries
+    needs: [python-boundaries, rust-windows-boundaries]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1425,7 +1506,10 @@ jobs:
       - name: Require cross-platform boundary checks
         env:
           BOUNDARY_RESULT: ${{ needs.python-boundaries.result }}
-        run: test "$BOUNDARY_RESULT" = success
+          WINDOWS_RUST_RESULT: ${{ needs.rust-windows-boundaries.result }}
+        run: >-
+          test "$BOUNDARY_RESULT" = success
+          && test "$WINDOWS_RUST_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -1440,14 +1524,16 @@ jobs:
   python-boundaries:
     name: Python boundaries (${{ matrix.runner }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        runner:
-          - macos-latest
-          - windows-latest
+        include:
+          - runner: macos-latest
+            pcbex: target/release/pcbex
+          - runner: windows-latest
+            pcbex: target/release/pcbex.exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1455,6 +1541,78 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Build pcbex release binary
+        run: cargo +stable build --package pcbex --release --locked
+      - name: Configure Windows GNU firmware toolchain
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $toolchain = 'C:\mingw64\bin'
+          foreach ($tool in @('gcc.exe', 'g++.exe')) {
+            $candidate = Join-Path $toolchain $tool
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+              throw "required Windows firmware compiler is missing: $candidate"
+            }
+          }
+          $toolchain | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Build real deterministic pipeline replay fixtures
+        run: >-
+          python scripts/deterministic_pipeline_ci.py
+          --pcbex ${{ matrix.pcbex }}
+          --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci
+          --output-dir build/deterministic-pipeline-portability
+          --timeout-seconds 120
+      - name: Diagnose Windows firmware fixture failure
+        if: ${{ failure() && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $firmware = 'build/deterministic-pipeline-portability/accepted/firmware'
+          $manifest = Join-Path $firmware 'manifest.json'
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            Write-Host 'firmware manifest was not retained'
+            exit 0
+          }
+          Get-Content -LiteralPath $manifest -Raw
+          $env:PATH = "C:\mingw64\bin;$env:PATH"
+          Push-Location $firmware
+          try {
+            & gcc -std=c11 -Wall -Wextra -Werror -pedantic -I . firmware.c firmware_smoke_test.c -o pcbex-diagnostic-c.exe
+            Write-Host "diagnostic C compile exit: $LASTEXITCODE"
+            if (Test-Path -LiteralPath 'pcbex-diagnostic-c.exe' -PathType Leaf) {
+              & .\pcbex-diagnostic-c.exe
+              Write-Host "diagnostic C smoke exit: $LASTEXITCODE"
+            }
+            & g++ -std=c++17 -Wall -Wextra -Werror -pedantic -I . firmware.cpp firmware_cpp_smoke_test.cpp -o pcbex-diagnostic-cpp.exe
+            Write-Host "diagnostic C++ compile exit: $LASTEXITCODE"
+            if (Test-Path -LiteralPath 'pcbex-diagnostic-cpp.exe' -PathType Leaf) {
+              & .\pcbex-diagnostic-cpp.exe
+              Write-Host "diagnostic C++ smoke exit: $LASTEXITCODE"
+            }
+          } finally {
+            Pop-Location
+          }
+          exit 0
+      - name: Replay accepted pipeline with the real release binary
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m pcbex_agent.cli replay-deterministic-pipeline
+          build/deterministic-pipeline-portability/accepted/plan.json
+          build/deterministic-pipeline-portability/accepted/report.json
+          --pcbex ${{ matrix.pcbex }}
+          --require-approved
+          --timeout-seconds 120
+      - name: Replay rejected pipeline with the real release binary
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m pcbex_agent.cli replay-deterministic-pipeline
+          build/deterministic-pipeline-portability/rejected/plan.json
+          build/deterministic-pipeline-portability/rejected/report.json
+          --pcbex ${{ matrix.pcbex }}
+          --timeout-seconds 120
       - name: Run cross-platform boundary tests
         env:
           PYTHONPATH: agent/src
@@ -1472,4 +1630,18 @@ jobs:
           agent.tests.test_circuit_handoff_bundle_v1453
           agent.tests.test_circuit_handoff_bundle_v1454
           agent.tests.test_manufacturing_replay_v1455
+          agent.tests.test_deterministic_pipeline_replay_v1456
           scripts.tests.test_ci_runtime
+
+  rust-windows-boundaries:
+    name: Rust Windows boundaries
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Run Windows Rust process regressions
+        run: cargo +stable test --package pcbex --bin pcbex --release --locked windows_
