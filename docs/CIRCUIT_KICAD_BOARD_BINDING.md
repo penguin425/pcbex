@@ -86,11 +86,27 @@ The strict comparison binds the following semantic data:
 - every footprint and pad's declared ownership, including missing, extra, or
   duplicate footprints/pads.
 
-Raw terminal-less nets are not silently dropped.  Duplicate net IDs/names are
-malformed board input because they make pad resolution ambiguous; they fail
-before a semantic report is possible.  Net `0` (KiCad's no-net
-identity) is a reserved board identifier, not a circuit net terminal; it is
-still validated and retained as part of the closed board import.  Board-net
+Raw terminal-less nets are not silently dropped. The board date-code selects
+the native net dialect: versions before `20251028` retain the legacy top-level
+numeric table and exact ID/name cross-checks, while versions at or after that
+cutoff use KiCad 10's quoted name-only fields and must not contain a legacy
+table. The modern net inventory includes pads, segments, arcs, vias, zones,
+and connected board/footprint graphics; this preserves `extra_net` detection
+even when a net exists only on routed copper. Connected fields are valid only
+at their native board/footprint ancestry, so wrapping a supported object in an
+unknown container cannot contribute a net. Quoted and unquoted atoms remain
+distinct where the dialect needs that distinction: numeric IDs are always
+unquoted, modern names are quoted, and legacy names retain their native scalar
+compatibility while being cross-checked exactly against the table. The two
+dialects cannot be mixed. Duplicate IDs or names in the legacy top-level net
+table are malformed because they make pad resolution ambiguous; they fail
+before a semantic report is possible. A legacy zone's optional `net_name` must
+match its numeric ID exactly; modern or out-of-context `net_name` fields are
+rejected. Repeated references to one quoted name across modern connected
+objects are expected and collapse to one semantic net. Net `0` (KiCad's no-net
+identity) is explicit and checked in the legacy dialect; the modern dialect
+makes that unconnected state implicit through an absent net field or KiCad's
+quoted empty net on a free segment, arc, or via. Board-net
 matching uses the canonical net names obtained from the imported schematic,
 not labels invented from the circuit JSON.  A schematic no-connect pin must
 map to its same-numbered unconnected board pad; an absent net field and an
@@ -120,12 +136,13 @@ binding-relevant board fields also fail closed.  Every pad must have a supported
 KiCad type and shape, positive bounded size, one canonical layer set containing
 declared copper, and a valid type-appropriate drill; supported custom pads must
 contain the same bounded polygon primitive accepted by the native importer.
-Unknown top-level placement/routing/graphics constructs remain ignored because
-their geometry is outside this gate.  The output path is checked for aliases,
-symlinks, and existing entries before work starts; no existing report is
-overwritten.  Once all three raw contracts have been imported, a rejected
-comparison is published atomically and retained before `--require-approved`
-returns failure.
+Unknown placement/routing/graphics geometry remains ignored because its shape
+is outside this gate, but a net field in an unsupported context fails closed
+instead of being used to complete the electrical inventory. The output path is
+checked for aliases, symlinks, and existing entries before work starts; no
+existing report is overwritten. Once all three raw contracts have been
+imported, a rejected comparison is published atomically and retained before
+`--require-approved` returns failure.
 
 The board input is capped at 128 MiB and the compact canonical report at
 12 MiB (12 MiB plus one byte when rendered with its required newline).

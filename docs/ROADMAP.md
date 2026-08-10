@@ -168,6 +168,7 @@ auditable release.
 | v1.454.0 | Retained-board electrical handoff replay | Bind an optional retained KiCad board and exact board-binding report, with an optional custom electrical-policy replay source, to the exactly reproduced handoff after prior optional assertions; emit closed path-free v5 `board_binding` evidence with bounded board/report plus raw replay-source and effective-policy identities while preserving v1–v4 result bytes and the unchanged six-entry archive, without claiming layout, DRC/DFM, manufacturing/fabrication, procurement, or tool provenance |
 | v1.455.0 | Fresh manufacturing-package replay | Capture one board, retained manufacturing ZIP, optional explicit KiCad project/rules sidecars, and one optional manufacturing profile under closed bounds; run the existing `fabricate` producer privately with explicit pcbex/KiCad commands and nested aggregate deadlines, accept only a byte-identical fresh ZIP, reread every staged and caller-visible source, and emit closed path-free `manufacturing-package-fresh-replay-v1` evidence without changing pipeline/MCP/Action or authorizing fabrication |
 | v1.456.0 | Fresh deterministic-pipeline report replay | Capture one closed plan, one retained report, every present source in the fixed 16-role contract, and all seven firmware siblings; run the existing deterministic-pipeline runner privately through a caller-selected pcbex command, require exact retained/fresh report bytes including the final LF, reread staged and caller-visible sources, emit closed path-free `deterministic-pipeline-fresh-replay-v1` evidence with verification distinct from the retained approval decision, close the residual bounded Darwin exited-group observation race, and make native firmware smoke execution plus short-lived Windows Job assignment portable without leaking private paths into evidence |
+| v1.457.0 | Shared-board circuit-to-manufacturing replay | Extend exact circuit-handoff replay only when a complete v5 board-binding pair is present, reuse that one captured raw board for a private manufacturing-package replay, require the fresh ZIP to equal the retained ZIP byte-for-byte, and emit closed path-free v6 evidence under one outer deadline and one final union caller-source reread while preserving exact v1–v5 results when omitted and never treating reproduction as fabrication authorization |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -820,7 +821,7 @@ replay does not alter deterministic-pipeline schemas, add MCP or Action
 integration, submit to a factory, authorize fabrication/procurement, or place
 an order.
 
-The current v1.456.0 milestone adds a standalone exact replay for one retained
+The released v1.456.0 milestone adds a standalone exact replay for one retained
 deterministic-pipeline report. The Python API and CLI are
 `replay_deterministic_pipeline` and
 `pcbex-agent replay-deterministic-pipeline`; the closed result schema is exposed
@@ -863,3 +864,54 @@ supervisor attempts the direct-child kill and uses only deadline-clipped
 It never resends the group signal, and every live, existing, unauthorized, or
 deadline-ambiguous group remains a cleanup failure that takes precedence over
 the original child failure.
+
+The current v1.457.0 milestone composes the v1.454 exact circuit-to-board
+electrical binding with the v1.455 exact manufacturing-package producer replay.
+Manufacturing options are accepted only with the complete v5 board-binding
+pair: one `--kicad-board` and one `--board-binding-report`, with the optional
+custom board policy retaining its existing meaning. There is deliberately no
+second manufacturing board input. The adapter captures the raw board once,
+uses those exact bytes for both replay stages, and requires the board byte count
+and SHA-256 reported by the nested manufacturing replay to equal the v5 binding
+identity. A geometry-only edit therefore fails this composition even when its
+electrical digest is unchanged.
+
+After exact six-entry handoff reproduction and any independently requested
+native-ERC, AI-quorum, or catalog-provenance assertions, the v5 board-binding
+report is freshly reproduced. The existing `--require-board-binding-approved`
+gate still prevents `fabricate` from starting when approval is required and the
+exact report is rejected; without that flag, the rejected decision remains
+visible evidence. The manufacturing stage then privately invokes the existing
+fresh-package replay with explicit project/rules sidecars and an optional
+profile selected from mutually exclusive built-in DFM, external DFM, or
+physical-profile modes. Success requires the
+fresh `manufacturing.zip` to equal the retained ZIP byte-for-byte.
+
+One outer monotonic deadline covers all captures, children, nested cleanup,
+cross-binding checks, result construction, and cleanup. The manufacturing child
+receives a strictly shorter remaining budget, and success is returned only
+after the nested staged-source checks and one final union reread of every
+caller-visible input across both replay stages. The closed, path-free schema-v6 result uses scope
+`deterministic-electrical-handoff-chain-manufacturing-package-replay-v6`, adds
+the complete closed `manufacturing-package-fresh-replay-v1` result, and records
+completed package replay and shared-board identity validation. Omitting all
+manufacturing options preserves exact v1–v5 result serialization, schemas, and
+the unchanged six-entry handoff archive.
+
+The release also aligns the board-binding parser with KiCad 10's `20251028`
+file-format boundary. It preserves quoted-token identity, keeps legacy numeric
+ID/name cross-checks intact, rejects mixed dialects, and builds the modern net
+inventory from every supported connected object rather than pads alone. This
+lets the real KiCad 10 upgraded board flow through the shared-board replay
+without weakening `extra_net` detection or confusing an unquoted netcode with
+a quoted net name. Connected fields are restricted to their native ancestry,
+legacy zone `net_name` must match its numeric ID, modern obsolete `net_name`
+fields are rejected, and quoted empty free-track nets retain KiCad 10's
+implicit unconnected semantics without entering the named-net inventory.
+
+This composition proves deterministic reproduction under caller-selected,
+unauthenticated pcbex and KiCad executables. It does not authenticate toolchain
+provenance, a supplier, factory, or network receipt; establish current parts or
+fabrication availability; submit an archive; authorize layout, procurement,
+manufacturing, fabrication, deployment, or ordering; add MCP/Action/pipeline
+schema parity; or generate/build firmware.

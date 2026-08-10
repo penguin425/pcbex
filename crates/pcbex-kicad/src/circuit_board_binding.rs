@@ -14,9 +14,9 @@ use super::{
     CIRCUIT_SPEC_V2_MAX_REFERENCE_BYTES, CIRCUIT_SPEC_V2_MAX_VALUE_BYTES,
     CircuitKicadHandoffReport, CircuitPartV2, ElectricalPolicy, Layer, Point, SchematicDocument,
     SchematicSymbol, Sexp, atom, board_copper_layers, check_circuit_spec, checked_mm_to_nm,
-    circuit_kicad_handoff_report_json_schema, custom_pad_polygon, import_schematic, number_u32,
-    optional_offset_pair, pad_layers, parse, parse_circuit_spec_v2, required_dimension_pair,
-    scalar_f64, verify_circuit_kicad_handoff,
+    circuit_kicad_handoff_report_json_schema, custom_pad_polygon, import_schematic,
+    optional_offset_pair, pad_layers, parse, parse_circuit_spec_v2, quoted_atom,
+    required_dimension_pair, scalar_f64, verify_circuit_kicad_handoff,
 };
 use crate::manufacturing::{ManufacturingPart, parse_footprint};
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,7 @@ const MAX_BINDING_FOOTPRINTS: usize = 4_096;
 const MAX_BINDING_PADS: usize = 100_000;
 const MAX_BINDING_FINDINGS: usize = 250_000;
 const MAX_BINDING_PAD_LAYER_NAMES: usize = 60;
+const KICAD_NAME_ONLY_NET_FORMAT_VERSION: u32 = 20_251_028;
 const BOARD_ELECTRICAL_DOMAIN: &[u8] = b"pcbex:circuit-kicad-board-electrical-v1\0";
 const HANDOFF_REPORT_DOMAIN: &[u8] = b"pcbex:circuit-kicad-handoff-report-v1\0";
 const BOARD_BINDING_DOMAIN: &[u8] = b"pcbex:circuit-kicad-board-binding-v1\0";
@@ -156,8 +157,14 @@ pub struct CircuitKicadBoardBindingHandoffSummary {
 #[derive(Clone, Debug)]
 struct BoardBindingDocument {
     has_reserved_net_zero: bool,
-    nets: BTreeMap<u32, String>,
+    nets: BTreeSet<String>,
     footprints: Vec<BoardBindingFootprint>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BoardNetDialect {
+    LegacyNumeric,
+    NameOnly,
 }
 
 #[derive(Clone, Debug)]
@@ -346,21 +353,27 @@ fn parse_board_binding_document(source: &str) -> Result<BoardBindingDocument, St
     let top = root
         .as_list()
         .ok_or_else(|| "KiCad document is not an s-expression".to_string())?;
-    if atom(top.first()) != Some("kicad_pcb") {
+    if binding_unquoted_atom(top.first()) != Some("kicad_pcb") {
         return Err("expected a kicad_pcb document".into());
     }
     let copper_layers = board_copper_layers(top)?;
+    let board_version = binding_board_version(top)?;
+    let net_dialect = if board_version >= KICAD_NAME_ONLY_NET_FORMAT_VERSION {
+        BoardNetDialect::NameOnly
+    } else {
+        BoardNetDialect::LegacyNumeric
+    };
 
-    let mut nets = BTreeMap::<u32, String>::new();
+    let mut legacy_nets = BTreeMap::<u32, String>::new();
     let mut names = BTreeMap::<String, u32>::new();
     for item in top {
         let Some(values) = item.as_list() else {
             continue;
         };
-        if atom(values.first()) != Some("net") {
+        if binding_unquoted_atom(values.first()) != Some("net") {
             continue;
         }
-        if nets.len() >= MAX_BINDING_NETS {
+        if legacy_nets.len() >= MAX_BINDING_NETS {
             return Err(format!(
                 "KiCad board contains more than {MAX_BINDING_NETS} net declarations"
             ));
@@ -368,7 +381,7 @@ fn parse_board_binding_document(source: &str) -> Result<BoardBindingDocument, St
         if values.len() != 3 {
             return Err("KiCad board net declaration must contain exactly one ID and name".into());
         }
-        let id = number_u32(values.get(1))
+        let id = binding_unquoted_u32(values.get(1))
             .ok_or_else(|| "KiCad board net is missing a valid numeric ID".to_string())?;
         let name = atom(values.get(2))
             .ok_or_else(|| format!("KiCad board net {id} is missing a scalar name"))?
@@ -385,7 +398,7 @@ fn parse_board_binding_document(source: &str) -> Result<BoardBindingDocument, St
             CIRCUIT_SPEC_V2_MAX_NET_NAME_BYTES,
             id == 0,
         )?;
-        if let Some(existing) = nets.insert(id, name.clone()) {
+        if let Some(existing) = legacy_nets.insert(id, name.clone()) {
             return Err(format!(
                 "KiCad board contains duplicate net ID {id}: {existing} and {name}"
             ));
@@ -396,14 +409,19 @@ fn parse_board_binding_document(source: &str) -> Result<BoardBindingDocument, St
             ));
         }
     }
-
+    if net_dialect == BoardNetDialect::NameOnly && !legacy_nets.is_empty() {
+        return Err(format!(
+            "KiCad board version {board_version} must not contain legacy top-level net declarations"
+        ));
+    }
+    let modern_nets = validate_and_collect_binding_net_fields(top, net_dialect, &legacy_nets)?;
     let mut footprints = Vec::new();
     let mut total_pads = 0usize;
     for item in top {
         let Some(values) = item.as_list() else {
             continue;
         };
-        if atom(values.first()) != Some("footprint") {
+        if binding_unquoted_atom(values.first()) != Some("footprint") {
             continue;
         }
         if footprints.len() >= MAX_BINDING_FOOTPRINTS {
@@ -443,7 +461,7 @@ fn parse_board_binding_document(source: &str) -> Result<BoardBindingDocument, St
             let Some(pad_values) = child.as_list() else {
                 continue;
             };
-            if atom(pad_values.first()) != Some("pad") {
+            if binding_unquoted_atom(pad_values.first()) != Some("pad") {
                 continue;
             }
             total_pads = total_pads
@@ -454,7 +472,12 @@ fn parse_board_binding_document(source: &str) -> Result<BoardBindingDocument, St
                     "KiCad board contains more than {MAX_BINDING_PADS} pads for board binding"
                 ));
             }
-            pads.push(parse_binding_pad(pad_values, &nets, &copper_layers)?);
+            pads.push(parse_binding_pad(
+                pad_values,
+                &legacy_nets,
+                &copper_layers,
+                net_dialect,
+            )?);
         }
         pads.sort();
         footprints.push(BoardBindingFootprint { part, pads });
@@ -471,17 +494,274 @@ fn parse_board_binding_document(source: &str) -> Result<BoardBindingDocument, St
             .then_with(|| left.pads.cmp(&right.pads))
     });
 
+    let has_reserved_net_zero = match net_dialect {
+        BoardNetDialect::LegacyNumeric => legacy_nets.get(&0).is_some_and(String::is_empty),
+        // KiCad's name-only format no longer serializes the implementation
+        // detail that used numeric net zero for an unconnected item.
+        BoardNetDialect::NameOnly => true,
+    };
+    let nets = match net_dialect {
+        BoardNetDialect::LegacyNumeric => legacy_nets
+            .into_iter()
+            .filter_map(|(id, name)| (id != 0).then_some(name))
+            .collect(),
+        BoardNetDialect::NameOnly => modern_nets,
+    };
+
     Ok(BoardBindingDocument {
-        has_reserved_net_zero: nets.get(&0).is_some_and(String::is_empty),
+        has_reserved_net_zero,
         nets,
         footprints,
     })
+}
+
+fn binding_unquoted_u32(value: Option<&Sexp>) -> Option<u32> {
+    match value? {
+        Sexp::Atom(value) => value.parse().ok(),
+        Sexp::QuotedAtom(_) | Sexp::List(_) => None,
+    }
+}
+
+fn binding_unquoted_atom(value: Option<&Sexp>) -> Option<&str> {
+    match value? {
+        Sexp::Atom(value) => Some(value),
+        Sexp::QuotedAtom(_) | Sexp::List(_) => None,
+    }
+}
+
+fn binding_board_version(top: &[Sexp]) -> Result<u32, String> {
+    let versions = binding_children(top, "version");
+    if versions.len() != 1 {
+        return Err("KiCad board must contain exactly one version field".into());
+    }
+    let field = versions[0];
+    if field.len() != 2 {
+        return Err("KiCad board version field must contain exactly one date code".into());
+    }
+    binding_unquoted_u32(field.get(1))
+        .ok_or_else(|| "KiCad board version must be an unquoted u32 date code".to_string())
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BindingNetContext {
+    Board,
+    Footprint,
+    Connected,
+    Unsupported,
+}
+
+fn binding_board_connected_net_parent(name: &str) -> bool {
+    matches!(
+        name,
+        "segment"
+            | "arc"
+            | "via"
+            | "zone"
+            | "gr_line"
+            | "gr_rect"
+            | "gr_circle"
+            | "gr_arc"
+            | "gr_poly"
+            | "gr_curve"
+            | "gr_ellipse"
+            | "gr_ellipse_arc"
+    )
+}
+
+fn binding_footprint_connected_net_parent(name: &str) -> bool {
+    matches!(
+        name,
+        "pad"
+            | "zone"
+            | "fp_line"
+            | "fp_rect"
+            | "fp_circle"
+            | "fp_arc"
+            | "fp_poly"
+            | "fp_curve"
+            | "fp_ellipse"
+            | "fp_ellipse_arc"
+    )
+}
+
+fn binding_child_net_context(context: BindingNetContext, name: &str) -> BindingNetContext {
+    match context {
+        BindingNetContext::Board if name == "footprint" => BindingNetContext::Footprint,
+        BindingNetContext::Board if binding_board_connected_net_parent(name) => {
+            BindingNetContext::Connected
+        }
+        BindingNetContext::Footprint if binding_footprint_connected_net_parent(name) => {
+            BindingNetContext::Connected
+        }
+        BindingNetContext::Board
+        | BindingNetContext::Footprint
+        | BindingNetContext::Connected
+        | BindingNetContext::Unsupported => BindingNetContext::Unsupported,
+    }
+}
+
+fn binding_modern_empty_net_is_unconnected(parent: &str) -> bool {
+    matches!(parent, "segment" | "arc" | "via")
+}
+
+fn validate_and_collect_binding_net_fields(
+    top: &[Sexp],
+    dialect: BoardNetDialect,
+    legacy_nets: &BTreeMap<u32, String>,
+) -> Result<BTreeSet<String>, String> {
+    let mut modern_nets = BTreeSet::new();
+    let mut stack = vec![(top, BindingNetContext::Board)];
+    while let Some((values, context)) = stack.pop() {
+        let parent = binding_unquoted_atom(values.first()).unwrap_or("<non-scalar>");
+        let net_fields = binding_children(values, "net");
+        let net_name_fields = binding_children(values, "net_name");
+        if context != BindingNetContext::Board && net_fields.len() > 1 {
+            return Err(format!(
+                "KiCad board {parent} net fields must not be repeated"
+            ));
+        }
+        if net_name_fields.len() > 1 {
+            return Err(format!(
+                "KiCad board {parent} net_name fields must not be repeated"
+            ));
+        }
+        if !net_name_fields.is_empty() {
+            if context != BindingNetContext::Connected || parent != "zone" {
+                return Err(format!(
+                    "KiCad board net_name field appears in unsupported {parent} context"
+                ));
+            }
+            if dialect == BoardNetDialect::NameOnly {
+                return Err("modern KiCad zone must not contain a legacy net_name field".into());
+            }
+            if net_fields.is_empty() {
+                return Err("legacy KiCad zone net_name field requires a net field".into());
+            }
+        }
+        if let Some(field) = net_fields.first() {
+            if context == BindingNetContext::Board {
+                if dialect == BoardNetDialect::NameOnly {
+                    return Err(
+                        "modern KiCad board must not contain top-level net declarations".into(),
+                    );
+                }
+            } else if context != BindingNetContext::Connected {
+                return Err(format!(
+                    "KiCad board net field appears in unsupported {parent} context"
+                ));
+            } else {
+                match dialect {
+                    BoardNetDialect::LegacyNumeric if parent == "pad" => {
+                        if field.len() != 3 {
+                            return Err(
+                                "legacy KiCad pad net field must contain exactly one ID and name"
+                                    .to_string(),
+                            );
+                        }
+                        let id = binding_unquoted_u32(field.get(1)).ok_or_else(|| {
+                            "legacy KiCad pad net field requires an unquoted numeric ID".to_string()
+                        })?;
+                        let name = atom(field.get(2)).ok_or_else(|| {
+                            format!("legacy KiCad pad net {id} requires a scalar name")
+                        })?;
+                        let declared = legacy_nets.get(&id).ok_or_else(|| {
+                            format!("legacy KiCad pad references undeclared net ID {id}")
+                        })?;
+                        if name != declared {
+                            return Err(format!(
+                                "legacy KiCad pad net {id} name {name:?} does not match declared name {declared:?}"
+                            ));
+                        }
+                    }
+                    BoardNetDialect::LegacyNumeric => {
+                        if field.len() != 2 {
+                            return Err(format!(
+                                "legacy KiCad {parent} net field must contain exactly one numeric ID"
+                            ));
+                        }
+                        let id = binding_unquoted_u32(field.get(1)).ok_or_else(|| {
+                            format!(
+                                "legacy KiCad {parent} net field requires an unquoted numeric ID"
+                            )
+                        })?;
+                        let declared = legacy_nets.get(&id).ok_or_else(|| {
+                            format!("legacy KiCad {parent} references undeclared net ID {id}")
+                        })?;
+                        if parent == "zone"
+                            && let Some(net_name_field) = net_name_fields.first()
+                        {
+                            if net_name_field.len() != 2 {
+                                return Err(
+                                    "legacy KiCad zone net_name field must contain exactly one name"
+                                        .into(),
+                                );
+                            }
+                            let name = atom(net_name_field.get(1)).ok_or_else(|| {
+                                format!("legacy KiCad zone net {id} requires a scalar net_name")
+                            })?;
+                            if name != declared {
+                                return Err(format!(
+                                    "legacy KiCad zone net {id} name {name:?} does not match declared name {declared:?}"
+                                ));
+                            }
+                        }
+                    }
+                    BoardNetDialect::NameOnly => {
+                        if field.len() != 2 {
+                            return Err(format!(
+                                "modern KiCad {parent} net field must contain exactly one name"
+                            ));
+                        }
+                        let name = quoted_atom(field.get(1)).ok_or_else(|| {
+                            format!("modern KiCad {parent} net field requires a quoted scalar name")
+                        })?;
+                        if name.is_empty() && binding_modern_empty_net_is_unconnected(parent) {
+                            // KiCad 10 writes an explicit empty name for an
+                            // unconnected track, arc, or via. It is net zero,
+                            // not a named member of the electrical inventory.
+                        } else {
+                            validate_board_text(
+                                name,
+                                &format!("modern KiCad {parent} net name"),
+                                CIRCUIT_SPEC_V2_MAX_NET_NAME_BYTES,
+                                false,
+                            )?;
+                            if !modern_nets.contains(name) && modern_nets.len() >= MAX_BINDING_NETS
+                            {
+                                return Err(format!(
+                                    "KiCad board contains more than {MAX_BINDING_NETS} distinct name-only nets"
+                                ));
+                            }
+                            modern_nets.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        for child in values {
+            let Some(child) = child.as_list() else {
+                continue;
+            };
+            if quoted_atom(child.first()) == Some("net") {
+                return Err("KiCad board net field keyword must be unquoted".into());
+            }
+            if quoted_atom(child.first()) == Some("net_name") {
+                return Err("KiCad board net_name field keyword must be unquoted".into());
+            }
+            let child_name = binding_unquoted_atom(child.first()).unwrap_or("<non-scalar>");
+            if !matches!(child_name, "net" | "net_name") {
+                stack.push((child, binding_child_net_context(context, child_name)));
+            }
+        }
+    }
+    Ok(modern_nets)
 }
 
 fn parse_binding_pad(
     values: &[Sexp],
     nets: &BTreeMap<u32, String>,
     copper_layers: &[Layer],
+    dialect: BoardNetDialect,
 ) -> Result<BoardBindingPad, String> {
     if values.len() < 4 {
         return Err("KiCad pad header must contain number, type, and shape".into());
@@ -533,13 +813,7 @@ fn parse_binding_pad(
             "KiCad pad {number:?} of type {kind:?} must not contain a drill field"
         ));
     }
-    let net_fields = values
-        .iter()
-        .filter_map(|item| {
-            let child = item.as_list()?;
-            (atom(child.first()) == Some("net")).then_some(child)
-        })
-        .collect::<Vec<_>>();
+    let net_fields = binding_children(values, "net");
     if net_fields.len() > 1 {
         return Err(format!(
             "KiCad pad {number:?} net fields must not be repeated"
@@ -547,13 +821,30 @@ fn parse_binding_pad(
     }
     let net = match net_fields.first() {
         None => None,
+        Some(field) if dialect == BoardNetDialect::NameOnly => {
+            if field.len() != 2 {
+                return Err(format!(
+                    "modern KiCad pad {number:?} net field must contain exactly one name"
+                ));
+            }
+            let name = quoted_atom(field.get(1)).ok_or_else(|| {
+                format!("modern KiCad pad {number:?} net requires a quoted scalar name")
+            })?;
+            validate_board_text(
+                name,
+                &format!("modern KiCad pad {number:?} net name"),
+                CIRCUIT_SPEC_V2_MAX_NET_NAME_BYTES,
+                false,
+            )?;
+            Some(name.to_string())
+        }
         Some(field) => {
             if field.len() != 3 {
                 return Err(format!(
-                    "KiCad pad {number:?} net field must contain exactly one ID and name"
+                    "legacy KiCad pad {number:?} net field must contain exactly one ID and name"
                 ));
             }
-            let id = number_u32(field.get(1))
+            let id = binding_unquoted_u32(field.get(1))
                 .ok_or_else(|| format!("KiCad pad {number:?} is missing a valid numeric net ID"))?;
             let declared = nets
                 .get(&id)
@@ -576,7 +867,7 @@ fn binding_children<'a>(values: &'a [Sexp], name: &str) -> Vec<&'a [Sexp]> {
         .iter()
         .filter_map(|item| {
             let child = item.as_list()?;
-            (atom(child.first()) == Some(name)).then_some(child)
+            (binding_unquoted_atom(child.first()) == Some(name)).then_some(child)
         })
         .collect()
 }
@@ -802,13 +1093,8 @@ fn compare_board_binding(
         compare_pads(part, symbol, footprint, &schematic_net_names, &mut findings)?;
     }
 
-    let board_net_names = board
-        .nets
-        .iter()
-        .filter(|(id, _)| **id != 0)
-        .map(|(_, name)| name.clone())
-        .collect::<BTreeSet<_>>();
-    for name in expected_net_names.difference(&board_net_names) {
+    let board_net_names = &board.nets;
+    for name in expected_net_names.difference(board_net_names) {
         push_finding(
             &mut findings,
             "missing_net",
@@ -1092,12 +1378,7 @@ fn expected_pin_net<'a>(
 }
 
 fn board_electrical_projection(board: &BoardBindingDocument) -> BoardElectricalProjection<'_> {
-    let mut nets = board
-        .nets
-        .iter()
-        .filter(|(id, _)| **id != 0)
-        .map(|(_, name)| name.as_str())
-        .collect::<Vec<_>>();
+    let mut nets = board.nets.iter().map(String::as_str).collect::<Vec<_>>();
     nets.sort_unstable();
     let footprints = board
         .footprints
@@ -1338,6 +1619,22 @@ mod tests {
             .unwrap()
     }
 
+    fn modern_board() -> String {
+        BOARD
+            .replace("(version 20250114)", "(version 20251028)")
+            .replace("(net 0 \"\") (net 1 \"SIG\")", "")
+            .replace("(net 1 \"SIG\")", "(net \"SIG\")")
+    }
+
+    fn append_board_item(board: &str, item: &str) -> String {
+        format!("{} {item})", board.strip_suffix(')').unwrap())
+    }
+
+    fn binding_error(board: &str) -> String {
+        verify_circuit_kicad_board_binding(SPEC, SCHEMATIC, board, &ElectricalPolicy::default())
+            .unwrap_err()
+    }
+
     #[test]
     fn exact_binding_is_deterministic_and_schema_is_closed() {
         let first = verify(BOARD);
@@ -1364,6 +1661,281 @@ mod tests {
             schema["$defs"]["handoff_report"]["additionalProperties"],
             false
         );
+    }
+
+    #[test]
+    fn accepts_kicad_10_name_only_nets_without_weakening_legacy_cross_checks() {
+        let name_only = modern_board();
+        let numeric = verify(BOARD);
+        let modern = verify(&name_only);
+        assert!(modern.approved, "{:?}", modern.findings);
+        assert_eq!(
+            modern.board_electrical_sha256,
+            numeric.board_electrical_sha256
+        );
+
+        let legacy_name_only = BOARD
+            .replace("(net 0 \"\") (net 1 \"SIG\")", "")
+            .replace("(net 1 \"SIG\")", "(net \"SIG\")");
+        assert!(
+            verify_circuit_kicad_board_binding(
+                SPEC,
+                SCHEMATIC,
+                &legacy_name_only,
+                &ElectricalPolicy::default(),
+            )
+            .unwrap_err()
+            .contains("legacy KiCad pad net field")
+        );
+
+        let modern_legacy_table = BOARD.replace("(version 20250114)", "(version 20251028)");
+        assert!(
+            verify_circuit_kicad_board_binding(
+                SPEC,
+                SCHEMATIC,
+                &modern_legacy_table,
+                &ElectricalPolicy::default(),
+            )
+            .unwrap_err()
+            .contains("must not contain legacy top-level net declarations")
+        );
+
+        let blank = name_only.replacen("(net \"SIG\")", "(net \" \")", 1);
+        assert!(
+            verify_circuit_kicad_board_binding(
+                SPEC,
+                SCHEMATIC,
+                &blank,
+                &ElectricalPolicy::default(),
+            )
+            .unwrap_err()
+            .contains("must be non-empty")
+        );
+
+        for numeric in ["1", "-1", "1e2"] {
+            let unquoted = name_only.replacen("(net \"SIG\")", &format!("(net {numeric})"), 1);
+            assert!(
+                verify_circuit_kicad_board_binding(
+                    SPEC,
+                    SCHEMATIC,
+                    &unquoted,
+                    &ElectricalPolicy::default(),
+                )
+                .unwrap_err()
+                .contains("requires a quoted scalar name")
+            );
+        }
+
+        let quoted_numeric = name_only.replace("(net \"SIG\")", "(net \"1\")");
+        assert!(
+            verify_circuit_kicad_board_binding(
+                SPEC,
+                SCHEMATIC,
+                &quoted_numeric,
+                &ElectricalPolicy::default(),
+            )
+            .is_ok()
+        );
+
+        let quoted_keyword = name_only.replacen("(net \"SIG\")", "(\"net\" \"SIG\")", 1);
+        assert!(
+            verify_circuit_kicad_board_binding(
+                SPEC,
+                SCHEMATIC,
+                &quoted_keyword,
+                &ElectricalPolicy::default(),
+            )
+            .unwrap_err()
+            .contains("keyword must be unquoted")
+        );
+
+        let unquoted_legacy_names = BOARD.replace("\"SIG\"", "SIG");
+        let unquoted = verify(&unquoted_legacy_names);
+        assert!(unquoted.approved, "{:?}", unquoted.findings);
+        assert_eq!(
+            unquoted.board_electrical_sha256,
+            numeric.board_electrical_sha256
+        );
+    }
+
+    #[test]
+    fn modern_net_inventory_includes_routing_zones_and_connected_graphics() {
+        let name_only = modern_board();
+        for connected in [
+            r#"(segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (net "EVIL"))"#,
+            r#"(arc (start 0 0) (mid 0.5 0.5) (end 1 0) (width 0.2) (layer "F.Cu") (net "EVIL"))"#,
+            r#"(via (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net "EVIL"))"#,
+            r#"(zone (net "EVIL") (layer "F.Cu") (hatch edge 0.5))"#,
+            r#"(gr_line (start 0 0) (end 1 0) (stroke (width 0.2) (type default)) (layer "F.Cu") (net "EVIL"))"#,
+            r#"(gr_ellipse (center 0 0) (radius 1 0.5) (stroke (width 0.2) (type default)) (layer "F.Cu") (net "EVIL"))"#,
+            r#"(gr_ellipse_arc (center 0 0) (radius 1 0.5) (start_angle 0) (end_angle 90) (stroke (width 0.2) (type default)) (layer "F.Cu") (net "EVIL"))"#,
+        ] {
+            let with_extra = append_board_item(&name_only, connected);
+            let report = verify(&with_extra);
+            assert!(report.findings.iter().any(|finding| {
+                finding.code == "extra_net" && finding.net.as_deref() == Some("EVIL")
+            }));
+        }
+
+        let unknown = format!(
+            "{} (unknown (net \"SIG\")))",
+            name_only.strip_suffix(')').unwrap()
+        );
+        assert!(
+            verify_circuit_kicad_board_binding(
+                SPEC,
+                SCHEMATIC,
+                &unknown,
+                &ElectricalPolicy::default(),
+            )
+            .unwrap_err()
+            .contains("unsupported unknown context")
+        );
+    }
+
+    #[test]
+    fn modern_empty_route_nets_are_implicit_net_zero_only() {
+        let name_only = modern_board();
+        let expected = verify(&name_only);
+        for unconnected in [
+            r#"(segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (net ""))"#,
+            r#"(arc (start 0 0) (mid 0.5 0.5) (end 1 0) (width 0.2) (layer "F.Cu") (net ""))"#,
+            r#"(via (at 0 0) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net ""))"#,
+        ] {
+            let report = verify(&append_board_item(&name_only, unconnected));
+            assert!(report.approved, "{unconnected}: {:?}", report.findings);
+            assert_eq!(
+                report.board_electrical_sha256,
+                expected.board_electrical_sha256
+            );
+        }
+
+        for invalid in [
+            r#"(segment (start 0 0) (end 1 0) (width 0.2) (layer "F.Cu") (net " "))"#,
+            r#"(zone (net "") (layer "F.Cu") (hatch edge 0.5))"#,
+            r#"(gr_line (start 0 0) (end 1 0) (stroke (width 0.2) (type default)) (layer "F.Cu") (net ""))"#,
+        ] {
+            assert!(
+                binding_error(&append_board_item(&name_only, invalid)).contains("non-empty"),
+                "{invalid}"
+            );
+        }
+        let empty_pad = name_only.replacen("(net \"SIG\")", "(net \"\")", 1);
+        assert!(binding_error(&empty_pad).contains("non-empty"));
+    }
+
+    #[test]
+    fn net_fields_require_their_exact_direct_board_context() {
+        let name_only = modern_board();
+        for (attack, context) in [
+            (
+                r#"(unknown (segment (start 0 0) (end 1 0) (net "SIG")))"#,
+                "unsupported segment context",
+            ),
+            (
+                r#"(pad "1" smd rect (size 1 1) (layers "F.Cu") (net "SIG"))"#,
+                "unsupported pad context",
+            ),
+            (
+                r#"(fp_line (start 0 0) (end 1 0) (layer "F.Cu") (net "SIG"))"#,
+                "unsupported fp_line context",
+            ),
+            (
+                r#"(unknown (gr_poly (pts (xy 0 0) (xy 1 0) (xy 0 1)) (net "SIG")))"#,
+                "unsupported gr_poly context",
+            ),
+            (
+                r#"(footprint "nested" (gr_line (start 0 0) (end 1 0) (net "SIG")))"#,
+                "unsupported gr_line context",
+            ),
+            (
+                r#"(gr_bbox (start 0 0) (end 1 0) (net "SIG"))"#,
+                "unsupported gr_bbox context",
+            ),
+            (
+                r#"(gr_vector (start 0 0) (end 1 0) (net "SIG"))"#,
+                "unsupported gr_vector context",
+            ),
+            (
+                r#"(segment (net "SIG") (net "SIG"))"#,
+                "net fields must not be repeated",
+            ),
+        ] {
+            let error = binding_error(&append_board_item(&name_only, attack));
+            assert!(error.contains(context), "{attack}: {error}");
+        }
+
+        for footprint_graphic in [
+            r#"(fp_line (start 0 0) (end 1 0) (layer "F.Cu") (net "EVIL"))"#,
+            r#"(fp_ellipse (center 0 0) (radius 1 0.5) (layer "F.Cu") (net "EVIL"))"#,
+            r#"(fp_ellipse_arc (center 0 0) (radius 1 0.5) (start_angle 0) (end_angle 90) (layer "F.Cu") (net "EVIL"))"#,
+        ] {
+            let with_graphic = name_only.replacen(
+                r#"(fp_text reference "R1""#,
+                &format!("{footprint_graphic}\n        (fp_text reference \"R1\""),
+                1,
+            );
+            let report = verify(&with_graphic);
+            assert!(report.findings.iter().any(|finding| {
+                finding.code == "extra_net" && finding.net.as_deref() == Some("EVIL")
+            }));
+        }
+    }
+
+    #[test]
+    fn legacy_zone_net_name_is_exact_and_modern_rejects_it() {
+        let expected_digest = verify(BOARD).board_electrical_sha256;
+        for name in [r#""SIG""#, "SIG"] {
+            let zone = format!(r#"(zone (net 1) (net_name {name}) (layer "F.Cu"))"#);
+            let report = verify(&append_board_item(BOARD, &zone));
+            assert!(report.approved, "{name}: {:?}", report.findings);
+            assert_eq!(report.board_electrical_sha256, expected_digest);
+        }
+
+        let numeric_only = verify(&append_board_item(
+            BOARD,
+            r#"(zone (net 1) (layer "F.Cu"))"#,
+        ));
+        assert!(numeric_only.approved, "{:?}", numeric_only.findings);
+
+        for (zone, message) in [
+            (
+                r#"(zone (net 1) (net_name "EVIL") (layer "F.Cu"))"#,
+                "does not match declared name",
+            ),
+            (
+                r#"(zone (net_name "SIG") (layer "F.Cu"))"#,
+                "requires a net field",
+            ),
+            (
+                r#"(zone (net 1) (net_name "SIG") (net_name "SIG") (layer "F.Cu"))"#,
+                "net_name fields must not be repeated",
+            ),
+            (
+                r#"(zone (net 1) (net_name "SIG" extra) (layer "F.Cu"))"#,
+                "must contain exactly one name",
+            ),
+            (
+                r#"(zone (net 1) (net_name (name "SIG")) (layer "F.Cu"))"#,
+                "requires a scalar net_name",
+            ),
+        ] {
+            let error = binding_error(&append_board_item(BOARD, zone));
+            assert!(error.contains(message), "{zone}: {error}");
+        }
+
+        let modern = modern_board();
+        let obsolete = append_board_item(
+            &modern,
+            r#"(zone (net "SIG") (net_name "EVIL") (layer "F.Cu"))"#,
+        );
+        assert!(binding_error(&obsolete).contains("must not contain a legacy net_name field"));
+
+        let outside_zone = append_board_item(&modern, r#"(unknown (net_name "SIG"))"#);
+        assert!(binding_error(&outside_zone).contains("unsupported unknown context"));
+
+        let quoted_keyword = append_board_item(&modern, r#"(unknown ("net_name" "SIG"))"#);
+        assert!(binding_error(&quoted_keyword).contains("keyword must be unquoted"));
     }
 
     #[test]

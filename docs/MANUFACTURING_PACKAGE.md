@@ -279,6 +279,73 @@ deterministic pipeline or its schemas, expose MCP or Action integration, submit
 to a factory, authenticate a factory receipt, authorize procurement/fabrication,
 or place an order.
 
+## Circuit-handoff composition (v1.457)
+
+Version 1.457 composes that standalone replay with exact circuit-handoff and
+board-binding evidence through the existing `replay-circuit-handoff-bundle`
+command:
+
+```sh
+pcbex-agent replay-circuit-handoff-bundle circuit-handoff.zip \
+  --pcbex pcbex \
+  --kicad-board board.kicad_pcb \
+  --board-binding-report circuit-kicad-board-binding.json \
+  --require-board-binding-approved \
+  --manufacturing-package manufacturing/manufacturing.zip \
+  --manufacturing-kicad-cli kicad-cli \
+  --manufacturing-kicad-project board.kicad_pro \
+  --manufacturing-kicad-rules board.kicad_dru \
+  --manufacturing-fab-profile profiles/acme-dfm.json \
+  --timeout-seconds 120 \
+  > circuit-manufacturing-replay.json
+
+pcbex-agent circuit-handoff-bundle-manufacturing-replay-result-schema \
+  --output circuit-manufacturing-replay.schema.json
+```
+
+Manufacturing replay is legal only with the complete v5 board-binding pair,
+`--kicad-board` and `--board-binding-report`, plus the retained package. There
+is intentionally no second manufacturing board argument. The adapter captures
+one raw board and uses those exact bytes for both the existing geometry-free
+electrical binding and the package producer. The board byte count and SHA-256
+in the nested standalone replay must equal the v5 board identity, so even a
+geometry-only raw-board change fails the composition when its electrical
+digest happens to remain equal.
+
+The unchanged handoff ZIP first reproduces exactly, followed by any requested
+native ERC, AI quorum, or catalog assertions and the exact board-binding
+report. If `--require-board-binding-approved` is set, an exact rejected report
+stops before manufacturing; otherwise the rejected decision remains visible
+evidence. The existing manufacturing producer then runs privately with the
+same captured board, explicit project/rules inputs, and one mutually exclusive
+profile at most: a built-in DFM profile, external DFM profile, or physical
+profile. A profile is optional. Its fresh ZIP must equal the retained ZIP
+byte-for-byte.
+
+One outer monotonic deadline governs every capture, native child, cross-binding
+check, reread, result construction, and cleanup. The nested manufacturing
+replay receives a strictly shorter remaining deadline. Before success, the
+composition completes the package replay's staged-source checks and one final
+union reread of the caller-visible handoff, optional assertion, binding, and
+manufacturing sources. Any source mutation or timeout fails without a partial
+v6 result.
+
+The closed path-free result has schema version 6 and exact verification scope
+`deterministic-electrical-handoff-chain-manufacturing-package-replay-v6`. It
+retains the complete closed `manufacturing-package-fresh-replay-v1` result and
+states that package replay and shared-board identity matching completed.
+Omitting every manufacturing option preserves exact handoff replay v1–v5
+serialization and the unchanged six-entry archive. The standalone
+`replay-manufacturing-package` API, CLI, and schema v1 are unchanged.
+
+The v6 result proves exact reproduction under caller-selected, unauthenticated
+pcbex and KiCad executables. It does not authenticate toolchain provenance,
+supplier or factory acceptance, a network request or receipt; publish or submit
+the regenerated package; establish current inventory, pricing, reservation, or
+fabrication availability; independently approve a PCB layout; authorize
+procurement, manufacturing, fabrication, deployment, or ordering; add
+MCP/Action/pipeline schema parity; or generate/build firmware.
+
 Component metadata is read from KiCad `property` fields and legacy `fp_text`
 fields. `Reference` and `Value` are required for a manufacturing row. `MPN`,
 `LCSC`, `JLCPCB`, `DigiKey`, and equivalent normalized property names are

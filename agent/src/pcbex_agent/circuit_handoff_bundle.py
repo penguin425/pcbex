@@ -39,6 +39,7 @@ from .bounded_io import (
     validate_no_clobber_path,
 )
 from .bounded_process import BoundedProcessError, run_bounded
+from . import manufacturing_replay as _manufacturing_replay
 from .catalog import (
     MAX_CATALOG_RAW_BYTES,
     CatalogError,
@@ -99,6 +100,10 @@ CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_RESULT_SCHEMA_VERSION = 5
 CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_SCOPE = (
     "deterministic-electrical-handoff-chain-board-binding-replay-v5"
 )
+CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_RESULT_SCHEMA_VERSION = 6
+CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_SCOPE = (
+    "deterministic-electrical-handoff-chain-manufacturing-package-replay-v6"
+)
 MAX_GENERATION_BUNDLE_BYTES = MAX_NATIVE_CHECK_BYTES
 MAX_CIRCUIT_SPEC_BYTES = 16 * 1024 * 1024
 MAX_SCHEMATIC_BYTES = 64 * 1024 * 1024
@@ -148,6 +153,7 @@ _WINDOWS_RESERVED_LEAF_STEMS = frozenset(
 _MAX_JSON_DEPTH = 128
 _MAX_JSON_NODES = 1_000_000
 _BOARD_BINDING_REQUIREMENT_UNSET = object()
+_MANUFACTURING_KICAD_CLI_UNSET = object()
 _GENERATION_KEYS = frozenset(
     {
         "schema_version",
@@ -2782,6 +2788,44 @@ def circuit_handoff_bundle_board_binding_replay_result_json_schema() -> dict[str
     return schema
 
 
+def circuit_handoff_bundle_manufacturing_replay_result_json_schema() -> dict[str, Any]:
+    """Return the closed v5 board-binding plus manufacturing replay schema."""
+
+    schema = copy.deepcopy(
+        circuit_handoff_bundle_board_binding_replay_result_json_schema()
+    )
+    schema["$id"] = (
+        "https://github.com/penguin425/pcbex/schemas/"
+        "circuit-generation-kicad-handoff-bundle-manufacturing-package-"
+        "replay-result-v6.json"
+    )
+    schema["title"] = (
+        "pcbex circuit handoff bundle manufacturing-package replay result"
+    )
+    schema["required"].append("manufacturing_package")
+    properties = schema["properties"]
+    properties["schema_version"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_RESULT_SCHEMA_VERSION
+    }
+    properties["verification_scope"] = {
+        "const": CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_SCOPE
+    }
+    validation = properties["validation"]
+    for replay_flag in (
+        "manufacturing_package_replayed",
+        "manufacturing_board_identity_matched",
+    ):
+        validation["required"].append(replay_flag)
+        validation["properties"][replay_flag] = {"const": True}
+
+    standalone = _manufacturing_replay.manufacturing_package_replay_result_json_schema()
+    properties["manufacturing_package"] = {
+        key: copy.deepcopy(standalone[key])
+        for key in ("type", "additionalProperties", "required", "properties")
+    }
+    return schema
+
+
 def _preflight_archive_directory(archive_raw: bytes) -> None:
     """Bound the central directory before ``zipfile`` allocates its records."""
 
@@ -3507,6 +3551,22 @@ def _circuit_handoff_board_binding_replay_result(
     return result
 
 
+def _circuit_handoff_manufacturing_replay_result(
+    board_binding_result: Mapping[str, Any],
+    *,
+    manufacturing_package: Mapping[str, Any],
+) -> dict[str, Any]:
+    result = copy.deepcopy(dict(board_binding_result))
+    result["schema_version"] = (
+        CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_RESULT_SCHEMA_VERSION
+    )
+    result["verification_scope"] = CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_SCOPE
+    result["validation"]["manufacturing_package_replayed"] = True
+    result["validation"]["manufacturing_board_identity_matched"] = True
+    result["manufacturing_package"] = copy.deepcopy(dict(manufacturing_package))
+    return result
+
+
 def replay_circuit_handoff_bundle(
     bundle: str | os.PathLike[str],
     pcbex: str | Sequence[str],
@@ -3522,6 +3582,15 @@ def replay_circuit_handoff_bundle(
     retained_board_binding_report: str | os.PathLike[str] | None = None,
     board_binding_policy: str | os.PathLike[str] | None = None,
     require_board_binding_approved: bool | object = _BOARD_BINDING_REQUIREMENT_UNSET,
+    retained_manufacturing_package: str | os.PathLike[str] | None = None,
+    manufacturing_kicad_cli: str | os.PathLike[str] | object = (
+        _MANUFACTURING_KICAD_CLI_UNSET
+    ),
+    manufacturing_kicad_project: str | os.PathLike[str] | None = None,
+    manufacturing_kicad_rules: str | os.PathLike[str] | None = None,
+    manufacturing_fab: str | None = None,
+    manufacturing_fab_profile: str | os.PathLike[str] | None = None,
+    manufacturing_physical_profile: str | os.PathLike[str] | None = None,
     retained_ai_quorum_report: str | os.PathLike[str] | None = None,
     ai_review_request: str | os.PathLike[str] | None = None,
     ai_policy_pack: str | os.PathLike[str] | None = None,
@@ -3580,6 +3649,50 @@ def replay_circuit_handoff_bundle(
         kicad_board is None or retained_board_binding_report is None
     ):
         raise _fail("board binding replay inputs are incomplete")
+    manufacturing_requested = any(
+        source is not None
+        for source in (
+            retained_manufacturing_package,
+            manufacturing_kicad_project,
+            manufacturing_kicad_rules,
+            manufacturing_fab,
+            manufacturing_fab_profile,
+            manufacturing_physical_profile,
+        )
+    ) or manufacturing_kicad_cli is not _MANUFACTURING_KICAD_CLI_UNSET
+    if manufacturing_requested and (
+        retained_manufacturing_package is None or not board_binding_requested
+    ):
+        raise _fail(
+            "manufacturing replay requires a retained package and complete "
+            "board binding replay inputs"
+        )
+    if (
+        sum(
+            selection is not None
+            for selection in (
+                manufacturing_fab,
+                manufacturing_fab_profile,
+                manufacturing_physical_profile,
+            )
+        )
+        > 1
+    ):
+        raise _fail("manufacturing profile selections are mutually exclusive")
+    manufacturing_kicad_cli_argument: str | None = None
+    if manufacturing_requested:
+        effective_manufacturing_kicad_cli = (
+            "kicad-cli"
+            if manufacturing_kicad_cli is _MANUFACTURING_KICAD_CLI_UNSET
+            else manufacturing_kicad_cli
+        )
+        try:
+            manufacturing_kicad_cli_argument = _manufacturing_replay._argument(
+                effective_manufacturing_kicad_cli,
+                "manufacturing kicad-cli argument",
+            )
+        except _manufacturing_replay.ManufacturingReplayError:
+            raise _fail("manufacturing kicad-cli argument is invalid") from None
     catalog_requested = any(
         source is not None
         for source in (
@@ -3640,6 +3753,77 @@ def replay_circuit_handoff_bundle(
             ),
             2 if minimum_distinct_ai_models is None else minimum_distinct_ai_models,
         )
+    if manufacturing_requested:
+        # The composed result promises that every caller source observed before
+        # a child runs is unchanged after the final manufacturing child. Freeze
+        # each upstream PathLike once so a stateful __fspath__ implementation
+        # cannot redirect that final read to a different file.
+        try:
+            bundle = _manufacturing_replay._freeze_path(
+                bundle, "circuit handoff archive source"
+            )
+            if catalog_generation_provenance is not None:
+                catalog_generation_provenance = _manufacturing_replay._freeze_path(
+                    catalog_generation_provenance,
+                    "catalog generation provenance source",
+                )
+            if catalog_fetch_receipt is not None:
+                catalog_fetch_receipt = _manufacturing_replay._freeze_path(
+                    catalog_fetch_receipt, "catalog fetch receipt source"
+                )
+            if catalog_snapshot is not None:
+                catalog_snapshot = _manufacturing_replay._freeze_path(
+                    catalog_snapshot, "catalog snapshot source"
+                )
+            if retained_native_kicad_erc_report is not None:
+                retained_native_kicad_erc_report = (
+                    _manufacturing_replay._freeze_path(
+                        retained_native_kicad_erc_report,
+                        "retained native KiCad ERC report source",
+                    )
+                )
+            if native_kicad_erc_warning_policy is not None:
+                native_kicad_erc_warning_policy = (
+                    _manufacturing_replay._freeze_path(
+                        native_kicad_erc_warning_policy,
+                        "native KiCad ERC warning policy source",
+                    )
+                )
+            assert kicad_board is not None
+            assert retained_board_binding_report is not None
+            kicad_board = _manufacturing_replay._freeze_path(
+                kicad_board, "manufacturing board source"
+            )
+            retained_board_binding_report = _manufacturing_replay._freeze_path(
+                retained_board_binding_report,
+                "retained board binding report source",
+            )
+            if board_binding_policy is not None:
+                board_binding_policy = _manufacturing_replay._freeze_path(
+                    board_binding_policy, "board binding policy source"
+                )
+            if retained_ai_quorum_report is not None:
+                retained_ai_quorum_report = _manufacturing_replay._freeze_path(
+                    retained_ai_quorum_report, "retained AI quorum report source"
+                )
+            if ai_review_request is not None:
+                ai_review_request = _manufacturing_replay._freeze_path(
+                    ai_review_request, "AI review request source"
+                )
+            if ai_policy_pack is not None:
+                ai_policy_pack = _manufacturing_replay._freeze_path(
+                    ai_policy_pack, "AI policy pack source"
+                )
+            approval_paths = tuple(
+                _manufacturing_replay._freeze_path(path, "AI approval source")
+                for path in approval_paths
+            )
+            response_paths = tuple(
+                _manufacturing_replay._freeze_path(path, "AI response source")
+                for path in response_paths
+            )
+        except _manufacturing_replay.ManufacturingReplayError:
+            raise _fail("manufacturing replay source path is invalid") from None
     try:
         command = _normalize_command(pcbex, label="pcbex command")
         archive_raw = read_bytes(bundle, max_bytes=MAX_HANDOFF_ARCHIVE_BYTES)
@@ -3786,6 +3970,32 @@ def replay_circuit_handoff_bundle(
             )
             _remaining(deadline, _clock)
 
+    manufacturing_capture: (
+        _manufacturing_replay._ManufacturingReplayCapture | None
+    ) = None
+    if manufacturing_requested:
+        assert kicad_board is not None
+        assert board_raw is not None
+        assert retained_manufacturing_package is not None
+        try:
+            manufacturing_capture = (
+                _manufacturing_replay._capture_manufacturing_replay_inputs(
+                    kicad_board,
+                    retained_manufacturing_package,
+                    kicad_project=manufacturing_kicad_project,
+                    kicad_rules=manufacturing_kicad_rules,
+                    fab=manufacturing_fab,
+                    fab_profile=manufacturing_fab_profile,
+                    physical_profile=manufacturing_physical_profile,
+                    deadline=deadline,
+                    clock=_clock,
+                    board_raw=board_raw,
+                )
+            )
+        except _manufacturing_replay.ManufacturingReplayError:
+            raise _fail("manufacturing replay inputs are invalid") from None
+        _remaining(deadline, _clock)
+
     ai_report_raw: bytes | None = None
     ai_request_raw: bytes | None = None
     ai_policy_pack_raw: bytes | None = None
@@ -3925,8 +4135,9 @@ def replay_circuit_handoff_bundle(
             clock=_clock,
         )
         _remaining(deadline, _clock)
-        # This is intentionally the last source read before the result is
-        # composed.  It catches mutations by every earlier optional child.
+        # This is the final board-source read before the optional manufacturing
+        # stage. It catches mutations by every earlier optional child; the v6
+        # composition performs one more complete caller-source read afterward.
         for path, expected_raw, maximum, label in board_caller_sources:
             try:
                 observed_raw = read_bytes(path, max_bytes=maximum)
@@ -3973,26 +4184,135 @@ def replay_circuit_handoff_bundle(
             raise _fail("board binding replay approval was not granted")
         return board_binding
 
+    def finish_result(
+        result: dict[str, Any],
+        board_binding: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if not manufacturing_requested:
+            return result
+        assert manufacturing_capture is not None
+        assert manufacturing_kicad_cli_argument is not None
+        if board_binding is None or "board_binding" not in result:
+            raise _fail("manufacturing replay has no reproduced board binding")
+
+        outer_remaining = _remaining(deadline, _clock)
+        final_reread_reserve = min(15.0, outer_remaining / 2.0)
+        manufacturing_deadline = deadline - final_reread_reserve
+        try:
+            if manufacturing_deadline <= float(_clock()):
+                raise _fail("manufacturing replay has no execution budget")
+        except (TypeError, ValueError, OverflowError):
+            raise _fail("aggregate deadline clock is invalid") from None
+        try:
+            manufacturing_package = (
+                _manufacturing_replay._replay_captured_manufacturing_package(
+                    manufacturing_capture,
+                    command,
+                    manufacturing_kicad_cli_argument,
+                    deadline=manufacturing_deadline,
+                    clock=_clock,
+                )
+            )
+        except _manufacturing_replay.ManufacturingReplayError as error:
+            raise _fail(f"manufacturing package replay failed: {error}") from None
+        _remaining(deadline, _clock)
+
+        captured_board_identity = manufacturing_capture.board_identity
+        manufacturing_board = manufacturing_package.get("board")
+        board_binding_board = board_binding.get("board")
+        if (
+            not isinstance(manufacturing_board, Mapping)
+            or not isinstance(board_binding_board, Mapping)
+            or manufacturing_board.get("bytes") != captured_board_identity["bytes"]
+            or manufacturing_board.get("sha256")
+            != captured_board_identity["sha256"]
+            or board_binding_board.get("bytes") != captured_board_identity["bytes"]
+            or board_binding_board.get("sha256")
+            != captured_board_identity["sha256"]
+        ):
+            raise _fail("manufacturing replay board identity is inconsistent")
+
+        final_sources: list[tuple[Any, bytes, int, str]] = [
+            (
+                bundle,
+                archive_raw,
+                MAX_HANDOFF_ARCHIVE_BYTES,
+                "circuit handoff archive",
+            )
+        ]
+        if native_report_raw is not None:
+            assert retained_native_kicad_erc_report is not None
+            final_sources.append(
+                (
+                    retained_native_kicad_erc_report,
+                    native_report_raw,
+                    MAX_NATIVE_KICAD_ERC_REPORT_BYTES,
+                    "retained native KiCad ERC report",
+                )
+            )
+            if native_kicad_erc_warning_policy is not None:
+                assert warning_policy_raw is not None
+                final_sources.append(
+                    (
+                        native_kicad_erc_warning_policy,
+                        warning_policy_raw,
+                        MAX_NATIVE_KICAD_ERC_WARNING_POLICY_BYTES,
+                        "native KiCad ERC warning policy",
+                    )
+                )
+        final_sources.extend(ai_caller_sources)
+        final_sources.extend(catalog_caller_sources)
+        final_sources.extend(board_caller_sources)
+        final_sources.extend(
+            source
+            for source in manufacturing_capture.caller_sources
+            if source[3] != "board"
+        )
+        for path, expected_raw, maximum, label in final_sources:
+            try:
+                observed_raw = read_bytes(path, max_bytes=maximum)
+            except BoundedIOError:
+                raise _fail(f"{label} changed during manufacturing replay") from None
+            if observed_raw != expected_raw:
+                raise _fail(f"{label} changed during manufacturing replay")
+            _remaining(deadline, _clock)
+
+        composed = _circuit_handoff_manufacturing_replay_result(
+            result,
+            manufacturing_package=manufacturing_package,
+        )
+        _remaining(deadline, _clock)
+        return composed
+
     if not ai_requested and not catalog_requested:
         board_binding = finish_board_binding()
         if board_binding is not None:
-            return _circuit_handoff_board_binding_replay_result(
-                verification,
-                catalog_input_erc_required=catalog_input_erc_required,
-                board_binding=board_binding,
-                native_kicad_erc=native_kicad_erc,
-                ai_schematic_quorum=None,
-                catalog_generation_provenance=None,
+            return finish_result(
+                _circuit_handoff_board_binding_replay_result(
+                    verification,
+                    catalog_input_erc_required=catalog_input_erc_required,
+                    board_binding=board_binding,
+                    native_kicad_erc=native_kicad_erc,
+                    ai_schematic_quorum=None,
+                    catalog_generation_provenance=None,
+                ),
+                board_binding,
             )
         if native_kicad_erc is not None:
-            return _circuit_handoff_native_erc_replay_result(
+            return finish_result(
+                _circuit_handoff_native_erc_replay_result(
+                    verification,
+                    catalog_input_erc_required=catalog_input_erc_required,
+                    native_kicad_erc=native_kicad_erc,
+                ),
+                None,
+            )
+        return finish_result(
+            _circuit_handoff_replay_result(
                 verification,
                 catalog_input_erc_required=catalog_input_erc_required,
-                native_kicad_erc=native_kicad_erc,
-            )
-        return _circuit_handoff_replay_result(
-            verification,
-            catalog_input_erc_required=catalog_input_erc_required,
+            ),
+            None,
         )
 
     ai_schematic_quorum: dict[str, Any] | None = None
@@ -4094,38 +4414,50 @@ def replay_circuit_handoff_bundle(
             _remaining(deadline, _clock)
         board_binding = finish_board_binding()
         if board_binding is not None:
-            return _circuit_handoff_board_binding_replay_result(
+            return finish_result(
+                _circuit_handoff_board_binding_replay_result(
+                    verification,
+                    catalog_input_erc_required=catalog_input_erc_required,
+                    board_binding=board_binding,
+                    native_kicad_erc=native_kicad_erc,
+                    ai_schematic_quorum=ai_schematic_quorum,
+                    catalog_generation_provenance=catalog_evidence,
+                ),
+                board_binding,
+            )
+        return finish_result(
+            _circuit_handoff_catalog_provenance_replay_result(
                 verification,
                 catalog_input_erc_required=catalog_input_erc_required,
-                board_binding=board_binding,
+                catalog_generation_provenance=catalog_evidence,
                 native_kicad_erc=native_kicad_erc,
                 ai_schematic_quorum=ai_schematic_quorum,
-                catalog_generation_provenance=catalog_evidence,
-            )
-        return _circuit_handoff_catalog_provenance_replay_result(
-            verification,
-            catalog_input_erc_required=catalog_input_erc_required,
-            catalog_generation_provenance=catalog_evidence,
-            native_kicad_erc=native_kicad_erc,
-            ai_schematic_quorum=ai_schematic_quorum,
+            ),
+            None,
         )
 
     assert ai_schematic_quorum is not None
     board_binding = finish_board_binding()
     if board_binding is not None:
-        return _circuit_handoff_board_binding_replay_result(
+        return finish_result(
+            _circuit_handoff_board_binding_replay_result(
+                verification,
+                catalog_input_erc_required=catalog_input_erc_required,
+                board_binding=board_binding,
+                native_kicad_erc=native_kicad_erc,
+                ai_schematic_quorum=ai_schematic_quorum,
+                catalog_generation_provenance=None,
+            ),
+            board_binding,
+        )
+    return finish_result(
+        _circuit_handoff_ai_quorum_replay_result(
             verification,
             catalog_input_erc_required=catalog_input_erc_required,
-            board_binding=board_binding,
-            native_kicad_erc=native_kicad_erc,
             ai_schematic_quorum=ai_schematic_quorum,
-            catalog_generation_provenance=None,
-        )
-    return _circuit_handoff_ai_quorum_replay_result(
-        verification,
-        catalog_input_erc_required=catalog_input_erc_required,
-        ai_schematic_quorum=ai_schematic_quorum,
-        native_kicad_erc=native_kicad_erc,
+            native_kicad_erc=native_kicad_erc,
+        ),
+        None,
     )
 
 
@@ -4387,6 +4719,8 @@ __all__ = [
     "CIRCUIT_HANDOFF_BUNDLE_CATALOG_PROVENANCE_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_BOARD_BINDING_REPLAY_SCOPE",
+    "CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_RESULT_SCHEMA_VERSION",
+    "CIRCUIT_HANDOFF_BUNDLE_MANUFACTURING_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_RESULT_SCHEMA_VERSION",
     "CIRCUIT_HANDOFF_BUNDLE_NATIVE_ERC_REPLAY_SCOPE",
     "CIRCUIT_HANDOFF_BUNDLE_REPLAY_RESULT_SCHEMA_VERSION",
@@ -4398,6 +4732,7 @@ __all__ = [
     "build_circuit_handoff_archive",
     "circuit_handoff_bundle_ai_quorum_replay_result_json_schema",
     "circuit_handoff_bundle_board_binding_replay_result_json_schema",
+    "circuit_handoff_bundle_manufacturing_replay_result_json_schema",
     "circuit_handoff_bundle_catalog_provenance_replay_result_json_schema",
     "circuit_handoff_bundle_json_schema",
     "circuit_handoff_bundle_native_erc_replay_result_json_schema",

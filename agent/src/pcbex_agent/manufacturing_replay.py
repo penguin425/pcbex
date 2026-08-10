@@ -11,6 +11,7 @@ temporary paths, subprocess output, and artifact payloads are never exposed.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 import hashlib
 import math
 import os
@@ -55,6 +56,37 @@ _BUILTIN_PROFILE_ID = re.compile(r"^[a-z0-9][a-z0-9.-]{0,127}$")
 
 class ManufacturingReplayError(ValueError):
     """A stable, path-free failure from manufacturing-package replay."""
+
+
+@dataclass(frozen=True)
+class _ManufacturingReplayCapture:
+    """One immutable caller-input snapshot shared by composed replay stages."""
+
+    board_source: str
+    retained_package_source: str
+    project_source: str | None
+    rules_source: str | None
+    fab_profile_source: str | None
+    physical_profile_source: str | None
+    board_name: str
+    project_name: str
+    rules_name: str
+    fab_profile_name: str | None
+    physical_profile_name: str | None
+    fab: str | None
+    board_raw: bytes
+    retained_raw: bytes
+    project_raw: bytes | None
+    rules_raw: bytes | None
+    fab_profile_raw: bytes | None
+    physical_profile_raw: bytes | None
+    board_identity: dict[str, Any]
+    retained_identity: dict[str, Any]
+    project_identity: dict[str, Any] | None
+    rules_identity: dict[str, Any] | None
+    fab_profile_identity: dict[str, Any] | None
+    physical_profile_identity: dict[str, Any] | None
+    caller_sources: tuple[tuple[str, bytes, int, str], ...]
 
 
 def _fail(message: str) -> ManufacturingReplayError:
@@ -425,6 +457,358 @@ def manufacturing_package_replay_result_json_schema() -> dict[str, Any]:
     }
 
 
+def _capture_manufacturing_replay_inputs(
+    board: str | os.PathLike[str],
+    retained_package: str | os.PathLike[str],
+    *,
+    kicad_project: str | os.PathLike[str] | None,
+    kicad_rules: str | os.PathLike[str] | None,
+    fab: str | None,
+    fab_profile: str | os.PathLike[str] | None,
+    physical_profile: str | os.PathLike[str] | None,
+    deadline: float,
+    clock: Callable[[], float],
+    board_raw: bytes | None = None,
+) -> _ManufacturingReplayCapture:
+    """Capture all manufacturing inputs before any composed child can run."""
+
+    selections = sum(
+        source is not None for source in (fab, fab_profile, physical_profile)
+    )
+    if selections > 1:
+        raise _fail("manufacturing profile selections are mutually exclusive")
+    if fab is not None:
+        fab = _builtin_profile_id(fab)
+
+    board_source = _freeze_path(board, "board source")
+    retained_package_source = _freeze_path(
+        retained_package, "retained package source"
+    )
+    project_source = (
+        None
+        if kicad_project is None
+        else _freeze_path(kicad_project, "KiCad project source")
+    )
+    rules_source = (
+        None
+        if kicad_rules is None
+        else _freeze_path(kicad_rules, "KiCad rules source")
+    )
+    fab_profile_source = (
+        None
+        if fab_profile is None
+        else _freeze_path(fab_profile, "DFM profile source")
+    )
+    physical_profile_source = (
+        None
+        if physical_profile is None
+        else _freeze_path(physical_profile, "physical profile source")
+    )
+    board_name = _board_leaf(board_source)
+    project_name = str(Path(board_name).with_suffix(".kicad_pro"))
+    rules_name = str(Path(board_name).with_suffix(".kicad_dru"))
+    fab_profile_name = (
+        None
+        if fab_profile_source is None
+        else _source_leaf(fab_profile_source, "DFM profile")
+    )
+    physical_profile_name = (
+        None
+        if physical_profile_source is None
+        else _source_leaf(physical_profile_source, "physical profile")
+    )
+    _remaining(deadline, clock)
+
+    sources: list[tuple[str, bytes, int, str]] = []
+    if board_raw is None:
+        captured_board_raw = _read_source(
+            board_source, MAXIMUM_BOARD_BYTES, "board"
+        )
+    elif (
+        not isinstance(board_raw, bytes)
+        or not board_raw
+        or len(board_raw) > MAXIMUM_BOARD_BYTES
+    ):
+        raise _fail("captured board source is invalid")
+    else:
+        captured_board_raw = board_raw
+    board_identity = _identity(captured_board_raw)
+    sources.append(
+        (board_source, captured_board_raw, MAXIMUM_BOARD_BYTES, "board")
+    )
+    _remaining(deadline, clock)
+
+    retained_raw = _read_source(
+        retained_package_source, MAXIMUM_PACKAGE_BYTES, "retained package"
+    )
+    retained_identity = _identity(retained_raw)
+    sources.append(
+        (
+            retained_package_source,
+            retained_raw,
+            MAXIMUM_PACKAGE_BYTES,
+            "retained package",
+        )
+    )
+    _remaining(deadline, clock)
+
+    optional_sources = (
+        (project_source, MAXIMUM_PROJECT_BYTES, "KiCad project"),
+        (rules_source, MAXIMUM_RULES_BYTES, "KiCad rules"),
+        (fab_profile_source, MAXIMUM_PROFILE_BYTES, "DFM profile"),
+        (physical_profile_source, MAXIMUM_PROFILE_BYTES, "physical profile"),
+    )
+    captured_optional: list[bytes | None] = []
+    captured_optional_identities: list[dict[str, Any] | None] = []
+    for path, maximum, label in optional_sources:
+        if path is None:
+            captured_optional.append(None)
+            captured_optional_identities.append(None)
+            continue
+        raw = _read_source(path, maximum, label)
+        captured_optional.append(raw)
+        captured_optional_identities.append(_identity(raw))
+        sources.append((path, raw, maximum, label))
+        _remaining(deadline, clock)
+    (
+        project_raw,
+        rules_raw,
+        fab_profile_raw,
+        physical_profile_raw,
+    ) = captured_optional
+    (
+        project_identity,
+        rules_identity,
+        fab_profile_identity,
+        physical_profile_identity,
+    ) = captured_optional_identities
+    if (
+        sum(len(raw) for _path, raw, _maximum, _label in sources)
+        > MAXIMUM_TOTAL_INPUT_BYTES
+    ):
+        raise _fail("manufacturing replay inputs exceed their aggregate bound")
+
+    return _ManufacturingReplayCapture(
+        board_source=board_source,
+        retained_package_source=retained_package_source,
+        project_source=project_source,
+        rules_source=rules_source,
+        fab_profile_source=fab_profile_source,
+        physical_profile_source=physical_profile_source,
+        board_name=board_name,
+        project_name=project_name,
+        rules_name=rules_name,
+        fab_profile_name=fab_profile_name,
+        physical_profile_name=physical_profile_name,
+        fab=fab,
+        board_raw=captured_board_raw,
+        retained_raw=retained_raw,
+        project_raw=project_raw,
+        rules_raw=rules_raw,
+        fab_profile_raw=fab_profile_raw,
+        physical_profile_raw=physical_profile_raw,
+        board_identity=board_identity,
+        retained_identity=retained_identity,
+        project_identity=project_identity,
+        rules_identity=rules_identity,
+        fab_profile_identity=fab_profile_identity,
+        physical_profile_identity=physical_profile_identity,
+        caller_sources=tuple(sources),
+    )
+
+
+def _replay_captured_manufacturing_package(
+    capture: _ManufacturingReplayCapture,
+    command: Sequence[str],
+    kicad_cli_argument: str,
+    *,
+    deadline: float,
+    clock: Callable[[], float],
+) -> dict[str, Any]:
+    """Replay one immutable capture under the caller's absolute deadline."""
+
+    staged: list[tuple[Path, bytes, int]] = []
+    fresh_raw: bytes | None = None
+    fresh_identity: dict[str, Any] | None = None
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="pcbex-manufacturing-replay-",
+            dir=_trusted_temporary_root(),
+        ) as directory:
+            root = Path(directory)
+            board_path = root / capture.board_name
+            output_dir = root / "fresh-manufacturing"
+            atomic_write_no_clobber(
+                board_path, capture.board_raw, max_bytes=MAXIMUM_BOARD_BYTES
+            )
+            staged.append((board_path, capture.board_raw, MAXIMUM_BOARD_BYTES))
+            _remaining(deadline, clock)
+            if capture.project_raw is not None:
+                project_path = root / capture.project_name
+                atomic_write_no_clobber(
+                    project_path,
+                    capture.project_raw,
+                    max_bytes=MAXIMUM_PROJECT_BYTES,
+                )
+                staged.append(
+                    (project_path, capture.project_raw, MAXIMUM_PROJECT_BYTES)
+                )
+                _remaining(deadline, clock)
+            if capture.rules_raw is not None:
+                rules_path = root / capture.rules_name
+                atomic_write_no_clobber(
+                    rules_path, capture.rules_raw, max_bytes=MAXIMUM_RULES_BYTES
+                )
+                staged.append((rules_path, capture.rules_raw, MAXIMUM_RULES_BYTES))
+                _remaining(deadline, clock)
+
+            profile_arguments: list[str] = []
+            if capture.fab is not None:
+                profile_arguments.append(f"--fab={capture.fab}")
+            elif capture.fab_profile_raw is not None:
+                assert capture.fab_profile_name is not None
+                profile_directory = root / "profile-input"
+                profile_directory.mkdir(mode=0o700)
+                profile_path = profile_directory / capture.fab_profile_name
+                atomic_write_no_clobber(
+                    profile_path,
+                    capture.fab_profile_raw,
+                    max_bytes=MAXIMUM_PROFILE_BYTES,
+                )
+                staged.append(
+                    (profile_path, capture.fab_profile_raw, MAXIMUM_PROFILE_BYTES)
+                )
+                profile_arguments.append(f"--fab-profile={profile_path}")
+                _remaining(deadline, clock)
+            elif capture.physical_profile_raw is not None:
+                assert capture.physical_profile_name is not None
+                profile_directory = root / "profile-input"
+                profile_directory.mkdir(mode=0o700)
+                profile_path = profile_directory / capture.physical_profile_name
+                atomic_write_no_clobber(
+                    profile_path,
+                    capture.physical_profile_raw,
+                    max_bytes=MAXIMUM_PROFILE_BYTES,
+                )
+                staged.append(
+                    (
+                        profile_path,
+                        capture.physical_profile_raw,
+                        MAXIMUM_PROFILE_BYTES,
+                    )
+                )
+                profile_arguments.append(f"--physical-profile={profile_path}")
+                _remaining(deadline, clock)
+
+            outer_remaining = _remaining(deadline, clock)
+            cleanup_and_reread_reserve = min(15.0, outer_remaining / 2.0)
+            process_timeout = outer_remaining - cleanup_and_reread_reserve
+            if not math.isfinite(process_timeout) or process_timeout <= 0:
+                raise _fail("manufacturing child has no execution budget")
+            argv = _validate_final_argv(
+                [
+                    *command,
+                    "fabricate",
+                    str(board_path),
+                    "--outer-process-tree-supervised",
+                    f"--output-dir={output_dir}",
+                    f"--kicad-cli={kicad_cli_argument}",
+                    f"--timeout-seconds={process_timeout:.17g}",
+                    *profile_arguments,
+                ]
+            )
+            try:
+                completed = run_bounded(
+                    argv,
+                    timeout_seconds=outer_remaining,
+                    max_stdout_bytes=MAXIMUM_CHILD_STDOUT_BYTES,
+                    max_stderr_bytes=MAXIMUM_CHILD_STDERR_BYTES,
+                )
+            except BoundedProcessError:
+                raise _fail("manufacturing child process failed") from None
+            if completed.returncode != 0:
+                raise _fail("manufacturing child rejected the replay")
+            _remaining(deadline, clock)
+
+            fresh_path = output_dir / "manufacturing.zip"
+            fresh_raw = _read_source(
+                fresh_path, MAXIMUM_PACKAGE_BYTES, "fresh package"
+            )
+            if fresh_raw != capture.retained_raw:
+                raise _fail(
+                    "fresh manufacturing replay did not reproduce the retained package"
+                )
+            fresh_identity = _identity(fresh_raw)
+            if fresh_identity != capture.retained_identity:
+                raise _fail("fresh manufacturing package identity is inconsistent")
+            _remaining(deadline, clock)
+
+            for path, expected, maximum in staged:
+                try:
+                    observed = read_bytes(path, max_bytes=maximum)
+                except (BoundedIOError, OSError, TypeError, ValueError):
+                    raise _fail(
+                        "staged manufacturing input changed during replay"
+                    ) from None
+                if observed != expected:
+                    raise _fail("staged manufacturing input changed during replay")
+                _remaining(deadline, clock)
+            try:
+                fresh_after = read_bytes(
+                    fresh_path, max_bytes=MAXIMUM_PACKAGE_BYTES
+                )
+            except (BoundedIOError, OSError, TypeError, ValueError):
+                raise _fail("fresh package changed during replay") from None
+            if fresh_after != fresh_raw:
+                raise _fail("fresh package changed during replay")
+            _remaining(deadline, clock)
+
+            for path, expected, maximum, label in capture.caller_sources:
+                try:
+                    observed = read_bytes(path, max_bytes=maximum)
+                except (BoundedIOError, OSError, TypeError, ValueError):
+                    raise _fail(f"{label} source changed during replay") from None
+                if observed != expected:
+                    raise _fail(f"{label} source changed during replay")
+                _remaining(deadline, clock)
+    except ManufacturingReplayError:
+        raise
+    except (BoundedIOError, BoundedProcessError, OSError, TypeError, ValueError):
+        raise _fail("manufacturing replay workspace failed") from None
+
+    assert fresh_raw is not None
+    assert fresh_identity is not None
+    _remaining(deadline, clock)
+    result = {
+        "schema_version": MANUFACTURING_REPLAY_RESULT_SCHEMA_VERSION,
+        "verification_scope": MANUFACTURING_REPLAY_SCOPE,
+        "verified": True,
+        "board": {"name": capture.board_name, **capture.board_identity},
+        "project": capture.project_identity,
+        "rules": capture.rules_identity,
+        "profile": _profile_result(
+            fab=capture.fab,
+            fab_profile_identity=capture.fab_profile_identity,
+            fab_profile_name=capture.fab_profile_name,
+            physical_profile_identity=capture.physical_profile_identity,
+            physical_profile_name=capture.physical_profile_name,
+        ),
+        "package": {
+            "retained": capture.retained_identity,
+            "fresh": fresh_identity,
+            "identical": True,
+        },
+        "validation": {
+            "inputs_captured": True,
+            "package_reproduced": True,
+            "staged_inputs_unchanged": True,
+            "caller_inputs_unchanged": True,
+        },
+    }
+    _remaining(deadline, clock)
+    return result
+
+
 def replay_manufacturing_package(
     board: str | os.PathLike[str],
     retained_package: str | os.PathLike[str],
@@ -465,279 +849,26 @@ def replay_manufacturing_package(
         raise _fail("manufacturing profile selections are mutually exclusive")
     if fab is not None:
         fab = _builtin_profile_id(fab)
-
     command = _normalize_command(pcbex)
     kicad_cli_argument = _argument(kicad_cli, "kicad-cli argument")
-    board_source = _freeze_path(board, "board source")
-    retained_package_source = _freeze_path(
-        retained_package, "retained package source"
+    capture = _capture_manufacturing_replay_inputs(
+        board,
+        retained_package,
+        kicad_project=kicad_project,
+        kicad_rules=kicad_rules,
+        fab=fab,
+        fab_profile=fab_profile,
+        physical_profile=physical_profile,
+        deadline=deadline,
+        clock=_clock,
     )
-    project_source = (
-        None
-        if kicad_project is None
-        else _freeze_path(kicad_project, "KiCad project source")
+    return _replay_captured_manufacturing_package(
+        capture,
+        command,
+        kicad_cli_argument,
+        deadline=deadline,
+        clock=_clock,
     )
-    rules_source = (
-        None
-        if kicad_rules is None
-        else _freeze_path(kicad_rules, "KiCad rules source")
-    )
-    fab_profile_source = (
-        None
-        if fab_profile is None
-        else _freeze_path(fab_profile, "DFM profile source")
-    )
-    physical_profile_source = (
-        None
-        if physical_profile is None
-        else _freeze_path(physical_profile, "physical profile source")
-    )
-    board_name = _board_leaf(board_source)
-    project_name = str(Path(board_name).with_suffix(".kicad_pro"))
-    rules_name = str(Path(board_name).with_suffix(".kicad_dru"))
-    fab_profile_name = (
-        None
-        if fab_profile_source is None
-        else _source_leaf(fab_profile_source, "DFM profile")
-    )
-    physical_profile_name = (
-        None
-        if physical_profile_source is None
-        else _source_leaf(physical_profile_source, "physical profile")
-    )
-    _remaining(deadline, _clock)
-
-    sources: list[tuple[str, bytes, int, str]] = []
-    board_raw = _read_source(board_source, MAXIMUM_BOARD_BYTES, "board")
-    board_identity = _identity(board_raw)
-    sources.append((board_source, board_raw, MAXIMUM_BOARD_BYTES, "board"))
-    _remaining(deadline, _clock)
-    retained_raw = _read_source(
-        retained_package_source, MAXIMUM_PACKAGE_BYTES, "retained package"
-    )
-    retained_identity = _identity(retained_raw)
-    sources.append(
-        (
-            retained_package_source,
-            retained_raw,
-            MAXIMUM_PACKAGE_BYTES,
-            "retained package",
-        )
-    )
-    _remaining(deadline, _clock)
-
-    project_raw: bytes | None = None
-    rules_raw: bytes | None = None
-    fab_profile_raw: bytes | None = None
-    physical_profile_raw: bytes | None = None
-    project_identity: dict[str, Any] | None = None
-    rules_identity: dict[str, Any] | None = None
-    fab_profile_identity: dict[str, Any] | None = None
-    physical_profile_identity: dict[str, Any] | None = None
-    optional_sources = (
-        (project_source, MAXIMUM_PROJECT_BYTES, "KiCad project"),
-        (rules_source, MAXIMUM_RULES_BYTES, "KiCad rules"),
-        (fab_profile_source, MAXIMUM_PROFILE_BYTES, "DFM profile"),
-        (physical_profile_source, MAXIMUM_PROFILE_BYTES, "physical profile"),
-    )
-    captured_optional: list[bytes | None] = []
-    captured_optional_identities: list[dict[str, Any] | None] = []
-    for path, maximum, label in optional_sources:
-        if path is None:
-            captured_optional.append(None)
-            captured_optional_identities.append(None)
-            continue
-        raw = _read_source(path, maximum, label)
-        captured_optional.append(raw)
-        captured_optional_identities.append(_identity(raw))
-        sources.append((path, raw, maximum, label))
-        _remaining(deadline, _clock)
-    (
-        project_raw,
-        rules_raw,
-        fab_profile_raw,
-        physical_profile_raw,
-    ) = captured_optional
-    (
-        project_identity,
-        rules_identity,
-        fab_profile_identity,
-        physical_profile_identity,
-    ) = captured_optional_identities
-    if sum(len(raw) for _path, raw, _maximum, _label in sources) > MAXIMUM_TOTAL_INPUT_BYTES:
-        raise _fail("manufacturing replay inputs exceed their aggregate bound")
-
-    staged: list[tuple[Path, bytes, int]] = []
-    fresh_raw: bytes | None = None
-    fresh_identity: dict[str, Any] | None = None
-    try:
-        with tempfile.TemporaryDirectory(
-            prefix="pcbex-manufacturing-replay-",
-            dir=_trusted_temporary_root(),
-        ) as directory:
-            root = Path(directory)
-            board_path = root / board_name
-            output_dir = root / "fresh-manufacturing"
-            atomic_write_no_clobber(
-                board_path, board_raw, max_bytes=MAXIMUM_BOARD_BYTES
-            )
-            staged.append((board_path, board_raw, MAXIMUM_BOARD_BYTES))
-            _remaining(deadline, _clock)
-            if project_raw is not None:
-                project_path = root / project_name
-                atomic_write_no_clobber(
-                    project_path, project_raw, max_bytes=MAXIMUM_PROJECT_BYTES
-                )
-                staged.append((project_path, project_raw, MAXIMUM_PROJECT_BYTES))
-                _remaining(deadline, _clock)
-            if rules_raw is not None:
-                rules_path = root / rules_name
-                atomic_write_no_clobber(
-                    rules_path, rules_raw, max_bytes=MAXIMUM_RULES_BYTES
-                )
-                staged.append((rules_path, rules_raw, MAXIMUM_RULES_BYTES))
-                _remaining(deadline, _clock)
-
-            profile_arguments: list[str] = []
-            if fab is not None:
-                profile_arguments.append(f"--fab={fab}")
-            elif fab_profile_raw is not None:
-                assert fab_profile_name is not None
-                profile_directory = root / "profile-input"
-                profile_directory.mkdir(mode=0o700)
-                profile_path = profile_directory / fab_profile_name
-                atomic_write_no_clobber(
-                    profile_path,
-                    fab_profile_raw,
-                    max_bytes=MAXIMUM_PROFILE_BYTES,
-                )
-                staged.append((profile_path, fab_profile_raw, MAXIMUM_PROFILE_BYTES))
-                profile_arguments.append(f"--fab-profile={profile_path}")
-                _remaining(deadline, _clock)
-            elif physical_profile_raw is not None:
-                assert physical_profile_name is not None
-                profile_directory = root / "profile-input"
-                profile_directory.mkdir(mode=0o700)
-                profile_path = profile_directory / physical_profile_name
-                atomic_write_no_clobber(
-                    profile_path,
-                    physical_profile_raw,
-                    max_bytes=MAXIMUM_PROFILE_BYTES,
-                )
-                staged.append(
-                    (profile_path, physical_profile_raw, MAXIMUM_PROFILE_BYTES)
-                )
-                profile_arguments.append(f"--physical-profile={profile_path}")
-                _remaining(deadline, _clock)
-
-            outer_remaining = _remaining(deadline, _clock)
-            cleanup_and_reread_reserve = min(15.0, outer_remaining / 2.0)
-            process_timeout = outer_remaining - cleanup_and_reread_reserve
-            if not math.isfinite(process_timeout) or process_timeout <= 0:
-                raise _fail("manufacturing child has no execution budget")
-            argv = _validate_final_argv(
-                [
-                    *command,
-                    "fabricate",
-                    str(board_path),
-                    "--outer-process-tree-supervised",
-                    f"--output-dir={output_dir}",
-                    f"--kicad-cli={kicad_cli_argument}",
-                    f"--timeout-seconds={process_timeout:.17g}",
-                    *profile_arguments,
-                ]
-            )
-            try:
-                completed = run_bounded(
-                    argv,
-                    # The inner Rust deadline is deliberately shorter.  The
-                    # Python supervisor retains time to let pcbex reap KiCad
-                    # descendants and to perform its own post-child reads.
-                    timeout_seconds=outer_remaining,
-                    max_stdout_bytes=MAXIMUM_CHILD_STDOUT_BYTES,
-                    max_stderr_bytes=MAXIMUM_CHILD_STDERR_BYTES,
-                )
-            except BoundedProcessError:
-                raise _fail("manufacturing child process failed") from None
-            if completed.returncode != 0:
-                raise _fail("manufacturing child rejected the replay")
-            _remaining(deadline, _clock)
-
-            fresh_path = output_dir / "manufacturing.zip"
-            fresh_raw = _read_source(
-                fresh_path, MAXIMUM_PACKAGE_BYTES, "fresh package"
-            )
-            if fresh_raw != retained_raw:
-                raise _fail(
-                    "fresh manufacturing replay did not reproduce the retained package"
-                )
-            fresh_identity = _identity(fresh_raw)
-            if fresh_identity != retained_identity:
-                raise _fail("fresh manufacturing package identity is inconsistent")
-            _remaining(deadline, _clock)
-
-            for path, expected, maximum in staged:
-                try:
-                    observed = read_bytes(path, max_bytes=maximum)
-                except (BoundedIOError, OSError, TypeError, ValueError):
-                    raise _fail("staged manufacturing input changed during replay") from None
-                if observed != expected:
-                    raise _fail("staged manufacturing input changed during replay")
-                _remaining(deadline, _clock)
-            try:
-                fresh_after = read_bytes(
-                    fresh_path, max_bytes=MAXIMUM_PACKAGE_BYTES
-                )
-            except (BoundedIOError, OSError, TypeError, ValueError):
-                raise _fail("fresh package changed during replay") from None
-            if fresh_after != fresh_raw:
-                raise _fail("fresh package changed during replay")
-            _remaining(deadline, _clock)
-
-            for path, expected, maximum, label in sources:
-                try:
-                    observed = read_bytes(path, max_bytes=maximum)
-                except (BoundedIOError, OSError, TypeError, ValueError):
-                    raise _fail(f"{label} source changed during replay") from None
-                if observed != expected:
-                    raise _fail(f"{label} source changed during replay")
-                _remaining(deadline, _clock)
-    except ManufacturingReplayError:
-        raise
-    except (BoundedIOError, BoundedProcessError, OSError, TypeError, ValueError):
-        raise _fail("manufacturing replay workspace failed") from None
-
-    assert fresh_raw is not None
-    assert fresh_identity is not None
-    _remaining(deadline, _clock)
-    result = {
-        "schema_version": MANUFACTURING_REPLAY_RESULT_SCHEMA_VERSION,
-        "verification_scope": MANUFACTURING_REPLAY_SCOPE,
-        "verified": True,
-        "board": {"name": board_name, **board_identity},
-        "project": project_identity,
-        "rules": rules_identity,
-        "profile": _profile_result(
-            fab=fab,
-            fab_profile_identity=fab_profile_identity,
-            fab_profile_name=fab_profile_name,
-            physical_profile_identity=physical_profile_identity,
-            physical_profile_name=physical_profile_name,
-        ),
-        "package": {
-            "retained": retained_identity,
-            "fresh": fresh_identity,
-            "identical": True,
-        },
-        "validation": {
-            "inputs_captured": True,
-            "package_reproduced": True,
-            "staged_inputs_unchanged": True,
-            "caller_inputs_unchanged": True,
-        },
-    }
-    _remaining(deadline, _clock)
-    return result
 
 
 __all__ = [
