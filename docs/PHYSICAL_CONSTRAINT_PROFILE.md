@@ -113,7 +113,12 @@ policy to enter during forwarding.
 The v1 profile does not perform vendor-specific CPL coordinate transforms and
 does not authorize a circuit-generation provider. The native
 [circuit-to-KiCad handoff verification](CIRCUIT_KICAD_HANDOFF.md) only checks
-the closed circuit-spec v2 semantic subset; it does not generate a schematic
-or make placement, routing, supplier, or fabrication decisions. Those
-boundaries remain vendor-neutral and are handled by the subsequent headless
-schematic-to-manufacturing orchestrator and qualified supplier milestones.
+the closed circuit-spec v2 semantic subset. The v1.463
+[board writer](CIRCUIT_KICAD_BOARD_WRITER.md) can now consume the schematic
+writer's flat subset together with a reproducible physical-profile subset—an
+empty or full rectangular outline, front-side fixed placements at cardinal
+rotations without fixed keepout extents, and track/via/zone keepouts without per-keepout routing
+overrides—to create a placed-but-unrouted board; it does not make
+routing, supplier, fabrication, or procurement decisions. Those later
+boundaries remain vendor-neutral and explicit in the existing downstream
+commands and qualified-supplier milestones.

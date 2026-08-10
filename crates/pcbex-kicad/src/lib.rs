@@ -7,7 +7,7 @@ use pcbex_core::{
     checking::check_board,
     placement::{BoardSide, Component, Connection, PinRef, PlacementProblem},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 
 mod sexp;
@@ -221,6 +221,37 @@ pub use circuit_spec::{
     check_circuit_spec, circuit_spec_check_json_schema, circuit_spec_v2_json_schema,
     circuit_spec_v2_sha256, circuit_spec_v2_to_schematic, normalize_circuit_spec_v2,
     parse_and_check_circuit_spec_v2, parse_circuit_spec_v2,
+};
+mod footprint_closure;
+pub use footprint_closure::{
+    FOOTPRINT_CLOSURE_V1_MAX_AGGREGATE_FOOTPRINT_BYTES, FOOTPRINT_CLOSURE_V1_MAX_FOOTPRINT_BYTES,
+    FOOTPRINT_CLOSURE_V1_MAX_FOOTPRINTS, FOOTPRINT_CLOSURE_V1_MAX_ID_BYTES,
+    FOOTPRINT_CLOSURE_V1_MAX_SOURCE_BYTES, FOOTPRINT_CLOSURE_V1_SCHEMA_VERSION,
+    FootprintClosureEntryV1, FootprintClosureV1, footprint_closure_v1_json_schema,
+    footprint_closure_v1_sha256, parse_footprint_closure_v1, validate_footprint_closure_v1,
+};
+mod board_construction_profile;
+pub use board_construction_profile::{
+    BOARD_CONSTRUCTION_PROFILE_V1_MAX_COPPER_LAYERS, BOARD_CONSTRUCTION_PROFILE_V1_MAX_COST,
+    BOARD_CONSTRUCTION_PROFILE_V1_MAX_DIELECTRIC_CONSTANT_MILLIONTHS,
+    BOARD_CONSTRUCTION_PROFILE_V1_MAX_ITERATIONS, BOARD_CONSTRUCTION_PROFILE_V1_MAX_SOURCE_BYTES,
+    BOARD_CONSTRUCTION_PROFILE_V1_MAX_TEXT_BYTES, BOARD_CONSTRUCTION_PROFILE_V1_MIN_COPPER_LAYERS,
+    BOARD_CONSTRUCTION_PROFILE_V1_SCHEMA_VERSION, BoardConstructionProfileV1,
+    BoardConstructionStackupLayerV1, BoardPlacementDefaultsV1, BoardRoutingDefaultsV1,
+    board_construction_copper_layers, board_construction_profile_v1_json_schema,
+    board_construction_profile_v1_sha256, board_construction_routing_rules,
+    parse_board_construction_profile_v1, validate_board_construction_profile_v1,
+};
+mod circuit_board_writer;
+pub use circuit_board_writer::{
+    CIRCUIT_KICAD_BOARD_MANIFEST_V1_MAX_RENDERED_BYTES,
+    CIRCUIT_KICAD_BOARD_MANIFEST_V1_SCHEMA_VERSION, CIRCUIT_KICAD_BOARD_MAX_OUTPUT_BYTES,
+    CIRCUIT_KICAD_BOARD_MAX_PHYSICAL_PROFILE_SOURCE_BYTES,
+    CIRCUIT_KICAD_BOARD_PRODUCER_ENGINE_VERSION, CIRCUIT_KICAD_BOARD_VERSION,
+    CircuitKicadBoardManifestV1, CircuitKicadBoardProduction, CircuitKicadBoardStateV1,
+    circuit_kicad_board_manifest_v1_json_schema, circuit_kicad_board_manifest_v1_sha256,
+    render_circuit_kicad_board_manifest_v1, validate_circuit_kicad_board_manifest_v1,
+    write_circuit_spec_kicad_board,
 };
 mod circuit_handoff;
 pub use circuit_handoff::{
@@ -988,6 +1019,25 @@ fn import_net_classes(
     defaults: &Rules,
     nets: &mut HashMap<u32, Net>,
 ) -> Result<HashMap<String, NetClassRules>, String> {
+    let has_top_level_net_classes = top.iter().any(|item| {
+        item.as_list()
+            .is_some_and(|values| atom(values.first()) == Some("net_class"))
+    });
+    let has_setup_net_classes = top.iter().any(|item| {
+        item.as_list().is_some_and(|values| {
+            atom(values.first()) == Some("setup")
+                && values.iter().any(|child| {
+                    child
+                        .as_list()
+                        .is_some_and(|child| atom(child.first()) == Some("net_class"))
+                })
+        })
+    });
+    if has_top_level_net_classes && has_setup_net_classes {
+        return Err(
+            "KiCad board must not mix top-level and setup-nested legacy net classes".into(),
+        );
+    }
     let mut classes = HashMap::new();
     let net_ids_by_name: HashMap<_, _> = nets
         .iter()
@@ -995,13 +1045,15 @@ fn import_net_classes(
         .collect();
     let mut class_by_net_id = HashMap::<u32, String>::new();
     for item in top {
-        let Some(setup) = item.as_list() else {
+        let Some(container) = item.as_list() else {
             continue;
         };
-        if atom(setup.first()) != Some("setup") {
-            continue;
-        }
-        for item in setup {
+        let net_class_items = match atom(container.first()) {
+            Some("net_class") => vec![item],
+            Some("setup") => container.iter().collect(),
+            _ => continue,
+        };
+        for item in net_class_items {
             let Some(values) = item.as_list() else {
                 continue;
             };
@@ -1255,7 +1307,11 @@ impl ImportedBoard {
             sides.push(side);
         }
         let mut components = Vec::with_capacity(self.board.footprints.len());
-        let mut net_pins = HashMap::<u32, Vec<PinRef>>::new();
+        // Net IDs are the stable electrical ordering already present in the
+        // board source. A randomized HashMap iteration here would reorder
+        // equal-degree placement connections between processes and could
+        // change the deterministic annealing result.
+        let mut net_pins = BTreeMap::<u32, Vec<PinRef>>::new();
         for (footprint_index, footprint) in self.board.footprints.iter().enumerate() {
             if footprint.reference.is_empty() {
                 return Err("every footprint requires a Reference property for placement".into());
@@ -3573,11 +3629,14 @@ fn parse_layer(value: &str) -> Option<Layer> {
     match value {
         "F.Cu" => Some(Layer::Front),
         "B.Cu" => Some(Layer::Back),
-        _ if value.starts_with("In") && value.ends_with(".Cu") => value[2..value.len() - 3]
-            .parse::<u8>()
-            .ok()
-            .and_then(Layer::from_index)
-            .filter(|layer| matches!(layer, Layer::Inner(_))),
+        _ if value.starts_with("In") && value.ends_with(".Cu") => {
+            let layer = value[2..value.len() - 3]
+                .parse::<u8>()
+                .ok()
+                .and_then(Layer::from_index)
+                .filter(|layer| matches!(layer, Layer::Inner(_)))?;
+            (layer.name() == value).then_some(layer)
+        }
         _ => None,
     }
 }
@@ -6247,6 +6306,39 @@ mod tests {
     }
 
     #[test]
+    fn placement_connections_follow_stable_net_id_order() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "FIRST")
+          (net 2 "SECOND")
+          (gr_rect (start 0 0) (end 40 40) (layer "Edge.Cuts"))
+          (footprint "A" (layer "F.Cu") (at 5 5)
+            (property "Reference" "A")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SECOND")))
+          (footprint "B" (layer "F.Cu") (at 10 5)
+            (property "Reference" "B")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SECOND")))
+          (footprint "C" (layer "F.Cu") (at 5 10)
+            (property "Reference" "C")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "FIRST")))
+          (footprint "D" (layer "F.Cu") (at 10 10)
+            (property "Reference" "D")
+            (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "FIRST"))))"#;
+        let imported = import(pcb, rules()).unwrap();
+        let problem = imported.placement_problem(500_000).unwrap();
+        let references = problem
+            .connections
+            .iter()
+            .map(|connection| {
+                (
+                    connection.from.component.as_str(),
+                    connection.to.component.as_str(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(references, [("C", "D"), ("A", "B")]);
+    }
+
+    #[test]
     fn imports_inner_copper_layers_and_tracks() {
         let pcb = r#"(kicad_pcb
           (layers
@@ -6625,16 +6717,15 @@ mod tests {
         let pcb = r#"(kicad_pcb
           (net 1 "USB_P")
           (net 2 "USB_N")
-          (setup
-            (net_class "USB" ""
-              (clearance 0.2)
-              (trace_width 0.25)
-              (via_dia 0.6)
-              (via_drill 0.3)
-              (diff_pair_width 0.18)
-              (diff_pair_gap 0.22)
-              (add_net "USB_P")
-              (add_net "USB_N")))
+          (net_class "USB" ""
+            (clearance 0.2)
+            (trace_width 0.25)
+            (via_dia 0.6)
+            (via_drill 0.3)
+            (diff_pair_width 0.18)
+            (diff_pair_gap 0.22)
+            (add_net "USB_P")
+            (add_net "USB_N"))
           (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts"))
           (footprint "P" (layer "F.Cu") (at 2 2)
             (property "Reference" "J1")
@@ -6649,6 +6740,16 @@ mod tests {
         assert_eq!(pair.name, "USB");
         assert_eq!(pair.gap_nm, 220_000);
         assert_eq!(imported.board.rules_for_net(1).track_width_nm, 180_000);
+    }
+
+    #[test]
+    fn rejects_mixed_top_level_and_setup_nested_legacy_net_classes() {
+        let pcb = r#"(kicad_pcb
+          (net 1 "SIGNAL")
+          (net_class "Top" "" (add_net "SIGNAL"))
+          (setup (net_class "Nested" ""))
+          (gr_rect (start 0 0) (end 20 20) (layer "Edge.Cuts")))"#;
+        assert!(import(pcb, rules()).is_err());
     }
 
     #[test]
@@ -8843,6 +8944,8 @@ mod tests {
         for layers in [
             r#"(layers "F.Unknown")"#,
             r#"(layers "F.Mask")"#,
+            r#"(layers "In+1.Cu")"#,
+            r#"(layers "In001.Cu")"#,
             r#"(layers "F.Cu" (structured yes))"#,
             r#"(layers "F.Cu") (layers "B.Cu")"#,
         ] {
@@ -8972,6 +9075,8 @@ mod tests {
     fn rejects_malformed_board_layer_tables_and_custom_primitives() {
         for layers in [
             r#"(layers (0 "F.Cu" signal) (2 "In0.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
+            r#"(layers (0 "F.Cu" signal) (2 "In+1.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
+            r#"(layers (0 "F.Cu" signal) (2 "In001.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
             r#"(layers (0 "F.Cu" signal) (2 "Unknown.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
             r#"(layers (0 "F.Cu" signal) (bad) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,
             r#"(layers (0 "F.Cu" signal) (31 "B.Cu" signal) (31 "B.Cu" signal) (44 "Edge.Cuts" user))"#,

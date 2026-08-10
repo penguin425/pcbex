@@ -1,8 +1,42 @@
 use serde_json::Value;
-use std::{path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, Output},
+};
 
 fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_pcbex"))
+}
+
+fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let canonical = fs::canonicalize(directory.path()).unwrap();
+    (directory, canonical)
+}
+
+fn run_board_producer(
+    circuit_spec: &Path,
+    schematic: &Path,
+    footprint_closure: &Path,
+    construction_profile: &Path,
+    physical_profile: &Path,
+    output_dir: &Path,
+) -> Output {
+    Command::new(binary())
+        .arg("generate-circuit-kicad-board")
+        .arg(circuit_spec)
+        .arg(schematic)
+        .arg("--footprint-closure")
+        .arg(footprint_closure)
+        .arg("--construction-profile")
+        .arg(construction_profile)
+        .arg("--physical-profile")
+        .arg(physical_profile)
+        .arg("--output-dir")
+        .arg(output_dir)
+        .output()
+        .unwrap()
 }
 
 #[test]
@@ -126,6 +160,10 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "check-schematic",
         "check-circuit-spec",
         "write-circuit-spec-kicad-schematic",
+        "generate-circuit-kicad-board",
+        "footprint-closure-schema",
+        "board-construction-profile-schema",
+        "circuit-kicad-board-manifest-schema",
         "circuit-kicad-board-binding-schema",
         "verify-circuit-kicad-board-binding",
         "prepare-ai-review",
@@ -265,6 +303,10 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "Fabrication authorization report v1",
         "Fabrication authorization reservation v1",
         "Fabrication authorization reservation ledger manifest v1",
+        "Deterministic KiCad board bundle v1",
+        "Footprint closure v1",
+        "Board construction profile v1",
+        "Circuit-to-KiCad board manifest v1",
     ] {
         assert!(
             report["output_contracts"]
@@ -274,5 +316,227 @@ fn publishes_a_complete_versioned_capability_inventory() {
                 .any(|contract| contract == expected),
             "missing output contract {expected}"
         );
+    }
+}
+
+#[test]
+fn board_producer_help_exposes_only_local_explicit_inputs() {
+    let output = Command::new(binary())
+        .args(["generate-circuit-kicad-board", "--help"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let help = String::from_utf8(output.stdout).unwrap();
+    for expected in [
+        "<CIRCUIT_SPEC>",
+        "<SCHEMATIC>",
+        "--footprint-closure <JSON>",
+        "--construction-profile <JSON>",
+        "--physical-profile <JSON>",
+        "--output-dir <NEW_DIR>",
+    ] {
+        assert!(
+            help.contains(expected),
+            "missing help fragment {expected:?}\n{help}"
+        );
+    }
+    for forbidden in ["--url", "--token", "--mcp", "--action"] {
+        assert!(
+            !help.contains(forbidden),
+            "unexpected remote integration {forbidden:?}\n{help}"
+        );
+    }
+}
+
+#[test]
+fn board_producer_parser_requires_every_closed_input() {
+    let output = Command::new(binary())
+        .args([
+            "generate-circuit-kicad-board",
+            "circuit.json",
+            "design.kicad_sch",
+            "--output-dir",
+            "generated-board",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for required in [
+        "--footprint-closure",
+        "--construction-profile",
+        "--physical-profile",
+    ] {
+        assert!(
+            stderr.contains(required),
+            "missing parser diagnostic {required:?}"
+        );
+    }
+}
+
+#[test]
+fn board_producer_preflights_output_before_inputs_without_leaking_paths() {
+    let (_directory_guard, directory) = canonical_tempdir();
+    let output_dir = directory.join("existing-output");
+    fs::create_dir(&output_dir).unwrap();
+    let sentinel = output_dir.join("sentinel");
+    fs::write(&sentinel, b"preserve\n").unwrap();
+    let missing = directory.join("missing");
+    let output = Command::new(binary())
+        .arg("generate-circuit-kicad-board")
+        .arg(&missing)
+        .arg(&missing)
+        .arg("--footprint-closure")
+        .arg(&missing)
+        .arg("--construction-profile")
+        .arg(&missing)
+        .arg("--physical-profile")
+        .arg(&missing)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert_eq!(fs::read(sentinel).unwrap(), b"preserve\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("board output directory already exists"));
+    assert!(!stderr.contains(&directory.display().to_string()));
+}
+
+#[test]
+fn failed_board_input_capture_removes_the_private_stage() {
+    let (_directory_guard, directory) = canonical_tempdir();
+    let missing = directory.join("missing");
+    let output_dir = directory.join("new-output");
+    let output = Command::new(binary())
+        .arg("generate-circuit-kicad-board")
+        .arg(&missing)
+        .arg(&missing)
+        .arg("--footprint-closure")
+        .arg(&missing)
+        .arg("--construction-profile")
+        .arg(&missing)
+        .arg("--physical-profile")
+        .arg(&missing)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!output_dir.exists());
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+    assert!(!String::from_utf8_lossy(&output.stderr).contains(&directory.display().to_string()));
+}
+
+#[cfg(unix)]
+#[test]
+fn board_producer_rejects_a_shared_writable_output_parent() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (_directory_guard, directory) = canonical_tempdir();
+    let shared = directory.join("shared");
+    fs::create_dir(&shared).unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o777)).unwrap();
+    let missing = directory.join("missing");
+    let output_dir = shared.join("new-output");
+    let output = Command::new(binary())
+        .arg("generate-circuit-kicad-board")
+        .arg(&missing)
+        .arg(&missing)
+        .arg("--footprint-closure")
+        .arg(&missing)
+        .arg("--construction-profile")
+        .arg(&missing)
+        .arg("--physical-profile")
+        .arg(&missing)
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(!output_dir.exists());
+    assert_eq!(fs::read_dir(&shared).unwrap().count(), 0);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("board output parent must not be writable by group or other users"));
+    assert!(!stderr.contains(&directory.display().to_string()));
+}
+
+#[test]
+fn board_producer_does_not_treat_distinct_equal_length_inputs_as_aliases() {
+    let (_directory_guard, directory) = canonical_tempdir();
+    let paths = [
+        directory.join("circuit.json"),
+        directory.join("schematic.kicad_sch"),
+        directory.join("closure.json"),
+        directory.join("construction.json"),
+        directory.join("physical.json"),
+    ];
+    for (index, path) in paths.iter().enumerate() {
+        fs::write(path, format!("invalid-{index}\n")).unwrap();
+    }
+    let output_dir = directory.join("output");
+    let output = run_board_producer(
+        &paths[0],
+        &paths[1],
+        &paths[2],
+        &paths[3],
+        &paths[4],
+        &output_dir,
+    );
+    assert!(!output.status.success());
+    assert!(!output_dir.exists());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("inputs must not alias"));
+    assert!(!stderr.contains(&directory.display().to_string()));
+}
+
+#[test]
+fn board_producer_rejects_hard_linked_input_aliases() {
+    let (_directory_guard, directory) = canonical_tempdir();
+    let circuit = directory.join("circuit.json");
+    let schematic = directory.join("schematic.kicad_sch");
+    let closure = directory.join("closure.json");
+    let construction = directory.join("construction.json");
+    let physical = directory.join("physical.json");
+    fs::write(&circuit, b"invalid\n").unwrap();
+    fs::hard_link(&circuit, &schematic).unwrap();
+    fs::write(&closure, b"x\n").unwrap();
+    fs::write(&construction, b"yy\n").unwrap();
+    fs::write(&physical, b"zzz\n").unwrap();
+    let output_dir = directory.join("output");
+    let output = run_board_producer(
+        &circuit,
+        &schematic,
+        &closure,
+        &construction,
+        &physical,
+        &output_dir,
+    );
+    assert!(!output.status.success());
+    assert!(!output_dir.exists());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("circuit specification and KiCad schematic inputs must not alias"));
+    assert!(!stderr.contains(&directory.display().to_string()));
+}
+
+#[test]
+fn board_producer_schemas_are_closed() {
+    for command in [
+        "footprint-closure-schema",
+        "board-construction-profile-schema",
+        "circuit-kicad-board-manifest-schema",
+    ] {
+        let output = Command::new(binary()).arg(command).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{command}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let schema: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(schema["additionalProperties"], false, "{command}");
     }
 }

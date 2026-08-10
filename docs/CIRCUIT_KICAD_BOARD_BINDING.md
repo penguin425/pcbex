@@ -219,3 +219,8 @@ Version 1.417's bounded-input deterministic runner recomputes this gate from
 the same privately staged raw files and nests the resulting report beside the
 unchanged pipeline report; it never treats a copied board-binding report as an
 input. See [Bounded-input deterministic pipeline runner](DETERMINISTIC_PIPELINE_RUNNER.md).
+Version 1.463's explicit [KiCad board writer](CIRCUIT_KICAD_BOARD_WRITER.md)
+also invokes this unchanged gate against its exact generated board and refuses
+publication unless it is approved. The writer's separate footprint,
+construction, placement, and raw-byte evidence does not broaden this report's
+geometry-free approval meaning.

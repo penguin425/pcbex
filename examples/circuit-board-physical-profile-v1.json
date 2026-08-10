@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "pcbex-board-writer-example-v1",
+  "revision": 1,
+  "description": "Rectangular constraints for the deterministic U1/R1 board-writer example",
+  "board_width_nm": 40000000,
+  "board_height_nm": 30000000,
+  "outline": [],
+  "fixed_components": [
+    {
+      "reference": "U1",
+      "x_nm": 10000000,
+      "y_nm": 10000000,
+      "rotation_mdeg": 0,
+      "tolerance_nm": 0,
+      "keepout_width_nm": 0,
+      "keepout_height_nm": 0
+    }
+  ],
+  "keepouts": [],
+  "manufacturing_rules": {
+    "minimum_track_width_nm": 100000,
+    "minimum_clearance_nm": 100000,
+    "minimum_drill_nm": 150000,
+    "minimum_annular_ring_nm": 180000,
+    "minimum_copper_to_edge_nm": 200000,
+    "board_thickness_nm": 1600000,
+    "maximum_via_aspect_ratio": 10,
+    "minimum_drill_to_drill_nm": 200000,
+    "allow_via_in_pad": false,
+    "minimum_trace_angle_deg": 0
+  }
+}

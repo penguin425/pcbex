@@ -30,8 +30,11 @@ use pcbex_kicad::{
     ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessQuorumReport,
     ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
     ApprovalLogGossipRegistryGovernanceAuthority, ApprovalLogWitnessTrustState,
-    ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet,
-    ExactArtifactIdentity, HumanEscalationCandidate, HumanEscalationDecision,
+    ApprovalTransparencyLog, BOARD_CONSTRUCTION_PROFILE_V1_MAX_SOURCE_BYTES,
+    CIRCUIT_KICAD_BOARD_BINDING_MAX_RENDERED_REPORT_BYTES,
+    CIRCUIT_KICAD_BOARD_MANIFEST_V1_MAX_RENDERED_BYTES, CIRCUIT_KICAD_BOARD_MAX_OUTPUT_BYTES,
+    ElectricalPolicy, ElectricalReview, ElectricalWaiverSet, ExactArtifactIdentity,
+    FOOTPRINT_CLOSURE_V1_MAX_SOURCE_BYTES, HumanEscalationCandidate, HumanEscalationDecision,
     HumanEscalationPolicy, HumanEscalationReport, RoutedAiApprovalQuorumReport,
     SessionAiApprovalQuorumReport, SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport,
     SignedAiApproval, SignedApprovalLogCheckpoint, SignedApprovalLogGossipObserverKeyRotation,
@@ -81,18 +84,20 @@ use pcbex_kicad::{
     approval_public_key, approval_transparency_log_json_schema, approval_transparency_log_sha256,
     audit_approval_log_gossip_organization_registry_history, bind_ai_review_request,
     bind_native_kicad_erc_to_ai_review_request,
-    bind_native_kicad_erc_warning_policy_to_ai_review_request, build_ai_review_request,
-    build_ai_review_session, check_schematic, circuit_kicad_board_binding_report_json_schema,
-    circuit_kicad_board_binding_report_summary, circuit_kicad_handoff_report_json_schema,
-    circuit_spec_check_json_schema, circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch,
-    compare_electrical_reviews, compare_schematics, create_approval_log_anchor_proof,
-    create_approval_log_consistency_proof, electrical_explanation_json_schema,
-    electrical_policy_json_schema, electrical_review_comparison_json_schema,
-    electrical_review_json_schema, electrical_review_to_junit, electrical_review_to_sarif,
-    electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
-    explain_electrical_review, human_escalation_report_json_schema, import as import_kicad,
-    import_schematic, manufacturing_gerber_layers, manufacturing_parts,
-    new_approval_log_gossip_observer_trust_state, new_approval_log_gossip_organization_registry,
+    bind_native_kicad_erc_warning_policy_to_ai_review_request,
+    board_construction_profile_v1_json_schema, build_ai_review_request, build_ai_review_session,
+    check_schematic, circuit_kicad_board_binding_report_json_schema,
+    circuit_kicad_board_binding_report_summary, circuit_kicad_board_manifest_v1_json_schema,
+    circuit_kicad_handoff_report_json_schema, circuit_spec_check_json_schema,
+    circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch, compare_electrical_reviews,
+    compare_schematics, create_approval_log_anchor_proof, create_approval_log_consistency_proof,
+    electrical_explanation_json_schema, electrical_policy_json_schema,
+    electrical_review_comparison_json_schema, electrical_review_json_schema,
+    electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
+    electrical_waiver_set_json_schema, explain_electrical_review, footprint_closure_v1_json_schema,
+    human_escalation_report_json_schema, import as import_kicad, import_schematic,
+    manufacturing_gerber_layers, manufacturing_parts, new_approval_log_gossip_observer_trust_state,
+    new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
     parse_and_check_circuit_spec_v2, parse_circuit_spec_v2, parse_electrical_policy,
@@ -152,7 +157,7 @@ use pcbex_kicad::{
     verify_circuit_kicad_board_binding, verify_circuit_kicad_handoff, verify_human_escalation,
     verify_routed_ai_approval_quorum, verify_session_ai_approval_quorum,
     verify_session_routed_ai_approval_quorum, verify_session_signed_ai_approval,
-    verify_signed_ai_approval,
+    verify_signed_ai_approval, write_circuit_spec_kicad_board,
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
@@ -164,6 +169,11 @@ use std::{
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn geteuid() -> std::os::raw::c_uint;
+}
 
 mod anchored_io;
 mod bounded_io;
@@ -212,7 +222,7 @@ mod remote_policy_lifecycle_witness;
 mod remote_witness;
 
 use bounded_io as fs;
-use physical_profile::{PhysicalProfileBinding, load_physical_profile};
+use physical_profile::{MAX_PHYSICAL_PROFILE_BYTES, PhysicalProfileBinding, load_physical_profile};
 
 use canary_completion::{
     CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
@@ -871,6 +881,21 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed deterministic footprint-closure v1 JSON Schema.
+    FootprintClosureSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed deterministic board-construction-profile v1 JSON Schema.
+    BoardConstructionProfileSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed deterministic circuit-to-KiCad board manifest v1 JSON Schema.
+    CircuitKicadBoardManifestSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed schematic semantic-diff JSON Schema.
     SchematicDiffSchema {
         #[arg(short, long)]
@@ -1367,6 +1392,25 @@ enum Command {
         /// New `.kicad_sch` destination; existing, aliased, or symlinked paths are refused.
         #[arg(short, long)]
         output: PathBuf,
+    },
+    /// Generate a deterministic KiCad board and its exact electrical binding evidence.
+    GenerateCircuitKicadBoard {
+        /// Circuit-spec v2 JSON source generated upstream.
+        circuit_spec: PathBuf,
+        /// Exact KiCad schematic source bound to the circuit specification.
+        schematic: PathBuf,
+        /// Closed footprint closure with all embedded `.kicad_mod` sources.
+        #[arg(long, value_name = "JSON")]
+        footprint_closure: PathBuf,
+        /// Closed deterministic board-construction profile.
+        #[arg(long, value_name = "JSON")]
+        construction_profile: PathBuf,
+        /// Closed pcbex physical constraint profile.
+        #[arg(long, value_name = "JSON")]
+        physical_profile: PathBuf,
+        /// New directory for exactly board.kicad_pcb, board-binding.json, and manifest.json.
+        #[arg(long, value_name = "NEW_DIR")]
+        output_dir: PathBuf,
     },
     /// Verify that a circuit specification and KiCad schematic are an exact electrical handoff.
     VerifyCircuitKicadHandoff {
@@ -6183,6 +6227,10 @@ fn capabilities_report() -> CapabilitiesReport {
             "Python host pinout helper",
             "Circuit specification v2",
             "Circuit-spec immutable ERC check v1",
+            "Deterministic KiCad board bundle v1",
+            "Footprint closure v1",
+            "Board construction profile v1",
+            "Circuit-to-KiCad board manifest v1",
             "Native KiCad schematic ERC report v1",
             "SPDX JSON",
         ],
@@ -6276,6 +6324,27 @@ fn run_cli() -> Result<()> {
             } else {
                 println!("{rendered}");
             }
+        }
+        Command::FootprintClosureSchema { output } => {
+            write_closed_schema(
+                &footprint_closure_v1_json_schema(),
+                output.as_deref(),
+                "footprint-closure schema output",
+            )?;
+        }
+        Command::BoardConstructionProfileSchema { output } => {
+            write_closed_schema(
+                &board_construction_profile_v1_json_schema(),
+                output.as_deref(),
+                "board-construction-profile schema output",
+            )?;
+        }
+        Command::CircuitKicadBoardManifestSchema { output } => {
+            write_closed_schema(
+                &circuit_kicad_board_manifest_v1_json_schema(),
+                output.as_deref(),
+                "circuit-to-KiCad board manifest schema output",
+            )?;
         }
         Command::SchematicDiffSchema { output } => {
             write_or_print_json(&schematic_diff_json_schema(), output.as_ref())?;
@@ -7434,6 +7503,24 @@ fn run_cli() -> Result<()> {
                 "generated deterministic KiCad schematic: {}",
                 output.display()
             );
+        }
+        Command::GenerateCircuitKicadBoard {
+            circuit_spec,
+            schematic,
+            footprint_closure,
+            construction_profile,
+            physical_profile,
+            output_dir,
+        } => {
+            generate_circuit_kicad_board(
+                &circuit_spec,
+                &schematic,
+                &footprint_closure,
+                &construction_profile,
+                &physical_profile,
+                &output_dir,
+            )?;
+            eprintln!("generated deterministic KiCad board bundle");
         }
         Command::VerifyCircuitKicadHandoff {
             circuit_spec,
@@ -17733,6 +17820,632 @@ fn read_bounded_utf8(path: &Path, label: &str, max_bytes: u64) -> Result<String>
         .with_context(|| format!("decoding {label} {} as UTF-8", path.display()))
 }
 
+const CIRCUIT_KICAD_BOARD_OUTPUT_FILES: [&str; 3] =
+    ["board.kicad_pcb", "board-binding.json", "manifest.json"];
+
+struct FrozenCircuitKicadBoardInput {
+    role: &'static str,
+    path: PathBuf,
+    metadata: fs::Metadata,
+    handle: fs::File,
+    source: String,
+    maximum_bytes: u64,
+}
+
+struct PreparedCircuitKicadBoardOutput {
+    output_dir: PathBuf,
+    output_name: std::ffi::OsString,
+    parent: PathBuf,
+    parent_handle: fs::File,
+    staging_handle: fs::File,
+    // Declared after the handle so Windows drops the open handle before
+    // TempDir attempts recursive cleanup on a pre-publication failure.
+    staging: tempfile::TempDir,
+    staging_name: std::ffi::OsString,
+}
+
+#[cfg(windows)]
+fn open_circuit_kicad_board_directory(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    };
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(windows))]
+fn open_circuit_kicad_board_directory(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+#[cfg(windows)]
+fn circuit_kicad_board_windows_file_identity(file: &fs::File) -> io::Result<(u32, u32, u32)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+    };
+
+    let mut information = BY_HANDLE_FILE_INFORMATION::default();
+    let handle = file.as_raw_handle() as HANDLE;
+    // SAFETY: the handle is borrowed from a live File and the Windows API
+    // writes only into the stack-owned information structure.
+    if unsafe { GetFileInformationByHandle(handle, &mut information) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((
+        information.dwVolumeSerialNumber,
+        information.nFileIndexHigh,
+        information.nFileIndexLow,
+    ))
+}
+
+#[cfg(windows)]
+fn circuit_kicad_board_directory_matches(handle: &fs::File, path: &Path) -> io::Result<bool> {
+    let visible = open_circuit_kicad_board_directory(path)?;
+    Ok(circuit_kicad_board_windows_file_identity(handle)?
+        == circuit_kicad_board_windows_file_identity(&visible)?)
+}
+
+#[cfg(not(windows))]
+fn circuit_kicad_board_directory_matches(handle: &fs::File, path: &Path) -> io::Result<bool> {
+    let visible = fs::symlink_metadata(path)?;
+    let opened = handle.metadata()?;
+    Ok(visible.file_type().is_dir() && fs::same_file(&visible, &opened))
+}
+
+#[cfg(unix)]
+fn require_trusted_circuit_kicad_board_parent(metadata: &fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    // SAFETY: geteuid has no preconditions and only reports the effective ID
+    // of the current process.
+    let effective_uid = unsafe { geteuid() };
+    if metadata.uid() != effective_uid {
+        bail!("board output parent must be owned by the effective user");
+    }
+    if metadata.permissions().mode() & 0o022 != 0 {
+        bail!("board output parent must not be writable by group or other users");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn require_trusted_circuit_kicad_board_parent(_metadata: &fs::Metadata) -> Result<()> {
+    Ok(())
+}
+
+fn frozen_circuit_kicad_board_inputs_alias(
+    left: &FrozenCircuitKicadBoardInput,
+    right: &FrozenCircuitKicadBoardInput,
+) -> Result<bool> {
+    if destinations_alias(&left.path, &right.path) {
+        return Ok(true);
+    }
+    #[cfg(unix)]
+    {
+        Ok(fs::same_file(&left.metadata, &right.metadata))
+    }
+    #[cfg(windows)]
+    {
+        let left_identity =
+            circuit_kicad_board_windows_file_identity(&left.handle).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot compare stable {} and {} input identities ({})",
+                    left.role,
+                    right.role,
+                    error.kind()
+                )
+            })?;
+        let right_identity =
+            circuit_kicad_board_windows_file_identity(&right.handle).map_err(|error| {
+                anyhow::anyhow!(
+                    "cannot compare stable {} and {} input identities ({})",
+                    left.role,
+                    right.role,
+                    error.kind()
+                )
+            })?;
+        Ok(left_identity == right_identity)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Ok(false)
+    }
+}
+
+fn generate_circuit_kicad_board(
+    circuit_spec: &Path,
+    schematic: &Path,
+    footprint_closure: &Path,
+    construction_profile: &Path,
+    physical_profile: &Path,
+    output_dir: &Path,
+) -> Result<()> {
+    // Reserve and privately stage the output boundary before reading a caller
+    // input, so an occupied or unsafe destination always wins preflight.
+    let prepared = prepare_circuit_kicad_board_output(output_dir)?;
+    let inputs = [
+        freeze_circuit_kicad_board_input(
+            circuit_spec,
+            "circuit specification",
+            pcbex_kicad::CIRCUIT_SPEC_V2_MAX_BYTES,
+        )?,
+        freeze_circuit_kicad_board_input(
+            schematic,
+            "KiCad schematic",
+            pcbex_kicad::CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES,
+        )?,
+        freeze_circuit_kicad_board_input(
+            footprint_closure,
+            "footprint closure",
+            FOOTPRINT_CLOSURE_V1_MAX_SOURCE_BYTES,
+        )?,
+        freeze_circuit_kicad_board_input(
+            construction_profile,
+            "board construction profile",
+            BOARD_CONSTRUCTION_PROFILE_V1_MAX_SOURCE_BYTES,
+        )?,
+        freeze_circuit_kicad_board_input(
+            physical_profile,
+            "physical profile",
+            MAX_PHYSICAL_PROFILE_BYTES,
+        )?,
+    ];
+    reject_circuit_kicad_board_input_aliases(&inputs, &prepared.output_dir)?;
+
+    let policy = ElectricalPolicy::default();
+    let production = write_circuit_spec_kicad_board(
+        &inputs[0].source,
+        &inputs[1].source,
+        &inputs[2].source,
+        &inputs[3].source,
+        &inputs[4].source,
+        &policy,
+    )
+    .map_err(anyhow::Error::msg)
+    .context("generating deterministic KiCad board")?;
+    if !production.board_binding_report.approved {
+        bail!("generated KiCad board binding was not approved");
+    }
+
+    let staged = [
+        (
+            CIRCUIT_KICAD_BOARD_OUTPUT_FILES[0],
+            production.board_source.as_bytes(),
+            CIRCUIT_KICAD_BOARD_MAX_OUTPUT_BYTES as u64,
+        ),
+        (
+            CIRCUIT_KICAD_BOARD_OUTPUT_FILES[1],
+            production.board_binding_report_json.as_bytes(),
+            CIRCUIT_KICAD_BOARD_BINDING_MAX_RENDERED_REPORT_BYTES as u64,
+        ),
+        (
+            CIRCUIT_KICAD_BOARD_OUTPUT_FILES[2],
+            production.manifest_json.as_bytes(),
+            CIRCUIT_KICAD_BOARD_MANIFEST_V1_MAX_RENDERED_BYTES as u64,
+        ),
+    ];
+    for (name, contents, maximum_bytes) in staged {
+        stage_circuit_kicad_board_file(prepared.staging.path(), name, contents, maximum_bytes)?;
+    }
+
+    validate_circuit_kicad_board_stage(prepared.staging.path(), &staged)?;
+    for input in &inputs {
+        recheck_frozen_circuit_kicad_board_input(input)?;
+    }
+    // Nothing derived from a caller path is read after this final staged
+    // bundle check. The next filesystem mutation is the no-replace rename.
+    validate_circuit_kicad_board_stage(prepared.staging.path(), &staged)?;
+    publish_circuit_kicad_board_output(prepared)
+}
+
+fn freeze_circuit_kicad_board_input(
+    path: &Path,
+    role: &'static str,
+    maximum_bytes: u64,
+) -> Result<FrozenCircuitKicadBoardInput> {
+    reject_output_symlink_components(path, role)
+        .map_err(|_| anyhow::anyhow!("{role} path is not a stable symlink-free input"))?;
+    let frozen = fs::canonicalize(path).map_err(|error| {
+        anyhow::anyhow!("cannot resolve stable {role} input ({})", error.kind())
+    })?;
+    let initial = fs::symlink_metadata(&frozen).map_err(|error| {
+        anyhow::anyhow!("cannot inspect stable {role} input ({})", error.kind())
+    })?;
+    if initial.file_type().is_symlink() || !initial.file_type().is_file() {
+        bail!("{role} must be a regular non-symlink file");
+    }
+    let handle = fs::File::open(&frozen)
+        .map_err(|error| anyhow::anyhow!("cannot pin stable {role} input ({})", error.kind()))?;
+    let opened = handle.metadata().map_err(|error| {
+        anyhow::anyhow!("cannot inspect pinned {role} input ({})", error.kind())
+    })?;
+    if !opened.file_type().is_file()
+        || !fs::same_file(&initial, &opened)
+        || !fs::opened_path_matches(&handle, &frozen).map_err(|error| {
+            anyhow::anyhow!("cannot verify stable {role} input ({})", error.kind())
+        })?
+    {
+        bail!("{role} changed while its path was being pinned");
+    }
+    let bytes = fs::read_with_limit(&frozen, maximum_bytes)
+        .map_err(|error| anyhow::anyhow!("cannot read stable {role} input ({})", error.kind()))?;
+    let final_metadata = fs::symlink_metadata(&frozen).map_err(|error| {
+        anyhow::anyhow!("cannot recheck stable {role} input ({})", error.kind())
+    })?;
+    if !fs::same_file(&initial, &final_metadata)
+        || initial.len() != final_metadata.len()
+        || initial.len() != bytes.len() as u64
+        || !fs::opened_path_matches(&handle, &frozen).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot finish verifying stable {role} input ({})",
+                error.kind()
+            )
+        })?
+    {
+        bail!("{role} changed while its path was being frozen");
+    }
+    let source =
+        String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{role} input is not valid UTF-8"))?;
+    Ok(FrozenCircuitKicadBoardInput {
+        role,
+        path: frozen,
+        metadata: final_metadata,
+        handle,
+        source,
+        maximum_bytes,
+    })
+}
+
+fn reject_circuit_kicad_board_input_aliases(
+    inputs: &[FrozenCircuitKicadBoardInput],
+    output_dir: &Path,
+) -> Result<()> {
+    for (index, input) in inputs.iter().enumerate() {
+        if destinations_alias(output_dir, &input.path) {
+            bail!(
+                "board output directory must not alias the {} input",
+                input.role
+            );
+        }
+        for other in &inputs[index + 1..] {
+            if frozen_circuit_kicad_board_inputs_alias(input, other)? {
+                bail!("{} and {} inputs must not alias", input.role, other.role);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn recheck_frozen_circuit_kicad_board_input(input: &FrozenCircuitKicadBoardInput) -> Result<()> {
+    let before = fs::symlink_metadata(&input.path).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot recheck stable {} input ({})",
+            input.role,
+            error.kind()
+        )
+    })?;
+    if !fs::same_file(&input.metadata, &before)
+        || input.metadata.len() != before.len()
+        || !fs::opened_path_matches(&input.handle, &input.path).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot verify frozen {} input ({})",
+                input.role,
+                error.kind()
+            )
+        })?
+    {
+        bail!("{} input path changed during board generation", input.role);
+    }
+    let current = fs::read_with_limit(&input.path, input.maximum_bytes).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot reread stable {} input ({})",
+            input.role,
+            error.kind()
+        )
+    })?;
+    let after = fs::symlink_metadata(&input.path).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot finish rechecking stable {} input ({})",
+            input.role,
+            error.kind()
+        )
+    })?;
+    if !fs::same_file(&input.metadata, &after)
+        || input.metadata.len() != after.len()
+        || current != input.source.as_bytes()
+        || !fs::opened_path_matches(&input.handle, &input.path).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot finish verifying frozen {} input ({})",
+                input.role,
+                error.kind()
+            )
+        })?
+    {
+        bail!("{} input changed during board generation", input.role);
+    }
+    Ok(())
+}
+
+fn prepare_circuit_kicad_board_output(
+    output_dir: &Path,
+) -> Result<PreparedCircuitKicadBoardOutput> {
+    if output_dir
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        bail!("board output directory path must not contain parent-directory components");
+    }
+    reject_output_symlink_components(output_dir, "board output directory")
+        .map_err(|_| anyhow::anyhow!("board output directory path must be symlink-free"))?;
+    match fs::symlink_metadata(output_dir) {
+        Ok(_) => bail!("board output directory already exists"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => bail!("cannot inspect board output directory ({})", error.kind()),
+    }
+    let output_name = output_dir
+        .file_name()
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("board output directory must name one new directory"))?
+        .to_owned();
+    let requested_parent = output_dir
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent = fs::canonicalize(requested_parent).map_err(|error| {
+        anyhow::anyhow!("cannot resolve board output parent ({})", error.kind())
+    })?;
+    let parent_metadata = fs::symlink_metadata(&parent).map_err(|error| {
+        anyhow::anyhow!("cannot inspect board output parent ({})", error.kind())
+    })?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.file_type().is_dir() {
+        bail!("board output parent must be a real directory");
+    }
+    require_trusted_circuit_kicad_board_parent(&parent_metadata)?;
+    let parent_handle = open_circuit_kicad_board_directory(&parent)
+        .map_err(|error| anyhow::anyhow!("cannot pin board output parent ({})", error.kind()))?;
+    let opened_parent = parent_handle.metadata().map_err(|error| {
+        anyhow::anyhow!(
+            "cannot inspect pinned board output parent ({})",
+            error.kind()
+        )
+    })?;
+    if !fs::same_file(&parent_metadata, &opened_parent)
+        || !circuit_kicad_board_directory_matches(&parent_handle, &parent).map_err(|error| {
+            anyhow::anyhow!("cannot verify board output parent ({})", error.kind())
+        })?
+    {
+        bail!("board output parent changed while it was being pinned");
+    }
+    let normalized_output = parent.join(&output_name);
+    match fs::symlink_metadata(&normalized_output) {
+        Ok(_) => bail!("board output directory already exists"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => bail!("cannot reserve board output directory ({})", error.kind()),
+    }
+    let staging = tempfile::Builder::new()
+        .prefix(".pcbex-board-stage-")
+        .tempdir_in(&parent)
+        .map_err(|error| anyhow::anyhow!("cannot create private board stage ({})", error.kind()))?;
+    let staging_name = staging
+        .path()
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("private board stage has no leaf name"))?
+        .to_owned();
+    let staging_handle = open_circuit_kicad_board_directory(staging.path())
+        .map_err(|error| anyhow::anyhow!("cannot pin private board stage ({})", error.kind()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        staging_handle
+            .set_permissions(fs::Permissions::from_mode(0o700))
+            .map_err(|error| {
+                anyhow::anyhow!("cannot make board stage private ({})", error.kind())
+            })?;
+        let private_metadata = staging_handle.metadata().map_err(|error| {
+            anyhow::anyhow!("cannot inspect private board stage ({})", error.kind())
+        })?;
+        if private_metadata.permissions().mode() & 0o777 != 0o700 {
+            bail!("private board stage does not have mode 0700");
+        }
+    }
+    let staging_metadata = staging_handle.metadata().map_err(|error| {
+        anyhow::anyhow!("cannot inspect private board stage ({})", error.kind())
+    })?;
+    if !staging_metadata.file_type().is_dir() {
+        bail!("private board stage is not a directory");
+    }
+    revalidate_circuit_kicad_board_parent(&parent, &parent_handle)?;
+    Ok(PreparedCircuitKicadBoardOutput {
+        output_dir: normalized_output,
+        output_name,
+        parent,
+        parent_handle,
+        staging_handle,
+        staging,
+        staging_name,
+    })
+}
+
+fn stage_circuit_kicad_board_file(
+    staging: &Path,
+    name: &str,
+    contents: &[u8],
+    maximum_bytes: u64,
+) -> Result<()> {
+    if contents.is_empty() || contents.len() as u128 > maximum_bytes as u128 {
+        bail!("generated {name} violates its bounded output contract");
+    }
+    let path = staging.join(name);
+    let prepared = prepare_atomic_new_file(&path)
+        .map_err(|_| anyhow::anyhow!("cannot prepare staged {name}"))?;
+    persist_atomic_new_file_bytes_with_privacy(prepared, &path, contents, false)
+        .map_err(|_| anyhow::anyhow!("cannot retain staged {name}"))
+}
+
+fn validate_circuit_kicad_board_stage(
+    staging: &Path,
+    expected: &[(&str, &[u8], u64); 3],
+) -> Result<()> {
+    let mut actual = Vec::new();
+    let entries = fs::read_dir(staging)
+        .map_err(|error| anyhow::anyhow!("cannot list private board stage ({})", error.kind()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            anyhow::anyhow!("cannot inspect private board stage ({})", error.kind())
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            anyhow::anyhow!("cannot inspect staged board artifact ({})", error.kind())
+        })?;
+        if !file_type.is_file() || file_type.is_symlink() {
+            bail!("private board stage contains a non-regular entry");
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("private board stage contains a non-UTF-8 name"))?;
+        actual.push(name);
+    }
+    actual.sort();
+    let mut names = CIRCUIT_KICAD_BOARD_OUTPUT_FILES
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    names.sort();
+    if actual != names {
+        bail!("private board stage does not contain the exact three-file bundle");
+    }
+    for (name, contents, maximum_bytes) in expected {
+        let observed = fs::read_with_limit(staging.join(name), *maximum_bytes)
+            .map_err(|error| anyhow::anyhow!("cannot verify staged {name} ({})", error.kind()))?;
+        if observed.as_slice() != *contents {
+            bail!("staged {name} changed before publication");
+        }
+    }
+    Ok(())
+}
+
+fn revalidate_circuit_kicad_board_parent(parent: &Path, handle: &fs::File) -> Result<()> {
+    let visible = fs::symlink_metadata(parent).map_err(|error| {
+        anyhow::anyhow!("cannot recheck board output parent ({})", error.kind())
+    })?;
+    let opened = handle.metadata().map_err(|error| {
+        anyhow::anyhow!(
+            "cannot recheck pinned board output parent ({})",
+            error.kind()
+        )
+    })?;
+    require_trusted_circuit_kicad_board_parent(&visible)?;
+    require_trusted_circuit_kicad_board_parent(&opened)?;
+    if !visible.file_type().is_dir()
+        || !fs::same_file(&visible, &opened)
+        || !circuit_kicad_board_directory_matches(handle, parent).map_err(|error| {
+            anyhow::anyhow!("cannot verify board output parent ({})", error.kind())
+        })?
+    {
+        bail!("board output parent changed before publication");
+    }
+    Ok(())
+}
+
+fn publish_circuit_kicad_board_output(prepared: PreparedCircuitKicadBoardOutput) -> Result<()> {
+    revalidate_circuit_kicad_board_parent(&prepared.parent, &prepared.parent_handle)?;
+    let visible_stage = fs::symlink_metadata(prepared.staging.path()).map_err(|error| {
+        anyhow::anyhow!("cannot recheck private board stage ({})", error.kind())
+    })?;
+    let opened_stage = prepared
+        .staging_handle
+        .metadata()
+        .map_err(|error| anyhow::anyhow!("cannot recheck pinned board stage ({})", error.kind()))?;
+    if !visible_stage.file_type().is_dir()
+        || !fs::same_file(&visible_stage, &opened_stage)
+        || !circuit_kicad_board_directory_matches(&prepared.staging_handle, prepared.staging.path())
+            .map_err(|error| {
+                anyhow::anyhow!("cannot verify private board stage ({})", error.kind())
+            })?
+    {
+        bail!("private board stage changed before publication");
+    }
+    match fs::symlink_metadata(&prepared.output_dir) {
+        Ok(_) => bail!("board output directory already exists"),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => bail!("cannot recheck board output directory ({})", error.kind()),
+    }
+    #[cfg(unix)]
+    prepared
+        .staging_handle
+        .sync_all()
+        .map_err(|error| anyhow::anyhow!("cannot sync private board stage ({})", error.kind()))?;
+    // Keep the trust/identity gate adjacent to the no-replace commit. A
+    // separate process running as this same OS identity can still ignore the
+    // boundary and mutate the parent; that same-principal race is explicitly
+    // outside this command's publication guarantee.
+    revalidate_circuit_kicad_board_parent(&prepared.parent, &prepared.parent_handle)?;
+
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    let publication = rustix::fs::renameat_with(
+        &prepared.parent_handle,
+        Path::new(&prepared.staging_name),
+        &prepared.parent_handle,
+        Path::new(&prepared.output_name),
+        rustix::fs::RenameFlags::NOREPLACE,
+    );
+    #[cfg(windows)]
+    let publication = std::fs::rename(prepared.staging.path(), &prepared.output_dir);
+    #[cfg(all(
+        not(windows),
+        not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))
+    ))]
+    let publication: std::io::Result<()> = Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "atomic no-replace directory publication is unavailable",
+    ));
+
+    if publication.is_err() {
+        bail!("atomic no-replace board output publication was refused");
+    }
+    // The old stage path no longer exists. Disable TempDir's path-based drop
+    // cleanup before syncing the handles retained across the atomic rename.
+    let _old_stage_path = prepared.staging.keep();
+    revalidate_circuit_kicad_board_parent(&prepared.parent, &prepared.parent_handle)
+        .context(
+            "board output publication completed but parent validation failed; output may exist; do not consume it",
+        )?;
+    if !circuit_kicad_board_directory_matches(&prepared.staging_handle, &prepared.output_dir)
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "board output publication completed but visible identity could not be verified ({}); output may exist; do not consume it",
+                error.kind()
+            )
+        })?
+    {
+        bail!(
+            "board output publication completed but visible identity validation failed; output may exist; do not consume it"
+        );
+    }
+    #[cfg(unix)]
+    {
+        prepared.staging_handle.sync_all().map_err(|error| {
+            anyhow::anyhow!(
+                "board output was published but output sync failed ({}); output may exist; do not consume it",
+                error.kind()
+            )
+        })?;
+        prepared.parent_handle.sync_all().map_err(|error| {
+            anyhow::anyhow!(
+                "board output was published but parent sync failed ({}); output may exist; do not consume it",
+                error.kind()
+            )
+        })?;
+    }
+    Ok(())
+}
+
 fn prepare_firmware_output(
     output_dir: &Path,
     inputs: &[&Path],
@@ -20220,6 +20933,24 @@ mod tests {
             verify_staged_kicad_project(&staged_board, b"board-one", &project_inputs).unwrap_err();
         assert!(
             error.to_string().contains("project input changed"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn circuit_kicad_board_input_recheck_rejects_same_size_mutation() {
+        let workspace = tempfile::tempdir().unwrap();
+        let input = workspace.path().join("input.json");
+        fs::write(&input, b"first").unwrap();
+
+        let frozen = freeze_circuit_kicad_board_input(&input, "test board", 64).unwrap();
+        fs::write(&input, b"other").unwrap();
+
+        let error = recheck_frozen_circuit_kicad_board_input(&frozen).unwrap_err();
+        let diagnostic = error.to_string();
+        assert!(
+            diagnostic.contains("test board input")
+                && diagnostic.contains("changed during board generation"),
             "{error:#}"
         );
     }

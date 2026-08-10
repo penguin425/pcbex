@@ -839,6 +839,11 @@
     {
       "id": "local-fabrication-authorization-challenge-reservation",
       "release": "v1.462.0",
+      "status": "released"
+    },
+    {
+      "id": "deterministic-circuit-kicad-board-producer",
+      "release": "v1.463.0",
       "status": "current"
     }
   ]
