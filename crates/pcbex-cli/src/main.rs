@@ -185,6 +185,7 @@ mod dfm_profile_binding;
 mod fabrication_authorization;
 mod fabrication_authorization_reservation;
 mod factory;
+mod final_bom;
 mod firmware;
 mod manufacturing_feedback;
 mod manufacturing_limits;
@@ -266,6 +267,7 @@ use factory::{
     factory_submission_json_schema, run_factory_feedback_loop, submit_factory_package,
     validate_manufacturing_package,
 };
+use final_bom::{final_bom_report_json_schema, render_final_bom_report, verify_final_bom_sources};
 use firmware::{
     FIRMWARE_ARTIFACTS, FirmwareBuildOptions, FirmwareManifest, firmware_bundle_schema,
     generate_firmware_bundle, parse_pin_map,
@@ -5243,6 +5245,24 @@ enum Command {
         #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile"])]
         physical_profile: Option<PathBuf>,
     },
+    /// Print the closed exact final-BOM verification report JSON Schema.
+    FinalBomReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Verify that a manufacturing ZIP is the exact final BOM for a KiCad board.
+    VerifyFinalBom {
+        /// Exact KiCad board source selected for manufacture.
+        board: PathBuf,
+        /// Fully validated pcbex manufacturing ZIP to compare with the board.
+        manufacturing_zip: PathBuf,
+        /// Optional new report path; existing, aliased, or symlinked destinations are refused.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Fail after retaining the report unless source and canonical BOM identities match.
+        #[arg(long)]
+        require_approved: bool,
+    },
     /// Print the JSON Schema for factory submission receipts.
     FactorySchema {
         #[arg(short, long)]
@@ -6211,6 +6231,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "BOM CSV",
             "Pick-and-place CSV",
             "Manufacturing ZIP",
+            "Final BOM verification report v1",
             "Factory submission receipt v1",
             "Factory feedback loop report v1",
             "Hardware pipeline gate report v1",
@@ -17536,6 +17557,80 @@ fn run_cli() -> Result<()> {
                 archive.display()
             );
         }
+        Command::FinalBomReportSchema { output } => {
+            write_closed_schema(
+                &final_bom_report_json_schema(),
+                output.as_deref(),
+                "final BOM report schema output",
+            )?;
+        }
+        Command::VerifyFinalBom {
+            board,
+            manufacturing_zip,
+            output,
+            require_approved,
+        } => {
+            let prepared_output = output
+                .as_deref()
+                .map(|path| {
+                    prepare_pipeline_output(
+                        path,
+                        &[board.as_path(), manufacturing_zip.as_path()],
+                    )
+                })
+                .transpose()?;
+            let (board_source, board_identity) = read_exact_artifact(
+                &board,
+                pcbex_kicad::CIRCUIT_KICAD_BOARD_BINDING_MAX_BOARD_BYTES,
+                "final BOM board",
+            )?;
+            let (package_source, package_identity) = read_exact_artifact(
+                &manufacturing_zip,
+                MAX_PACKAGE_BYTES,
+                "final BOM manufacturing package",
+            )?;
+            let board_basename = board
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("final BOM board must have a UTF-8 basename"))?;
+            let report = verify_final_bom_sources(
+                board_basename,
+                &board_source,
+                &package_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = render_final_bom_report(&report).map_err(anyhow::Error::msg)?;
+
+            require_exact_artifact(
+                &board,
+                pcbex_kicad::CIRCUIT_KICAD_BOARD_BINDING_MAX_BOARD_BYTES,
+                &board_identity,
+                "final BOM board",
+            )?;
+            require_exact_artifact(
+                &manufacturing_zip,
+                MAX_PACKAGE_BYTES,
+                &package_identity,
+                "final BOM manufacturing package",
+            )?;
+
+            if let (Some(prepared), Some(path)) = (prepared_output, output.as_deref()) {
+                persist_atomic_new_file_bytes(prepared, path, &rendered)?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+                io::stdout().flush()?;
+            }
+            eprintln!(
+                "final BOM verification: {}; {} finding(s); {} BOM reference(s)",
+                if report.approved { "approved" } else { "rejected" },
+                report.findings.len(),
+                report.in_bom_parts.len()
+            );
+            if require_approved && !report.approved {
+                bail!("final BOM verification rejected");
+            }
+        }
         Command::FactorySchema { output } => {
             let rendered = serde_json::to_string_pretty(&factory_submission_json_schema())?;
             if let Some(path) = output {
@@ -18961,7 +19056,7 @@ fn require_exact_artifact(
 ) -> Result<()> {
     let (_, actual) = read_exact_artifact(path, maximum_bytes, label)?;
     if &actual != expected {
-        bail!("{label} changed during fabrication authorization");
+        bail!("{label} changed during final source revalidation");
     }
     Ok(())
 }

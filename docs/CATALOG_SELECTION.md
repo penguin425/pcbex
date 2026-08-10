@@ -237,6 +237,51 @@ operation. See [Atomic circuit-generation to KiCad handoff
 bundle](CIRCUIT_HANDOFF_BUNDLE.md) for execution order and the complete result
 contract.
 
+## Final-BOM procurement-intent linkage (v1.464)
+
+Version 1.464 adds an explicit offline consumer for one retained
+catalog-backed generation bundle, its exact snapshot, one final KiCad board,
+and one manufacturing ZIP:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent build-procurement-intent \
+  board.kicad_pcb manufacturing/manufacturing.zip \
+  --circuit-generation circuit-generation.json \
+  --catalog-snapshot catalog-snapshot.json \
+  --pcbex target/release/pcbex \
+  --output procurement-intent.json \
+  --require-approved
+
+PYTHONPATH=agent/src python3 -m pcbex_agent procurement-intent-schema \
+  --output procurement-intent-v1.schema.json
+```
+
+The adapter fully replays the embedded catalog-selection receipt against the
+exact retained snapshot and invokes the Rust `verify-final-bom` boundary for
+the exact board/package pair. Approval requires identical populated reference
+sets across the final BOM, resolved circuit, and replayed selections; values
+must match between the final BOM and resolved circuit; and footprints and MPNs
+must match across all three. Every populated reference must have one supplier
+part number, and a supplier part number may not ambiguously identify multiple
+MPN/catalog-part-digest pairs. Approved records are grouped into deterministic
+per-board line items by MPN, supplier part number, catalog-part digest, and
+footprint. A semantic mismatch retains a closed rejected report with an empty
+line-item list rather than a partially usable purchasing list. The result
+retains the complete validated Rust final-BOM report and separately identifies
+its exact raw child-report bytes.
+
+This bridge uses the selection's retained `evaluated_at_unix` and exact local
+snapshot. It does not refresh or query the catalog, establish current stock,
+price, lifecycle, lead time, reservation, supplier/manufacturer authenticity,
+or datasheet truth, or authenticate the selected pcbex executable. It does not
+establish the circuit's electrical binding to the board: only the listed BOM
+metadata is compared. Quantities count one populated board only; there is no
+assembly, panel, build, or order multiplier. The result has constant-false
+network, current-availability, supplier-authenticity, procurement-authorized,
+and order-placed fields. See [Final BOM verification and offline procurement
+intent](PROCUREMENT_INTENT.md) for the exact report fields, limits, and hard
+error versus retained-rejection boundary.
+
 ## Selection and receipt
 
 `select_catalog_parts` first verifies every prefilled MPN, including exact

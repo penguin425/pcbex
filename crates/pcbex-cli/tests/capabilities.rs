@@ -208,6 +208,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "fetch-policy-pack",
         "mcp-server",
         "fabricate",
+        "final-bom-report-schema",
+        "verify-final-bom",
         "factory-schema",
         "factory-feedback-loop-schema",
         "factory-submit",
@@ -307,6 +309,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "Footprint closure v1",
         "Board construction profile v1",
         "Circuit-to-KiCad board manifest v1",
+        "Final BOM verification report v1",
     ] {
         assert!(
             report["output_contracts"]

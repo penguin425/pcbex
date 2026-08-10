@@ -166,10 +166,16 @@ def _sha256(raw: bytes) -> str:
 
 
 def _json_string_bytes(value: str, *, label: str, maximum: int) -> int:
-    if len(value) > maximum:
+    # Use the concrete base implementation throughout.  A caller-supplied
+    # ``str`` subclass must not be able to lie about its length or iteration
+    # while this preflight decides whether making an exact built-in snapshot
+    # is bounded.
+    value_length = str.__len__(value)
+    if value_length > maximum:
         raise _fail(f"{label} exceeds its byte bound")
     size = 2
-    for character in value:
+    for index in range(value_length):
+        character = str.__getitem__(value, index)
         codepoint = ord(character)
         if character in {'"', "\\", "\b", "\f", "\n", "\r", "\t"}:
             size += 2
@@ -216,7 +222,15 @@ def _looks_like_json_object_text(value: str) -> bool:
     return False
 
 
-def _preflight_injected_json(value: Any, *, label: str, maximum: int) -> None:
+def _exact_json_integer(value: int) -> int:
+    return int.__int__(value)
+
+
+def _exact_json_string(value: str) -> str:
+    return str.__str__(value)
+
+
+def _preflight_injected_json(value: Any, *, label: str, maximum: int) -> Any:
     active: set[int] = set()
     used = 0
 
@@ -226,42 +240,60 @@ def _preflight_injected_json(value: Any, *, label: str, maximum: int) -> None:
         if used > maximum:
             raise _fail(f"{label} exceeds its byte bound")
 
-    def visit(item: Any, depth: int) -> None:
+    def visit(item: Any, depth: int) -> Any:
         if depth > 128:
             raise _fail(f"{label} is nested too deeply")
-        if item is None or isinstance(item, bool):
+        if item is None:
             charge(5)
+            return None
+        elif isinstance(item, bool):
+            charge(5)
+            return bool(item)
         elif isinstance(item, int):
             # Estimate decimal digits from the bit length without converting a
-            # caller-supplied giant integer to an unbounded temporary string.
-            digits = max(1, (abs(item).bit_length() * 30104) // 100000 + 2)
+            # caller-supplied giant integer to an unbounded temporary string or
+            # exact-int copy.  Only copy after the charge has succeeded.
+            digits = max(1, (int.bit_length(item) * 30104) // 100000 + 2)
             charge(digits)
+            return _exact_json_integer(item)
         elif isinstance(item, float):
-            if not math.isfinite(item):
+            plain_item = float.__float__(item)
+            if not math.isfinite(plain_item):
                 raise _fail(f"{label} contains a non-finite number")
             charge(32)
+            return plain_item
         elif isinstance(item, str):
-            charge(_json_string_bytes(item, label=label, maximum=maximum))
+            string_bytes = _json_string_bytes(item, label=label, maximum=maximum)
+            charge(string_bytes)
+            return _exact_json_string(item)
         elif isinstance(item, Mapping):
             identity = id(item)
             if identity in active:
                 raise _fail(f"{label} contains a recursive object")
             active.add(identity)
+            snapshot: dict[str, Any] = {}
             try:
                 charge(2)
                 for key, child in item.items():
                     if not isinstance(key, str):
                         raise _fail(f"{label} contains a non-string key")
-                    charge(
-                        _json_string_bytes(key, label=label, maximum=maximum) + 2
+                    key_bytes = _json_string_bytes(
+                        key,
+                        label=label,
+                        maximum=maximum,
                     )
-                    visit(child, depth + 1)
+                    charge(key_bytes + 2)
+                    plain_key = _exact_json_string(key)
+                    if plain_key in snapshot:
+                        raise _fail(f"{label} contains a duplicate key")
+                    snapshot[plain_key] = visit(child, depth + 1)
             except CatalogGenerationProvenanceError:
                 raise
             except (TypeError, ValueError, RuntimeError):
                 raise _fail(f"{label} could not be traversed safely") from None
             finally:
                 active.remove(identity)
+            return snapshot
         elif isinstance(item, (list, tuple)):
             if len(item) > maximum:
                 raise _fail(f"{label} exceeds its byte bound")
@@ -269,24 +301,29 @@ def _preflight_injected_json(value: Any, *, label: str, maximum: int) -> None:
             if identity in active:
                 raise _fail(f"{label} contains a recursive array")
             active.add(identity)
+            snapshot_list: list[Any] = []
             try:
                 charge(2)
                 for child in item:
                     charge(1)
-                    visit(child, depth + 1)
+                    snapshot_list.append(visit(child, depth + 1))
             finally:
                 active.remove(identity)
+            return snapshot_list
         else:
             raise _fail(f"{label} contains a non-JSON value")
 
-    visit(value, 0)
+    return visit(value, 0)
 
 
 def _json_bytes(value: Any, *, maximum: int, label: str) -> bytes:
-    _preflight_injected_json(value, label=label, maximum=maximum)
+    # Serialize only the bounded plain snapshot produced by the first
+    # traversal.  Re-traversing a caller-supplied stateful Mapping here would
+    # permit its second view to bypass the preflight allocation bound.
+    snapshot = _preflight_injected_json(value, label=label, maximum=maximum)
     try:
         encoded = json.dumps(
-            value,
+            snapshot,
             ensure_ascii=False,
             separators=(",", ":"),
             allow_nan=False,
@@ -377,13 +414,12 @@ def _digest(value: Any, label: str) -> str:
 def _validate_provenance_shape(provenance: Any) -> dict[str, Any]:
     if not isinstance(provenance, Mapping):
         raise _fail("catalog generation provenance must be an object")
-    _preflight_injected_json(
+    value = _preflight_injected_json(
         provenance,
         label="catalog generation provenance",
         maximum=MAX_PROVENANCE_BYTES,
     )
     try:
-        value = dict(provenance)
         keys = set(value)
     except (TypeError, ValueError, RuntimeError):
         raise _fail("catalog generation provenance must be an object") from None

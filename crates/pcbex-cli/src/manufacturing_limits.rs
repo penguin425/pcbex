@@ -305,9 +305,15 @@ pub(crate) fn validate_manufacturing_basename(
         .unwrap_or(name)
         .trim_end_matches([' ', '.'])
         .to_ascii_uppercase();
-    let numbered_device = device_stem.len() == 4
-        && (device_stem.starts_with("COM") || device_stem.starts_with("LPT"))
-        && matches!(device_stem.as_bytes()[3], b'1'..=b'9');
+    let numbered_device = device_stem
+        .strip_prefix("COM")
+        .or_else(|| device_stem.strip_prefix("LPT"))
+        .is_some_and(|suffix| {
+            matches!(
+                suffix,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        });
     if matches!(
         device_stem.as_str(),
         "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
@@ -455,6 +461,9 @@ mod tests {
             "conout$.log",
             "nul",
             "LPT9.gbr",
+            "COM¹.gbr",
+            "LPT².gbr",
+            "com³",
             "trailing.",
             "trailing ",
             "bad?.gbr",

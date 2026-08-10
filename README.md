@@ -589,6 +589,55 @@ for both stages and cross-checks its byte identity; it does not accept a second
 manufacturing board. See [Atomic saved-circuit handoff](#atomic-saved-circuit-handoff)
 for the v6 command and its additional trust boundary.
 
+### Exact final BOM and offline procurement intent
+
+Version 1.464 adds a narrow final-BOM verifier that reuses the full package
+validator, regenerates the canonical `bom.csv` from one exact board, and
+compares both those BOM bytes and the package's recorded board source identity:
+
+```sh
+pcbex verify-final-bom \
+  board.kicad_pcb manufacturing/manufacturing.zip \
+  --output final-bom.json --require-approved
+pcbex final-bom-report-schema --output final-bom.schema.json
+```
+
+The closed report records the actual package BOM and regenerated canonical BOM
+as separate byte/SHA-256 identities, the package manifest's board-source
+identity, at most 256 reference-sorted populated parts, and stable findings.
+Valid BOM/source mismatches retain `approved: false` evidence before the
+optional gate fails; malformed or unsafe input is a hard error with no output.
+The reported board basename is informational. Approval compares the supplied
+board's exact byte count and SHA-256 with the manifest identity, not the
+package manifest's input filename.
+
+For a catalog-backed retained generation bundle, the offline Python adapter can
+replay the exact historical selection and reconcile it with that final BOM:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent build-procurement-intent \
+  board.kicad_pcb manufacturing/manufacturing.zip \
+  --circuit-generation circuit-generation.json \
+  --catalog-snapshot catalog-snapshot.json \
+  --pcbex target/release/pcbex \
+  --output procurement-intent.json --require-approved
+PYTHONPATH=agent/src python3 -m pcbex_agent procurement-intent-schema \
+  --output procurement-intent.schema.json
+```
+
+An approved result groups exact MPN/SKU/catalog-part/footprint matches into
+per-board populated-reference quantities and retains the complete validated
+Rust final-BOM report alongside its raw byte/SHA-256 identity. Any semantic
+mismatch produces no partial line items. This comparison is not an electrical
+circuit/schematic/board binding and does not compare nets or pins. The adapter
+starts no network request, does not verify current stock, pricing, lifecycle,
+reservation, supplier or manufacturer authenticity, does not multiply an
+assembly/order quantity, and does not authorize procurement or place an order;
+its caller-selected pcbex executable remains unauthenticated and unsandboxed.
+See [Final BOM verification
+and offline procurement intent](docs/PROCUREMENT_INTENT.md) for the exact field,
+limit, replay, schema, and nonclaim contract.
+
 Submit that exact archive to a deployment-owned JLCPCB, PCBWay, or generic
 quote/DFM adapter without putting credentials in argv:
 
@@ -5963,6 +6012,9 @@ candidate correction against the native immutable ERC floor. It can explicitly
 acquire the closed snapshot from a bounded HTTPS feed before selection, but
 does not translate arbitrary supplier-native APIs. Declared power metadata and
 catalog inventory remain input evidence rather than verified datasheet or
-supplier truth. pcbex does not yet replace complete electrical design, live
-supplier qualification, analog or signal-integrity simulation, final KiCad
-ERC/DRC, or fabrication review.
+supplier truth. The final-BOM/procurement-intent boundary can reconcile one
+exact board/package BOM with that retained selection as per-board offline
+evidence, but it is not an electrical binding, live availability check,
+purchase authorization, or order. pcbex does not yet replace complete
+electrical design, live supplier qualification, analog or signal-integrity
+simulation, final KiCad ERC/DRC, or fabrication review.

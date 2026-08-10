@@ -83,6 +83,12 @@ from .deterministic_pipeline_replay import (
     deterministic_pipeline_replay_result_json_schema,
     replay_deterministic_pipeline,
 )
+from .procurement_intent import (
+    MAXIMUM_PROCUREMENT_INTENT_BYTES,
+    ProcurementIntentError,
+    evaluate_procurement_intent,
+    procurement_intent_json_schema,
+)
 from .skidl import (
     CircuitSpecError,
     assign_catalog_parts,
@@ -607,6 +613,31 @@ def main() -> None:
         help="write the closed fresh manufacturing-package replay result schema",
     )
     manufacturing_replay_schema.add_argument("-o", "--output", type=Path)
+    procurement_intent = sub.add_parser(
+        "build-procurement-intent",
+        help="bind one exact final BOM to fully replayed catalog SKU selections",
+    )
+    procurement_intent.add_argument("board", type=Path)
+    procurement_intent.add_argument("manufacturing_package", type=Path)
+    procurement_intent.add_argument(
+        "--circuit-generation", type=Path, required=True
+    )
+    procurement_intent.add_argument("--catalog-snapshot", type=Path, required=True)
+    procurement_intent.add_argument("--pcbex", default="pcbex")
+    procurement_intent.add_argument(
+        "--timeout-seconds", type=float, default=120.0
+    )
+    procurement_intent.add_argument("-o", "--output", type=Path, required=True)
+    procurement_intent.add_argument(
+        "--require-approved",
+        action="store_true",
+        help="fail after retaining a technically rejected intent report",
+    )
+    procurement_intent_schema = sub.add_parser(
+        "procurement-intent-schema",
+        help="write the closed offline procurement-intent report JSON Schema",
+    )
+    procurement_intent_schema.add_argument("-o", "--output", type=Path)
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -1407,6 +1438,50 @@ def main() -> None:
             raise SystemExit(
                 f"manufacturing package replay schema failed: {error}"
             ) from error
+    elif args.command == "build-procurement-intent":
+        try:
+            validate_no_clobber_path(args.output)
+            result = evaluate_procurement_intent(
+                args.board,
+                args.manufacturing_package,
+                args.circuit_generation,
+                args.catalog_snapshot,
+                args.pcbex,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
+            atomic_write_text_no_clobber(
+                args.output,
+                rendered,
+                max_bytes=MAXIMUM_PROCUREMENT_INTENT_BYTES,
+            )
+        except (OSError, BoundedIOError, ProcurementIntentError) as error:
+            raise SystemExit(f"procurement intent evaluation failed: {error}") from error
+        if args.require_approved and not result["approved"]:
+            raise SystemExit(
+                "procurement intent report was retained but was not technically approved"
+            )
+    elif args.command == "procurement-intent-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    procurement_intent_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, ProcurementIntentError) as error:
+            raise SystemExit(f"procurement intent schema failed: {error}") from error
     else:
         if _paths_are_same(args.output, args.report):
             raise SystemExit("repair board output and report paths must differ")
