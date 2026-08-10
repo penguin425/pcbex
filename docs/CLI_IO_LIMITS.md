@@ -71,6 +71,15 @@ Task result. If the child completed atomic publication just before cancellation
 was observed, the no-clobber report may remain; the cancelled Task does not
 authenticate it, and a consumer must rerun verification into a new path.
 
+The v1.461 focused Action accepts the same direct source ceilings and 1–100
+approval files. Its locked release build is bounded to 30 minutes, the wrapper
+to 15 minutes, and the inner verifier child to 10 minutes. After authentication
+it scans exactly one depth-one regular report with 128 MiB per-file and
+aggregate ceilings, then repeats direct-input snapshot and report-summary
+authentication at the publication boundary. The full report remains on disk
+or in the optional artifact; only the fixed report path and 23 bounded scalar
+fields become Action outputs.
+
 For signing, a valid response that fails an approval gate is still a legitimate
 signed rejection: the no-clobber approval is published before
 `--require-approved` returns failure. Any existing regular file, symbolic link,

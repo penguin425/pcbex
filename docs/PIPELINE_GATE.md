@@ -418,6 +418,10 @@ place an order, or spend funds. See
 Version 1.460 exposes the same fresh verifier, but not signing, through
 synchronous MCP calls and optional Tasks. This does not add a pipeline phase;
 the complete authorization report remains an independent retained artifact.
+Version 1.461 adds a separate focused boardless Action around that verifier.
+It accepts an already-closed deterministic plan and retained report rather
+than extending the root `pipeline-verify` surface, and its valid negative
+decision remains retained before an optional final authorization gate.
 
 ## Deterministic Pipeline CI check (v1.438.0)
 

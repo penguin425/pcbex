@@ -688,6 +688,268 @@ jobs:
           grep -F '# Time-bound AI schematic approval quorum' "$SUMMARY" >/dev/null
           grep -F 'Result: quorum met' "$SUMMARY" >/dev/null
           ! grep -F 'reviewer-a' "$SUMMARY" >/dev/null
+      - name: Build real factory-bound fabrication authorization fixture
+        run: >-
+          python3 scripts/ci_runtime.py exec
+          --timeout-seconds 900
+          --max-stdout-bytes 65536
+          --max-stderr-bytes 1048576
+          --output-root build/fabrication-authorization-action-fixture
+          -- python3 scripts/fabrication_authorization_action_ci.py
+          --pcbex target/release/pcbex
+          --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci
+          --policy-template examples/acme-policy-pack.json
+          --output-dir build/fabrication-authorization-action-fixture
+          --timeout-seconds 300
+      - name: Exercise authorized fabrication authorization action
+        id: fabrication-authorization-authorized
+        uses: ./actions/fabrication-authorization
+        with:
+          plan: build/fabrication-authorization-action-fixture/factory-required-plan.json
+          retained-report: build/fabrication-authorization-action-fixture/factory-required-report.json
+          manufacturing-package: build/fabrication-authorization-action-fixture/manufacturing.zip
+          factory-receipt: build/fabrication-authorization-action-fixture/factory-receipt.json
+          policy-pack: build/fabrication-authorization-action-fixture/final-policy-pack.json
+          approval-files: |
+            build/fabrication-authorization-action-fixture/approval-a.json
+            build/fabrication-authorization-action-fixture/approval-b.json
+          require-authorized: "true"
+          output-dir: build/fabrication-authorization-authorized
+          upload-artifact: "false"
+      - name: Exercise insufficient fabrication authorization action
+        id: fabrication-authorization-insufficient
+        continue-on-error: true
+        uses: ./actions/fabrication-authorization
+        with:
+          plan: build/fabrication-authorization-action-fixture/factory-required-plan.json
+          retained-report: build/fabrication-authorization-action-fixture/factory-required-report.json
+          manufacturing-package: build/fabrication-authorization-action-fixture/manufacturing.zip
+          factory-receipt: build/fabrication-authorization-action-fixture/factory-receipt.json
+          policy-pack: build/fabrication-authorization-action-fixture/final-policy-pack.json
+          approval-files: build/fabrication-authorization-action-fixture/approval-a.json
+          require-authorized: "true"
+          output-dir: build/fabrication-authorization-insufficient
+          upload-artifact: "false"
+      - name: Verify focused fabrication authorization action outputs
+        if: ${{ always() }}
+        env:
+          AUTHORIZED_STATUS: ${{ steps.fabrication-authorization-authorized.outputs.status }}
+          AUTHORIZED_ARTIFACT_DIR: ${{ steps.fabrication-authorization-authorized.outputs.artifact-dir }}
+          AUTHORIZED_REPORT: ${{ steps.fabrication-authorization-authorized.outputs.fabrication-authorization-report }}
+          AUTHORIZED_SCHEMA_VERSION: ${{ steps.fabrication-authorization-authorized.outputs.schema-version }}
+          AUTHORIZED_STATUS_VALUE: ${{ steps.fabrication-authorization-authorized.outputs.authorization-status }}
+          AUTHORIZED: ${{ steps.fabrication-authorization-authorized.outputs.fabrication-authorized }}
+          AUTHORIZED_AUTHORIZATION_ID: ${{ steps.fabrication-authorization-authorized.outputs.authorization-id }}
+          AUTHORIZED_CHALLENGE: ${{ steps.fabrication-authorization-authorized.outputs.challenge }}
+          AUTHORIZED_QUANTITY: ${{ steps.fabrication-authorization-authorized.outputs.quantity }}
+          AUTHORIZED_CURRENCY: ${{ steps.fabrication-authorization-authorized.outputs.currency }}
+          AUTHORIZED_MAXIMUM_TOTAL: ${{ steps.fabrication-authorization-authorized.outputs.maximum-total-minor-units }}
+          AUTHORIZED_VALID_FROM: ${{ steps.fabrication-authorization-authorized.outputs.valid-from-unix }}
+          AUTHORIZED_EXPIRES_AT: ${{ steps.fabrication-authorization-authorized.outputs.expires-at-unix }}
+          AUTHORIZED_EVALUATED_AT: ${{ steps.fabrication-authorization-authorized.outputs.evaluated-at-unix }}
+          AUTHORIZED_APPROVALS: ${{ steps.fabrication-authorization-authorized.outputs.approvals }}
+          AUTHORIZED_REJECTIONS: ${{ steps.fabrication-authorization-authorized.outputs.rejections }}
+          AUTHORIZED_GATE_FAILURE_COUNT: ${{ steps.fabrication-authorization-authorized.outputs.gate-failure-count }}
+          AUTHORIZED_PLAN_SHA256: ${{ steps.fabrication-authorization-authorized.outputs.plan-sha256 }}
+          AUTHORIZED_RUN_SHA256: ${{ steps.fabrication-authorization-authorized.outputs.run-sha256 }}
+          AUTHORIZED_PACKAGE_SHA256: ${{ steps.fabrication-authorization-authorized.outputs.manufacturing-package-sha256 }}
+          AUTHORIZED_RECEIPT_SHA256: ${{ steps.fabrication-authorization-authorized.outputs.factory-receipt-sha256 }}
+          AUTHORIZED_POLICY_SHA256: ${{ steps.fabrication-authorization-authorized.outputs.policy-pack-sha256 }}
+          AUTHORIZED_QUOTE_VERIFIED: ${{ steps.fabrication-authorization-authorized.outputs.quote-authenticity-verified }}
+          AUTHORIZED_CHALLENGE_ENFORCED: ${{ steps.fabrication-authorization-authorized.outputs.challenge-one-time-use-enforced }}
+          AUTHORIZED_REPORT_BYTES: ${{ steps.fabrication-authorization-authorized.outputs.report-bytes }}
+          AUTHORIZED_REPORT_SHA256: ${{ steps.fabrication-authorization-authorized.outputs.report-sha256 }}
+          INSUFFICIENT_OUTCOME: ${{ steps.fabrication-authorization-insufficient.outcome }}
+          INSUFFICIENT_STATUS: ${{ steps.fabrication-authorization-insufficient.outputs.status }}
+          INSUFFICIENT_ARTIFACT_DIR: ${{ steps.fabrication-authorization-insufficient.outputs.artifact-dir }}
+          INSUFFICIENT_REPORT: ${{ steps.fabrication-authorization-insufficient.outputs.fabrication-authorization-report }}
+          INSUFFICIENT_SCHEMA_VERSION: ${{ steps.fabrication-authorization-insufficient.outputs.schema-version }}
+          INSUFFICIENT_STATUS_VALUE: ${{ steps.fabrication-authorization-insufficient.outputs.authorization-status }}
+          INSUFFICIENT_AUTHORIZED: ${{ steps.fabrication-authorization-insufficient.outputs.fabrication-authorized }}
+          INSUFFICIENT_AUTHORIZATION_ID: ${{ steps.fabrication-authorization-insufficient.outputs.authorization-id }}
+          INSUFFICIENT_CHALLENGE: ${{ steps.fabrication-authorization-insufficient.outputs.challenge }}
+          INSUFFICIENT_QUANTITY: ${{ steps.fabrication-authorization-insufficient.outputs.quantity }}
+          INSUFFICIENT_CURRENCY: ${{ steps.fabrication-authorization-insufficient.outputs.currency }}
+          INSUFFICIENT_MAXIMUM_TOTAL: ${{ steps.fabrication-authorization-insufficient.outputs.maximum-total-minor-units }}
+          INSUFFICIENT_VALID_FROM: ${{ steps.fabrication-authorization-insufficient.outputs.valid-from-unix }}
+          INSUFFICIENT_EXPIRES_AT: ${{ steps.fabrication-authorization-insufficient.outputs.expires-at-unix }}
+          INSUFFICIENT_EVALUATED_AT: ${{ steps.fabrication-authorization-insufficient.outputs.evaluated-at-unix }}
+          INSUFFICIENT_APPROVALS: ${{ steps.fabrication-authorization-insufficient.outputs.approvals }}
+          INSUFFICIENT_REJECTIONS: ${{ steps.fabrication-authorization-insufficient.outputs.rejections }}
+          INSUFFICIENT_GATE_FAILURE_COUNT: ${{ steps.fabrication-authorization-insufficient.outputs.gate-failure-count }}
+          INSUFFICIENT_PLAN_SHA256: ${{ steps.fabrication-authorization-insufficient.outputs.plan-sha256 }}
+          INSUFFICIENT_RUN_SHA256: ${{ steps.fabrication-authorization-insufficient.outputs.run-sha256 }}
+          INSUFFICIENT_PACKAGE_SHA256: ${{ steps.fabrication-authorization-insufficient.outputs.manufacturing-package-sha256 }}
+          INSUFFICIENT_RECEIPT_SHA256: ${{ steps.fabrication-authorization-insufficient.outputs.factory-receipt-sha256 }}
+          INSUFFICIENT_POLICY_SHA256: ${{ steps.fabrication-authorization-insufficient.outputs.policy-pack-sha256 }}
+          INSUFFICIENT_QUOTE_VERIFIED: ${{ steps.fabrication-authorization-insufficient.outputs.quote-authenticity-verified }}
+          INSUFFICIENT_CHALLENGE_ENFORCED: ${{ steps.fabrication-authorization-insufficient.outputs.challenge-one-time-use-enforced }}
+          INSUFFICIENT_REPORT_BYTES: ${{ steps.fabrication-authorization-insufficient.outputs.report-bytes }}
+          INSUFFICIENT_REPORT_SHA256: ${{ steps.fabrication-authorization-insufficient.outputs.report-sha256 }}
+        run: |
+          set -euo pipefail
+          fixture=build/fabrication-authorization-action-fixture
+          fixture_summary="$fixture/fixture-summary.json"
+          test -s "$fixture_summary"
+          jq -e \
+            '.schema_version == 1
+             and .pipeline_approved == true
+             and .factory_required == true
+             and .plan == "factory-required-plan.json"
+             and .retained_report == "factory-required-report.json"
+             and .manufacturing_package == "manufacturing.zip"
+             and .factory_receipt == "factory-receipt.json"
+             and .policy_pack == "final-policy-pack.json"
+             and .approvals == ["approval-a.json", "approval-b.json"]
+             and .authorization_id == "action-fabrication-release"
+             and .challenge == ("ab" * 32)
+             and .quantity == 25
+             and .currency == "USD"
+             and .maximum_total_minor_units == 125000
+             and (.plan_sha256 | test("^[0-9a-f]{64}$"))
+             and (.run_sha256 | test("^[0-9a-f]{64}$"))
+             and (.retained_report_sha256 | test("^[0-9a-f]{64}$"))
+             and (.manufacturing_package_sha256 | test("^[0-9a-f]{64}$"))
+             and (.factory_receipt_sha256 | test("^[0-9a-f]{64}$"))
+             and (.policy_pack_sha256 | test("^[0-9a-f]{64}$"))' \
+            "$fixture_summary" >/dev/null
+
+          test "$AUTHORIZED_STATUS" = "ok"
+          test "$AUTHORIZED_ARTIFACT_DIR" = "build/fabrication-authorization-authorized"
+          test "$AUTHORIZED_REPORT" = "$AUTHORIZED_ARTIFACT_DIR/fabrication-authorization.json"
+          test -s "$AUTHORIZED_REPORT"
+          test "$AUTHORIZED_SCHEMA_VERSION" = "1"
+          test "$AUTHORIZED_STATUS_VALUE" = "fabrication_authorized"
+          test "$AUTHORIZED" = "true"
+          test "$AUTHORIZED_AUTHORIZATION_ID" = "$(jq -r '.authorization_id' "$fixture_summary")"
+          test "$AUTHORIZED_CHALLENGE" = "$(jq -r '.challenge' "$fixture_summary")"
+          test "$AUTHORIZED_QUANTITY" = "$(jq -r '.quantity' "$fixture_summary")"
+          test "$AUTHORIZED_CURRENCY" = "$(jq -r '.currency' "$fixture_summary")"
+          test "$AUTHORIZED_MAXIMUM_TOTAL" = "$(jq -r '.maximum_total_minor_units' "$fixture_summary")"
+          test "$AUTHORIZED_VALID_FROM" = "$(jq -r '.valid_from_unix' "$fixture_summary")"
+          test "$AUTHORIZED_EXPIRES_AT" = "$(jq -r '.expires_at_unix' "$fixture_summary")"
+          test "$AUTHORIZED_EVALUATED_AT" -ge "$AUTHORIZED_VALID_FROM"
+          test "$AUTHORIZED_EVALUATED_AT" -le "$AUTHORIZED_EXPIRES_AT"
+          test "$AUTHORIZED_APPROVALS" = "2"
+          test "$AUTHORIZED_REJECTIONS" = "0"
+          test "$AUTHORIZED_GATE_FAILURE_COUNT" = "0"
+          test "$AUTHORIZED_PLAN_SHA256" = "$(jq -r '.plan_sha256' "$fixture_summary")"
+          test "$AUTHORIZED_RUN_SHA256" = "$(jq -r '.run_sha256' "$fixture_summary")"
+          test "$AUTHORIZED_PACKAGE_SHA256" = "$(sha256sum "$fixture/manufacturing.zip" | cut -d' ' -f1)"
+          test "$AUTHORIZED_RECEIPT_SHA256" = "$(sha256sum "$fixture/factory-receipt.json" | cut -d' ' -f1)"
+          test "$AUTHORIZED_POLICY_SHA256" = "$(sha256sum "$fixture/final-policy-pack.json" | cut -d' ' -f1)"
+          test "$AUTHORIZED_QUOTE_VERIFIED" = "false"
+          test "$AUTHORIZED_CHALLENGE_ENFORCED" = "false"
+          test "$AUTHORIZED_REPORT_BYTES" -le 134217728
+          test "$AUTHORIZED_REPORT_BYTES" = "$(wc -c < "$AUTHORIZED_REPORT" | tr -d ' ')"
+          test "$AUTHORIZED_REPORT_SHA256" = "$(sha256sum "$AUTHORIZED_REPORT" | cut -d' ' -f1)"
+          jq -e \
+            --arg authorization_id "$AUTHORIZED_AUTHORIZATION_ID" \
+            --arg challenge "$AUTHORIZED_CHALLENGE" \
+            --arg currency "$AUTHORIZED_CURRENCY" \
+            --arg plan_sha256 "$AUTHORIZED_PLAN_SHA256" \
+            --arg run_sha256 "$AUTHORIZED_RUN_SHA256" \
+            --arg package_sha256 "$AUTHORIZED_PACKAGE_SHA256" \
+            --arg receipt_sha256 "$AUTHORIZED_RECEIPT_SHA256" \
+            --arg policy_sha256 "$AUTHORIZED_POLICY_SHA256" \
+            --argjson quantity "$AUTHORIZED_QUANTITY" \
+            --argjson maximum_total "$AUTHORIZED_MAXIMUM_TOTAL" \
+            --argjson valid_from "$AUTHORIZED_VALID_FROM" \
+            --argjson expires_at "$AUTHORIZED_EXPIRES_AT" \
+            --argjson evaluated_at "$AUTHORIZED_EVALUATED_AT" \
+            '.schema_version == 1
+             and .status == "fabrication_authorized"
+             and .fabrication_authorized == true
+             and .approvals == 2
+             and .rejections == 0
+             and .gate_failures == []
+             and .scope == {
+               authorization_id: $authorization_id,
+               challenge: $challenge,
+               quantity: $quantity,
+               currency: $currency,
+               maximum_total_minor_units: $maximum_total,
+               valid_from_unix: $valid_from,
+               expires_at_unix: $expires_at
+             }
+             and .evaluated_at_unix == $evaluated_at
+             and .evidence.pipeline.plan_sha256 == $plan_sha256
+             and .evidence.pipeline.run_sha256 == $run_sha256
+             and .evidence.manufacturing_package.sha256 == $package_sha256
+             and .evidence.factory_receipt.receipt.sha256 == $receipt_sha256
+             and .evidence.policy_pack.source.sha256 == $policy_sha256
+             and .evidence.factory_receipt.quote_authenticity_verified == false
+             and .challenge_one_time_use_enforced == false' \
+            "$AUTHORIZED_REPORT" >/dev/null
+
+          test "$INSUFFICIENT_OUTCOME" = "failure"
+          test "$INSUFFICIENT_STATUS" = "ok"
+          test "$INSUFFICIENT_ARTIFACT_DIR" = "build/fabrication-authorization-insufficient"
+          test "$INSUFFICIENT_REPORT" = "$INSUFFICIENT_ARTIFACT_DIR/fabrication-authorization.json"
+          test -s "$INSUFFICIENT_REPORT"
+          test "$INSUFFICIENT_SCHEMA_VERSION" = "1"
+          test "$INSUFFICIENT_STATUS_VALUE" = "not_authorized"
+          test "$INSUFFICIENT_AUTHORIZED" = "false"
+          test "$INSUFFICIENT_AUTHORIZATION_ID" = "$AUTHORIZED_AUTHORIZATION_ID"
+          test "$INSUFFICIENT_CHALLENGE" = "$AUTHORIZED_CHALLENGE"
+          test "$INSUFFICIENT_QUANTITY" = "$AUTHORIZED_QUANTITY"
+          test "$INSUFFICIENT_CURRENCY" = "$AUTHORIZED_CURRENCY"
+          test "$INSUFFICIENT_MAXIMUM_TOTAL" = "$AUTHORIZED_MAXIMUM_TOTAL"
+          test "$INSUFFICIENT_VALID_FROM" = "$AUTHORIZED_VALID_FROM"
+          test "$INSUFFICIENT_EXPIRES_AT" = "$AUTHORIZED_EXPIRES_AT"
+          test "$INSUFFICIENT_EVALUATED_AT" -ge "$INSUFFICIENT_VALID_FROM"
+          test "$INSUFFICIENT_EVALUATED_AT" -le "$INSUFFICIENT_EXPIRES_AT"
+          test "$INSUFFICIENT_APPROVALS" = "1"
+          test "$INSUFFICIENT_REJECTIONS" = "0"
+          test "$INSUFFICIENT_GATE_FAILURE_COUNT" = "1"
+          test "$INSUFFICIENT_PLAN_SHA256" = "$AUTHORIZED_PLAN_SHA256"
+          test "$INSUFFICIENT_RUN_SHA256" = "$AUTHORIZED_RUN_SHA256"
+          test "$INSUFFICIENT_PACKAGE_SHA256" = "$AUTHORIZED_PACKAGE_SHA256"
+          test "$INSUFFICIENT_RECEIPT_SHA256" = "$AUTHORIZED_RECEIPT_SHA256"
+          test "$INSUFFICIENT_POLICY_SHA256" = "$AUTHORIZED_POLICY_SHA256"
+          test "$INSUFFICIENT_QUOTE_VERIFIED" = "false"
+          test "$INSUFFICIENT_CHALLENGE_ENFORCED" = "false"
+          test "$INSUFFICIENT_REPORT_BYTES" -le 134217728
+          test "$INSUFFICIENT_REPORT_BYTES" = "$(wc -c < "$INSUFFICIENT_REPORT" | tr -d ' ')"
+          test "$INSUFFICIENT_REPORT_SHA256" = "$(sha256sum "$INSUFFICIENT_REPORT" | cut -d' ' -f1)"
+          jq -e \
+            --arg authorization_id "$INSUFFICIENT_AUTHORIZATION_ID" \
+            --arg challenge "$INSUFFICIENT_CHALLENGE" \
+            --arg currency "$INSUFFICIENT_CURRENCY" \
+            --arg plan_sha256 "$INSUFFICIENT_PLAN_SHA256" \
+            --arg run_sha256 "$INSUFFICIENT_RUN_SHA256" \
+            --arg package_sha256 "$INSUFFICIENT_PACKAGE_SHA256" \
+            --arg receipt_sha256 "$INSUFFICIENT_RECEIPT_SHA256" \
+            --arg policy_sha256 "$INSUFFICIENT_POLICY_SHA256" \
+            --argjson quantity "$INSUFFICIENT_QUANTITY" \
+            --argjson maximum_total "$INSUFFICIENT_MAXIMUM_TOTAL" \
+            --argjson valid_from "$INSUFFICIENT_VALID_FROM" \
+            --argjson expires_at "$INSUFFICIENT_EXPIRES_AT" \
+            --argjson evaluated_at "$INSUFFICIENT_EVALUATED_AT" \
+            '.schema_version == 1
+             and .status == "not_authorized"
+             and .fabrication_authorized == false
+             and .approvals == 1
+             and .rejections == 0
+             and .gate_failures == ["insufficient_fabrication_approvals:required=2:actual=1"]
+             and .scope == {
+               authorization_id: $authorization_id,
+               challenge: $challenge,
+               quantity: $quantity,
+               currency: $currency,
+               maximum_total_minor_units: $maximum_total,
+               valid_from_unix: $valid_from,
+               expires_at_unix: $expires_at
+             }
+             and .evaluated_at_unix == $evaluated_at
+             and .evidence.pipeline.plan_sha256 == $plan_sha256
+             and .evidence.pipeline.run_sha256 == $run_sha256
+             and .evidence.manufacturing_package.sha256 == $package_sha256
+             and .evidence.factory_receipt.receipt.sha256 == $receipt_sha256
+             and .evidence.policy_pack.source.sha256 == $policy_sha256
+             and .evidence.factory_receipt.quote_authenticity_verified == false
+             and .challenge_one_time_use_enforced == false' \
+            "$INSUFFICIENT_REPORT" >/dev/null
       - name: Prepare deterministic pipeline plan fixture
         run: |
           smoke_dir=build/deterministic-pipeline

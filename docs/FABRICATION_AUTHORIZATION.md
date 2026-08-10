@@ -3,8 +3,11 @@
 Version 1.459 adds a Rust-native dual-control CLI boundary for releasing one
 exact manufacturing package to a separately controlled fabrication handoff.
 Version 1.460 exposes fresh verification, but never signing or private-key
-access, through MCP. Neither version submits that package, places an order,
-reserves inventory, executes payment, or contacts a network service.
+access, through MCP. Version 1.461 adds the same verification-only boundary as
+a focused boardless composite GitHub Action. None of these versions submits
+that package to a factory, places an order, reserves inventory, executes
+payment, or contacts a fabrication API as part of verification. The Action
+may still download its Rust toolchain and upload the retained GitHub artifact.
 
 The authorization starts from an existing factory-required deterministic
 pipeline plan and retained report. pcbex runs that plan again in-process and
@@ -223,6 +226,29 @@ the file may remain rather than being deleted. That file is not authenticated
 by the cancelled Task and must be treated only as a snapshot pending a fresh
 verification into a new output path.
 
+## Focused GitHub Action parity
+
+Version 1.461 adds the standalone
+`actions/fabrication-authorization` composite Action. It accepts the same five
+required evidence paths plus 1–100 newline-separated `approval-files`, keeps
+signing and private-key access CLI-only, and retains the fixed
+`${output-dir}/fabrication-authorization.json` report. It is boardless and does
+not expand the root hardware-analysis Action.
+
+The Action authenticates the exact 23-field compact verifier bridge against
+the full retained report, snapshots and rereads all direct inputs, requires a
+one-file depth-one output within 128 MiB, and revalidates the report at the
+publication boundary. Valid `not_authorized` evidence is retained and may be
+uploaded before the optional `require-authorized` final gate fails. The full
+report contains policy and human approval material; use
+`upload-artifact: "false"` when that evidence should not enter the GitHub
+artifact service.
+
+See
+[`FABRICATION_AUTHORIZATION_ACTION.md`](FABRICATION_AUTHORIZATION_ACTION.md)
+for the exact inputs, outputs, sequencing, confidentiality warning, and
+non-claims.
+
 ## Receipt and authority limits
 
 The existing factory receipt is locally normalized evidence. The verifier
@@ -243,9 +269,9 @@ expiration prevent accidental cross-scope reuse, but a static offline verifier
 cannot know whether an authorization was already consumed. One-time use,
 revocation, procurement authorization, supplier authenticity, live inventory,
 and spend enforcement require a durable trusted ledger and a separate order
-executor. Those capabilities remain outside v1.460. MCP verification is
-available, but a verification-only GitHub Action is intentionally deferred to
-a later milestone.
+executor. Those capabilities remain outside v1.461. MCP and the focused GitHub
+Action provide fresh verification only; neither consumes the challenge nor
+executes an order.
 
 The verifier can veto only a valid rejection included in its submitted
 approval set. It cannot discover a withheld decision or treat a later

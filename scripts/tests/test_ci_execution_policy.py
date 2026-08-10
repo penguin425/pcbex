@@ -11,6 +11,37 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 ACTION = ROOT / "action.yml"
 BOARDLESS_NATIVE_ERC_ACTION = ROOT / "actions" / "native-kicad-erc" / "action.yml"
+FABRICATION_AUTHORIZATION_ACTION = (
+    ROOT / "actions" / "fabrication-authorization" / "action.yml"
+)
+FABRICATION_AUTHORIZATION_FIXTURE = (
+    ROOT / "scripts" / "fabrication_authorization_action_ci.py"
+)
+FABRICATION_AUTHORIZATION_SUMMARY_OUTPUTS = (
+    "schema-version",
+    "authorization-status",
+    "fabrication-authorized",
+    "authorization-id",
+    "challenge",
+    "quantity",
+    "currency",
+    "maximum-total-minor-units",
+    "valid-from-unix",
+    "expires-at-unix",
+    "evaluated-at-unix",
+    "approvals",
+    "rejections",
+    "gate-failure-count",
+    "plan-sha256",
+    "run-sha256",
+    "manufacturing-package-sha256",
+    "factory-receipt-sha256",
+    "policy-pack-sha256",
+    "quote-authenticity-verified",
+    "challenge-one-time-use-enforced",
+    "report-bytes",
+    "report-sha256",
+)
 
 EXPECTED_TIMEOUTS = {
     "ci.yml": {
@@ -185,6 +216,190 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertGreaterEqual(
             document.count("steps.artifact-boundary.outputs.safe == 'true'"), 3
         )
+
+    def test_focused_fabrication_authorization_action_smoke_is_bounded_and_ordered(
+        self,
+    ):
+        document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+        block = _job_blocks(document)["hardware-ci-action"]
+        fixture_name = (
+            "- name: Build real factory-bound fabrication authorization fixture"
+        )
+        authorized_name = "- name: Exercise authorized fabrication authorization action"
+        insufficient_name = (
+            "- name: Exercise insufficient fabrication authorization action"
+        )
+        verify_name = "- name: Verify focused fabrication authorization action outputs"
+        following_name = "- name: Prepare deterministic pipeline plan fixture"
+        fixture_index = block.index(fixture_name)
+        authorized_index = block.index(authorized_name)
+        insufficient_index = block.index(insufficient_name)
+        verify_index = block.index(verify_name)
+        following_index = block.index(following_name)
+        self.assertLess(fixture_index, authorized_index)
+        self.assertLess(authorized_index, insufficient_index)
+        self.assertLess(insufficient_index, verify_index)
+        self.assertLess(verify_index, following_index)
+
+        fixture = block[fixture_index:authorized_index]
+        authorized = block[authorized_index:insufficient_index]
+        insufficient = block[insufficient_index:verify_index]
+        verification = block[verify_index:following_index]
+        for required in (
+            "python3 scripts/ci_runtime.py exec",
+            "--timeout-seconds 900",
+            "--max-stdout-bytes 65536",
+            "--max-stderr-bytes 1048576",
+            "--output-root build/fabrication-authorization-action-fixture",
+            "-- python3 scripts/fabrication_authorization_action_ci.py",
+            "--pcbex target/release/pcbex",
+            "--fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci",
+            "--policy-template examples/acme-policy-pack.json",
+            "--output-dir build/fabrication-authorization-action-fixture",
+            "--timeout-seconds 300",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, fixture)
+        self.assertEqual(
+            block.count("uses: ./actions/fabrication-authorization"), 2
+        )
+        for action_case in (authorized, insufficient):
+            self.assertIn("require-authorized: \"true\"", action_case)
+            self.assertIn('upload-artifact: "false"', action_case)
+            self.assertIn("approval-files:", action_case)
+            self.assertNotRegex(action_case, r"(?m)^          approvals:")
+            self.assertIn("factory-required-plan.json", action_case)
+            self.assertIn("factory-required-report.json", action_case)
+            self.assertIn("manufacturing.zip", action_case)
+            self.assertIn("factory-receipt.json", action_case)
+            self.assertIn("final-policy-pack.json", action_case)
+        self.assertNotIn("continue-on-error", authorized)
+        self.assertIn("continue-on-error: true", insufficient)
+        self.assertIn("approval-b.json", authorized)
+        self.assertNotIn("approval-b.json", insufficient)
+        self.assertIn("if: ${{ always() }}", verification)
+        for output in FABRICATION_AUTHORIZATION_SUMMARY_OUTPUTS:
+            with self.subTest(summary_output=output):
+                self.assertIn(
+                    f"steps.fabrication-authorization-authorized.outputs.{output}",
+                    verification,
+                )
+                self.assertIn(
+                    f"steps.fabrication-authorization-insufficient.outputs.{output}",
+                    verification,
+                )
+        for required in (
+            "fixture-summary.json",
+            'test "$AUTHORIZED_STATUS" = "ok"',
+            'test "$AUTHORIZED_STATUS_VALUE" = "fabrication_authorized"',
+            'test "$AUTHORIZED" = "true"',
+            'test "$AUTHORIZED_APPROVALS" = "2"',
+            'test "$AUTHORIZED_GATE_FAILURE_COUNT" = "0"',
+            'test "$AUTHORIZED_REPORT_BYTES" -le 134217728',
+            'test "$AUTHORIZED_REPORT_BYTES" =',
+            'test "$AUTHORIZED_REPORT_SHA256" =',
+            'test "$INSUFFICIENT_OUTCOME" = "failure"',
+            'test "$INSUFFICIENT_STATUS_VALUE" = "not_authorized"',
+            'test "$INSUFFICIENT_AUTHORIZED" = "false"',
+            'test "$INSUFFICIENT_APPROVALS" = "1"',
+            'test "$INSUFFICIENT_GATE_FAILURE_COUNT" = "1"',
+            'test "$INSUFFICIENT_REPORT_BYTES" -le 134217728',
+            'test "$INSUFFICIENT_REPORT_BYTES" =',
+            'test "$INSUFFICIENT_REPORT_SHA256" =',
+            "insufficient_fabrication_approvals:required=2:actual=1",
+            "and .scope == {",
+            "and .evaluated_at_unix == $evaluated_at",
+            ".evidence.pipeline.plan_sha256",
+            ".evidence.pipeline.run_sha256",
+            ".evidence.manufacturing_package.sha256",
+            ".evidence.factory_receipt.receipt.sha256",
+            ".evidence.policy_pack.source.sha256",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, verification)
+
+        fixture_source = FABRICATION_AUTHORIZATION_FIXTURE.read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "import deterministic_pipeline_ci as pipeline_fixture", fixture_source
+        )
+        self.assertIn("tempfile.TemporaryDirectory", fixture_source)
+        self.assertIn('"require_factory": True', fixture_source)
+        self.assertIn('"run-deterministic-pipeline"', fixture_source)
+        self.assertIn('"--require-approved"', fixture_source)
+        self.assertEqual(fixture_source.count('"sign-fabrication-approval"'), 1)
+        self.assertIn("_validate_approvals(", fixture_source)
+        self.assertIn("fixture-summary.json", fixture_source)
+
+    def test_focused_fabrication_authorization_action_has_pinned_execution_and_gate_order(
+        self,
+    ):
+        document = FABRICATION_AUTHORIZATION_ACTION.read_text(encoding="utf-8")
+        inputs = document[
+            document.index("\ninputs:\n") : document.index("\noutputs:\n")
+        ]
+        outputs = document[
+            document.index("\noutputs:\n") : document.index("\nruns:\n")
+        ]
+        self.assertEqual(
+            re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\s*$", inputs),
+            [
+                "plan",
+                "retained-report",
+                "manufacturing-package",
+                "factory-receipt",
+                "policy-pack",
+                "approval-files",
+                "require-authorized",
+                "output-dir",
+                "upload-artifact",
+                "artifact-name",
+                "retention-days",
+            ],
+        )
+        self.assertEqual(
+            re.findall(r"(?m)^  ([a-z][a-z0-9-]*):\s*$", outputs),
+            [
+                "status",
+                "artifact-dir",
+                "fabrication-authorization-report",
+                *FABRICATION_AUTHORIZATION_SUMMARY_OUTPUTS,
+            ],
+        )
+        self.assertIn('scripts/ci_runtime.py" exec', document)
+        for required in (
+            "--timeout-seconds 600",
+            "--timeout-seconds 1800",
+            "--timeout-seconds 60",
+            "--timeout-seconds 900",
+            "--max-stdout-bytes 1048576",
+            "--max-stderr-bytes 8388608",
+            "--max-file-bytes 134217728",
+            "--max-total-bytes 134217728",
+            "cargo +stable build",
+            "--locked",
+            "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+            "authorization-status",
+            "report-bytes",
+            "report-sha256",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, document)
+        verify = document.index("- name: Verify fabrication authorization")
+        artifact = document.index(
+            "- name: Validate one-file bounded fabrication evidence"
+        )
+        publication = document.index(
+            "- name: Revalidate fabrication authorization before publication"
+        )
+        upload = document.index("- name: Upload fabrication authorization evidence")
+        gate = document.index("- name: Enforce fabrication authorization gate")
+        self.assertLess(verify, artifact)
+        self.assertLess(artifact, publication)
+        self.assertLess(publication, upload)
+        self.assertLess(upload, gate)
+        self.assertIn("if: ${{ always() }}", document[gate:])
 
     def test_deterministic_pipeline_job_is_independent_and_fully_enforced(self):
         document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")

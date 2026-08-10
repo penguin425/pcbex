@@ -1,0 +1,364 @@
+name: pcbex fabrication authorization verification
+description: Freshly verify exact fabrication authorization evidence and retain a bounded audit report without signing, ordering, or payment authority.
+author: pcbex contributors
+
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  plan:
+    description: Caller-workspace-relative deterministic pipeline plan to replay.
+    required: true
+  retained-report:
+    description: Caller-workspace-relative retained approved deterministic pipeline report.
+    required: true
+  manufacturing-package:
+    description: Caller-workspace-relative retained manufacturing package ZIP.
+    required: true
+  factory-receipt:
+    description: Caller-workspace-relative retained factory receipt JSON.
+    required: true
+  policy-pack:
+    description: Caller-workspace-relative organization policy pack JSON.
+    required: true
+  approval-files:
+    description: Newline-separated caller-workspace-relative signed fabrication approval JSON files.
+    required: true
+  require-authorized:
+    description: Fail the final Action gate unless the freshly verified authorization is authorized; this is never forwarded to the child CLI.
+    required: false
+    default: "false"
+  output-dir:
+    description: Empty caller-relative literal directory for the fixed fabrication-authorization.json report.
+    required: false
+    default: pcbex-fabrication-authorization
+  upload-artifact:
+    description: Upload the one-file bounded, publication-revalidated fabrication authorization evidence directory.
+    required: false
+    default: "true"
+  artifact-name:
+    description: GitHub Actions artifact name for the authenticated fabrication authorization evidence.
+    required: false
+    default: pcbex-fabrication-authorization
+  retention-days:
+    description: Artifact retention in days from 1 through 90.
+    required: false
+    default: "14"
+
+outputs:
+  status:
+    description: Fresh fabrication authorization verification status, either ok or error.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && 'ok' || 'error' }}
+  artifact-dir:
+    description: Bounded caller-workspace-relative evidence directory, exposed only after summary authentication.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.artifact-dir || '' }}
+  fabrication-authorization-report:
+    description: Fixed authenticated fabrication authorization report path.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.fabrication-authorization-report || '' }}
+  schema-version:
+    description: Fabrication authorization report schema version.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.schema-version || '' }}
+  authorization-status:
+    description: Closed report status, fabrication_authorized or not_authorized.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.authorization-status || '' }}
+  fabrication-authorized:
+    description: Whether the freshly replayed authorization quorum authorized the exact signed scope.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.fabrication-authorized || '' }}
+  authorization-id:
+    description: Signed authorization identifier from the authenticated compact summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.authorization-id || '' }}
+  challenge:
+    description: Signed authorization challenge digest from the authenticated compact summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.challenge || '' }}
+  quantity:
+    description: Signed fabrication quantity from the authenticated compact summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.quantity || '' }}
+  currency:
+    description: Signed three-letter currency from the authenticated compact summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.currency || '' }}
+  maximum-total-minor-units:
+    description: Signed maximum total in minor units from the authenticated compact summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.maximum-total-minor-units || '' }}
+  valid-from-unix:
+    description: Signed authorization window start from the authenticated compact summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.valid-from-unix || '' }}
+  expires-at-unix:
+    description: Signed authorization window end from the authenticated compact summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.expires-at-unix || '' }}
+  evaluated-at-unix:
+    description: Child-sampled evaluation time from the authenticated audit snapshot; it is not reusable authority.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.evaluated-at-unix || '' }}
+  approvals:
+    description: Count of valid approve decisions in the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.approvals || '' }}
+  rejections:
+    description: Count of valid reject decisions in the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.rejections || '' }}
+  gate-failure-count:
+    description: Number of closed authorization gate failures in the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.gate-failure-count || '' }}
+  plan-sha256:
+    description: Replayed deterministic plan digest from the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.plan-sha256 || '' }}
+  run-sha256:
+    description: Replayed deterministic pipeline run digest from the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.run-sha256 || '' }}
+  manufacturing-package-sha256:
+    description: Exact manufacturing package digest from the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.manufacturing-package-sha256 || '' }}
+  factory-receipt-sha256:
+    description: Exact factory receipt source digest from the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.factory-receipt-sha256 || '' }}
+  policy-pack-sha256:
+    description: Exact policy pack source digest from the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.policy-pack-sha256 || '' }}
+  quote-authenticity-verified:
+    description: Always false for the unsigned normalized receipt boundary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.quote-authenticity-verified || '' }}
+  challenge-one-time-use-enforced:
+    description: Always false because this offline Action does not provide durable challenge consumption state.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.challenge-one-time-use-enforced || '' }}
+  report-bytes:
+    description: Exact retained report byte count from the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.report-bytes || '' }}
+  report-sha256:
+    description: Exact retained report SHA-256 from the authenticated summary.
+    value: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.report-sha256 || '' }}
+
+runs:
+  using: composite
+  steps:
+    - name: Validate fabrication authorization Action inputs
+      id: preflight
+      shell: bash
+      env:
+        PCBEX_FABRICATION_PLAN: ${{ inputs.plan }}
+        PCBEX_FABRICATION_RETAINED_REPORT: ${{ inputs.retained-report }}
+        PCBEX_FABRICATION_MANUFACTURING_PACKAGE: ${{ inputs.manufacturing-package }}
+        PCBEX_FABRICATION_FACTORY_RECEIPT: ${{ inputs.factory-receipt }}
+        PCBEX_FABRICATION_POLICY_PACK: ${{ inputs.policy-pack }}
+        PCBEX_FABRICATION_APPROVAL_FILES: ${{ inputs.approval-files }}
+        PCBEX_FABRICATION_REQUIRE_AUTHORIZED: ${{ inputs.require-authorized }}
+        PCBEX_FABRICATION_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_FABRICATION_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+        PCBEX_FABRICATION_RETENTION_DAYS: ${{ inputs.retention-days }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        repository_root="$(cd -- "$GITHUB_ACTION_PATH/../.." && pwd -P)"
+        if [[ -z "$PCBEX_FABRICATION_PLAN" ||
+          -z "$PCBEX_FABRICATION_RETAINED_REPORT" ||
+          -z "$PCBEX_FABRICATION_MANUFACTURING_PACKAGE" ||
+          -z "$PCBEX_FABRICATION_FACTORY_RECEIPT" ||
+          -z "$PCBEX_FABRICATION_POLICY_PACK" ||
+          -z "$PCBEX_FABRICATION_APPROVAL_FILES" ]]; then
+          echo "plan, retained-report, manufacturing-package, factory-receipt, policy-pack, and approval-files are required" >&2
+          exit 2
+        fi
+        case "$PCBEX_FABRICATION_REQUIRE_AUTHORIZED" in
+          true|false) ;;
+          *) echo "require-authorized must be true or false" >&2; exit 2 ;;
+        esac
+        case "$PCBEX_FABRICATION_UPLOAD_ARTIFACT" in
+          true|false) ;;
+          *) echo "upload-artifact must be true or false" >&2; exit 2 ;;
+        esac
+        if [[ -z "$PCBEX_FABRICATION_ARTIFACT_NAME" ||
+          "$PCBEX_FABRICATION_ARTIFACT_NAME" =~ [[:cntrl:]] ]]; then
+          echo "artifact-name must be non-empty and contain no control characters" >&2
+          exit 2
+        fi
+        if [[ ! "$PCBEX_FABRICATION_RETENTION_DAYS" =~ ^([1-9]|[1-8][0-9]|90)$ ]]; then
+          echo "retention-days must be an integer from 1 through 90" >&2
+          exit 2
+        fi
+        python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+          "--path=$PCBEX_FABRICATION_PLAN"
+        python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+          "--path=$PCBEX_FABRICATION_RETAINED_REPORT"
+        python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+          "--path=$PCBEX_FABRICATION_MANUFACTURING_PACKAGE"
+        python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+          "--path=$PCBEX_FABRICATION_FACTORY_RECEIPT"
+        python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+          "--path=$PCBEX_FABRICATION_POLICY_PACK"
+        approvals_without_trailing_newline="$PCBEX_FABRICATION_APPROVAL_FILES"
+        if [[ "$approvals_without_trailing_newline" == *$'\n' ]]; then
+          approvals_without_trailing_newline="${approvals_without_trailing_newline%$'\n'}"
+        fi
+        approval_count=0
+        while IFS= read -r approval || [[ -n "$approval" ]]; do
+          if [[ -z "$approval" ]]; then
+            echo "approval-files must contain one non-empty relative path per line" >&2
+            exit 2
+          fi
+          approval_count=$((approval_count + 1))
+          if ((approval_count > 100)); then
+            echo "approval-files must contain 1 through 100 paths" >&2
+            exit 2
+          fi
+          python3 "$repository_root/scripts/ci_runtime.py" validate-input \
+            "--path=$approval"
+        done <<< "$approvals_without_trailing_newline"
+        if ((approval_count < 1)); then
+          echo "approval-files must contain 1 through 100 paths" >&2
+          exit 2
+        fi
+        python3 "$repository_root/scripts/ci_runtime.py" validate-output \
+          "--output-root=$PCBEX_OUTPUT_DIR"
+        printf 'valid=true\n' >> "$GITHUB_OUTPUT"
+
+    - name: Build pcbex
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+        repository_root="$(cd -- "$GITHUB_ACTION_PATH/../.." && pwd -P)"
+        python3 "$repository_root/scripts/ci_runtime.py" exec \
+          --timeout-seconds 600 \
+          --max-stdout-bytes 8388608 \
+          --max-stderr-bytes 8388608 \
+          -- rustup toolchain install stable --profile minimal
+        python3 "$repository_root/scripts/ci_runtime.py" exec \
+          --timeout-seconds 1800 \
+          --max-stdout-bytes 8388608 \
+          --max-stderr-bytes 8388608 \
+          -- cargo +stable build \
+            --manifest-path "$repository_root/Cargo.toml" \
+            --package pcbex \
+            --release \
+            --locked
+        target_directory="$(
+          python3 "$repository_root/scripts/ci_runtime.py" exec \
+            --timeout-seconds 60 \
+            --max-stdout-bytes 1048576 \
+            --max-stderr-bytes 1048576 \
+            -- cargo +stable metadata \
+              --manifest-path "$repository_root/Cargo.toml" \
+              --format-version 1 \
+              --no-deps |
+          python3 -c 'import json,sys; value=json.load(sys.stdin)["target_directory"]; valid=isinstance(value,str) and bool(value) and not any(ord(c)<32 or ord(c)==127 for c in value); sys.exit(2) if not valid else print(value,end="")'
+        )"
+        binary="$target_directory/release/pcbex"
+        if [[ ! -x "$binary" && -x "${binary}.exe" ]]; then
+          binary="${binary}.exe"
+        fi
+        if [[ ! -f "$binary" || ! -x "$binary" ]]; then
+          echo "built pcbex binary is unavailable" >&2
+          exit 2
+        fi
+        printf 'binary=%s\n' "$binary" >> "$GITHUB_OUTPUT"
+        printf 'repository-root=%s\n' "$repository_root" >> "$GITHUB_OUTPUT"
+
+    - name: Verify fabrication authorization
+      id: fabrication-authorization
+      shell: bash
+      env:
+        PCBEX_BINARY: ${{ steps.build.outputs.binary }}
+        PCBEX_REPOSITORY_ROOT: ${{ steps.build.outputs.repository-root }}
+        PCBEX_FABRICATION_PLAN: ${{ inputs.plan }}
+        PCBEX_FABRICATION_RETAINED_REPORT: ${{ inputs.retained-report }}
+        PCBEX_FABRICATION_MANUFACTURING_PACKAGE: ${{ inputs.manufacturing-package }}
+        PCBEX_FABRICATION_FACTORY_RECEIPT: ${{ inputs.factory-receipt }}
+        PCBEX_FABRICATION_POLICY_PACK: ${{ inputs.policy-pack }}
+        PCBEX_FABRICATION_APPROVAL_FILES: ${{ inputs.approval-files }}
+        PCBEX_FABRICATION_REQUIRE_AUTHORIZED: ${{ inputs.require-authorized }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: >-
+        python3 "$PCBEX_REPOSITORY_ROOT/scripts/ci_runtime.py" exec
+        --timeout-seconds 900
+        --max-stdout-bytes 1048576
+        --max-stderr-bytes 8388608
+        --output-root="$PCBEX_OUTPUT_DIR"
+        -- bash "$PCBEX_REPOSITORY_ROOT/scripts/fabrication-authorization-action.sh"
+
+    - name: Validate one-file bounded fabrication evidence
+      id: artifact-boundary
+      if: ${{ always() && steps.fabrication-authorization.outcome == 'success' && steps.fabrication-authorization.outputs.artifact-dir != '' }}
+      shell: bash
+      env:
+        PCBEX_REPOSITORY_ROOT: ${{ steps.build.outputs.repository-root }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: |
+        set -euo pipefail
+        usage="$(python3 "$PCBEX_REPOSITORY_ROOT/scripts/ci_runtime.py" scan \
+          "--output-root=$PCBEX_OUTPUT_DIR" \
+          --max-entries 1 \
+          --max-depth 1 \
+          --max-file-bytes 134217728 \
+          --max-total-bytes 134217728)"
+        [[ "$usage" == *"1 entries, 1 files,"* ]] || {
+          echo "fabrication authorization evidence must contain exactly one bounded file" >&2
+          exit 2
+        }
+        printf 'safe=true\n' >> "$GITHUB_OUTPUT"
+
+    - name: Revalidate fabrication authorization before publication
+      id: publication-boundary
+      if: ${{ always() && steps.fabrication-authorization.outcome == 'success' && steps.artifact-boundary.outputs.safe == 'true' && steps.fabrication-authorization.outputs.artifact-dir != '' }}
+      shell: bash
+      env:
+        PCBEX_BINARY: ${{ steps.build.outputs.binary }}
+        PCBEX_REPOSITORY_ROOT: ${{ steps.build.outputs.repository-root }}
+        PCBEX_FABRICATION_PLAN: ${{ inputs.plan }}
+        PCBEX_FABRICATION_RETAINED_REPORT: ${{ inputs.retained-report }}
+        PCBEX_FABRICATION_MANUFACTURING_PACKAGE: ${{ inputs.manufacturing-package }}
+        PCBEX_FABRICATION_FACTORY_RECEIPT: ${{ inputs.factory-receipt }}
+        PCBEX_FABRICATION_POLICY_PACK: ${{ inputs.policy-pack }}
+        PCBEX_FABRICATION_APPROVAL_FILES: ${{ inputs.approval-files }}
+        PCBEX_FABRICATION_REQUIRE_AUTHORIZED: ${{ inputs.require-authorized }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+        PCBEX_FABRICATION_REPORT: ${{ steps.fabrication-authorization.outputs.fabrication-authorization-report }}
+        PCBEX_FABRICATION_INPUT_SNAPSHOT: ${{ steps.fabrication-authorization.outputs.input-snapshot-sha256 }}
+        PCBEX_FABRICATION_SUMMARY_SCHEMA_VERSION: ${{ steps.fabrication-authorization.outputs.schema-version }}
+        PCBEX_FABRICATION_SUMMARY_STATUS: ${{ steps.fabrication-authorization.outputs.authorization-status }}
+        PCBEX_FABRICATION_SUMMARY_FABRICATION_AUTHORIZED: ${{ steps.fabrication-authorization.outputs.fabrication-authorized }}
+        PCBEX_FABRICATION_SUMMARY_AUTHORIZATION_ID: ${{ steps.fabrication-authorization.outputs.authorization-id }}
+        PCBEX_FABRICATION_SUMMARY_CHALLENGE: ${{ steps.fabrication-authorization.outputs.challenge }}
+        PCBEX_FABRICATION_SUMMARY_QUANTITY: ${{ steps.fabrication-authorization.outputs.quantity }}
+        PCBEX_FABRICATION_SUMMARY_CURRENCY: ${{ steps.fabrication-authorization.outputs.currency }}
+        PCBEX_FABRICATION_SUMMARY_MAXIMUM_TOTAL_MINOR_UNITS: ${{ steps.fabrication-authorization.outputs.maximum-total-minor-units }}
+        PCBEX_FABRICATION_SUMMARY_VALID_FROM_UNIX: ${{ steps.fabrication-authorization.outputs.valid-from-unix }}
+        PCBEX_FABRICATION_SUMMARY_EXPIRES_AT_UNIX: ${{ steps.fabrication-authorization.outputs.expires-at-unix }}
+        PCBEX_FABRICATION_SUMMARY_EVALUATED_AT_UNIX: ${{ steps.fabrication-authorization.outputs.evaluated-at-unix }}
+        PCBEX_FABRICATION_SUMMARY_APPROVALS: ${{ steps.fabrication-authorization.outputs.approvals }}
+        PCBEX_FABRICATION_SUMMARY_REJECTIONS: ${{ steps.fabrication-authorization.outputs.rejections }}
+        PCBEX_FABRICATION_SUMMARY_GATE_FAILURE_COUNT: ${{ steps.fabrication-authorization.outputs.gate-failure-count }}
+        PCBEX_FABRICATION_SUMMARY_PLAN_SHA256: ${{ steps.fabrication-authorization.outputs.plan-sha256 }}
+        PCBEX_FABRICATION_SUMMARY_RUN_SHA256: ${{ steps.fabrication-authorization.outputs.run-sha256 }}
+        PCBEX_FABRICATION_SUMMARY_MANUFACTURING_PACKAGE_SHA256: ${{ steps.fabrication-authorization.outputs.manufacturing-package-sha256 }}
+        PCBEX_FABRICATION_SUMMARY_FACTORY_RECEIPT_SHA256: ${{ steps.fabrication-authorization.outputs.factory-receipt-sha256 }}
+        PCBEX_FABRICATION_SUMMARY_POLICY_PACK_SHA256: ${{ steps.fabrication-authorization.outputs.policy-pack-sha256 }}
+        PCBEX_FABRICATION_SUMMARY_QUOTE_AUTHENTICITY_VERIFIED: ${{ steps.fabrication-authorization.outputs.quote-authenticity-verified }}
+        PCBEX_FABRICATION_SUMMARY_CHALLENGE_ONE_TIME_USE_ENFORCED: ${{ steps.fabrication-authorization.outputs.challenge-one-time-use-enforced }}
+        PCBEX_FABRICATION_SUMMARY_REPORT_BYTES: ${{ steps.fabrication-authorization.outputs.report-bytes }}
+        PCBEX_FABRICATION_SUMMARY_REPORT_SHA256: ${{ steps.fabrication-authorization.outputs.report-sha256 }}
+      run: bash "$PCBEX_REPOSITORY_ROOT/scripts/fabrication-authorization-action.sh" --revalidate
+
+    - name: Upload fabrication authorization evidence
+      id: upload
+      if: ${{ always() && steps.fabrication-authorization.outcome == 'success' && steps.artifact-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.safe == 'true' && inputs.upload-artifact == 'true' && steps.publication-boundary.outputs.artifact-dir != '' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.publication-boundary.outputs.artifact-dir }}
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}
+
+    - name: Enforce fabrication authorization gate
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PCBEX_PREFLIGHT_VALID: ${{ steps.preflight.outputs.valid }}
+        PCBEX_FABRICATION_OUTCOME: ${{ steps.fabrication-authorization.outcome }}
+        PCBEX_FABRICATION_STATUS: ${{ steps.fabrication-authorization.outputs.status }}
+        PCBEX_FABRICATION_REPORT: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.fabrication-authorization-report || '' }}
+        PCBEX_FABRICATION_AUTHORIZED: ${{ steps.publication-boundary.outputs.safe == 'true' && steps.publication-boundary.outputs.fabrication-authorized || '' }}
+        PCBEX_ARTIFACT_SAFE: ${{ steps.artifact-boundary.outputs.safe }}
+        PCBEX_PUBLICATION_SAFE: ${{ steps.publication-boundary.outputs.safe }}
+        PCBEX_UPLOAD_ARTIFACT: ${{ inputs.upload-artifact }}
+        PCBEX_UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        PCBEX_REQUIRE_AUTHORIZED: ${{ inputs.require-authorized }}
+        PCBEX_OUTPUT_DIR: ${{ inputs.output-dir }}
+      run: bash "$GITHUB_ACTION_PATH/../../scripts/fabrication-authorization-action-gate.sh"
