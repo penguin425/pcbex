@@ -370,7 +370,7 @@ membership. The standalone API/CLI/schema and the Rust plan/report schemas are
 unchanged. This new surface has no MCP or Composite Action parity and adds no
 fresh producer, firmware build, network/factory call, or fabrication authority.
 
-## Fabrication release authorization (v1.459.0)
+## Fabrication release authorization (v1.459.0 CLI / v1.460.0 MCP verification)
 
 The standalone Rust CLI can now use a stricter subset of runner evidence as an
 offline authorization prerequisite. The plan must explicitly select an
@@ -397,6 +397,16 @@ quorum shortage, or temporal failure remains a `not_authorized` authorization
 report; invalid signatures or mixed evidence are operational errors. See
 [`FABRICATION_AUTHORIZATION.md`](FABRICATION_AUTHORIZATION.md) for the dedicated
 key policy, commands, bounds, and non-claims.
+
+Version 1.460 exposes only fresh authorization verification as the optional-
+Task MCP tool `verify_fabrication_authorization`. It routes the original plan,
+retained pipeline report, ZIP, receipt, policy pack, and approvals through the
+same CLI verifier and samples no caller-provided time. The complete report is
+retained at a new no-clobber output path; a compact summary is accepted only
+after its exact byte count, SHA-256, decision, scope, and evidence identities
+match a stable read of that output. Signing and private-key access remain
+CLI-only, and this release adds no Action, runner phase, network, factory
+submission, order, or payment boundary.
 
 ## MCP parity
 

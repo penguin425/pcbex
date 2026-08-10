@@ -2587,7 +2587,8 @@ The server implements the 2025-11-25 MCP lifecycle and negotiates compatible
 2025-06-18, 2025-03-26, and 2024-11-05 clients. It exposes
 `list_dfm_profiles`, policy verification, board analysis and routing,
 manufacturing-feedback recording/comparison, schematic semantic comparison,
-and signed schematic-review tools.
+signed schematic-review tools, and fresh fabrication-authorization
+verification.
 Every tool has a closed input schema, an output schema, safety annotations, a
 human-readable text result, and matching `structuredContent`. Tool processes
 capture stdout and stderr so the stdio transport emits only newline-delimited
@@ -2627,6 +2628,15 @@ four concurrently. A task watchdog actively cancels bounded child work at TTL
 expiry. Older negotiated protocol versions continue to execute calls
 synchronously and ignore task augmentation as required by their capability
 model.
+
+Version 1.460 adds the verification-only
+`verify_fabrication_authorization` tool. It reruns the v1.459 verifier from the
+original plan, retained pipeline report, manufacturing ZIP, factory receipt,
+policy pack, and signed approvals. It supports synchronous calls and optional
+Tasks, but exposes no signing operation, private key, caller-selected
+evaluation time, network call, or order operation. The complete report remains
+at the caller's new output path; MCP returns only a compact summary
+authenticated against that file's exact bytes and SHA-256.
 
 Version 1.414.0 carries the complete hardware pipeline boundary into MCP. The
 server adds `check_schematic` (with optional explanation, JUnit, SARIF, and
@@ -3911,9 +3921,43 @@ separately controlled fabrication handoff. The receipt is not factory-signed,
 the opaque quote is not a typed order contract, the policy pack is an externally
 selected trust root, and the challenge has no durable consumption state. No
 network call, upload, order, inventory reservation, fabrication execution,
-payment, spend authority, MCP tool, or Action is added. See
+payment, spend authority, or Action is added. Version 1.460 exposes fresh
+verification—but never signing or private-key access—through MCP. See
 [`docs/FABRICATION_AUTHORIZATION.md`](docs/FABRICATION_AUTHORIZATION.md) for the
 closed schemas, bounds, verification order, and non-claims.
+
+An MCP call uses the same explicit sources:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1460,
+  "method": "tools/call",
+  "params": {
+    "name": "verify_fabrication_authorization",
+    "arguments": {
+      "plan": "pipeline-plan.json",
+      "retained_report": "pipeline-report.json",
+      "manufacturing_package": "manufacturing.zip",
+      "factory_receipt": "factory-receipt.json",
+      "policy_pack": "organization-policy-pack.json",
+      "approvals": [
+        "fabrication-a.approval.json",
+        "fabrication-b.approval.json"
+      ],
+      "output": "fabrication-authorization.json",
+      "require_authorized": true
+    },
+    "task": {"ttl": 600000}
+  }
+}
+```
+
+Without `require_authorized`, `ok: true` means verification completed and a
+digest-authenticated report was retained; callers must still inspect
+`report_summary.fabrication_authorized`. A queued Task may cross the signed
+time window and truthfully retain `not_authorized` evidence. The response does
+not embed policy bodies, signed envelopes, signatures, reasons, or tickets.
 
 The authorization report is an audit snapshot, not an outer-signed trusted
 timestamp. A release consumer must freshly rerun the verifier from the original

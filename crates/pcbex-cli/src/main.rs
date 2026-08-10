@@ -231,8 +231,8 @@ use dfm_profile_binding::{
     DfmProfileBinding, builtin_dfm_profile_binding, external_dfm_profile_binding,
 };
 use fabrication_authorization::{
-    FabricationApprovalDecision, FabricationAuthorizationScope, MAX_FACTORY_RECEIPT_BYTES,
-    MAX_POLICY_PACK_BYTES, MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
+    FabricationApprovalDecision, FabricationAuthorizationReport, FabricationAuthorizationScope,
+    MAX_FACTORY_RECEIPT_BYTES, MAX_POLICY_PACK_BYTES, MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
     capture_fabrication_authorization_evidence, fabrication_authorization_report_json_schema,
     parse_signed_fabrication_approval, sign_fabrication_approval,
     signed_fabrication_approval_json_schema, validate_fabrication_approval_signing_inputs,
@@ -1079,6 +1079,9 @@ enum Command {
         /// Fail after retaining the report unless the exact fabrication scope is authorized.
         #[arg(long)]
         require_authorized: bool,
+        /// Echo a path-free digest-bound report summary to stdout for the MCP subprocess bridge.
+        #[arg(long, hide = true)]
+        mcp_echo_report_summary: bool,
     },
     /// Compile one closed deterministic pipeline intent into a canonical plan.
     CompileDeterministicPipelinePlan {
@@ -5466,6 +5469,151 @@ fn emit_native_kicad_drc_report_summary(
     Ok(())
 }
 
+#[derive(Serialize)]
+struct FabricationAuthorizationReportSummary<'a> {
+    schema_version: u32,
+    status: &'a str,
+    fabrication_authorized: bool,
+    authorization_id: &'a str,
+    challenge: &'a str,
+    quantity: u32,
+    currency: &'a str,
+    maximum_total_minor_units: u64,
+    valid_from_unix: u64,
+    expires_at_unix: u64,
+    evaluated_at_unix: u64,
+    approvals: u32,
+    rejections: u32,
+    gate_failure_count: u64,
+    plan_sha256: &'a str,
+    run_sha256: &'a str,
+    manufacturing_package_sha256: &'a str,
+    factory_receipt_sha256: &'a str,
+    policy_pack_sha256: &'a str,
+    quote_authenticity_verified: bool,
+    challenge_one_time_use_enforced: bool,
+    report_bytes: u64,
+    report_sha256: String,
+}
+
+fn fabrication_authorization_report_summary<'a>(
+    report: &'a FabricationAuthorizationReport,
+    rendered: &[u8],
+) -> FabricationAuthorizationReportSummary<'a> {
+    FabricationAuthorizationReportSummary {
+        schema_version: report.schema_version,
+        status: &report.status,
+        fabrication_authorized: report.fabrication_authorized,
+        authorization_id: &report.scope.authorization_id,
+        challenge: &report.scope.challenge,
+        quantity: report.scope.quantity,
+        currency: &report.scope.currency,
+        maximum_total_minor_units: report.scope.maximum_total_minor_units,
+        valid_from_unix: report.scope.valid_from_unix,
+        expires_at_unix: report.scope.expires_at_unix,
+        evaluated_at_unix: report.evaluated_at_unix,
+        approvals: report.approvals,
+        rejections: report.rejections,
+        gate_failure_count: report.gate_failures.len() as u64,
+        plan_sha256: &report.evidence.pipeline.plan_sha256,
+        run_sha256: &report.evidence.pipeline.run_sha256,
+        manufacturing_package_sha256: &report.evidence.manufacturing_package.sha256,
+        factory_receipt_sha256: &report.evidence.factory_receipt.receipt.sha256,
+        policy_pack_sha256: &report.evidence.policy_pack.source.sha256,
+        quote_authenticity_verified: report.evidence.factory_receipt.quote_authenticity_verified,
+        challenge_one_time_use_enforced: report.challenge_one_time_use_enforced,
+        report_bytes: rendered.len() as u64,
+        report_sha256: hex::encode(Sha256::digest(rendered)),
+    }
+}
+
+fn render_fabrication_authorization_report_summary(
+    report: &FabricationAuthorizationReport,
+    rendered: &[u8],
+) -> Result<Vec<u8>> {
+    let summary = fabrication_authorization_report_summary(report, rendered);
+    let mut summary_bytes = serde_json::to_vec(&summary)?;
+    summary_bytes.push(b'\n');
+    Ok(summary_bytes)
+}
+
+fn emit_fabrication_authorization_report_summary(
+    report: &FabricationAuthorizationReport,
+    rendered: &[u8],
+) -> Result<()> {
+    let summary_bytes = render_fabrication_authorization_report_summary(report, rendered)?;
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    stdout.write_all(&summary_bytes)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+struct BoundedFabricationAuthorizationReport {
+    bytes: Vec<u8>,
+    maximum_bytes: usize,
+}
+
+impl BoundedFabricationAuthorizationReport {
+    fn new(maximum_bytes: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            maximum_bytes,
+        }
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl Write for BoundedFabricationAuthorizationReport {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let Some(rendered_bytes) = self.bytes.len().checked_add(buffer.len()) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fabrication authorization report byte count overflow",
+            ));
+        };
+        if rendered_bytes > self.maximum_bytes {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "fabrication authorization report exceeds the {}-byte file limit",
+                    self.maximum_bytes
+                ),
+            ));
+        }
+        self.bytes.extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn render_fabrication_authorization_report_with_limit(
+    report: &FabricationAuthorizationReport,
+    maximum_bytes: u64,
+) -> Result<Vec<u8>> {
+    let maximum_bytes = usize::try_from(maximum_bytes)
+        .context("fabrication authorization report limit is not representable")?;
+    let mut rendered = BoundedFabricationAuthorizationReport::new(maximum_bytes);
+    serde_json::to_writer_pretty(&mut rendered, report)
+        .context("rendering fabrication authorization report")?;
+    rendered
+        .write_all(b"\n")
+        .context("rendering fabrication authorization report terminator")?;
+    Ok(rendered.into_bytes())
+}
+
+fn render_fabrication_authorization_report(
+    report: &FabricationAuthorizationReport,
+) -> Result<Vec<u8>> {
+    render_fabrication_authorization_report_with_limit(report, fs::MAX_FILE_BYTES)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -6204,6 +6352,7 @@ fn run_cli() -> Result<()> {
             approvals,
             output,
             require_authorized,
+            mcp_echo_report_summary,
         } => {
             if approvals.len() > 100 {
                 bail!("fabrication approval set cannot contain more than 100 entries");
@@ -6322,9 +6471,12 @@ fn run_cli() -> Result<()> {
                 current_unix_seconds()?,
             )
             .map_err(anyhow::Error::msg)?;
-            let rendered = format!("{}\n", serde_json::to_string_pretty(&report)?);
+            let rendered = render_fabrication_authorization_report(&report)?;
             validate_fabrication_authorization_output(&output, &replayed_plan)?;
-            persist_atomic_new_file(prepared, &output, &rendered)?;
+            persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
+            if mcp_echo_report_summary {
+                emit_fabrication_authorization_report_summary(&report, &rendered)?;
+            }
             eprintln!(
                 "fabrication authorization: {}; {} approval(s), {} rejection(s); package_sha256={}",
                 if report.fabrication_authorized {
@@ -18673,6 +18825,207 @@ mod tests {
             .expect("CLI parser test thread starts")
             .join()
             .expect("CLI parser test thread succeeds")
+    }
+
+    fn sample_fabrication_authorization_report() -> FabricationAuthorizationReport {
+        let identity = |sha256: &str| ExactArtifactIdentity {
+            bytes: 1,
+            sha256: sha256.into(),
+        };
+        FabricationAuthorizationReport {
+            schema_version: 1,
+            status: "not_authorized".into(),
+            evidence: fabrication_authorization::FabricationAuthorizationEvidence {
+                pipeline: fabrication_authorization::FabricationPipelineEvidence {
+                    plan_source: identity("plan-source"),
+                    plan_sha256: "plan".into(),
+                    retained_report: identity("pipeline-report"),
+                    run_sha256: "run".into(),
+                },
+                manufacturing_package: identity("package"),
+                factory_receipt: fabrication_authorization::FabricationFactoryReceiptEvidence {
+                    receipt: identity("receipt"),
+                    provider: FactoryProvider::Generic,
+                    endpoint: "https://factory.example/quote".into(),
+                    quote_sha256: "quote".into(),
+                    quote_authenticity_verified: false,
+                },
+                policy_pack: fabrication_authorization::FabricationPolicyPackEvidence {
+                    source: identity("policy-source"),
+                    canonical_sha256: "policy-canonical".into(),
+                    id: "test-policy".into(),
+                    revision: 1,
+                },
+            },
+            scope: FabricationAuthorizationScope {
+                authorization_id: "fab-summary".into(),
+                challenge: "challenge".into(),
+                quantity: 25,
+                currency: "USD".into(),
+                maximum_total_minor_units: 125_000,
+                valid_from_unix: 100,
+                expires_at_unix: 200,
+            },
+            policy_pack: parse_policy_pack(include_str!("../../../examples/acme-policy-pack.json"))
+                .unwrap(),
+            evaluated_at_unix: 150,
+            approvals: 1,
+            rejections: 1,
+            members: Vec::new(),
+            signed_approvals: Vec::new(),
+            fabrication_authorized: false,
+            gate_failures: vec!["human_rejection".into(), "insufficient_quorum".into()],
+            challenge_one_time_use_enforced: false,
+        }
+    }
+
+    #[test]
+    fn fabrication_authorization_report_rendering_is_newline_terminated_and_bounded() {
+        let report = sample_fabrication_authorization_report();
+        let rendered = render_fabrication_authorization_report(&report).unwrap();
+        assert!(rendered.ends_with(b"\n"));
+        assert!(rendered.len() as u64 <= fs::MAX_FILE_BYTES);
+        assert_eq!(
+            rendered,
+            format!("{}\n", serde_json::to_string_pretty(&report).unwrap()).as_bytes()
+        );
+        assert_eq!(
+            serde_json::from_slice::<FabricationAuthorizationReport>(&rendered).unwrap(),
+            report
+        );
+
+        let exact =
+            render_fabrication_authorization_report_with_limit(&report, rendered.len() as u64)
+                .unwrap();
+        assert_eq!(exact, rendered);
+        let error =
+            render_fabrication_authorization_report_with_limit(&report, rendered.len() as u64 - 1)
+                .unwrap_err();
+        assert!(format!("{error:#}").contains("file limit"), "{error:#}");
+    }
+
+    #[test]
+    fn fabrication_authorization_summary_is_path_free_closed_and_ordered() {
+        let report = sample_fabrication_authorization_report();
+        let rendered = render_fabrication_authorization_report(&report).unwrap();
+        let summary_bytes =
+            render_fabrication_authorization_report_summary(&report, &rendered).unwrap();
+        assert_eq!(
+            summary_bytes.iter().filter(|byte| **byte == b'\n').count(),
+            1
+        );
+        assert_eq!(summary_bytes.last(), Some(&b'\n'));
+        let compact = std::str::from_utf8(&summary_bytes[..summary_bytes.len() - 1]).unwrap();
+        let value: serde_json::Value = serde_json::from_str(compact).unwrap();
+        let report_sha256 = hex::encode(Sha256::digest(&rendered));
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "schema_version": 1,
+                "status": "not_authorized",
+                "fabrication_authorized": false,
+                "authorization_id": "fab-summary",
+                "challenge": "challenge",
+                "quantity": 25,
+                "currency": "USD",
+                "maximum_total_minor_units": 125_000,
+                "valid_from_unix": 100,
+                "expires_at_unix": 200,
+                "evaluated_at_unix": 150,
+                "approvals": 1,
+                "rejections": 1,
+                "gate_failure_count": 2,
+                "plan_sha256": "plan",
+                "run_sha256": "run",
+                "manufacturing_package_sha256": "package",
+                "factory_receipt_sha256": "receipt",
+                "policy_pack_sha256": "policy-source",
+                "quote_authenticity_verified": false,
+                "challenge_one_time_use_enforced": false,
+                "report_bytes": rendered.len() as u64,
+                "report_sha256": report_sha256,
+            })
+        );
+        assert_eq!(value.as_object().unwrap().len(), 23);
+        assert!(!compact.contains("path"));
+
+        let fields = [
+            "schema_version",
+            "status",
+            "fabrication_authorized",
+            "authorization_id",
+            "challenge",
+            "quantity",
+            "currency",
+            "maximum_total_minor_units",
+            "valid_from_unix",
+            "expires_at_unix",
+            "evaluated_at_unix",
+            "approvals",
+            "rejections",
+            "gate_failure_count",
+            "plan_sha256",
+            "run_sha256",
+            "manufacturing_package_sha256",
+            "factory_receipt_sha256",
+            "policy_pack_sha256",
+            "quote_authenticity_verified",
+            "challenge_one_time_use_enforced",
+            "report_bytes",
+            "report_sha256",
+        ];
+        let positions = fields.map(|field| {
+            compact
+                .find(&format!("\"{field}\":"))
+                .unwrap_or_else(|| panic!("missing summary field {field}"))
+        });
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn parses_hidden_fabrication_authorization_summary_flag() {
+        let parsed = parse_cli(&[
+            "pcbex",
+            "verify-fabrication-authorization",
+            "plan.json",
+            "--report",
+            "pipeline-report.json",
+            "--manufacturing-package",
+            "manufacturing.zip",
+            "--factory-receipt",
+            "factory-receipt.json",
+            "--policy-pack",
+            "policy-pack.json",
+            "--approval",
+            "approval.json",
+            "--output",
+            "authorization.json",
+            "--require-authorized",
+            "--mcp-echo-report-summary",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *parsed.command,
+            Command::VerifyFabricationAuthorization {
+                require_authorized: true,
+                mcp_echo_report_summary: true,
+                ..
+            }
+        ));
+
+        let help = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                Cli::command()
+                    .find_subcommand_mut("verify-fabrication-authorization")
+                    .unwrap()
+                    .render_long_help()
+                    .to_string()
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(!help.contains("mcp-echo-report-summary"));
     }
 
     #[test]

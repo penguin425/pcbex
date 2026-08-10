@@ -7,7 +7,7 @@ use std::{
     io::{BufRead, BufReader, Cursor, Read, Write},
     path::{Path, PathBuf},
     process::{ChildStdin, ChildStdout, Command, Output, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
@@ -919,6 +919,90 @@ fn verify_fabrication_decisions(
         command.arg("--require-authorized");
     }
     command.output().unwrap()
+}
+
+fn assert_fabrication_authorization_summary(summary: &Value, report_path: &Path) {
+    let report_bytes = fs::read(report_path).unwrap();
+    let report: Value = serde_json::from_slice(&report_bytes).unwrap();
+    assert_eq!(
+        summary,
+        &json!({
+            "schema_version": report["schema_version"],
+            "status": report["status"],
+            "fabrication_authorized": report["fabrication_authorized"],
+            "authorization_id": report["scope"]["authorization_id"],
+            "challenge": report["scope"]["challenge"],
+            "quantity": report["scope"]["quantity"],
+            "currency": report["scope"]["currency"],
+            "maximum_total_minor_units": report["scope"]["maximum_total_minor_units"],
+            "valid_from_unix": report["scope"]["valid_from_unix"],
+            "expires_at_unix": report["scope"]["expires_at_unix"],
+            "evaluated_at_unix": report["evaluated_at_unix"],
+            "approvals": report["approvals"],
+            "rejections": report["rejections"],
+            "gate_failure_count": report["gate_failures"].as_array().unwrap().len(),
+            "plan_sha256": report["evidence"]["pipeline"]["plan_sha256"],
+            "run_sha256": report["evidence"]["pipeline"]["run_sha256"],
+            "manufacturing_package_sha256": report["evidence"]["manufacturing_package"]["sha256"],
+            "factory_receipt_sha256": report["evidence"]["factory_receipt"]["receipt"]["sha256"],
+            "policy_pack_sha256": report["evidence"]["policy_pack"]["source"]["sha256"],
+            "quote_authenticity_verified": report["evidence"]["factory_receipt"]["quote_authenticity_verified"],
+            "challenge_one_time_use_enforced": report["challenge_one_time_use_enforced"],
+            "report_bytes": report_bytes.len() as u64,
+            "report_sha256": sha256(&report_bytes),
+        })
+    );
+    assert_eq!(summary.as_object().unwrap().len(), 23);
+}
+
+fn assert_compact_fabrication_authorization_mcp_response(response: &Value) {
+    let result = &response["result"];
+    let structured = &result["structuredContent"];
+    let text_value: Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(&text_value, structured);
+    assert!(
+        keys(structured).is_subset(&BTreeSet::from([
+            "exit_code",
+            "message",
+            "ok",
+            "output",
+            "report_summary",
+        ])),
+        "unexpected full authorization data in MCP structured content: {structured}"
+    );
+    assert!(structured.get("report").is_none());
+    let summary = &structured["report_summary"];
+    for forbidden in [
+        "policy_pack",
+        "signed_approvals",
+        "members",
+        "scope",
+        "evidence",
+        "gate_failures",
+        "reason",
+        "ticket",
+        "signature",
+    ] {
+        assert!(
+            summary.get(forbidden).is_none(),
+            "full authorization field {forbidden:?} leaked into MCP summary"
+        );
+    }
+    let encoded = serde_json::to_vec(response).unwrap();
+    assert!(encoded.len() < 16 * 1024 * 1024);
+    let encoded = String::from_utf8(encoded).unwrap();
+    for sensitive in [
+        "Independent decision by fabrication-a",
+        "Independent decision by fabrication-b",
+        "FAB-fabrication-a",
+        "FAB-fabrication-b",
+    ] {
+        assert!(
+            !encoded.contains(sensitive),
+            "sensitive approval data leaked into MCP response: {sensitive}"
+        );
+    }
 }
 
 fn missing_inputs(directory: &Path) -> PipelineInputs {
@@ -3878,6 +3962,315 @@ fn fabrication_authorization_cli_retains_truthful_dual_control_results_and_rejec
 }
 
 #[test]
+fn fabrication_authorization_mcp_verifies_sync_and_retains_not_authorized_task_report() {
+    let temporary = tempfile::tempdir().unwrap();
+    let fixture = fabrication_cli_fixture(temporary.path());
+    let approval_a = temporary.path().join("fabrication-a-approval.json");
+    let approval_b = temporary.path().join("fabrication-b-approval.json");
+    let signed_a = sign_fabrication_decision(
+        &fixture,
+        &fixture.private_a,
+        "fabrication-a",
+        "approve",
+        &approval_a,
+    );
+    assert_success(&signed_a, "sign fabrication approval A for MCP");
+    let signed_b = sign_fabrication_decision(
+        &fixture,
+        &fixture.private_b,
+        "fabrication-b",
+        "approve",
+        &approval_b,
+    );
+    assert_success(&signed_b, "sign fabrication approval B for MCP");
+
+    let mut child = Command::new(binary())
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize_mcp(&mut stdin, &mut stdout);
+
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "fabrication-tools",
+            "method": "tools/list"
+        }),
+    );
+    let tools_response = receive_mcp(&mut stdout);
+    let tools = tools_response["result"]["tools"].as_array().unwrap();
+    let tool = tools
+        .iter()
+        .find(|tool| tool["name"] == "verify_fabrication_authorization")
+        .expect("fabrication authorization verifier MCP tool");
+    assert_eq!(tool["inputSchema"]["additionalProperties"], false);
+    assert_eq!(
+        tool["inputSchema"]["required"],
+        json!([
+            "plan",
+            "retained_report",
+            "manufacturing_package",
+            "factory_receipt",
+            "policy_pack",
+            "approvals",
+            "output"
+        ])
+    );
+    assert_eq!(
+        keys(&tool["inputSchema"]["properties"]),
+        BTreeSet::from([
+            "approvals",
+            "factory_receipt",
+            "manufacturing_package",
+            "output",
+            "plan",
+            "policy_pack",
+            "require_authorized",
+            "retained_report",
+        ])
+    );
+    assert_eq!(
+        tool["inputSchema"]["properties"]["approvals"]["minItems"],
+        1
+    );
+    assert_eq!(
+        tool["inputSchema"]["properties"]["approvals"]["maxItems"],
+        100
+    );
+    assert_eq!(
+        tool["inputSchema"]["properties"]["approvals"]["items"]["type"],
+        "string"
+    );
+    assert_eq!(
+        tool["inputSchema"]["properties"]["require_authorized"]["default"],
+        false
+    );
+    assert_eq!(tool["execution"]["taskSupport"], "optional");
+    assert_eq!(
+        tool["annotations"],
+        json!({
+            "readOnlyHint": false,
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false
+        })
+    );
+    assert!(
+        tools
+            .iter()
+            .all(|tool| tool["name"] != "sign_fabrication_approval"),
+        "fabrication signing must remain CLI-only"
+    );
+    assert!(
+        !serde_json::to_string(tool).unwrap().contains("private_key"),
+        "fabrication private-key inputs must remain CLI-only"
+    );
+
+    let sync_output = temporary.path().join("mcp-fabrication-authorized.json");
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "fabrication-sync",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_fabrication_authorization",
+                "arguments": {
+                    "plan": fixture.plan,
+                    "retained_report": fixture.report,
+                    "manufacturing_package": fixture.manufacturing_package,
+                    "factory_receipt": fixture.factory_receipt,
+                    "policy_pack": fixture.policy_pack,
+                    "approvals": [approval_b, approval_a],
+                    "output": sync_output,
+                    "require_authorized": true
+                }
+            }
+        }),
+    );
+    let sync = receive_mcp(&mut stdout);
+    assert_eq!(sync["result"]["isError"], false);
+    assert_eq!(sync["result"]["structuredContent"]["ok"], true);
+    assert_eq!(sync["result"]["structuredContent"]["exit_code"], 0);
+    let sync_report = read_json(&sync_output);
+    assert_eq!(sync_report["status"], "fabrication_authorized");
+    assert_eq!(sync_report["fabrication_authorized"], true);
+    assert_eq!(sync_report["approvals"], 2);
+    assert_eq!(sync_report["rejections"], 0);
+    assert_eq!(
+        sync_report["signed_approvals"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|approval| approval["signer_id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["fabrication-a", "fabrication-b"]
+    );
+    assert_fabrication_authorization_summary(
+        &sync["result"]["structuredContent"]["report_summary"],
+        &sync_output,
+    );
+    assert_compact_fabrication_authorization_mcp_response(&sync);
+
+    let task_output = temporary.path().join("mcp-fabrication-not-authorized.json");
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "create-fabrication-task",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_fabrication_authorization",
+                "arguments": {
+                    "plan": fixture.plan,
+                    "retained_report": fixture.report,
+                    "manufacturing_package": fixture.manufacturing_package,
+                    "factory_receipt": fixture.factory_receipt,
+                    "policy_pack": fixture.policy_pack,
+                    "approvals": [approval_a],
+                    "output": task_output,
+                    "require_authorized": true
+                },
+                "task": {"ttl": 60_000}
+            }
+        }),
+    );
+    let created = receive_mcp(&mut stdout);
+    assert_eq!(created["result"]["task"]["status"], "working");
+    let task_id = created["result"]["task"]["taskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "fabrication-task-result",
+            "method": "tasks/result",
+            "params": {"taskId": task_id}
+        }),
+    );
+    let task = receive_mcp(&mut stdout);
+    assert_eq!(task["result"]["isError"], true);
+    assert_eq!(task["result"]["structuredContent"]["ok"], false);
+    assert!(
+        task["result"]["structuredContent"]["exit_code"]
+            .as_i64()
+            .is_some_and(|code| code != 0)
+    );
+    assert!(
+        task["result"]["structuredContent"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("fabrication authorization quorum did not authorize the exact scope")
+    );
+    let task_report = read_json(&task_output);
+    assert_eq!(task_report["status"], "not_authorized");
+    assert_eq!(task_report["fabrication_authorized"], false);
+    assert_eq!(task_report["approvals"], 1);
+    assert_eq!(task_report["rejections"], 0);
+    assert_eq!(
+        task_report["gate_failures"],
+        json!(["insufficient_fabrication_approvals:required=2:actual=1"])
+    );
+    assert_fabrication_authorization_summary(
+        &task["result"]["structuredContent"]["report_summary"],
+        &task_output,
+    );
+    assert_compact_fabrication_authorization_mcp_response(&task);
+    assert_eq!(
+        task["result"]["_meta"]["io.modelcontextprotocol/related-task"]["taskId"],
+        task_id
+    );
+
+    let sentinel = b"preserve stale fabrication authorization output\n";
+    let stale_output = temporary.path().join("mcp-stale-authorization.json");
+    fs::write(&stale_output, sentinel).unwrap();
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "fabrication-stale-output",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_fabrication_authorization",
+                "arguments": {
+                    "plan": fixture.plan,
+                    "retained_report": fixture.report,
+                    "manufacturing_package": fixture.manufacturing_package,
+                    "factory_receipt": fixture.factory_receipt,
+                    "policy_pack": fixture.policy_pack,
+                    "approvals": [approval_a, approval_b],
+                    "output": stale_output
+                }
+            }
+        }),
+    );
+    let stale = receive_mcp(&mut stdout);
+    assert_eq!(stale["error"]["code"], -32602);
+    assert_eq!(
+        stale["error"]["data"]["detail"],
+        "output path already exists; refusing stale MCP evidence"
+    );
+    assert_eq!(fs::read(&stale_output).unwrap(), sentinel);
+
+    let mut signature_tamper = read_json(&approval_a);
+    let signature = signature_tamper["signature"].as_str().unwrap();
+    let first = if signature.starts_with('0') { "1" } else { "0" };
+    signature_tamper["signature"] = Value::String(format!("{first}{}", &signature[1..]));
+    let signature_tamper_path = temporary.path().join("mcp-signature-tamper.json");
+    write_json(&signature_tamper_path, &signature_tamper);
+    let signature_tamper_output = temporary.path().join("mcp-tamper-report.json");
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "fabrication-signature-tamper",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_fabrication_authorization",
+                "arguments": {
+                    "plan": fixture.plan,
+                    "retained_report": fixture.report,
+                    "manufacturing_package": fixture.manufacturing_package,
+                    "factory_receipt": fixture.factory_receipt,
+                    "policy_pack": fixture.policy_pack,
+                    "approvals": [signature_tamper_path, approval_b],
+                    "output": signature_tamper_output
+                }
+            }
+        }),
+    );
+    let tampered = receive_mcp(&mut stdout);
+    assert_eq!(tampered["result"]["isError"], true);
+    assert_eq!(tampered["result"]["structuredContent"]["ok"], false);
+    assert_eq!(
+        tampered["result"]["structuredContent"]["report_summary"],
+        Value::Null
+    );
+    assert!(!signature_tamper_output.exists());
+    assert_compact_fabrication_authorization_mcp_response(&tampered);
+
+    drop(stdin);
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+}
+
+#[test]
 fn fabrication_authorization_schemas_are_closed_bounded_and_no_clobber() {
     let temporary = tempfile::tempdir().unwrap();
     for (command, name) in [
@@ -3957,4 +4350,415 @@ fn fabrication_authorization_schemas_are_closed_bounded_and_no_clobber() {
         assert!(!collision.status.success());
         assert_eq!(fs::read(&path).unwrap(), source);
     }
+}
+
+#[test]
+fn fabrication_authorization_mcp_handles_option_like_paths_without_injection() {
+    let temporary = tempfile::tempdir().unwrap();
+    let fixture = fabrication_cli_fixture(temporary.path());
+    let approval_a = temporary.path().join("fabrication-a-approval.json");
+    let approval_b = temporary.path().join("fabrication-b-approval.json");
+    assert_success(
+        &sign_fabrication_decision(
+            &fixture,
+            &fixture.private_a,
+            "fabrication-a",
+            "approve",
+            &approval_a,
+        ),
+        "sign option-like MCP approval A",
+    );
+    assert_success(
+        &sign_fabrication_decision(
+            &fixture,
+            &fixture.private_b,
+            "fabrication-b",
+            "approve",
+            &approval_b,
+        ),
+        "sign option-like MCP approval B",
+    );
+
+    // Keep every direct MCP path option-like.  The handler must use attached
+    // option values and terminate parsing before the positional plan; a bare
+    // value such as `--require-authorized` must never become a second CLI flag.
+    let option_plan = temporary.path().join("--plan.json");
+    let option_report = temporary.path().join("--retained-report.json");
+    let option_package = temporary.path().join("--manufacturing-package.zip");
+    let option_receipt = temporary.path().join("--factory-receipt.json");
+    let option_policy = temporary.path().join("--policy-pack.json");
+    let option_approval_a = temporary.path().join("--require-authorized");
+    let option_approval_b = temporary.path().join("--approval-b.json");
+    let option_output = temporary.path().join("--authorization.json");
+    for (source, destination) in [
+        (&fixture.plan, &option_plan),
+        (&fixture.report, &option_report),
+        (&fixture.manufacturing_package, &option_package),
+        (&fixture.factory_receipt, &option_receipt),
+        (&fixture.policy_pack, &option_policy),
+        (&approval_a, &option_approval_a),
+        (&approval_b, &option_approval_b),
+    ] {
+        fs::copy(source, destination).unwrap();
+    }
+    let relative = |path: &Path| {
+        path.strip_prefix(temporary.path())
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string()
+    };
+
+    let mut child = Command::new(binary())
+        .arg("mcp-server")
+        .current_dir(temporary.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize_mcp(&mut stdin, &mut stdout);
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "option-like-fabrication",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_fabrication_authorization",
+                "arguments": {
+                    "plan": relative(&option_plan),
+                    "retained_report": relative(&option_report),
+                    "manufacturing_package": relative(&option_package),
+                    "factory_receipt": relative(&option_receipt),
+                    "policy_pack": relative(&option_policy),
+                    "approvals": [relative(&option_approval_a), relative(&option_approval_b)],
+                    "output": relative(&option_output),
+                    "require_authorized": true
+                }
+            }
+        }),
+    );
+    let response = receive_mcp(&mut stdout);
+    assert_eq!(response["result"]["isError"], false);
+    assert_eq!(response["result"]["structuredContent"]["ok"], true);
+    assert_eq!(
+        response["result"]["structuredContent"]["report_summary"]["fabrication_authorized"],
+        true
+    );
+    assert_fabrication_authorization_summary(
+        &response["result"]["structuredContent"]["report_summary"],
+        &option_output,
+    );
+    assert_compact_fabrication_authorization_mcp_response(&response);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+}
+
+#[test]
+fn fabrication_authorization_mcp_cancel_does_not_return_partial_authority() {
+    let temporary = tempfile::tempdir().unwrap();
+    let fixture = fabrication_cli_fixture(temporary.path());
+    let approval_a = temporary.path().join("fabrication-a-approval.json");
+    let approval_b = temporary.path().join("fabrication-b-approval.json");
+    assert_success(
+        &sign_fabrication_decision(
+            &fixture,
+            &fixture.private_a,
+            "fabrication-a",
+            "approve",
+            &approval_a,
+        ),
+        "sign cancellation approval A",
+    );
+    assert_success(
+        &sign_fabrication_decision(
+            &fixture,
+            &fixture.private_b,
+            "fabrication-b",
+            "approve",
+            &approval_b,
+        ),
+        "sign cancellation approval B",
+    );
+
+    let mut child = Command::new(binary())
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize_mcp(&mut stdin, &mut stdout);
+
+    let mut cancelled = false;
+    for attempt in 0..8 {
+        let output = temporary
+            .path()
+            .join(format!("mcp-cancelled-{attempt}.json"));
+        send_mcp(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": format!("create-cancel-{attempt}"),
+                "method": "tools/call",
+                "params": {
+                    "name": "verify_fabrication_authorization",
+                    "arguments": {
+                        "plan": fixture.plan,
+                        "retained_report": fixture.report,
+                        "manufacturing_package": fixture.manufacturing_package,
+                        "factory_receipt": fixture.factory_receipt,
+                        "policy_pack": fixture.policy_pack,
+                        "approvals": [approval_a, approval_b],
+                        "output": output,
+                        "require_authorized": true
+                    },
+                    "task": {"ttl": 60_000}
+                }
+            }),
+        );
+        let created = receive_mcp(&mut stdout);
+        assert_eq!(created["result"]["task"]["status"], "working");
+        let task_id = created["result"]["task"]["taskId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Send cancellation immediately after task creation.  A very fast
+        // child may already have reached a terminal state; in that case the
+        // completed result is checked and another unique output is tried.
+        send_mcp(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": format!("cancel-{attempt}"),
+                "method": "tasks/cancel",
+                "params": {"taskId": task_id}
+            }),
+        );
+        let cancel = receive_mcp(&mut stdout);
+        if cancel["result"]["status"] == "cancelled" {
+            cancelled = true;
+            send_mcp(
+                &mut stdin,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": format!("cancel-result-{attempt}"),
+                    "method": "tasks/result",
+                    "params": {"taskId": task_id}
+                }),
+            );
+            let result = receive_mcp(&mut stdout);
+            assert_eq!(result["result"]["isError"], true);
+            assert_eq!(result["result"]["structuredContent"]["ok"], false);
+            assert!(
+                result["result"]["structuredContent"]
+                    .get("report_summary")
+                    .is_none(),
+                "cancelled task must not return a summary as authority"
+            );
+
+            // Atomic publication permits either no output or one complete
+            // report if cancellation raced after publication.  A partial
+            // report is never acceptable.
+            for _ in 0..100 {
+                if output.exists() {
+                    let bytes = fs::read(&output).unwrap();
+                    if let Ok(report) = serde_json::from_slice::<Value>(&bytes) {
+                        assert_eq!(report["schema_version"], 1);
+                        assert!(report.get("signed_approvals").is_some());
+                        break;
+                    }
+                } else {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            if output.exists() {
+                let bytes = fs::read(&output).unwrap();
+                let report: Value = serde_json::from_slice(&bytes)
+                    .expect("cancel race must leave either no output or complete JSON");
+                assert_eq!(report["schema_version"], 1);
+                assert!(report.get("signed_approvals").is_some());
+            }
+            break;
+        }
+
+        assert_eq!(cancel["error"]["code"], -32602);
+        send_mcp(
+            &mut stdin,
+            json!({
+                "jsonrpc": "2.0",
+                "id": format!("completed-result-{attempt}"),
+                "method": "tasks/result",
+                "params": {"taskId": task_id}
+            }),
+        );
+        let completed = receive_mcp(&mut stdout);
+        assert_eq!(completed["result"]["isError"], false);
+        assert_fabrication_authorization_summary(
+            &completed["result"]["structuredContent"]["report_summary"],
+            &output,
+        );
+    }
+    assert!(
+        cancelled,
+        "at least one in-flight fabrication task must cancel"
+    );
+
+    // Existing output remains a stale-evidence error and is never touched,
+    // including when the caller asks for a task.
+    let stale_output = temporary.path().join("mcp-cancel-stale.json");
+    let sentinel = b"preserve cancellation sentinel\n";
+    fs::write(&stale_output, sentinel).unwrap();
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "cancel-stale-output",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_fabrication_authorization",
+                "arguments": {
+                    "plan": fixture.plan,
+                    "retained_report": fixture.report,
+                    "manufacturing_package": fixture.manufacturing_package,
+                    "factory_receipt": fixture.factory_receipt,
+                    "policy_pack": fixture.policy_pack,
+                    "approvals": [approval_a, approval_b],
+                    "output": stale_output
+                },
+                "task": {"ttl": 60_000}
+            }
+        }),
+    );
+    let stale_created = receive_mcp(&mut stdout);
+    assert_eq!(stale_created["result"]["task"]["status"], "working");
+    let stale_task_id = stale_created["result"]["task"]["taskId"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "cancel-stale-output-result",
+            "method": "tasks/result",
+            "params": {"taskId": stale_task_id}
+        }),
+    );
+    let stale = receive_mcp(&mut stdout);
+    assert_eq!(stale["error"]["code"], -32602);
+    assert_eq!(
+        stale["error"]["data"]["detail"],
+        "output path already exists; refusing stale MCP evidence"
+    );
+    assert_eq!(fs::read(&stale_output).unwrap(), sentinel);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
+}
+
+#[test]
+fn fabrication_authorization_mcp_rejects_atomic_retained_report_replacement() {
+    let temporary = tempfile::tempdir().unwrap();
+    let fixture = fabrication_cli_fixture(temporary.path());
+    let approval = temporary.path().join("fabrication-a-approval.json");
+    assert_success(
+        &sign_fabrication_decision(
+            &fixture,
+            &fixture.private_a,
+            "fabrication-a",
+            "approve",
+            &approval,
+        ),
+        "sign retained-report replacement approval",
+    );
+
+    let retained_report = temporary.path().join("retained-report-replaced.json");
+    fs::copy(&fixture.report, &retained_report).unwrap();
+    let mut forged = read_json(&retained_report);
+    forged["pipeline"]["passed"] = json!(false);
+    let replacement = temporary.path().join("retained-report-replacement.tmp");
+    write_json(&replacement, &forged);
+    fs::rename(&replacement, &retained_report).unwrap();
+
+    let output = temporary
+        .path()
+        .join("rejected-after-report-replacement.json");
+    let mut child = Command::new(binary())
+        .arg("mcp-server")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut stderr = child.stderr.take().unwrap();
+    initialize_mcp(&mut stdin, &mut stdout);
+    send_mcp(
+        &mut stdin,
+        json!({
+            "jsonrpc": "2.0",
+            "id": "atomic-retained-report-replacement",
+            "method": "tools/call",
+            "params": {
+                "name": "verify_fabrication_authorization",
+                "arguments": {
+                    "plan": fixture.plan,
+                    "retained_report": retained_report,
+                    "manufacturing_package": fixture.manufacturing_package,
+                    "factory_receipt": fixture.factory_receipt,
+                    "policy_pack": fixture.policy_pack,
+                    "approvals": [approval],
+                    "output": output
+                }
+            }
+        }),
+    );
+    let response = receive_mcp(&mut stdout);
+    assert_eq!(response["result"]["isError"], true);
+    assert_eq!(response["result"]["structuredContent"]["ok"], false);
+    assert_eq!(
+        response["result"]["structuredContent"]["report_summary"],
+        Value::Null
+    );
+    assert!(
+        !output.exists(),
+        "replaced retained report must not authorize output"
+    );
+    assert_compact_fabrication_authorization_mcp_response(&response);
+
+    drop(stdin);
+    assert!(child.wait().unwrap().success());
+    let mut stderr_bytes = Vec::new();
+    stderr.read_to_end(&mut stderr_bytes).unwrap();
+    assert!(
+        stderr_bytes.is_empty(),
+        "MCP server stderr: {}",
+        String::from_utf8_lossy(&stderr_bytes)
+    );
 }
