@@ -12,7 +12,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from jsonschema import Draft202012Validator
+try:
+    from jsonschema import Draft202012Validator
+except ImportError:  # Optional in the minimal macOS/Windows boundary environment.
+    Draft202012Validator = None
 
 from agent.tests.test_circuit_handoff_bundle_v1454 import (
     _board_case,
@@ -235,9 +238,22 @@ class CircuitHandoffBundleV1457Tests(unittest.TestCase):
         self.assertNotIn(root_text, json.dumps(result))
         schema = circuit_handoff_bundle_manufacturing_replay_result_json_schema()
         self.assertFalse(schema["additionalProperties"])
-        self.assertEqual(
-            list(Draft202012Validator(schema).iter_errors(result)), []
-        )
+        self.assertIn("board_binding", schema["required"])
+        self.assertIn("manufacturing_package", schema["required"])
+        validation_schema = schema["properties"]["validation"]
+        self.assertFalse(validation_schema["additionalProperties"])
+        for flag in (
+            "manufacturing_package_replayed",
+            "manufacturing_board_identity_matched",
+        ):
+            self.assertIn(flag, validation_schema["required"])
+            self.assertEqual(validation_schema["properties"][flag], {"const": True})
+        manufacturing_schema = schema["properties"]["manufacturing_package"]
+        self.assertFalse(manufacturing_schema["additionalProperties"])
+        if Draft202012Validator is not None:
+            self.assertEqual(
+                list(Draft202012Validator(schema).iter_errors(result)), []
+            )
 
     def test_manufacturing_requires_complete_v5_and_preflights_profiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -556,15 +572,22 @@ class CircuitHandoffBundleV1457Tests(unittest.TestCase):
         self.assertNotIn("manufacturing_package_replayed", first["validation"])
 
     def test_schema_rejects_missing_or_forged_manufacturing_evidence(self) -> None:
+        schema = circuit_handoff_bundle_manufacturing_replay_result_json_schema()
+        self.assertFalse(schema["additionalProperties"])
+        self.assertIn("board_binding", schema["required"])
+        self.assertIn("manufacturing_package", schema["required"])
+        self.assertFalse(
+            schema["properties"]["manufacturing_package"]["additionalProperties"]
+        )
+        if Draft202012Validator is None:
+            self.skipTest("jsonschema is not installed")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve(strict=True)
             case, package, _package_raw, command = _case(root)
             result = replay_circuit_handoff_bundle(
                 case["archive"], command, **_options(case, package)
             )
-        validator = Draft202012Validator(
-            circuit_handoff_bundle_manufacturing_replay_result_json_schema()
-        )
+        validator = Draft202012Validator(schema)
         for mutation in ("missing", "false-flag", "extra", "missing-board"):
             forged = json.loads(json.dumps(result))
             if mutation == "missing":
