@@ -753,8 +753,10 @@ def _run_case(
                 "runner rejection exit code must be a nonzero byte-sized status"
             )
     elif runner_result.returncode != expected_exit:
+        detail = _unexpected_runner_detail(report, runner_result.stderr)
+        suffix = f": {detail}" if detail else ""
         raise FixtureError(
-            f"runner exit code {runner_result.returncode} did not match {expected_exit}"
+            f"runner exit code {runner_result.returncode} did not match {expected_exit}{suffix}"
         )
     if not report.exists() or report.is_symlink():
         raise FixtureError(f"runner did not retain a regular report: {report}")
@@ -768,6 +770,58 @@ def _run_case(
         timeout_seconds=timeout_seconds,
     )
     return compiler_summary, _report_identity(case, report, verified), runner_result.returncode
+
+
+def _unexpected_runner_detail(report: Path, stderr: bytes) -> str:
+    """Render one bounded diagnostic without making it verification evidence."""
+
+    diagnostic: dict[str, Any] = {}
+    try:
+        payload = _read_stable(report, maximum=MAX_REPORT_BYTES, role="failed runner report")
+        value = _parse_json(payload, role="failed runner report")
+    except (FixtureError, OSError, ValueError) as error:
+        diagnostic["report_error"] = str(error)[:256]
+    else:
+        if isinstance(value, dict):
+            if type(value.get("approved")) is bool:
+                diagnostic["approved"] = value["approved"]
+            failures = value.get("failures")
+            if isinstance(failures, list):
+                diagnostic["failures"] = [
+                    failure[:256]
+                    for failure in failures[:4]
+                    if isinstance(failure, str) and failure
+                ]
+            pipeline = value.get("pipeline")
+            phases = pipeline.get("phases") if isinstance(pipeline, dict) else None
+            if isinstance(phases, list):
+                failed_phases = []
+                for phase in phases[:8]:
+                    if not isinstance(phase, dict) or phase.get("passed") is not False:
+                        continue
+                    name = phase.get("name")
+                    phase_failures = phase.get("failures")
+                    failed_phases.append(
+                        {
+                            "name": name[:64] if isinstance(name, str) else "invalid",
+                            "failures": [
+                                failure[:256]
+                                for failure in phase_failures[:4]
+                                if isinstance(failure, str) and failure
+                            ]
+                            if isinstance(phase_failures, list)
+                            else [],
+                        }
+                    )
+                if failed_phases:
+                    diagnostic["failed_phases"] = failed_phases
+
+    stderr_detail = stderr.decode("utf-8", errors="replace").strip()
+    if stderr_detail:
+        diagnostic["stderr"] = stderr_detail[:512]
+    if not diagnostic:
+        return ""
+    return json.dumps(diagnostic, ensure_ascii=True, separators=(",", ":"))[:2048]
 
 
 def _scan_output_tree(root: Path) -> None:
