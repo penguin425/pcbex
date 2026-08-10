@@ -1498,7 +1498,7 @@ jobs:
 
   python:
     name: Python
-    needs: python-boundaries
+    needs: [python-boundaries, rust-windows-boundaries]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -1506,7 +1506,10 @@ jobs:
       - name: Require cross-platform boundary checks
         env:
           BOUNDARY_RESULT: ${{ needs.python-boundaries.result }}
-        run: test "$BOUNDARY_RESULT" = success
+          WINDOWS_RUST_RESULT: ${{ needs.rust-windows-boundaries.result }}
+        run: >-
+          test "$BOUNDARY_RESULT" = success
+          && test "$WINDOWS_RUST_RESULT" = success
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -1542,9 +1545,6 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Build pcbex release binary
         run: cargo +stable build --package pcbex --release --locked
-      - name: Run Windows Rust process regressions
-        if: ${{ runner.os == 'Windows' }}
-        run: cargo +stable test --package pcbex --bin pcbex --release --locked windows_
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
@@ -1632,3 +1632,16 @@ jobs:
           agent.tests.test_manufacturing_replay_v1455
           agent.tests.test_deterministic_pipeline_replay_v1456
           scripts.tests.test_ci_runtime
+
+  rust-windows-boundaries:
+    name: Rust Windows boundaries
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Run Windows Rust process regressions
+        run: cargo +stable test --package pcbex --bin pcbex --release --locked windows_

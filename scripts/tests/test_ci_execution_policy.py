@@ -19,6 +19,7 @@ EXPECTED_TIMEOUTS = {
         "rust": 45,
         "python": 20,
         "python-boundaries": 45,
+        "rust-windows-boundaries": 30,
     },
     "codeql.yml": {"analyze": 30},
     "fuzz.yml": {"fuzz": 30},
@@ -283,7 +284,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
 
     def test_shared_runtime_boundaries_run_on_macos_and_windows(self):
         document = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-        boundaries = _job_blocks(document)["python-boundaries"]
+        jobs = _job_blocks(document)
+        boundaries = jobs["python-boundaries"]
+        rust_windows = jobs["rust-windows-boundaries"]
         self.assertIn("macos-latest", boundaries)
         self.assertIn("windows-latest", boundaries)
         self.assertRegex(
@@ -303,13 +306,12 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(
             "cargo +stable build --package pcbex --release --locked", boundaries
         )
-        rust_regression_step = boundaries.index(
-            "- name: Run Windows Rust process regressions"
-        )
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
-            boundaries,
+            rust_windows,
         )
+        self.assertIn("runs-on: windows-latest", rust_windows)
+        self.assertIn("rustup toolchain install stable --profile minimal", rust_windows)
         toolchain_step = boundaries.index(
             "- name: Configure Windows GNU firmware toolchain"
         )
@@ -346,11 +348,6 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         boundary_tests_step = boundaries.index(
             "- name: Run cross-platform boundary tests"
-        )
-        self.assertLess(rust_regression_step, toolchain_step)
-        self.assertIn(
-            "if: ${{ runner.os == 'Windows' }}",
-            boundaries[rust_regression_step:toolchain_step],
         )
         self.assertLess(toolchain_step, fixture_step)
         self.assertLess(fixture_step, diagnostic_step)

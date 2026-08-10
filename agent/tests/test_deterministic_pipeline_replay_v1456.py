@@ -341,11 +341,23 @@ summary = {
 }
 summary.update(config.get("summary_override", {}))
 if config.get("malformed_summary"):
-    sys.stdout.write("not-json\n")
+    stdout = b"not-json\n"
 elif config.get("stdout_bytes"):
-    sys.stdout.write("x" * int(config["stdout_bytes"]))
+    stdout = b"x" * int(config["stdout_bytes"])
 else:
-    sys.stdout.write(json.dumps(summary, separators=(",", ":")) + "\n")
+    stdout = (json.dumps(summary, separators=(",", ":")) + "\n").encode("utf-8")
+transport = config.get("summary_transport")
+if transport == "crlf":
+    stdout = stdout.removesuffix(b"\n") + b"\r\n"
+elif transport == "lone-cr":
+    stdout = stdout.removesuffix(b"\n") + b"\r"
+elif transport == "double-lf":
+    stdout += b"\n"
+elif transport == "leading-lf":
+    stdout = b"\n" + stdout
+elif transport == "trailing-log":
+    stdout += b"unexpected-log"
+sys.stdout.buffer.write(stdout)
 raise SystemExit(int(config.get("returncode", 0)))
 ''',
         encoding="utf-8",
@@ -484,6 +496,11 @@ class DeterministicPipelineReplayTests(unittest.TestCase):
             {"summary_override": {"approved": False}},
             {"summary_override": {"failure_count": 99}},
             {"malformed_summary": True},
+            {"summary_transport": "crlf"},
+            {"summary_transport": "lone-cr"},
+            {"summary_transport": "double-lf"},
+            {"summary_transport": "leading-lf"},
+            {"summary_transport": "trailing-log"},
         )
         for index, configuration in enumerate(configurations):
             with self.subTest(configuration=configuration), tempfile.TemporaryDirectory() as directory:

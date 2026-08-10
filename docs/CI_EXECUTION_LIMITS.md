@@ -17,7 +17,8 @@ and are never cancelled during publication.
 | CI deterministic pipeline | 45 minutes |
 | CI Rust | 45 minutes |
 | CI Python | 20 minutes |
-| CI Python boundary matrix | 20 minutes |
+| CI Python boundary matrix | 45 minutes |
+| CI Rust Windows boundaries | 30 minutes |
 | CodeQL language matrix | 30 minutes |
 | Fuzz target matrix | 30 minutes |
 | KiCad end-to-end | 45 minutes |
@@ -40,7 +41,11 @@ check of the workflow inventory, exact job timeouts, concurrency, matrix
 parallelism, fuzz flags, serialized release policy, fixture-server cleanup,
 and composite-action publication gate. Adding a workflow or job therefore
 requires an explicit policy decision in the same change.
-The shared runtime boundary suite is also repeated on macOS and Windows.
+The shared runtime boundary suite is also repeated on macOS and Windows. The
+Windows-only Rust process regressions run as a separate required job in
+parallel with that matrix, and the aggregate `Python` check requires both jobs
+to succeed. This keeps the real Windows release build/replay and release-mode
+Rust process tests independent without serializing their compilation costs.
 
 ## Shared script runtime
 
