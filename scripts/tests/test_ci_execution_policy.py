@@ -303,6 +303,13 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(
             "cargo +stable build --package pcbex --release --locked", boundaries
         )
+        rust_regression_step = boundaries.index(
+            "- name: Run Windows Rust process regressions"
+        )
+        self.assertIn(
+            "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
+            boundaries,
+        )
         toolchain_step = boundaries.index(
             "- name: Configure Windows GNU firmware toolchain"
         )
@@ -339,6 +346,11 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         boundary_tests_step = boundaries.index(
             "- name: Run cross-platform boundary tests"
+        )
+        self.assertLess(rust_regression_step, toolchain_step)
+        self.assertIn(
+            "if: ${{ runner.os == 'Windows' }}",
+            boundaries[rust_regression_step:toolchain_step],
         )
         self.assertLess(toolchain_step, fixture_step)
         self.assertLess(fixture_step, diagnostic_step)

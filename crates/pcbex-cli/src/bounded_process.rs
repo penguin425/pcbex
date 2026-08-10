@@ -161,8 +161,10 @@ enum ProcessDeadline {
 /// of a fresh process group so timeout, cancellation, output failure, or
 /// direct-child completion also terminates its ordinary descendants.  On
 /// Windows, the optional Job Object implementation provides the equivalent
-/// kill-on-close behavior once the crate's `windows-sys` dependency is enabled
-/// (see [`windows_job`] below).
+/// kill-on-close behavior once assignment succeeds.  A post-spawn assignment
+/// failure is accepted only when `try_wait` proves the direct child already
+/// exited; that narrow fallback has no descendant-cleanup guarantee (see
+/// [`windows_job`] below).
 pub fn run_bounded(
     command: &mut Command,
     limits: ProcessLimits,
@@ -281,22 +283,21 @@ fn run_bounded_inner(
     let mut child = command.spawn().map_err(ProcessError::Spawn)?;
 
     #[cfg(windows)]
-    let job = if tree_mode == ProcessTreeMode::Isolated {
+    let (job, initial_status) = if tree_mode == ProcessTreeMode::Isolated {
         match windows_job::Job::for_child(&child) {
-            Ok(job) => Some(job),
+            Ok(job) => (Some(job), None),
             Err(source) => {
-                let cleanup = terminate_and_reap(&mut child, None, tree_mode);
-                return Err(match cleanup {
-                    Ok(()) => ProcessError::PostSpawnSetup(source),
-                    Err(cleanup) => ProcessError::Wait(cleanup),
-                });
+                match recover_completed_child_after_job_failure(&mut child, source, tree_mode) {
+                    Ok(status) => (None, Some(status)),
+                    Err(error) => return Err(error),
+                }
             }
         }
     } else {
-        None
+        (None, None)
     };
     #[cfg(not(windows))]
-    let job = ();
+    let (job, initial_status) = ((), None);
 
     let stdout = child.stdout.take().ok_or_else(|| ProcessError::Read {
         stream: ProcessStream::Stdout,
@@ -362,7 +363,7 @@ fn run_bounded_inner(
         }
     };
 
-    let mut status = None;
+    let mut status = initial_status;
     let mut stdout_done = false;
     let mut stderr_done = false;
     let mut stdout_bytes = Vec::new();
@@ -615,6 +616,34 @@ fn terminate_handle(job: &Option<windows_job::Job>) -> Option<&windows_job::Job>
     job.as_ref()
 }
 
+#[cfg(windows)]
+fn recover_completed_child_after_job_failure(
+    child: &mut Child,
+    source: io::Error,
+    tree_mode: ProcessTreeMode,
+) -> Result<ExitStatus, ProcessError> {
+    match child.try_wait() {
+        // A very short-lived child can exit between CreateProcess and Job
+        // assignment. Its completed status and captured pipes remain
+        // authoritative, but no descendant-cleanup guarantee is available.
+        Ok(Some(status)) => Ok(status),
+        Ok(None) => {
+            let cleanup = terminate_and_reap(child, None, tree_mode);
+            Err(match cleanup {
+                Ok(()) => ProcessError::PostSpawnSetup(source),
+                Err(cleanup) => ProcessError::Wait(cleanup),
+            })
+        }
+        Err(wait) => {
+            let cleanup = terminate_and_reap(child, None, tree_mode);
+            Err(match cleanup {
+                Ok(()) => ProcessError::Wait(wait),
+                Err(cleanup) => ProcessError::Wait(cleanup),
+            })
+        }
+    }
+}
+
 #[cfg(not(any(unix, windows)))]
 fn terminate_handle(_job: &()) -> Option<&()> {
     None
@@ -798,12 +827,67 @@ mod tests {
         command
     }
 
+    #[cfg(windows)]
+    fn windows_command(script: &str) -> Command {
+        let mut command = Command::new("cmd.exe");
+        command.args(["/D", "/C", script]);
+        command
+    }
+
     fn limits(timeout: Duration, stdout_bytes: usize, stderr_bytes: usize) -> ProcessLimits {
         ProcessLimits {
             timeout,
             stdout_bytes,
             stderr_bytes,
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_completed_child_job_failure_preserves_exit_status() {
+        let mut child = windows_command("exit 7")
+            .spawn()
+            .expect("spawn completed child");
+        let expected = child.wait().expect("wait for completed child");
+
+        let observed = recover_completed_child_after_job_failure(
+            &mut child,
+            io::Error::new(io::ErrorKind::PermissionDenied, "synthetic Job failure"),
+            ProcessTreeMode::Isolated,
+        )
+        .expect("a proven completed child remains valid output");
+
+        assert_eq!(observed.code(), expected.code());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "helper process used by the Job-assignment cleanup regression"]
+    fn windows_job_failure_sleep_child() {
+        thread::sleep(Duration::from_secs(30));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_live_child_job_failure_fails_closed_and_reaps() {
+        let mut child = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--ignored",
+                "--exact",
+                "bounded_process::tests::windows_job_failure_sleep_child",
+            ])
+            .spawn()
+            .expect("spawn live child");
+
+        let error = recover_completed_child_after_job_failure(
+            &mut child,
+            io::Error::new(io::ErrorKind::PermissionDenied, "synthetic Job failure"),
+            ProcessTreeMode::Isolated,
+        )
+        .expect_err("a live child must not bypass failed Job assignment");
+
+        assert!(matches!(error, ProcessError::PostSpawnSetup(_)));
+        assert!(child.try_wait().expect("query reaped child").is_some());
     }
 
     #[cfg(unix)]

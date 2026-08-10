@@ -225,6 +225,8 @@ OS resource sandbox. A third-party action or external tool can consume CPU,
 memory, network, or filesystem space until its job or process deadline, and an
 external writer can race between output-tree scans. POSIX descendants that
 deliberately create a new session are outside process-group cleanup; Windows
-has a small post-spawn Job Object assignment race. Deployments requiring live
+has a small post-spawn Job Object assignment race. Rust accepts an assignment
+failure only after observing that the direct child already exited, and that
+fallback does not claim descendant cleanup. Deployments requiring live
 CPU, memory, disk, syscall, or network enforcement must add runner-level
 cgroups, quotas, containers, or equivalent isolation.

@@ -685,8 +685,11 @@ pcbex generate-firmware design.kicad_sch --mcu-reference U1 \
 
 The bundle contains exactly seven source artifacts and a closed v2 manifest; a
 `--skip-build` source-only bundle is intentionally rejected by
-`pipeline-verify`. See the [firmware generator contract](docs/FIRMWARE_GENERATOR.md)
-for the staging, subprocess, and no-overwrite boundaries.
+`pipeline-verify`. Native smoke executables are launched through their exact
+private absolute paths while the manifest keeps stable path-free relative
+command evidence, so the same contract holds on Windows. See the [firmware
+generator contract](docs/FIRMWARE_GENERATOR.md) for the staging, subprocess,
+and no-overwrite boundaries.
 
 ## Component placement
 

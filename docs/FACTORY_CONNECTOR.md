@@ -120,13 +120,15 @@ must obtain them through a deployment-owned mechanism rather than expecting
 ambient inheritance. This is a narrow secret boundary, not a claim that
 arbitrary repair programs are safe: the wrapper remains trusted deployment
 code. On Unix the wrapper leads a fresh process group; on Windows it is assigned
-to a kill-on-close Job Object immediately after spawn, which leaves a short
-pre-assignment race. Timeout, output overflow, and direct-child completion
-terminate and reap ordinary managed descendants. pcbex does not provide a full
-OS sandbox: a Unix descendant can deliberately create another session, and CPU,
-memory, filesystem, network, syscall, and privilege use remain outside this
-boundary. Deploy it with appropriate operating-system identity, filesystem,
-network, and process restrictions.
+to a kill-on-close Job Object immediately after spawn. An assignment failure is
+accepted only if `try_wait` proves that the direct child already exited; a live
+or ambiguous wrapper fails closed, while the already-exited fallback cannot
+guarantee descendant cleanup. Timeout, output overflow, and direct-child
+completion terminate and reap ordinary managed descendants. pcbex does not
+provide a full OS sandbox: a Unix descendant can deliberately create another
+session, and CPU, memory, filesystem, network, syscall, and privilege use remain
+outside this boundary. Deploy it with appropriate operating-system identity,
+filesystem, network, and process restrictions.
 
 The wrapper must produce a complete, non-empty manifest ZIP no larger than 128
 MiB. It cannot emit only changed Gerbers or copy a package and replace an

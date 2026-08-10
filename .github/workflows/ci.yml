@@ -1542,6 +1542,9 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Build pcbex release binary
         run: cargo +stable build --package pcbex --release --locked
+      - name: Run Windows Rust process regressions
+        if: ${{ runner.os == 'Windows' }}
+        run: cargo +stable test --package pcbex --bin pcbex --release --locked windows_
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
