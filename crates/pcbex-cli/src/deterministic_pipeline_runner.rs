@@ -752,10 +752,7 @@ pub(crate) fn run_deterministic_pipeline(
             plan.schema_version
         );
     }
-    let stage = tempfile::Builder::new()
-        .prefix("pcbex-deterministic-pipeline-")
-        .tempdir()
-        .context("creating private deterministic pipeline staging directory")?;
+    let stage = create_private_pipeline_stage(&std::env::temp_dir())?;
     let mut failures = FailureCollector::new();
     let mut evidence = Vec::new();
 
@@ -1080,6 +1077,32 @@ pub(crate) fn run_deterministic_pipeline(
         bail!("deterministic pipeline report exceeds its byte limit");
     }
     Ok(report)
+}
+
+fn create_private_pipeline_stage(temp_parent: &Path) -> Result<tempfile::TempDir> {
+    // macOS commonly spells TMPDIR below /var even though /var is a symlink to
+    // /private/var.  Caller inputs must continue to reject every symlink
+    // ancestor, but the runner's own trusted private stage needs a canonical
+    // lexical parent so that the same boundary does not reject its writes.
+    let canonical_parent = std::fs::canonicalize(temp_parent)
+        .context("canonicalizing deterministic pipeline temporary directory")?;
+    let metadata = std::fs::symlink_metadata(&canonical_parent)
+        .context("inspecting deterministic pipeline temporary directory")?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("deterministic pipeline temporary directory must be a real directory");
+    }
+    reject_symlink_components(
+        &canonical_parent,
+        "deterministic pipeline temporary directory",
+    )
+    .map_err(anyhow::Error::msg)?;
+    let stage = tempfile::Builder::new()
+        .prefix("pcbex-deterministic-pipeline-")
+        .tempdir_in(&canonical_parent)
+        .context("creating private deterministic pipeline staging directory")?;
+    reject_symlink_components(stage.path(), "deterministic pipeline staging directory")
+        .map_err(anyhow::Error::msg)?;
+    Ok(stage)
 }
 
 /// Re-run a deterministic pipeline and bind an AI review request to the exact
@@ -1903,6 +1926,37 @@ mod tests {
         fs::write(&plan_path, serde_json::to_vec(&value).unwrap()).unwrap();
         let plan = load_deterministic_pipeline_plan(&plan_path).unwrap();
         (workspace, plan)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_stage_canonicalizes_a_symlink_spelled_temp_parent() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let real_parent = workspace.path().join("real-temp");
+        fs::create_dir(&real_parent).unwrap();
+        let linked_parent = workspace.path().join("linked-temp");
+        symlink(&real_parent, &linked_parent).unwrap();
+
+        let rejected_stage = tempfile::Builder::new()
+            .prefix("pcbex-deterministic-pipeline-")
+            .tempdir_in(&linked_parent)
+            .unwrap();
+        assert!(
+            crate::bounded_io::write(rejected_stage.path().join("input"), b"input").is_err(),
+            "the regression precondition requires the lexical symlink to be rejected"
+        );
+
+        let stage = create_private_pipeline_stage(&linked_parent).unwrap();
+        let canonical_parent = std::fs::canonicalize(&real_parent).unwrap();
+        assert_eq!(stage.path().parent(), Some(canonical_parent.as_path()));
+        let input = stage.path().join("input");
+        crate::bounded_io::write(&input, b"input").unwrap();
+        assert_eq!(
+            crate::bounded_io::read_with_limit(&input, 16).unwrap(),
+            b"input"
+        );
     }
 
     #[test]
