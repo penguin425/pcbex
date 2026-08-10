@@ -80,6 +80,37 @@ authentication at the publication boundary. The full report remains on disk
 or in the optional artifact; only the fixed report path and 23 bounded scalar
 fields become Action outputs.
 
+The v1.462 `reserve-fabrication-authorization` command reuses the verifier's
+direct-source and 1–100 approval bounds, but publishes no full authorization
+report and writes nothing to standard output. Its complete in-memory report
+remains under the generic 128 MiB ceiling; only its closed 23-field compact
+summary enters a fixed challenge-keyed reservation marker no larger than 16
+KiB. The fixed ledger manifest is limited to 4,096 bytes. Both JSON objects are
+duplicate-free, closed, and path-free.
+
+Reservation is available only on Unix. The caller supplies an absolute,
+already existing, non-symlink ledger directory owned by the effective UID with
+mode exactly `0700`, its fixed manifest, and the expected ledger ID. The
+directory is pinned by descriptor before the complete private temporary marker
+is written and synchronized. It must not overlap a direct authorization input,
+plan-selected input, or the exact firmware bundle directory. Publication uses
+a descriptor-relative no-replace operation and synchronizes that same
+directory before returning success. Local validity-window checks run before
+and after the installation and once more after durability; expiry after the
+final name appears returns an error but never removes that marker. Any existing
+marker-name entry blocks the operation regardless of its type or contents.
+Once final installation succeeds, a later validation, cleanup, directory-sync,
+path-identity, process, or reporting failure never removes the marker
+automatically; an ambiguous attempt is burned rather than retried.
+
+These mechanics provide cooperative at-most-once admission only within the
+same trusted, non-replaced, non-rollback local ledger. They do not protect
+against the same UID or an administrator, span another root/host/runner, cover
+Windows or network/distributed/overlay/ephemeral filesystems, or make a factory
+submission, order, payment, or other external side effect exactly once. The
+nested verifier summary therefore continues to state
+`challenge_one_time_use_enforced: false`.
+
 For signing, a valid response that fails an approval gate is still a legitimate
 signed rejection: the no-clobber approval is published before
 `--require-approved` returns failure. Any existing regular file, symbolic link,

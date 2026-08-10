@@ -3919,13 +3919,16 @@ replayed plan before the no-clobber report is published.
 This authorizes only release of those exact bytes and signed limits to a
 separately controlled fabrication handoff. The receipt is not factory-signed,
 the opaque quote is not a typed order contract, the policy pack is an externally
-selected trust root, and the challenge has no durable consumption state. No
+selected trust root, and the ordinary verifier/report has no durable challenge
+consumption state. No
 network call, order, inventory reservation, fabrication execution, payment, or
 spend authority is added. Version 1.460 exposes fresh verification—but never
 signing or private-key access—through MCP. Version 1.461 exposes that verifier
 as a standalone boardless composite Action; it may retain or optionally upload
 the audit report, but it still cannot sign, contact a factory, or act on an
-order. See
+order. Version 1.462 adds a separate Unix-only cooperative local challenge
+reservation; it does not change the stateless verifier, MCP tool, or Action.
+See
 [`docs/FABRICATION_AUTHORIZATION.md`](docs/FABRICATION_AUTHORIZATION.md) for the
 closed schemas, bounds, verification order, and non-claims.
 
@@ -3985,6 +3988,46 @@ report can contain policy bodies, public keys, approval envelopes, reasons, and
 tickets; set `upload-artifact: "false"` when those should not be uploaded. See
 [`docs/FABRICATION_AUTHORIZATION_ACTION.md`](docs/FABRICATION_AUTHORIZATION_ACTION.md)
 for the exact 26-output contract, bounds, sequencing, and cancellation limits.
+
+On a trusted Unix executor, reserve one freshly authorized challenge in an
+already provisioned private ledger with:
+
+```sh
+pcbex reserve-fabrication-authorization \
+  --report pipeline-report.json \
+  --manufacturing-package manufacturing.zip \
+  --factory-receipt factory-receipt.json \
+  --policy-pack organization-policy-pack.json \
+  --approval fabrication-a.approval.json \
+  --approval fabrication-b.approval.json \
+  --reservation-ledger /var/lib/pcbex/fabrication-reservations \
+  --expected-ledger-id "$LEDGER_ID" \
+  -- pipeline-plan.json
+```
+
+The absolute ledger directory must pre-exist, be owned by the effective user
+with mode `0700`, and contain the fixed closed manifest matching the expected
+64-hex ledger ID. After fresh authorization, pcbex synchronizes and installs
+one no-replace marker named from the signed challenge, then synchronizes the
+pinned directory and confirms the signed window remains active before
+returning success. Expiry after installation burns the challenge and returns
+an error without removing the marker. The marker contains only a closed
+five-key wrapper around the existing path-free 23-field report summary; its
+nested `challenge_one_time_use_enforced` remains `false`, and the full
+authorization report with its signed approvals is not retained by this
+command. Standard output stays
+empty; a concise non-sensitive result may be written to standard error.
+
+This is local at-most-once admission under a cooperative trusted executor, not
+global one-time use. It cannot protect state from the same UID or an
+administrator, survive ledger replacement or rollback, coordinate another
+root, host, or runner, cover Windows or network filesystems, discover
+revocations or withheld rejections, authenticate a factory or clock, submit an
+order, pay, or make an external side effect exactly once. A credential-holding
+executor must make reservation mandatory for it to form an operational
+boundary. See
+[`docs/FABRICATION_AUTHORIZATION_RESERVATION.md`](docs/FABRICATION_AUTHORIZATION_RESERVATION.md)
+for the exact manifest, marker, commit, crash, and trust contracts.
 
 The authorization report is an audit snapshot, not an outer-signed trusted
 timestamp. A release consumer must freshly rerun the verifier from the original

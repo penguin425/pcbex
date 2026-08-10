@@ -173,6 +173,7 @@ auditable release.
 | v1.459.0 | Dual-control exact fabrication release authorization | Freshly reproduce one approved factory-required deterministic pipeline, revalidate its exact manufacturing ZIP, passing factory receipt, and selected organization policy pack, then require domain-separated approvals from at least two dedicated trusted human keys over one bounded quantity/currency/value/window/challenge scope; retain full signed evidence without contacting a factory, placing an order, spending funds, or claiming factory authenticity or one-time use |
 | v1.460.0 | MCP fabrication authorization verification parity | Expose the v1.459 fresh verifier synchronously and through optional MCP Tasks, retain truthful authorized/not-authorized reports, and return a digest-authenticated bounded summary without exposing signing keys or embedding the complete authorization report |
 | v1.461.0 | Focused fabrication authorization verification Action | Add a standalone verification-only composite Action that freshly invokes the v1.459 verifier, authenticates and retains its exact report, exposes the compact bridge as 23 scalar outputs, optionally uploads the one-file evidence artifact, and applies an authorization gate only after retention without exposing signing keys or placing an order |
+| v1.462.0 | Local fabrication authorization challenge reservation | On Unix, freshly require an authorized fabrication quorum before installing one challenge-keyed, closed path-free compact marker through a descriptor-pinned no-replace and file/directory synchronization boundary in an explicitly trusted pre-provisioned local ledger, while retaining the existing false one-time-use flag and making no global, cross-host, permission, factory, order, payment, or exactly-once claim |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -990,7 +991,7 @@ MCP never accepts a caller-selected evaluation time and does not expose
 factory submission, ordering, payment, or challenge consumption. Signing stays
 CLI-only.
 
-The current v1.461.0 milestone adds that verification boundary as a focused,
+The released v1.461.0 milestone adds that verification boundary as a focused,
 boardless composite Action. It accepts only paths to the original verifier
 inputs and a newline-delimited approval set, writes one fixed no-clobber report
 inside its output directory, authenticates the compact bridge and exposes its
@@ -1006,3 +1007,34 @@ report contains the complete policy and signed envelopes, including human
 reasons and tickets, so confidentiality-sensitive callers can disable artifact
 upload. Near-limit 128 MiB publication remains an independently enforced bound,
 not a claimed adversarial end-to-end upload fixture.
+
+The current v1.462.0 milestone adds a separate Unix-only cooperative
+reservation boundary without changing verification, MCP, or either Action.
+`reserve-fabrication-authorization` consumes the original plan, retained
+pipeline report, manufacturing package, factory receipt, policy pack, and one
+to 100 signed approvals. It freshly requires the complete in-memory
+authorization report to be authorized, then commits only a bounded path-free
+23-field summary under a filename keyed by the exact signed challenge.
+
+The caller must select an already existing effective-UID-owned mode-`0700`
+ledger by absolute path and supply the expected 64-hex ledger identity from its
+fixed closed manifest. On Unix the ledger directory remains pinned while a
+complete marker is synchronized, installed without replacement relative to
+that descriptor, and followed by directory synchronization. Local window
+checks bracket installation and confirm validity again after durability;
+expiry after installation burns the challenge and returns an error. Any
+existing entry blocks reuse, and an error after installation never removes the
+final marker automatically. The marker has the exact five-key
+`pinned-local-ledger-at-most-once-v1` contract and retains the nested verifier's
+`challenge_one_time_use_enforced: false` value.
+
+This is deliberately not global one-time use or a permission boundary. The
+same UID or an administrator can delete or replace state; a ledger path can be
+swapped or rolled back between invocations; another ledger, host, or runner has
+independent state; and Windows plus network, distributed, overlay, and
+ephemeral filesystems are outside the durability claim. The command does not
+discover revocations or withheld rejections, authenticate a factory or clock,
+retain the full signed report, expose MCP/Action parity, submit a package,
+order, pay, or make an external side effect exactly once. Enforcement requires
+a separately controlled credential-holding executor that makes this local
+reservation mandatory.
