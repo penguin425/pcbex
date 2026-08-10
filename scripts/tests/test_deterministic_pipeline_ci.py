@@ -29,6 +29,8 @@ class DeterministicPipelineCiTests(unittest.TestCase):
             ["--cc", "clang", "--cxx", "clang++"],
         )
         self.assertEqual(fixture._firmware_compiler_arguments("posix"), [])
+        expected = ["--cc", "clang", "--cxx", "clang++"] if os.name == "nt" else []
+        self.assertEqual(fixture._firmware_compiler_arguments(), expected)
 
     def test_resolves_relative_executable_and_rejects_symlink(self):
         with tempfile.TemporaryDirectory() as temporary:
