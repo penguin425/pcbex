@@ -173,6 +173,7 @@ mod deterministic_pipeline_compiler;
 mod deterministic_pipeline_runner;
 mod dfm_profile_binding;
 mod fabrication_authorization;
+mod fabrication_authorization_reservation;
 mod factory;
 mod firmware;
 mod manufacturing_feedback;
@@ -237,6 +238,18 @@ use fabrication_authorization::{
     parse_signed_fabrication_approval, sign_fabrication_approval,
     signed_fabrication_approval_json_schema, validate_fabrication_approval_signing_inputs,
     verify_fabrication_authorization,
+};
+#[cfg(unix)]
+use fabrication_authorization_reservation::{
+    FABRICATION_AUTHORIZATION_RESERVATION_LEDGER_MANIFEST_FILENAME,
+    MAX_FABRICATION_AUTHORIZATION_RESERVATION_BYTES,
+    MAX_FABRICATION_AUTHORIZATION_RESERVATION_LEDGER_MANIFEST_BYTES,
+    fabrication_authorization_reservation_filename, render_fabrication_authorization_reservation,
+    validate_fabrication_authorization_reservation_ledger_manifest,
+};
+use fabrication_authorization_reservation::{
+    fabrication_authorization_reservation_json_schema,
+    fabrication_authorization_reservation_ledger_manifest_json_schema,
 };
 use factory::{
     FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
@@ -544,6 +557,18 @@ impl std::ops::Deref for CompactPath {
 
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+
+fn parse_lowercase_sha256(value: &str) -> std::result::Result<String, String> {
+    if value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        Ok(value.to_string())
+    } else {
+        Err("expected 64 lowercase hexadecimal digits".to_string())
     }
 }
 
@@ -886,6 +911,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<CompactPath>,
     },
+    /// Print the closed local fabrication-authorization reservation JSON Schema.
+    FabricationAuthorizationReservationSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed local reservation-ledger manifest JSON Schema.
+    FabricationAuthorizationReservationLedgerSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
     /// Print the closed normalized native KiCad schematic ERC report JSON Schema.
     NativeKicadErcReportSchema {
         #[arg(short, long)]
@@ -1082,6 +1117,29 @@ enum Command {
         /// Echo a path-free digest-bound report summary to stdout for the MCP subprocess bridge.
         #[arg(long, hide = true)]
         mcp_echo_report_summary: bool,
+    },
+    /// Durably reserve one freshly authorized fabrication challenge in a trusted local ledger.
+    ReserveFabricationAuthorization {
+        #[arg(long = "report")]
+        retained_report: CompactPath,
+        #[arg(long)]
+        manufacturing_package: CompactPath,
+        #[arg(long)]
+        factory_receipt: CompactPath,
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Signed fabrication approval; repeat once per independent human signer.
+        #[arg(long = "approval", required = true)]
+        approvals: Vec<CompactPath>,
+        /// Existing absolute private directory holding the fixed ledger manifest and markers.
+        #[arg(long, value_name = "ABSOLUTE_DIRECTORY")]
+        reservation_ledger: CompactPath,
+        /// Expected lowercase SHA-256 ledger identity from the fixed manifest.
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_ledger_id: String,
+        /// Factory-required deterministic pipeline plan; must follow the `--` separator.
+        #[arg(last = true)]
+        plan: CompactPath,
     },
     /// Compile one closed deterministic pipeline intent into a canonical plan.
     CompileDeterministicPipelinePlan {
@@ -5614,6 +5672,374 @@ fn render_fabrication_authorization_report(
     render_fabrication_authorization_report_with_limit(report, fs::MAX_FILE_BYTES)
 }
 
+struct FreshFabricationAuthorization {
+    report: FabricationAuthorizationReport,
+    rendered_report: Vec<u8>,
+    replayed_plan: DeterministicPipelinePlan,
+}
+
+#[derive(Clone, Copy)]
+struct FabricationAuthorizationVerificationInputs<'a> {
+    plan: &'a Path,
+    retained_report: &'a Path,
+    manufacturing_package: &'a Path,
+    factory_receipt: &'a Path,
+    policy_pack: &'a Path,
+    approvals: &'a [CompactPath],
+}
+
+impl<'a> FabricationAuthorizationVerificationInputs<'a> {
+    fn direct_paths(self) -> Vec<&'a Path> {
+        let mut paths = vec![
+            self.plan,
+            self.retained_report,
+            self.manufacturing_package,
+            self.factory_receipt,
+            self.policy_pack,
+        ];
+        paths.extend(self.approvals.iter().map(|path| &**path));
+        paths
+    }
+}
+
+fn freshly_verify_fabrication_authorization<F>(
+    inputs: FabricationAuthorizationVerificationInputs<'_>,
+    after_replay: F,
+) -> Result<FreshFabricationAuthorization>
+where
+    F: FnOnce(&DeterministicPipelinePlan) -> Result<()>,
+{
+    let (replay, replayed_plan) =
+        replay_approved_fabrication_pipeline(inputs.plan, inputs.retained_report)?;
+    after_replay(&replayed_plan)?;
+    let (_, plan_identity) =
+        read_exact_artifact(inputs.plan, MAX_PLAN_BYTES, "deterministic pipeline plan")?;
+    if plan_identity != replay.plan_source {
+        bail!("deterministic pipeline plan changed after its approved replay");
+    }
+    let (_, report_identity) = read_exact_artifact(
+        inputs.retained_report,
+        MAX_REPORT_BYTES as u64 + 1,
+        "retained deterministic pipeline report",
+    )?;
+    if report_identity != replay.report {
+        bail!("retained deterministic pipeline report changed after its approved replay");
+    }
+    let (package_source, _) = read_exact_artifact(
+        inputs.manufacturing_package,
+        MAX_PACKAGE_BYTES,
+        "manufacturing package",
+    )?;
+    let (receipt_source, _) = read_exact_artifact(
+        inputs.factory_receipt,
+        MAX_FACTORY_RECEIPT_BYTES,
+        "factory receipt",
+    )?;
+    let (policy_source, _) = read_exact_artifact(
+        inputs.policy_pack,
+        MAX_POLICY_PACK_BYTES,
+        "organization policy pack",
+    )?;
+    let (evidence, policy) = capture_fabrication_authorization_evidence(
+        &replay,
+        &package_source,
+        &receipt_source,
+        &policy_source,
+    )
+    .map_err(anyhow::Error::msg)?;
+    let mut signed = Vec::with_capacity(inputs.approvals.len());
+    let mut approval_identities = Vec::with_capacity(inputs.approvals.len());
+    for path in inputs.approvals {
+        let (source, identity) = read_exact_artifact(
+            path,
+            MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
+            "signed fabrication approval",
+        )?;
+        let source = std::str::from_utf8(&source).map_err(|error| {
+            anyhow::anyhow!("signed fabrication approval is not UTF-8: {error}")
+        })?;
+        signed.push(parse_signed_fabrication_approval(source).map_err(anyhow::Error::msg)?);
+        approval_identities.push(identity);
+    }
+    require_exact_artifact(
+        inputs.plan,
+        MAX_PLAN_BYTES,
+        &replay.plan_source,
+        "deterministic pipeline plan",
+    )?;
+    require_exact_artifact(
+        inputs.retained_report,
+        MAX_REPORT_BYTES as u64 + 1,
+        &replay.report,
+        "retained deterministic pipeline report",
+    )?;
+    require_exact_artifact(
+        inputs.manufacturing_package,
+        MAX_PACKAGE_BYTES,
+        &replay.manufacturing_package,
+        "manufacturing package",
+    )?;
+    require_exact_artifact(
+        inputs.factory_receipt,
+        MAX_FACTORY_RECEIPT_BYTES,
+        &replay.factory_receipt,
+        "factory receipt",
+    )?;
+    require_exact_artifact(
+        inputs.policy_pack,
+        MAX_POLICY_PACK_BYTES,
+        &replay.policy_pack,
+        "organization policy pack",
+    )?;
+    for (path, identity) in inputs.approvals.iter().zip(&approval_identities) {
+        require_exact_artifact(
+            path,
+            MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
+            identity,
+            "signed fabrication approval",
+        )?;
+    }
+    // Evaluate the temporal authorization only after every caller source has
+    // passed its final stable re-read. Reservation and report publication
+    // therefore share the same narrow, current-time verifier boundary.
+    let report =
+        verify_fabrication_authorization(&evidence, &policy, &signed, current_unix_seconds()?)
+            .map_err(anyhow::Error::msg)?;
+    let rendered_report = render_fabrication_authorization_report(&report)?;
+    Ok(FreshFabricationAuthorization {
+        report,
+        rendered_report,
+        replayed_plan,
+    })
+}
+
+#[cfg(unix)]
+fn validate_pinned_fabrication_authorization_reservation_ledger(
+    ledger: &anchored_io::PinnedDirectory,
+    expected_ledger_id: &str,
+) -> Result<()> {
+    ledger
+        .revalidate()
+        .context("revalidating pinned local fabrication authorization reservation ledger")?;
+    ledger
+        .require_secure_directory()
+        .context("validating trusted local fabrication authorization reservation ledger")?;
+    let manifest = ledger
+        .read_regular_file_with_limit(
+            FABRICATION_AUTHORIZATION_RESERVATION_LEDGER_MANIFEST_FILENAME,
+            MAX_FABRICATION_AUTHORIZATION_RESERVATION_LEDGER_MANIFEST_BYTES,
+        )
+        .context("reading fixed manifest from trusted local reservation ledger")?;
+    validate_fabrication_authorization_reservation_ledger_manifest(&manifest, expected_ledger_id)
+        .map_err(anyhow::Error::msg)?;
+    ledger
+        .require_secure_directory()
+        .context("revalidating trusted local fabrication authorization reservation ledger")?;
+    ledger
+        .revalidate()
+        .context("revalidating pinned local fabrication authorization reservation ledger")?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn canonical_reservation_path(path: &Path, label: &str) -> Result<PathBuf> {
+    fs::canonicalize(path).with_context(|| format!("resolving {label} {}", path.display()))
+}
+
+#[cfg(unix)]
+fn reservation_paths_overlap(left_directory: &Path, right: &Path) -> bool {
+    left_directory == right
+        || right.starts_with(left_directory)
+        || left_directory.starts_with(right)
+}
+
+#[cfg(unix)]
+fn reject_reservation_ledger_input_overlap(
+    ledger: &anchored_io::PinnedDirectory,
+    inputs: &[&Path],
+) -> Result<()> {
+    let ledger_path = canonical_reservation_path(ledger.path(), "reservation ledger")?;
+    for input in inputs {
+        let input_path = canonical_reservation_path(input, "fabrication authorization input")?;
+        if reservation_paths_overlap(&ledger_path, &input_path) {
+            bail!(
+                "trusted local reservation ledger must not contain or alias fabrication authorization input {}",
+                input.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn reject_reservation_ledger_plan_overlap(
+    ledger: &anchored_io::PinnedDirectory,
+    plan: &DeterministicPipelinePlan,
+) -> Result<()> {
+    reject_reservation_ledger_input_overlap(ledger, &plan.input_paths())?;
+    let ledger_path = canonical_reservation_path(ledger.path(), "reservation ledger")?;
+    let firmware_directory = plan
+        .firmware_manifest
+        .path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let firmware_directory = canonical_reservation_path(
+        firmware_directory,
+        "deterministic pipeline firmware directory",
+    )?;
+    if reservation_paths_overlap(&ledger_path, &firmware_directory) {
+        bail!(
+            "trusted local reservation ledger must be outside the exact firmware bundle directory {}",
+            firmware_directory.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_fabrication_authorization_reservation_commit_time(
+    report: &FabricationAuthorizationReport,
+    commit_time_unix: u64,
+) -> Result<()> {
+    if commit_time_unix < report.scope.valid_from_unix
+        || commit_time_unix > report.scope.expires_at_unix
+    {
+        bail!("fabrication authorization is not valid at reservation commit time");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_fabrication_authorization_reservation_commit_time_now(
+    report: &FabricationAuthorizationReport,
+) -> io::Result<()> {
+    let commit_time_unix = current_unix_seconds().map_err(|error| {
+        io::Error::other(format!("sampling reservation commit time: {error:#}"))
+    })?;
+    validate_fabrication_authorization_reservation_commit_time(report, commit_time_unix)
+        .map_err(|error| io::Error::other(format!("{error:#}")))
+}
+
+#[cfg(unix)]
+fn finish_fabrication_authorization_reservation(
+    report: &FabricationAuthorizationReport,
+    outcome: anchored_io::NoReplacePublicationOutcome,
+    completion_time: impl FnOnce() -> Result<u64>,
+) -> Result<()> {
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => {
+            let completion_time_unix = completion_time().context(
+                "fabrication authorization marker was committed durably, but the completion-time clock could not be sampled; the challenge remains reserved",
+            )?;
+            validate_fabrication_authorization_reservation_commit_time(
+                report,
+                completion_time_unix,
+            )
+            .context(
+                "fabrication authorization marker was committed durably, but the authorization was not active when completion was confirmed; the challenge remains reserved",
+            )?;
+            eprintln!("fabrication authorization reserved durably in trusted local ledger");
+            Ok(())
+        }
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            bail!("fabrication authorization challenge is already reserved in the local ledger")
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => {
+            bail!(
+                "fabrication authorization reservation marker was committed, but post-install completion failed; the challenge remains reserved: {error}"
+            )
+        }
+    }
+}
+
+#[cfg(unix)]
+fn reserve_fabrication_authorization_local(
+    inputs: FabricationAuthorizationVerificationInputs<'_>,
+    reservation_ledger: &Path,
+    expected_ledger_id: &str,
+) -> Result<()> {
+    if inputs.approvals.len() > 100 {
+        bail!("fabrication approval set cannot contain more than 100 entries");
+    }
+    if !reservation_ledger.is_absolute() {
+        bail!("fabrication authorization reservation ledger path must be absolute");
+    }
+    let ledger = anchored_io::PinnedDirectory::open(reservation_ledger).with_context(|| {
+        format!(
+            "pinning local fabrication authorization reservation ledger {}",
+            reservation_ledger.display()
+        )
+    })?;
+    validate_pinned_fabrication_authorization_reservation_ledger(&ledger, expected_ledger_id)?;
+
+    let direct_inputs = inputs.direct_paths();
+    reject_reservation_ledger_input_overlap(&ledger, &direct_inputs)?;
+    let plan_document = load_deterministic_pipeline_plan(inputs.plan)?;
+    reject_reservation_ledger_plan_overlap(&ledger, &plan_document)?;
+
+    let fresh = freshly_verify_fabrication_authorization(inputs, |replayed_plan| {
+        validate_pinned_fabrication_authorization_reservation_ledger(&ledger, expected_ledger_id)?;
+        reject_reservation_ledger_plan_overlap(&ledger, replayed_plan)
+    })?;
+    if !fresh.report.fabrication_authorized {
+        bail!("fresh fabrication authorization did not authorize the exact scope");
+    }
+
+    let marker_name = fabrication_authorization_reservation_filename(&fresh.report.scope.challenge)
+        .map_err(anyhow::Error::msg)?;
+    let marker_path = ledger.path().join(&marker_name);
+    reject_pipeline_output_aliases(
+        &marker_path,
+        &direct_inputs,
+        "fabrication authorization reservation marker",
+    )?;
+    validate_fabrication_authorization_output(&marker_path, &fresh.replayed_plan)?;
+    let marker = render_fabrication_authorization_reservation(
+        &fresh.report,
+        &fresh.rendered_report,
+        expected_ledger_id,
+    )
+    .map_err(anyhow::Error::msg)?;
+    if marker.len() > MAX_FABRICATION_AUTHORIZATION_RESERVATION_BYTES {
+        bail!("fabrication authorization reservation marker exceeds its byte limit");
+    }
+
+    let mut temporary = ledger
+        .create_temp(".pcbex-fabrication-authorization-reservation-")
+        .context("staging local fabrication authorization reservation marker")?;
+    temporary
+        .write_all(&marker)
+        .context("writing local fabrication authorization reservation marker")?;
+    temporary
+        .flush()
+        .context("flushing local fabrication authorization reservation marker")?;
+
+    // Revalidate both the descriptor-pinned trust boundary and the exact
+    // manifest immediately before the descriptor-relative no-replace commit.
+    validate_pinned_fabrication_authorization_reservation_ledger(&ledger, expected_ledger_id)?;
+    reject_reservation_ledger_input_overlap(&ledger, &direct_inputs)?;
+    reject_reservation_ledger_plan_overlap(&ledger, &fresh.replayed_plan)?;
+    validate_fabrication_authorization_output(&marker_path, &fresh.replayed_plan)?;
+    // This second clock sample is only a commit-time freshness gate. The
+    // marker retains the original fresh report's exact evaluated_at_unix and
+    // never represents this local wall clock as trusted evidence.
+    validate_fabrication_authorization_reservation_commit_time(
+        &fresh.report,
+        current_unix_seconds()?,
+    )?;
+
+    let outcome = ledger
+        .persist_no_replace_with_guards(
+            temporary,
+            &marker_path,
+            || validate_fabrication_authorization_reservation_commit_time_now(&fresh.report),
+            || validate_fabrication_authorization_reservation_commit_time_now(&fresh.report),
+        )
+        .context("committing local fabrication authorization reservation marker")?;
+    finish_fabrication_authorization_reservation(&fresh.report, outcome, current_unix_seconds)
+}
+
 fn executable_check(
     id: &'static str,
     executable: &str,
@@ -5749,6 +6175,8 @@ fn capabilities_report() -> CapabilitiesReport {
             "Deterministic pipeline runner report v1",
             "Signed fabrication approval v1",
             "Fabrication authorization report v1",
+            "Fabrication authorization reservation v1",
+            "Fabrication authorization reservation ledger manifest v1",
             "Firmware bundle manifest v2",
             "C11 firmware source bundle",
             "C++17 firmware source bundle",
@@ -5897,6 +6325,20 @@ fn run_cli() -> Result<()> {
                 &fabrication_authorization_report_json_schema(),
                 output.as_deref(),
                 "fabrication authorization report schema output",
+            )?;
+        }
+        Command::FabricationAuthorizationReservationSchema { output } => {
+            write_closed_schema(
+                &fabrication_authorization_reservation_json_schema(),
+                output.as_deref(),
+                "fabrication authorization reservation schema output",
+            )?;
+        }
+        Command::FabricationAuthorizationReservationLedgerSchema { output } => {
+            write_closed_schema(
+                &fabrication_authorization_reservation_ledger_manifest_json_schema(),
+                output.as_deref(),
+                "fabrication authorization reservation ledger manifest schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -6357,140 +6799,83 @@ fn run_cli() -> Result<()> {
             if approvals.len() > 100 {
                 bail!("fabrication approval set cannot contain more than 100 entries");
             }
-            let mut direct_inputs: Vec<&Path> = vec![
-                &plan,
-                &retained_report,
-                &manufacturing_package,
-                &factory_receipt,
-                &policy_pack,
-            ];
-            direct_inputs.extend(approvals.iter().map(|path| &**path));
+            let inputs = FabricationAuthorizationVerificationInputs {
+                plan: &plan,
+                retained_report: &retained_report,
+                manufacturing_package: &manufacturing_package,
+                factory_receipt: &factory_receipt,
+                policy_pack: &policy_pack,
+                approvals: &approvals,
+            };
+            let direct_inputs = inputs.direct_paths();
             let prepared = prepare_fabrication_authorization_output(
                 &output,
                 &plan,
                 &direct_inputs,
             )?;
-            let (replay, replayed_plan) =
-                replay_approved_fabrication_pipeline(&plan, &retained_report)?;
-            validate_fabrication_authorization_output(&output, &replayed_plan)?;
-            let (_, plan_identity) =
-                read_exact_artifact(&plan, MAX_PLAN_BYTES, "deterministic pipeline plan")?;
-            if plan_identity != replay.plan_source {
-                bail!("deterministic pipeline plan changed after its approved replay");
-            }
-            let (_, report_identity) = read_exact_artifact(
-                &retained_report,
-                MAX_REPORT_BYTES as u64 + 1,
-                "retained deterministic pipeline report",
-            )?;
-            if report_identity != replay.report {
-                bail!("retained deterministic pipeline report changed after its approved replay");
-            }
-            let (package_source, _) = read_exact_artifact(
-                &manufacturing_package,
-                MAX_PACKAGE_BYTES,
-                "manufacturing package",
-            )?;
-            let (receipt_source, _) = read_exact_artifact(
-                &factory_receipt,
-                MAX_FACTORY_RECEIPT_BYTES,
-                "factory receipt",
-            )?;
-            let (policy_source, _) = read_exact_artifact(
-                &policy_pack,
-                MAX_POLICY_PACK_BYTES,
-                "organization policy pack",
-            )?;
-            let (evidence, policy) = capture_fabrication_authorization_evidence(
-                &replay,
-                &package_source,
-                &receipt_source,
-                &policy_source,
-            )
-            .map_err(anyhow::Error::msg)?;
-            let mut signed = Vec::with_capacity(approvals.len());
-            let mut approval_identities = Vec::with_capacity(approvals.len());
-            for path in &approvals {
-                let (source, identity) = read_exact_artifact(
-                    path,
-                    MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
-                    "signed fabrication approval",
-                )?;
-                let source = std::str::from_utf8(&source)
-                    .map_err(|error| anyhow::anyhow!("signed fabrication approval is not UTF-8: {error}"))?;
-                signed.push(
-                    parse_signed_fabrication_approval(source).map_err(anyhow::Error::msg)?,
-                );
-                approval_identities.push(identity);
-            }
-            require_exact_artifact(
-                &plan,
-                MAX_PLAN_BYTES,
-                &replay.plan_source,
-                "deterministic pipeline plan",
-            )?;
-            require_exact_artifact(
-                &retained_report,
-                MAX_REPORT_BYTES as u64 + 1,
-                &replay.report,
-                "retained deterministic pipeline report",
-            )?;
-            require_exact_artifact(
-                &manufacturing_package,
-                MAX_PACKAGE_BYTES,
-                &replay.manufacturing_package,
-                "manufacturing package",
-            )?;
-            require_exact_artifact(
-                &factory_receipt,
-                MAX_FACTORY_RECEIPT_BYTES,
-                &replay.factory_receipt,
-                "factory receipt",
-            )?;
-            require_exact_artifact(
-                &policy_pack,
-                MAX_POLICY_PACK_BYTES,
-                &replay.policy_pack,
-                "organization policy pack",
-            )?;
-            for (path, identity) in approvals.iter().zip(&approval_identities) {
-                require_exact_artifact(
-                    path,
-                    MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
-                    identity,
-                    "signed fabrication approval",
-                )?;
-            }
-            // Evaluate the temporal authorization only after every caller
-            // source has passed its final stable re-read, minimizing the gap
-            // between the recorded evaluation time and atomic publication.
-            let report = verify_fabrication_authorization(
-                &evidence,
-                &policy,
-                &signed,
-                current_unix_seconds()?,
-            )
-            .map_err(anyhow::Error::msg)?;
-            let rendered = render_fabrication_authorization_report(&report)?;
-            validate_fabrication_authorization_output(&output, &replayed_plan)?;
-            persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
+            let fresh = freshly_verify_fabrication_authorization(inputs, |replayed_plan| {
+                validate_fabrication_authorization_output(&output, replayed_plan)
+            })?;
+            validate_fabrication_authorization_output(&output, &fresh.replayed_plan)?;
+            persist_atomic_new_file_bytes(prepared, &output, &fresh.rendered_report)?;
             if mcp_echo_report_summary {
-                emit_fabrication_authorization_report_summary(&report, &rendered)?;
+                emit_fabrication_authorization_report_summary(
+                    &fresh.report,
+                    &fresh.rendered_report,
+                )?;
             }
             eprintln!(
                 "fabrication authorization: {}; {} approval(s), {} rejection(s); package_sha256={}",
-                if report.fabrication_authorized {
+                if fresh.report.fabrication_authorized {
                     "authorized"
                 } else {
                     "not authorized"
                 },
-                report.approvals,
-                report.rejections,
-                report.evidence.manufacturing_package.sha256
+                fresh.report.approvals,
+                fresh.report.rejections,
+                fresh.report.evidence.manufacturing_package.sha256
             );
-            if require_authorized && !report.fabrication_authorized {
+            if require_authorized && !fresh.report.fabrication_authorized {
                 bail!("fabrication authorization quorum did not authorize the exact scope");
             }
+        }
+        Command::ReserveFabricationAuthorization {
+            retained_report,
+            manufacturing_package,
+            factory_receipt,
+            policy_pack,
+            approvals,
+            reservation_ledger,
+            expected_ledger_id,
+            plan,
+        } => {
+            #[cfg(not(unix))]
+            {
+                let _ = (
+                    retained_report,
+                    manufacturing_package,
+                    factory_receipt,
+                    policy_pack,
+                    approvals,
+                    reservation_ledger,
+                    expected_ledger_id,
+                    plan,
+                );
+                bail!("local fabrication authorization reservation is supported only on Unix");
+            }
+            #[cfg(unix)]
+            reserve_fabrication_authorization_local(
+                FabricationAuthorizationVerificationInputs {
+                    plan: &plan,
+                    retained_report: &retained_report,
+                    manufacturing_package: &manufacturing_package,
+                    factory_receipt: &factory_receipt,
+                    policy_pack: &policy_pack,
+                    approvals: &approvals,
+                },
+                &reservation_ledger,
+                &expected_ledger_id,
+            )?;
         }
         Command::CompileDeterministicPipelinePlan {
             intent,
@@ -18904,6 +19289,50 @@ mod tests {
         assert!(format!("{error:#}").contains("file limit"), "{error:#}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn reservation_commit_time_is_inclusive_without_rewriting_report_time() {
+        let report = sample_fabrication_authorization_report();
+        assert_eq!(report.evaluated_at_unix, 150);
+        validate_fabrication_authorization_reservation_commit_time(&report, 100).unwrap();
+        validate_fabrication_authorization_reservation_commit_time(&report, 200).unwrap();
+        assert!(validate_fabrication_authorization_reservation_commit_time(&report, 99).is_err());
+        assert!(validate_fabrication_authorization_reservation_commit_time(&report, 201).is_err());
+        assert_eq!(report.evaluated_at_unix, 150);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reservation_completion_time_burns_a_durably_committed_expired_challenge() {
+        let report = sample_fabrication_authorization_report();
+        finish_fabrication_authorization_reservation(
+            &report,
+            anchored_io::NoReplacePublicationOutcome::CommittedDurable,
+            || Ok(200),
+        )
+        .unwrap();
+
+        let expired = finish_fabrication_authorization_reservation(
+            &report,
+            anchored_io::NoReplacePublicationOutcome::CommittedDurable,
+            || Ok(201),
+        )
+        .unwrap_err();
+        let message = format!("{expired:#}");
+        assert!(message.contains("committed durably"), "{message}");
+        assert!(message.contains("challenge remains reserved"), "{message}");
+
+        let clock_failure = finish_fabrication_authorization_reservation(
+            &report,
+            anchored_io::NoReplacePublicationOutcome::CommittedDurable,
+            || bail!("injected clock failure"),
+        )
+        .unwrap_err();
+        let message = format!("{clock_failure:#}");
+        assert!(message.contains("completion-time clock"), "{message}");
+        assert!(message.contains("challenge remains reserved"), "{message}");
+    }
+
     #[test]
     fn fabrication_authorization_summary_is_path_free_closed_and_ordered() {
         let report = sample_fabrication_authorization_report();
@@ -19026,6 +19455,138 @@ mod tests {
             .join()
             .unwrap();
         assert!(!help.contains("mcp-echo-report-summary"));
+    }
+
+    #[test]
+    fn parses_closed_local_fabrication_authorization_reservation_surface() {
+        let ledger_id = "12".repeat(32);
+        let parsed = parse_cli(&[
+            "pcbex",
+            "reserve-fabrication-authorization",
+            "--report",
+            "pipeline-report.json",
+            "--manufacturing-package",
+            "manufacturing.zip",
+            "--factory-receipt",
+            "factory-receipt.json",
+            "--policy-pack",
+            "policy-pack.json",
+            "--approval",
+            "approval-a.json",
+            "--approval",
+            "approval-b.json",
+            "--reservation-ledger",
+            "/private/fabrication-ledger",
+            "--expected-ledger-id",
+            &ledger_id,
+            "--",
+            "plan.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *parsed.command,
+            Command::ReserveFabricationAuthorization {
+                approvals,
+                reservation_ledger,
+                expected_ledger_id,
+                plan,
+                ..
+            } if approvals.len() == 2
+                && reservation_ledger.as_os_str() == "/private/fabrication-ledger"
+                && expected_ledger_id == ledger_id
+                && plan.as_os_str() == "plan.json"
+        ));
+
+        let (long_options, positional_ids) = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let mut command = Cli::command();
+                let command = command
+                    .find_subcommand_mut("reserve-fabrication-authorization")
+                    .unwrap();
+                let long_options = command
+                    .get_arguments()
+                    .filter_map(|argument| argument.get_long())
+                    .filter(|name| *name != "help")
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                let positional_ids = command
+                    .get_positionals()
+                    .map(|argument| argument.get_id().as_str().to_string())
+                    .collect::<Vec<_>>();
+                (long_options, positional_ids)
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(
+            long_options,
+            [
+                "report",
+                "manufacturing-package",
+                "factory-receipt",
+                "policy-pack",
+                "approval",
+                "reservation-ledger",
+                "expected-ledger-id",
+            ]
+        );
+        assert_eq!(positional_ids, ["plan"]);
+    }
+
+    #[test]
+    fn reservation_parser_requires_separator_and_lowercase_ledger_id() {
+        let ledger_id = "34".repeat(32);
+        let base = [
+            "pcbex",
+            "reserve-fabrication-authorization",
+            "--report",
+            "pipeline-report.json",
+            "--manufacturing-package",
+            "manufacturing.zip",
+            "--factory-receipt",
+            "factory-receipt.json",
+            "--policy-pack",
+            "policy-pack.json",
+            "--approval",
+            "approval.json",
+            "--reservation-ledger",
+            "/private/fabrication-ledger",
+            "--expected-ledger-id",
+        ];
+        let mut missing_separator = base.to_vec();
+        missing_separator.extend([ledger_id.as_str(), "plan.json"]);
+        assert!(parse_cli(&missing_separator).is_err());
+
+        for invalid in ["ab", &"A5".repeat(32), &"g0".repeat(32)] {
+            let mut arguments = base.to_vec();
+            arguments.extend([invalid, "--", "plan.json"]);
+            assert!(
+                parse_cli(&arguments).is_err(),
+                "accepted ledger id {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_fabrication_authorization_reservation_schema_commands() {
+        let marker = parse_cli(&["pcbex", "fabrication-authorization-reservation-schema"]).unwrap();
+        assert!(matches!(
+            *marker.command,
+            Command::FabricationAuthorizationReservationSchema { output: None }
+        ));
+        let ledger = parse_cli(&[
+            "pcbex",
+            "fabrication-authorization-reservation-ledger-schema",
+            "--output",
+            "ledger.schema.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *ledger.command,
+            Command::FabricationAuthorizationReservationLedgerSchema { output: Some(path) }
+                if path.as_os_str() == "ledger.schema.json"
+        ));
     }
 
     #[test]

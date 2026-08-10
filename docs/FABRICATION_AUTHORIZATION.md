@@ -4,10 +4,12 @@ Version 1.459 adds a Rust-native dual-control CLI boundary for releasing one
 exact manufacturing package to a separately controlled fabrication handoff.
 Version 1.460 exposes fresh verification, but never signing or private-key
 access, through MCP. Version 1.461 adds the same verification-only boundary as
-a focused boardless composite GitHub Action. None of these versions submits
-that package to a factory, places an order, reserves inventory, executes
-payment, or contacts a fabrication API as part of verification. The Action
-may still download its Rust toolchain and upload the retained GitHub artifact.
+a focused boardless composite GitHub Action. Version 1.462 adds a separate
+Unix-only cooperative reservation of an authorized challenge in one trusted
+local ledger. None of these versions submits that package to a factory, places
+an order, reserves inventory, executes payment, or contacts a fabrication API
+as part of verification or reservation. The Action may still download its Rust
+toolchain and upload the retained GitHub artifact.
 
 The authorization starts from an existing factory-required deterministic
 pipeline plan and retained report. pcbex runs that plan again in-process and
@@ -249,6 +251,56 @@ See
 for the exact inputs, outputs, sequencing, confidentiality warning, and
 non-claims.
 
+## Trusted local challenge reservation
+
+Version 1.462 adds the CLI-only `reserve-fabrication-authorization` boundary.
+It accepts the same original plan, retained pipeline report, manufacturing ZIP,
+factory receipt, policy pack, and one to 100 signed approvals. It accepts no
+fabrication-authorization output path, authorization gate, evaluation-time
+override, private key, signer decision, network endpoint, factory credential,
+order, or payment input. Standard output is empty on success; only a concise
+non-sensitive status may be written to standard error.
+
+The command freshly builds the complete authorization report in memory and
+requires it to be `fabrication_authorized` before reserving anything. It then
+retains only one path-free marker containing the existing 23-field compact
+summary, including the exact full-report byte count and SHA-256. The full
+policy pack, approvals, signatures, reasons, tickets, receipt details, and full
+authorization report are not published by this command. Consumers that need
+that audit evidence must separately run `verify-fabrication-authorization`
+into a new no-clobber output.
+
+The caller supplies an absolute `--reservation-ledger` and the 64-lowercase-hex
+`--expected-ledger-id` selected from its fixed manifest. That ledger must
+already exist on Unix as an effective-UID-owned real directory with mode
+exactly `0700`; pcbex does not initialize or repair it. The complete marker is
+file-synchronized, installed without replacement relative to the pinned ledger
+descriptor under a challenge-derived fixed filename, and followed by
+directory synchronization before success. Local wall-clock checks bracket the
+installation and run once more after durability; an inactive pre-install
+window leaves no marker, while expiry after installation burns the challenge
+and returns an error. Those samples are not recorded as trusted time. Any
+existing entry blocks the challenge. A failure after installation leaves the
+final marker in place and makes subsequent attempts fail closed.
+
+The exact five-key marker continues to report
+`authorization_report_summary.challenge_one_time_use_enforced: false`. Its
+scope is only `pinned-local-ledger-at-most-once-v1`: the approval signatures do
+not bind the ledger identity, and another ledger, host, or runner has
+independent state. Same-UID or administrative deletion, ledger replacement or
+rollback, Windows, network/distributed/overlay/ephemeral filesystems, trusted
+time, revocation or withheld-rejection discovery, global one-time use, factory
+authenticity, submission, ordering, payment, and exactly-once side effects are
+not provided. Without a separately controlled executor that owns the handoff
+credentials and makes this reservation mandatory, the marker is cooperative
+replay protection rather than a permission boundary.
+
+See
+[`FABRICATION_AUTHORIZATION_RESERVATION.md`](FABRICATION_AUTHORIZATION_RESERVATION.md)
+for the exact manifest, marker, schema, synchronization, crash, and trust
+contracts. This feature is not exposed through MCP, the focused verification
+Action, or the root hardware Action.
+
 ## Receipt and authority limits
 
 The existing factory receipt is locally normalized evidence. The verifier
@@ -264,14 +316,16 @@ do not interpret tax, shipping, price breaks, or other fields inside the opaque
 quote. A downstream order executor must compare its typed order terms against
 this ceiling under its own trusted factory contract.
 
-`challenge_one_time_use_enforced` is always false. A random challenge and
-expiration prevent accidental cross-scope reuse, but a static offline verifier
-cannot know whether an authorization was already consumed. One-time use,
-revocation, procurement authorization, supplier authenticity, live inventory,
-and spend enforcement require a durable trusted ledger and a separate order
-executor. Those capabilities remain outside v1.461. MCP and the focused GitHub
-Action provide fresh verification only; neither consumes the challenge nor
-executes an order.
+`challenge_one_time_use_enforced` is always false in ordinary authorization
+reports, MCP/Action summaries, and the v1.462 local reservation marker. A
+random challenge and expiration prevent accidental cross-scope reuse, but a
+static offline verifier cannot know whether an authorization was already
+consumed. Global one-time use, revocation, procurement authorization, supplier
+authenticity, live inventory, and spend enforcement require a durable trusted
+ledger and a separately controlled order executor. The v1.462 marker adds only
+the bounded local cooperative reservation described above. MCP and the focused
+GitHub Action provide fresh verification only; neither consumes the challenge
+nor executes an order.
 
 The verifier can veto only a valid rejection included in its submitted
 approval set. It cannot discover a withheld decision or treat a later

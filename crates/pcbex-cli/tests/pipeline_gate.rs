@@ -921,6 +921,55 @@ fn verify_fabrication_decisions(
     command.output().unwrap()
 }
 
+#[cfg(unix)]
+fn reservation_command(
+    fixture: &FabricationCliFixture,
+    approvals: &[&Path],
+    ledger: &Path,
+    ledger_id: &str,
+) -> Command {
+    let mut command = Command::new(binary());
+    command
+        .arg("reserve-fabrication-authorization")
+        .arg("--report")
+        .arg(&fixture.report)
+        .arg("--manufacturing-package")
+        .arg(&fixture.manufacturing_package)
+        .arg("--factory-receipt")
+        .arg(&fixture.factory_receipt)
+        .arg("--policy-pack")
+        .arg(&fixture.policy_pack);
+    for approval in approvals {
+        command.arg("--approval").arg(approval);
+    }
+    command
+        .arg("--reservation-ledger")
+        .arg(ledger)
+        .arg("--expected-ledger-id")
+        .arg(ledger_id)
+        .arg("--")
+        .arg(&fixture.plan);
+    command
+}
+
+#[cfg(unix)]
+fn write_reservation_ledger(parent: &Path, name: &str, ledger_id: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ledger = parent.join(name);
+    fs::create_dir(&ledger).unwrap();
+    fs::set_permissions(&ledger, fs::Permissions::from_mode(0o700)).unwrap();
+    write_json(
+        &ledger.join(".pcbex-fabrication-authorization-reservation-ledger-v1.json"),
+        &json!({
+            "schema_version": 1,
+            "ledger_scope": "pinned-local-ledger-at-most-once-v1",
+            "ledger_id": ledger_id,
+        }),
+    );
+    ledger
+}
+
 fn assert_fabrication_authorization_summary(summary: &Value, report_path: &Path) {
     let report_bytes = fs::read(report_path).unwrap();
     let report: Value = serde_json::from_slice(&report_bytes).unwrap();
@@ -4350,6 +4399,269 @@ fn fabrication_authorization_schemas_are_closed_bounded_and_no_clobber() {
         assert!(!collision.status.success());
         assert_eq!(fs::read(&path).unwrap(), source);
     }
+}
+
+#[test]
+fn fabrication_authorization_reservation_schemas_are_closed_and_no_clobber() {
+    let temporary = tempfile::tempdir().unwrap();
+    for (command, name, expected_properties) in [
+        (
+            "fabrication-authorization-reservation-schema",
+            "fabrication-authorization-reservation.schema.json",
+            5,
+        ),
+        (
+            "fabrication-authorization-reservation-ledger-schema",
+            "fabrication-authorization-reservation-ledger.schema.json",
+            3,
+        ),
+    ] {
+        let path = temporary.path().join(name);
+        let output = Command::new(binary())
+            .arg(command)
+            .arg("--output")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert_success(&output, command);
+        let source = fs::read(&path).unwrap();
+        let schema = read_json(&path);
+        assert_eq!(
+            schema["$schema"],
+            "https://json-schema.org/draft/2020-12/schema"
+        );
+        assert_eq!(schema["additionalProperties"], false);
+        assert_eq!(
+            schema["properties"].as_object().unwrap().len(),
+            expected_properties
+        );
+        assert_schema_objects_are_closed(&schema);
+        assert_eq!(schema["properties"]["schema_version"]["const"], 1);
+        if expected_properties == 5 {
+            assert_eq!(
+                schema["properties"]["status"]["const"],
+                "local_reservation_committed"
+            );
+            assert_eq!(
+                schema["properties"]["reservation_scope"]["const"],
+                "pinned-local-ledger-at-most-once-v1"
+            );
+            assert!(
+                schema["properties"]
+                    .get("challenge_one_time_use_enforced")
+                    .is_none()
+            );
+            assert_eq!(
+                schema["properties"]["authorization_report_summary"]["properties"]["challenge_one_time_use_enforced"]
+                    ["const"],
+                false
+            );
+        } else {
+            assert_eq!(
+                schema["properties"]["ledger_scope"]["const"],
+                "pinned-local-ledger-at-most-once-v1"
+            );
+        }
+
+        let collision = Command::new(binary())
+            .arg(command)
+            .arg("--output")
+            .arg(&path)
+            .output()
+            .unwrap();
+        assert!(!collision.status.success());
+        assert_eq!(fs::read(&path).unwrap(), source);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn fabrication_authorization_reservation_is_durable_private_and_at_most_once_per_ledger() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+
+    const CHALLENGE: &str = "abababababababababababababababababababababababababababababababab";
+    let temporary = tempfile::tempdir().unwrap();
+    let fixture = fabrication_cli_fixture(temporary.path());
+    let approval_a = temporary.path().join("reservation-a.json");
+    let approval_b = temporary.path().join("reservation-b.json");
+    assert_success(
+        &sign_fabrication_decision(
+            &fixture,
+            &fixture.private_a,
+            "fabrication-a",
+            "approve",
+            &approval_a,
+        ),
+        "sign reservation approval A",
+    );
+    assert_success(
+        &sign_fabrication_decision(
+            &fixture,
+            &fixture.private_b,
+            "fabrication-b",
+            "approve",
+            &approval_b,
+        ),
+        "sign reservation approval B",
+    );
+    let approvals = [approval_a.as_path(), approval_b.as_path()];
+    let ledger_id = "cd".repeat(32);
+    let ledger = write_reservation_ledger(
+        temporary.path(),
+        "fabrication-reservation-ledger",
+        &ledger_id,
+    );
+    let marker_name = format!("fabrication-authorization-reservation-v1-{CHALLENGE}.json");
+    let marker = ledger.join(&marker_name);
+
+    let reserved = reservation_command(&fixture, &approvals, &ledger, &ledger_id)
+        .output()
+        .unwrap();
+    assert_success(&reserved, "reserve fabrication authorization");
+    assert!(
+        reserved.stdout.is_empty(),
+        "reservation stdout must be empty"
+    );
+    let marker_source = fs::read(&marker).unwrap();
+    let marker_value: Value = serde_json::from_slice(&marker_source).unwrap();
+    assert_eq!(
+        keys(&marker_value),
+        BTreeSet::from([
+            "authorization_report_summary",
+            "ledger_id",
+            "reservation_scope",
+            "schema_version",
+            "status",
+        ])
+    );
+    assert_eq!(marker_value["schema_version"], 1);
+    assert_eq!(marker_value["status"], "local_reservation_committed");
+    assert_eq!(
+        marker_value["reservation_scope"],
+        "pinned-local-ledger-at-most-once-v1"
+    );
+    assert_eq!(marker_value["ledger_id"], ledger_id);
+    let summary = &marker_value["authorization_report_summary"];
+    assert_eq!(summary.as_object().unwrap().len(), 23);
+    assert_eq!(summary["status"], "fabrication_authorized");
+    assert_eq!(summary["fabrication_authorized"], true);
+    assert_eq!(summary["authorization_id"], "fixture-fabrication-release");
+    assert_eq!(summary["challenge"], CHALLENGE);
+    assert_eq!(summary["approvals"], 2);
+    assert_eq!(summary["rejections"], 0);
+    assert_eq!(summary["gate_failure_count"], 0);
+    assert_eq!(summary["quote_authenticity_verified"], false);
+    assert_eq!(summary["challenge_one_time_use_enforced"], false);
+    assert_eq!(
+        summary["manufacturing_package_sha256"],
+        sha256_file(&fixture.manufacturing_package)
+    );
+    assert_eq!(
+        summary["factory_receipt_sha256"],
+        sha256_file(&fixture.factory_receipt)
+    );
+    assert_eq!(
+        summary["policy_pack_sha256"],
+        sha256_file(&fixture.policy_pack)
+    );
+    assert!(summary["report_bytes"].as_u64().unwrap() > 0);
+    assert_eq!(summary["report_sha256"].as_str().unwrap().len(), 64);
+    let metadata = fs::metadata(&marker).unwrap();
+    assert_eq!(metadata.permissions().mode() & 0o7777, 0o600);
+    assert_eq!(metadata.nlink(), 1);
+
+    let duplicate = reservation_command(&fixture, &approvals, &ledger, &ledger_id)
+        .output()
+        .unwrap();
+    assert!(!duplicate.status.success());
+    assert_eq!(fs::read(&marker).unwrap(), marker_source);
+
+    let insufficient_ledger = write_reservation_ledger(
+        temporary.path(),
+        "insufficient-reservation-ledger",
+        &"de".repeat(32),
+    );
+    let insufficient = reservation_command(
+        &fixture,
+        &[approval_a.as_path()],
+        &insufficient_ledger,
+        &"de".repeat(32),
+    )
+    .output()
+    .unwrap();
+    assert!(!insufficient.status.success());
+    assert!(!insufficient_ledger.join(&marker_name).exists());
+
+    let concurrent_ledger = write_reservation_ledger(
+        temporary.path(),
+        "concurrent-reservation-ledger",
+        &"ef".repeat(32),
+    );
+    let first = reservation_command(&fixture, &approvals, &concurrent_ledger, &"ef".repeat(32))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let second = reservation_command(&fixture, &approvals, &concurrent_ledger, &"ef".repeat(32))
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let first = first.wait_with_output().unwrap();
+    let second = second.wait_with_output().unwrap();
+    assert_eq!(
+        usize::from(first.status.success()) + usize::from(second.status.success()),
+        1,
+        "exactly one concurrent reservation must succeed; first stderr={} second stderr={}",
+        String::from_utf8_lossy(&first.stderr),
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert!(concurrent_ledger.join(&marker_name).is_file());
+
+    let malformed_ledger = write_reservation_ledger(
+        temporary.path(),
+        "malformed-reservation-ledger",
+        &"12".repeat(32),
+    );
+    write_json(
+        &malformed_ledger.join(".pcbex-fabrication-authorization-reservation-ledger-v1.json"),
+        &json!({
+            "schema_version": 1,
+            "ledger_scope": "pinned-local-ledger-at-most-once-v1",
+            "ledger_id": "12".repeat(32),
+            "unexpected": true,
+        }),
+    );
+    let malformed = reservation_command(&fixture, &approvals, &malformed_ledger, &"12".repeat(32))
+        .output()
+        .unwrap();
+    assert!(!malformed.status.success());
+    assert!(!malformed_ledger.join(&marker_name).exists());
+
+    let insecure_ledger = write_reservation_ledger(
+        temporary.path(),
+        "insecure-reservation-ledger",
+        &"23".repeat(32),
+    );
+    fs::set_permissions(&insecure_ledger, fs::Permissions::from_mode(0o755)).unwrap();
+    let insecure = reservation_command(&fixture, &approvals, &insecure_ledger, &"23".repeat(32))
+        .output()
+        .unwrap();
+    assert!(!insecure.status.success());
+    assert!(!insecure_ledger.join(&marker_name).exists());
+
+    let real_ledger = write_reservation_ledger(
+        temporary.path(),
+        "real-reservation-ledger",
+        &"34".repeat(32),
+    );
+    let linked_ledger = temporary.path().join("linked-reservation-ledger");
+    symlink(&real_ledger, &linked_ledger).unwrap();
+    let linked = reservation_command(&fixture, &approvals, &linked_ledger, &"34".repeat(32))
+        .output()
+        .unwrap();
+    assert!(!linked.status.success());
+    assert!(!real_ledger.join(&marker_name).exists());
 }
 
 #[test]

@@ -834,6 +834,11 @@
     {
       "id": "focused-fabrication-authorization-verification-action",
       "release": "v1.461.0",
+      "status": "released"
+    },
+    {
+      "id": "local-fabrication-authorization-challenge-reservation",
+      "release": "v1.462.0",
       "status": "current"
     }
   ]

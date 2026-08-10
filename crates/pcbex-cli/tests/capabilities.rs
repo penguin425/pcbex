@@ -180,6 +180,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "deterministic-pipeline-report-schema",
         "signed-fabrication-approval-schema",
         "fabrication-authorization-report-schema",
+        "fabrication-authorization-reservation-schema",
+        "fabrication-authorization-reservation-ledger-schema",
         "native-kicad-erc-report-schema",
         "run-native-kicad-erc",
         "verify-native-kicad-erc-report",
@@ -189,6 +191,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "run-deterministic-pipeline",
         "sign-fabrication-approval",
         "verify-fabrication-authorization",
+        "reserve-fabrication-authorization",
         "pipeline-schema",
         "pipeline-verify",
         "firmware-schema",
@@ -260,6 +263,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "Native KiCad schematic ERC report v1",
         "Signed fabrication approval v1",
         "Fabrication authorization report v1",
+        "Fabrication authorization reservation v1",
+        "Fabrication authorization reservation ledger manifest v1",
     ] {
         assert!(
             report["output_contracts"]
