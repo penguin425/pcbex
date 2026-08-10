@@ -38,6 +38,8 @@ DEFAULT_MAX_OUTPUT_BYTES = 16 * 1024 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 _CLEANUP_WAIT_SECONDS = 5.0
 _THREAD_JOIN_SECONDS = 1.0
+_DARWIN_EXIT_RACE_SECONDS = 1.0
+_DARWIN_EXIT_RACE_POLL_SECONDS = 0.01
 
 
 class BoundedProcessError(RuntimeError):
@@ -392,32 +394,59 @@ def _first_failure(
 
 
 def _darwin_exited_process_group_is_gone(
-    process: subprocess.Popen[bytes], error: OSError
+    process: subprocess.Popen[bytes],
+    error: OSError,
+    *,
+    proof_deadline: float | None = None,
 ) -> bool:
     """Return whether a Darwin ``killpg`` EPERM is an exited-group race.
 
-    Darwin can report EPERM while the direct child is exiting.  Treat that
-    result as benign only after ``poll`` has reaped the direct child and a
-    signal-zero probe proves that the process group no longer exists.  A live
-    child, an existing group, or any probe error remains a cleanup failure.
+    Darwin can report EPERM while the direct child is exiting.  Give that
+    kernel transition a small bounded window, but treat the result as benign
+    only after ``poll`` has reaped the direct child and a signal-zero probe
+    proves that the process group no longer exists.  A live child, an existing
+    group, or an ambiguous probe at the deadline remains a cleanup failure.
     """
 
     if sys.platform != "darwin" or error.errno != errno.EPERM:
         return False
-    try:
-        if process.poll() is None:
+    race_deadline = time.monotonic() + _DARWIN_EXIT_RACE_SECONDS
+    if proof_deadline is None:
+        proof_deadline = race_deadline
+    else:
+        proof_deadline = min(proof_deadline, race_deadline)
+    while True:
+        try:
+            exited = process.poll() is not None
+        except OSError:
             return False
-    except OSError:
-        return False
-    try:
-        os.killpg(process.pid, 0)
-    except OSError as probe_error:
-        return probe_error.errno == errno.ESRCH
-    return False
+        if exited:
+            try:
+                os.killpg(process.pid, 0)
+            except OSError as probe_error:
+                if probe_error.errno == errno.ESRCH:
+                    return True
+                if probe_error.errno != errno.EPERM:
+                    return False
+            else:
+                return False
+        now = time.monotonic()
+        if now >= proof_deadline:
+            return False
+        time.sleep(
+            min(_DARWIN_EXIT_RACE_POLL_SECONDS, proof_deadline - now)
+        )
 
 
-def _kill_process_tree(process: subprocess.Popen[bytes], job: Any) -> list[str]:
+def _kill_process_tree(
+    process: subprocess.Popen[bytes],
+    job: Any,
+    *,
+    deadline: float | None = None,
+) -> list[str]:
     failures: list[str] = []
+    posix_group_error: OSError | None = None
+    direct_child_error: OSError | None = None
     if job is not None:
         try:
             job.terminate()
@@ -432,14 +461,23 @@ def _kill_process_tree(process: subprocess.Popen[bytes], job: Any) -> list[str]:
         except ProcessLookupError:
             pass
         except OSError as exc:
-            if not _darwin_exited_process_group_is_gone(process, exc):
-                failures.append(f"could not terminate POSIX process group: {exc}")
+            posix_group_error = exc
     try:
         process.kill()
     except ProcessLookupError:
         pass
     except OSError as exc:
-        failures.append(f"could not terminate direct child: {exc}")
+        direct_child_error = exc
+    if posix_group_error is not None and not _darwin_exited_process_group_is_gone(
+        process,
+        posix_group_error,
+        proof_deadline=deadline,
+    ):
+        failures.append(
+            f"could not terminate POSIX process group: {posix_group_error}"
+        )
+    if direct_child_error is not None:
+        failures.append(f"could not terminate direct child: {direct_child_error}")
     return failures
 
 
@@ -469,7 +507,13 @@ def _cleanup_process(
     stop_event.set()
     termination_failures = list(prior_termination_failures)
     if terminate_tree:
-        termination_failures.extend(_kill_process_tree(process, job))
+        termination_failures.extend(
+            _kill_process_tree(
+                process,
+                job,
+                deadline=cleanup_deadline,
+            )
+        )
     cleanup_error = (
         ProcessCleanupError("; ".join(termination_failures), argv=argv)
         if termination_failures
@@ -811,7 +855,7 @@ def run_bounded(
                     # pass below instead of sending a second kill to a process
                     # group whose numeric id may already have been reused.
                     tree_termination_failures.extend(
-                        _kill_process_tree(process, job)
+                        _kill_process_tree(process, job, deadline=deadline)
                     )
                     tree_terminated = True
                 if (

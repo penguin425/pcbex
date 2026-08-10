@@ -1542,6 +1542,18 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Build pcbex release binary
         run: cargo +stable build --package pcbex --release --locked
+      - name: Configure Windows GNU firmware toolchain
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $toolchain = 'C:\mingw64\bin'
+          foreach ($tool in @('gcc.exe', 'g++.exe')) {
+            $candidate = Join-Path $toolchain $tool
+            if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+              throw "required Windows firmware compiler is missing: $candidate"
+            }
+          }
+          $toolchain | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Build real deterministic pipeline replay fixtures
         run: >-
           python scripts/deterministic_pipeline_ci.py
@@ -1549,6 +1561,36 @@ jobs:
           --fixture-dir crates/pcbex-cli/tests/fixtures/deterministic-pipeline-ci
           --output-dir build/deterministic-pipeline-portability
           --timeout-seconds 120
+      - name: Diagnose Windows firmware fixture failure
+        if: ${{ failure() && runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $firmware = 'build/deterministic-pipeline-portability/accepted/firmware'
+          $manifest = Join-Path $firmware 'manifest.json'
+          if (-not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
+            Write-Host 'firmware manifest was not retained'
+            exit 0
+          }
+          Get-Content -LiteralPath $manifest -Raw
+          $env:PATH = "C:\mingw64\bin;$env:PATH"
+          Push-Location $firmware
+          try {
+            & gcc -std=c11 -Wall -Wextra -Werror -pedantic -I . firmware.c firmware_smoke_test.c -o pcbex-diagnostic-c.exe
+            Write-Host "diagnostic C compile exit: $LASTEXITCODE"
+            if (Test-Path -LiteralPath 'pcbex-diagnostic-c.exe' -PathType Leaf) {
+              & .\pcbex-diagnostic-c.exe
+              Write-Host "diagnostic C smoke exit: $LASTEXITCODE"
+            }
+            & g++ -std=c++17 -Wall -Wextra -Werror -pedantic -I . firmware.cpp firmware_cpp_smoke_test.cpp -o pcbex-diagnostic-cpp.exe
+            Write-Host "diagnostic C++ compile exit: $LASTEXITCODE"
+            if (Test-Path -LiteralPath 'pcbex-diagnostic-cpp.exe' -PathType Leaf) {
+              & .\pcbex-diagnostic-cpp.exe
+              Write-Host "diagnostic C++ smoke exit: $LASTEXITCODE"
+            }
+          } finally {
+            Pop-Location
+          }
+          exit 0
       - name: Replay accepted pipeline with the real release binary
         env:
           PYTHONPATH: agent/src

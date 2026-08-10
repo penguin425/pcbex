@@ -303,6 +303,13 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(
             "cargo +stable build --package pcbex --release --locked", boundaries
         )
+        toolchain_step = boundaries.index(
+            "- name: Configure Windows GNU firmware toolchain"
+        )
+        self.assertIn("if: ${{ runner.os == 'Windows' }}", boundaries)
+        self.assertIn("C:\\mingw64\\bin", boundaries)
+        self.assertIn("@('gcc.exe', 'g++.exe')", boundaries)
+        self.assertIn("$env:GITHUB_PATH", boundaries)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(
@@ -321,6 +328,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         fixture_step = boundaries.index(
             "- name: Build real deterministic pipeline replay fixtures"
         )
+        diagnostic_step = boundaries.index(
+            "- name: Diagnose Windows firmware fixture failure"
+        )
         accepted_step = boundaries.index(
             "- name: Replay accepted pipeline with the real release binary"
         )
@@ -330,7 +340,21 @@ class CiExecutionPolicyTests(unittest.TestCase):
         boundary_tests_step = boundaries.index(
             "- name: Run cross-platform boundary tests"
         )
-        self.assertLess(fixture_step, accepted_step)
+        self.assertLess(toolchain_step, fixture_step)
+        self.assertLess(fixture_step, diagnostic_step)
+        self.assertLess(diagnostic_step, accepted_step)
+        self.assertIn(
+            "if: ${{ failure() && runner.os == 'Windows' }}",
+            boundaries[diagnostic_step:accepted_step],
+        )
+        self.assertIn(
+            "build/deterministic-pipeline-portability/accepted/firmware",
+            boundaries[diagnostic_step:accepted_step],
+        )
+        self.assertIn(
+            "Get-Content -LiteralPath $manifest -Raw",
+            boundaries[diagnostic_step:accepted_step],
+        )
         self.assertLess(accepted_step, rejected_step)
         self.assertLess(rejected_step, boundary_tests_step)
         accepted_block = boundaries[accepted_step:rejected_step]
