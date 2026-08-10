@@ -624,6 +624,14 @@ provenance, approve a rejected pipeline, publish manufacturing artifacts,
 authorize fabrication/procurement/deployment, or place an order. MCP and
 Composite Action parity remain separate future integrations.
 
+Version 1.459 does not sign this v7 presentation or introduce a v8 handoff
+result. Its separate Rust CLI authorization freshly reruns the factory-required
+deterministic plan, requires the retained report itself to be approved and
+byte-identical, and binds the exact ZIP, receipt, and plan-selected policy pack
+to dedicated human signatures. The v7 result remains replay evidence and is
+not an authority input. See
+[`FABRICATION_AUTHORIZATION.md`](FABRICATION_AUTHORIZATION.md).
+
 ## Exact archive
 
 Success publishes exactly one no-clobber ZIP file with these ordered entries:

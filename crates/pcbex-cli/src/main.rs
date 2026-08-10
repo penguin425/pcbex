@@ -31,10 +31,10 @@ use pcbex_kicad::{
     ApprovalLogGossipOrganizationRegistryHistoryCheckpointWitnessTrustState,
     ApprovalLogGossipRegistryGovernanceAuthority, ApprovalLogWitnessTrustState,
     ApprovalTransparencyLog, ElectricalPolicy, ElectricalReview, ElectricalWaiverSet,
-    HumanEscalationCandidate, HumanEscalationDecision, HumanEscalationPolicy,
-    HumanEscalationReport, RoutedAiApprovalQuorumReport, SessionAiApprovalQuorumReport,
-    SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport, SignedAiApproval,
-    SignedApprovalLogCheckpoint, SignedApprovalLogGossipObserverKeyRotation,
+    ExactArtifactIdentity, HumanEscalationCandidate, HumanEscalationDecision,
+    HumanEscalationPolicy, HumanEscalationReport, RoutedAiApprovalQuorumReport,
+    SessionAiApprovalQuorumReport, SessionAiQuorumEvidence, SessionRoutedAiApprovalQuorumReport,
+    SignedAiApproval, SignedApprovalLogCheckpoint, SignedApprovalLogGossipObserverKeyRotation,
     SignedApprovalLogGossipOrganizationRegistryAuthorityKeyRotation,
     SignedApprovalLogGossipOrganizationRegistryGovernance,
     SignedApprovalLogGossipOrganizationRegistryGovernanceRotation,
@@ -172,6 +172,7 @@ mod canary_completion;
 mod deterministic_pipeline_compiler;
 mod deterministic_pipeline_runner;
 mod dfm_profile_binding;
+mod fabrication_authorization;
 mod factory;
 mod firmware;
 mod manufacturing_feedback;
@@ -221,12 +222,21 @@ use deterministic_pipeline_compiler::{
     compile_deterministic_pipeline_plan, deterministic_pipeline_intent_schema,
 };
 use deterministic_pipeline_runner::{
+    DeterministicPipelinePlan, MAX_PLAN_BYTES, MAX_REPORT_BYTES,
     deterministic_pipeline_plan_schema, deterministic_pipeline_report_schema,
-    load_deterministic_pipeline_plan, run_deterministic_pipeline,
-    verify_ai_review_artifact_binding,
+    load_deterministic_pipeline_plan, replay_approved_fabrication_pipeline,
+    run_deterministic_pipeline, verify_ai_review_artifact_binding,
 };
 use dfm_profile_binding::{
     DfmProfileBinding, builtin_dfm_profile_binding, external_dfm_profile_binding,
+};
+use fabrication_authorization::{
+    FabricationApprovalDecision, FabricationAuthorizationScope, MAX_FACTORY_RECEIPT_BYTES,
+    MAX_POLICY_PACK_BYTES, MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
+    capture_fabrication_authorization_evidence, fabrication_authorization_report_json_schema,
+    parse_signed_fabrication_approval, sign_fabrication_approval,
+    signed_fabrication_approval_json_schema, validate_fabrication_approval_signing_inputs,
+    verify_fabrication_authorization,
 };
 use factory::{
     FactoryProvider, factory_feedback_loop_json_schema, factory_feedback_passed,
@@ -246,7 +256,7 @@ use manufacturing_feedback::{
     render_manufacturing_feedback_comparison_summary, render_manufacturing_feedback_summary,
     verify_analysis_manifest_board,
 };
-use manufacturing_limits::{ManufacturingLimits, scan_manufacturing_workspace};
+use manufacturing_limits::{MAX_PACKAGE_BYTES, ManufacturingLimits, scan_manufacturing_workspace};
 use manufacturing_package::{
     KiCadIdentity, KiCadProjectInput, collect_staged_artifacts, normalize_kicad_artifacts,
     prepare_manufacturing_output_directory, publish_staged_package_before_deadline,
@@ -632,6 +642,15 @@ impl From<HumanDecisionArg> for RolloutApprovalDecision {
     }
 }
 
+impl From<HumanDecisionArg> for FabricationApprovalDecision {
+    fn from(value: HumanDecisionArg) -> Self {
+        match value {
+            HumanDecisionArg::Approve => Self::Approve,
+            HumanDecisionArg::Reject => Self::Reject,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum ApprovalArtifactKindArg {
     SignedAiApproval,
@@ -857,6 +876,16 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed signed fabrication-approval JSON Schema.
+    SignedFabricationApprovalSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
+    /// Print the closed fabrication-authorization report JSON Schema.
+    FabricationAuthorizationReportSchema {
+        #[arg(short, long)]
+        output: Option<CompactPath>,
+    },
     /// Print the closed normalized native KiCad schematic ERC report JSON Schema.
     NativeKicadErcReportSchema {
         #[arg(short, long)]
@@ -982,6 +1011,74 @@ enum Command {
         /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
         #[arg(long, hide = true)]
         mcp_echo_report_summary: bool,
+    },
+    /// Sign one human decision over a freshly replayed exact fabrication evidence set.
+    SignFabricationApproval {
+        /// Factory-required deterministic pipeline plan to replay in-process.
+        plan: CompactPath,
+        /// Retained canonical report that must equal the fresh pipeline result byte-for-byte.
+        #[arg(long = "report")]
+        retained_report: CompactPath,
+        /// Exact manufacturing ZIP selected by the approved pipeline.
+        #[arg(long)]
+        manufacturing_package: CompactPath,
+        /// Exact passing factory quote/DFM receipt selected by the approved pipeline.
+        #[arg(long)]
+        factory_receipt: CompactPath,
+        /// Exact organization policy pack selected by the approved pipeline.
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Dedicated fabrication-approval Ed25519 private key.
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(long, value_enum)]
+        decision: HumanDecisionArg,
+        #[arg(long)]
+        authorization_id: String,
+        /// Caller-generated lowercase 32-byte hex challenge; one-time consumption is external.
+        #[arg(long)]
+        challenge: String,
+        #[arg(long)]
+        quantity: u32,
+        /// Three-letter uppercase currency code for the signed monetary ceiling.
+        #[arg(long)]
+        currency: String,
+        #[arg(long)]
+        maximum_total_minor_units: u64,
+        #[arg(long)]
+        valid_from_unix: u64,
+        #[arg(long)]
+        expires_at_unix: u64,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        /// New signed approval path; existing, aliased, or symlinked destinations are refused.
+        #[arg(short, long)]
+        output: CompactPath,
+    },
+    /// Freshly replay exact evidence and verify a dedicated human authorization quorum.
+    VerifyFabricationAuthorization {
+        plan: CompactPath,
+        #[arg(long = "report")]
+        retained_report: CompactPath,
+        #[arg(long)]
+        manufacturing_package: CompactPath,
+        #[arg(long)]
+        factory_receipt: CompactPath,
+        #[arg(long)]
+        policy_pack: CompactPath,
+        /// Signed fabrication approval; repeat once per independent human signer.
+        #[arg(long = "approval", required = true)]
+        approvals: Vec<CompactPath>,
+        /// New authorization report path; valid rejection evidence is retained before gating.
+        #[arg(short, long)]
+        output: CompactPath,
+        /// Fail after retaining the report unless the exact fabrication scope is authorized.
+        #[arg(long)]
+        require_authorized: bool,
     },
     /// Compile one closed deterministic pipeline intent into a canonical plan.
     CompileDeterministicPipelinePlan {
@@ -5502,6 +5599,8 @@ fn capabilities_report() -> CapabilitiesReport {
             "Factory-bound hardware pipeline gate report v2",
             "Deterministic pipeline plan v1",
             "Deterministic pipeline runner report v1",
+            "Signed fabrication approval v1",
+            "Fabrication authorization report v1",
             "Firmware bundle manifest v2",
             "C11 firmware source bundle",
             "C++17 firmware source bundle",
@@ -5636,6 +5735,20 @@ fn run_cli() -> Result<()> {
                 &deterministic_pipeline_report_schema(),
                 output.as_deref(),
                 "deterministic pipeline report schema output",
+            )?;
+        }
+        Command::SignedFabricationApprovalSchema { output } => {
+            write_closed_schema(
+                &signed_fabrication_approval_json_schema(),
+                output.as_deref(),
+                "signed fabrication approval schema output",
+            )?;
+        }
+        Command::FabricationAuthorizationReportSchema { output } => {
+            write_closed_schema(
+                &fabrication_authorization_report_json_schema(),
+                output.as_deref(),
+                "fabrication authorization report schema output",
             )?;
         }
         Command::NativeKicadErcReportSchema { output } => {
@@ -5935,6 +6048,296 @@ fn run_cli() -> Result<()> {
             );
             if require_approved && !report.approved {
                 bail!("deterministic hardware pipeline rejected");
+            }
+        }
+        Command::SignFabricationApproval {
+            plan,
+            retained_report,
+            manufacturing_package,
+            factory_receipt,
+            policy_pack,
+            private_key,
+            signer_id,
+            decision,
+            authorization_id,
+            challenge,
+            quantity,
+            currency,
+            maximum_total_minor_units,
+            valid_from_unix,
+            expires_at_unix,
+            reason,
+            ticket,
+            output,
+        } => {
+            let direct_inputs: [&Path; 6] = [
+                &plan,
+                &retained_report,
+                &manufacturing_package,
+                &factory_receipt,
+                &policy_pack,
+                &private_key,
+            ];
+            let prepared = prepare_fabrication_authorization_output(
+                &output,
+                &plan,
+                &direct_inputs,
+            )?;
+            let (replay, replayed_plan) =
+                replay_approved_fabrication_pipeline(&plan, &retained_report)?;
+            validate_fabrication_authorization_output(&output, &replayed_plan)?;
+            let (_, plan_identity) =
+                read_exact_artifact(&plan, MAX_PLAN_BYTES, "deterministic pipeline plan")?;
+            if plan_identity != replay.plan_source {
+                bail!("deterministic pipeline plan changed after its approved replay");
+            }
+            let (_, report_identity) = read_exact_artifact(
+                &retained_report,
+                MAX_REPORT_BYTES as u64 + 1,
+                "retained deterministic pipeline report",
+            )?;
+            if report_identity != replay.report {
+                bail!("retained deterministic pipeline report changed after its approved replay");
+            }
+            let (package_source, _) = read_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                "manufacturing package",
+            )?;
+            let (receipt_source, _) = read_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                "factory receipt",
+            )?;
+            let (policy_source, _) = read_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                "organization policy pack",
+            )?;
+            let (evidence, policy) = capture_fabrication_authorization_evidence(
+                &replay,
+                &package_source,
+                &receipt_source,
+                &policy_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let scope = FabricationAuthorizationScope {
+                authorization_id,
+                challenge,
+                quantity,
+                currency,
+                maximum_total_minor_units,
+                valid_from_unix,
+                expires_at_unix,
+            };
+            let decision: FabricationApprovalDecision = decision.into();
+            validate_fabrication_approval_signing_inputs(
+                &evidence,
+                &policy,
+                &scope,
+                decision,
+                &reason,
+                &ticket,
+                &signer_id,
+            )
+            .map_err(anyhow::Error::msg)?;
+            // All public evidence, scope, trust, and destination checks happen
+            // before the dedicated private key is read.
+            let secret = read_hex_key(&private_key, "fabrication approval private key")?;
+            let signed = sign_fabrication_approval(
+                &evidence,
+                &policy,
+                &scope,
+                decision,
+                &reason,
+                &ticket,
+                &signer_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                &plan,
+                MAX_PLAN_BYTES,
+                &replay.plan_source,
+                "deterministic pipeline plan",
+            )?;
+            require_exact_artifact(
+                &retained_report,
+                MAX_REPORT_BYTES as u64 + 1,
+                &replay.report,
+                "retained deterministic pipeline report",
+            )?;
+            require_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                &replay.manufacturing_package,
+                "manufacturing package",
+            )?;
+            require_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                &replay.factory_receipt,
+                "factory receipt",
+            )?;
+            require_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                &replay.policy_pack,
+                "organization policy pack",
+            )?;
+            let rendered = format!("{}\n", serde_json::to_string_pretty(&signed)?);
+            validate_fabrication_authorization_output(&output, &replayed_plan)?;
+            persist_atomic_new_file(prepared, &output, &rendered)?;
+            eprintln!(
+                "signed fabrication decision: {:?}; signer={}; package_sha256={}",
+                signed.decision,
+                signed.signer_id,
+                signed.evidence.manufacturing_package.sha256
+            );
+        }
+        Command::VerifyFabricationAuthorization {
+            plan,
+            retained_report,
+            manufacturing_package,
+            factory_receipt,
+            policy_pack,
+            approvals,
+            output,
+            require_authorized,
+        } => {
+            if approvals.len() > 100 {
+                bail!("fabrication approval set cannot contain more than 100 entries");
+            }
+            let mut direct_inputs: Vec<&Path> = vec![
+                &plan,
+                &retained_report,
+                &manufacturing_package,
+                &factory_receipt,
+                &policy_pack,
+            ];
+            direct_inputs.extend(approvals.iter().map(|path| &**path));
+            let prepared = prepare_fabrication_authorization_output(
+                &output,
+                &plan,
+                &direct_inputs,
+            )?;
+            let (replay, replayed_plan) =
+                replay_approved_fabrication_pipeline(&plan, &retained_report)?;
+            validate_fabrication_authorization_output(&output, &replayed_plan)?;
+            let (_, plan_identity) =
+                read_exact_artifact(&plan, MAX_PLAN_BYTES, "deterministic pipeline plan")?;
+            if plan_identity != replay.plan_source {
+                bail!("deterministic pipeline plan changed after its approved replay");
+            }
+            let (_, report_identity) = read_exact_artifact(
+                &retained_report,
+                MAX_REPORT_BYTES as u64 + 1,
+                "retained deterministic pipeline report",
+            )?;
+            if report_identity != replay.report {
+                bail!("retained deterministic pipeline report changed after its approved replay");
+            }
+            let (package_source, _) = read_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                "manufacturing package",
+            )?;
+            let (receipt_source, _) = read_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                "factory receipt",
+            )?;
+            let (policy_source, _) = read_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                "organization policy pack",
+            )?;
+            let (evidence, policy) = capture_fabrication_authorization_evidence(
+                &replay,
+                &package_source,
+                &receipt_source,
+                &policy_source,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let mut signed = Vec::with_capacity(approvals.len());
+            let mut approval_identities = Vec::with_capacity(approvals.len());
+            for path in &approvals {
+                let (source, identity) = read_exact_artifact(
+                    path,
+                    MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
+                    "signed fabrication approval",
+                )?;
+                let source = std::str::from_utf8(&source)
+                    .map_err(|error| anyhow::anyhow!("signed fabrication approval is not UTF-8: {error}"))?;
+                signed.push(
+                    parse_signed_fabrication_approval(source).map_err(anyhow::Error::msg)?,
+                );
+                approval_identities.push(identity);
+            }
+            require_exact_artifact(
+                &plan,
+                MAX_PLAN_BYTES,
+                &replay.plan_source,
+                "deterministic pipeline plan",
+            )?;
+            require_exact_artifact(
+                &retained_report,
+                MAX_REPORT_BYTES as u64 + 1,
+                &replay.report,
+                "retained deterministic pipeline report",
+            )?;
+            require_exact_artifact(
+                &manufacturing_package,
+                MAX_PACKAGE_BYTES,
+                &replay.manufacturing_package,
+                "manufacturing package",
+            )?;
+            require_exact_artifact(
+                &factory_receipt,
+                MAX_FACTORY_RECEIPT_BYTES,
+                &replay.factory_receipt,
+                "factory receipt",
+            )?;
+            require_exact_artifact(
+                &policy_pack,
+                MAX_POLICY_PACK_BYTES,
+                &replay.policy_pack,
+                "organization policy pack",
+            )?;
+            for (path, identity) in approvals.iter().zip(&approval_identities) {
+                require_exact_artifact(
+                    path,
+                    MAX_SIGNED_FABRICATION_APPROVAL_BYTES,
+                    identity,
+                    "signed fabrication approval",
+                )?;
+            }
+            // Evaluate the temporal authorization only after every caller
+            // source has passed its final stable re-read, minimizing the gap
+            // between the recorded evaluation time and atomic publication.
+            let report = verify_fabrication_authorization(
+                &evidence,
+                &policy,
+                &signed,
+                current_unix_seconds()?,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let rendered = format!("{}\n", serde_json::to_string_pretty(&report)?);
+            validate_fabrication_authorization_output(&output, &replayed_plan)?;
+            persist_atomic_new_file(prepared, &output, &rendered)?;
+            eprintln!(
+                "fabrication authorization: {}; {} approval(s), {} rejection(s); package_sha256={}",
+                if report.fabrication_authorized {
+                    "authorized"
+                } else {
+                    "not authorized"
+                },
+                report.approvals,
+                report.rejections,
+                report.evidence.manufacturing_package.sha256
+            );
+            if require_authorized && !report.fabrication_authorized {
+                bail!("fabrication authorization quorum did not authorize the exact scope");
             }
         }
         Command::CompileDeterministicPipelinePlan {
@@ -17245,6 +17648,72 @@ fn prepare_pipeline_output(output: &Path, inputs: &[&Path]) -> Result<tempfile::
     reject_output_symlink_components(output, "pipeline output")?;
     reject_pipeline_output_aliases(output, inputs, "pipeline output")?;
     prepare_atomic_new_file(output)
+}
+
+fn prepare_fabrication_authorization_output(
+    output: &Path,
+    plan: &Path,
+    direct_inputs: &[&Path],
+) -> Result<tempfile::NamedTempFile> {
+    let prepared = prepare_pipeline_output(output, direct_inputs)?;
+    let plan_document = load_deterministic_pipeline_plan(plan)?;
+    validate_fabrication_authorization_output(output, &plan_document)?;
+    Ok(prepared)
+}
+
+fn validate_fabrication_authorization_output(
+    output: &Path,
+    plan: &DeterministicPipelinePlan,
+) -> Result<()> {
+    reject_output_symlink_components(output, "fabrication authorization output")?;
+    let firmware_directory = plan
+        .firmware_manifest
+        .path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    reject_pipeline_output_directory(
+        output,
+        firmware_directory,
+        "fabrication authorization output",
+    )?;
+    reject_pipeline_output_aliases(
+        output,
+        &plan.input_paths(),
+        "fabrication authorization output",
+    )?;
+    Ok(())
+}
+
+fn exact_artifact_identity(source: &[u8]) -> ExactArtifactIdentity {
+    ExactArtifactIdentity {
+        bytes: source.len() as u64,
+        sha256: hex::encode(Sha256::digest(source)),
+    }
+}
+
+fn read_exact_artifact(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> Result<(Vec<u8>, ExactArtifactIdentity)> {
+    let source = fs::read_with_limit(path, maximum_bytes)
+        .with_context(|| format!("reading {label} {}", path.display()))?;
+    let identity = exact_artifact_identity(&source);
+    Ok((source, identity))
+}
+
+fn require_exact_artifact(
+    path: &Path,
+    maximum_bytes: u64,
+    expected: &ExactArtifactIdentity,
+    label: &str,
+) -> Result<()> {
+    let (_, actual) = read_exact_artifact(path, maximum_bytes, label)?;
+    if &actual != expected {
+        bail!("{label} changed during fabrication authorization");
+    }
+    Ok(())
 }
 
 fn reject_pipeline_output_aliases(output: &Path, inputs: &[&Path], label: &str) -> Result<()> {

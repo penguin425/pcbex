@@ -178,6 +178,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "compile-deterministic-pipeline-plan",
         "deterministic-pipeline-plan-schema",
         "deterministic-pipeline-report-schema",
+        "signed-fabrication-approval-schema",
+        "fabrication-authorization-report-schema",
         "native-kicad-erc-report-schema",
         "run-native-kicad-erc",
         "verify-native-kicad-erc-report",
@@ -185,6 +187,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "run-native-kicad-drc",
         "verify-native-kicad-drc-report",
         "run-deterministic-pipeline",
+        "sign-fabrication-approval",
+        "verify-fabrication-authorization",
         "pipeline-schema",
         "pipeline-verify",
         "firmware-schema",
@@ -254,6 +258,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "C++17 firmware source bundle",
         "Python host pinout helper",
         "Native KiCad schematic ERC report v1",
+        "Signed fabrication approval v1",
+        "Fabrication authorization report v1",
     ] {
         assert!(
             report["output_contracts"]

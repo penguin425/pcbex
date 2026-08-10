@@ -227,6 +227,21 @@ pub(crate) struct DeterministicPipelineReport {
     pub(crate) run_sha256: String,
 }
 
+/// Path-free identities from one freshly replayed, approved factory-bound
+/// deterministic pipeline.  The authorization layer separately reopens the
+/// three selected artifacts and requires them to match these exact identities
+/// before any human signature is accepted.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ApprovedFabricationPipelineEvidence {
+    pub(crate) plan_source: ExactArtifactIdentity,
+    pub(crate) plan_sha256: String,
+    pub(crate) report: ExactArtifactIdentity,
+    pub(crate) run_sha256: String,
+    pub(crate) manufacturing_package: ExactArtifactIdentity,
+    pub(crate) factory_receipt: ExactArtifactIdentity,
+    pub(crate) policy_pack: ExactArtifactIdentity,
+}
+
 #[derive(Clone, Debug)]
 struct Snapshot {
     bytes: Vec<u8>,
@@ -1103,6 +1118,124 @@ fn create_private_pipeline_stage(temp_parent: &Path) -> Result<tempfile::TempDir
     reject_symlink_components(stage.path(), "deterministic pipeline staging directory")
         .map_err(anyhow::Error::msg)?;
     Ok(stage)
+}
+
+/// Freshly reproduce an approved factory-bound pipeline and bind its retained
+/// report plus the three artifacts used by the fabrication-authorization
+/// layer.  The path-free evidence is accompanied by the exact in-memory plan
+/// used for the run so the CLI can recheck its output boundary without loading
+/// a different plan snapshot.  That plan is never serialized into approval or
+/// authorization artifacts.
+pub(crate) fn replay_approved_fabrication_pipeline(
+    plan_path: &Path,
+    report_path: &Path,
+) -> Result<(
+    ApprovedFabricationPipelineEvidence,
+    DeterministicPipelinePlan,
+)> {
+    let plan = load_deterministic_pipeline_plan(plan_path)?;
+    if !plan.require_factory || plan.factory_receipt.is_none() {
+        bail!("fabrication authorization requires a factory-bound deterministic pipeline plan");
+    }
+    if plan.analysis_policy_pack.is_none() {
+        bail!(
+            "fabrication authorization requires the deterministic pipeline plan to select an organization policy pack"
+        );
+    }
+
+    let report = run_deterministic_pipeline(&plan)?;
+    if !report.approved {
+        bail!("deterministic pipeline report is not approved for fabrication authorization");
+    }
+    let pipeline = report
+        .pipeline
+        .as_ref()
+        .ok_or_else(|| anyhow!("approved deterministic pipeline report has no pipeline gate"))?;
+    let factory_phases = pipeline
+        .phases
+        .iter()
+        .filter(|phase| phase.name == "factory-dfm")
+        .collect::<Vec<_>>();
+    if pipeline.schema_version != 2
+        || pipeline.pipeline != "pcbex-hardware-v2"
+        || !pipeline.passed
+        || factory_phases.len() != 1
+        || !factory_phases[0].passed
+    {
+        bail!("deterministic pipeline report has no passing factory DFM phase");
+    }
+
+    let rendered = format!("{}\n", serde_json::to_string(&report)?);
+    let retained_report = fs::read_with_limit(report_path, MAX_REPORT_BYTES as u64 + 1)
+        .with_context(|| {
+            format!(
+                "reading retained deterministic pipeline report {}",
+                report_path.display()
+            )
+        })?;
+    if retained_report != rendered.as_bytes() {
+        bail!("retained deterministic pipeline report does not match its fresh replay");
+    }
+
+    let evidence_for = |role: &str| -> Result<ExactArtifactIdentity> {
+        let matches = report
+            .input_evidence
+            .iter()
+            .filter(|evidence| evidence.role == role)
+            .collect::<Vec<_>>();
+        if matches.len() != 1 {
+            bail!("approved deterministic pipeline report must contain exactly one {role} input");
+        }
+        Ok(ExactArtifactIdentity {
+            bytes: matches[0].bytes,
+            sha256: matches[0].sha256.clone(),
+        })
+    };
+
+    let confirmed_plan = fs::read_with_limit(plan_path, MAX_PLAN_BYTES).with_context(|| {
+        format!(
+            "re-reading deterministic pipeline plan for fabrication authorization {}",
+            plan_path.display()
+        )
+    })?;
+    if confirmed_plan.len() as u64 != report.plan_source_bytes
+        || digest_hex(&confirmed_plan) != report.plan_source_sha256
+    {
+        bail!("deterministic pipeline plan changed during fabrication authorization replay");
+    }
+    let confirmed_report = fs::read_with_limit(report_path, MAX_REPORT_BYTES as u64 + 1)
+        .with_context(|| {
+            format!(
+                "re-reading deterministic pipeline report for fabrication authorization {}",
+                report_path.display()
+            )
+        })?;
+    if confirmed_report != retained_report {
+        bail!("deterministic pipeline report changed during fabrication authorization replay");
+    }
+
+    let manufacturing_package = evidence_for("manufacturing_package")?;
+    let factory_receipt = evidence_for("factory_receipt")?;
+    let policy_pack = evidence_for("analysis_policy_pack")?;
+
+    Ok((
+        ApprovedFabricationPipelineEvidence {
+            plan_source: ExactArtifactIdentity {
+                bytes: report.plan_source_bytes,
+                sha256: report.plan_source_sha256,
+            },
+            plan_sha256: report.plan_sha256,
+            report: ExactArtifactIdentity {
+                bytes: retained_report.len() as u64,
+                sha256: digest_hex(&retained_report),
+            },
+            run_sha256: report.run_sha256,
+            manufacturing_package,
+            factory_receipt,
+            policy_pack,
+        },
+        plan,
+    ))
 }
 
 /// Re-run a deterministic pipeline and bind an AI review request to the exact
@@ -2005,6 +2138,30 @@ mod tests {
         parent["board"]["path"] = Value::String("../board.kicad_pcb".into());
         fs::write(&plan_path, serde_json::to_vec(&parent).unwrap()).unwrap();
         assert!(load_deterministic_pipeline_plan(&plan_path).is_err());
+    }
+
+    #[test]
+    fn fabrication_replay_requires_factory_and_policy_before_running_inputs() {
+        let workspace = tempfile::tempdir().unwrap();
+        let plan_path = workspace.path().join("plan.json");
+        let report_path = workspace.path().join("report.json");
+
+        fs::write(&plan_path, serde_json::to_vec(&plan_json()).unwrap()).unwrap();
+        let error = replay_approved_fabrication_pipeline(&plan_path, &report_path).unwrap_err();
+        assert!(
+            error.to_string().contains("factory-bound"),
+            "unexpected error: {error:#}"
+        );
+
+        let mut factory_plan = plan_json();
+        factory_plan["require_factory"] = true.into();
+        factory_plan["factory_receipt"] = descriptor("factory-receipt.json", b"factory receipt");
+        fs::write(&plan_path, serde_json::to_vec(&factory_plan).unwrap()).unwrap();
+        let error = replay_approved_fabrication_pipeline(&plan_path, &report_path).unwrap_err();
+        assert!(
+            error.to_string().contains("organization policy pack"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]

@@ -2971,11 +2971,16 @@ pcbex check-schematic design.kicad_sch \
 
 The closed `schema_version: 1` contract combines one DFM profile, one
 electrical policy, explicit AI-review requirements, whether simulation
-evidence is mandatory, and an allowlist of signer IDs with Ed25519 public
-keys. IDs, dates, dimensions, rule settings, requirements, and keys are
-strictly validated; unknown fields, duplicates, and altered profiles that
-impersonate built-in DFM identities fail closed. Private keys are never part
-of a policy pack.
+evidence is mandatory, and allowlists of signer IDs with Ed25519 public keys.
+Version 1.459 optionally adds a dedicated `fabrication_authorization_policy`
+with a 2–100 signer set, quorum of at least two, and validity ceiling of at
+most seven days. Its signer IDs and keys must be disjoint from AI-review and
+human-escalation roles; omission preserves existing normalized policy bytes
+and leaves the pack ineligible for fabrication release authorization. IDs,
+dates, dimensions, rule settings, requirements, and keys are strictly
+validated; unknown fields, duplicates, and altered profiles that impersonate
+built-in DFM identities fail closed. Private keys are never part of a policy
+pack.
 
 `--policy-pack` applies to KiCad analysis, routing, route-candidate generation,
 board DFM checking, schematic checking, AI-review preparation, approval
@@ -3852,6 +3857,69 @@ call, factory submission, or order. Existing `pipeline-verify` v1/v2 schemas
 are unchanged. See
 [`docs/DETERMINISTIC_PIPELINE_RUNNER.md`](docs/DETERMINISTIC_PIPELINE_RUNNER.md)
 for the complete plan, report, resource, and failure contract.
+
+### Offline dual-control fabrication release authorization
+
+Version 1.459 adds a separate Rust-native authorization boundary over an
+approved factory-required runner report. It does not change the runner,
+pipeline, manufacturing ZIP, receipt, or handoff schemas. The exact policy pack
+selected as `analysis_policy_pack` must contain a dedicated
+`fabrication_authorization_policy` with at least two keys that do not overlap AI
+or human-escalation roles.
+
+Each human signs the same exact plan/report/package/receipt/policy evidence and
+the same authorization ID, random 32-byte challenge, quantity, currency,
+maximum total in minor units, and validity window:
+
+```sh
+pcbex sign-fabrication-approval pipeline-plan.json \
+  --report pipeline-report.json \
+  --manufacturing-package manufacturing.zip \
+  --factory-receipt factory-receipt.json \
+  --policy-pack organization-policy-pack.json \
+  --private-key .secrets/fabrication-a.key \
+  --signer-id fabrication-a --decision approve \
+  --authorization-id lot-2026-08-10-a \
+  --challenge "$FABRICATION_CHALLENGE" \
+  --quantity 20 --currency USD --maximum-total-minor-units 25000 \
+  --valid-from-unix "$VALID_FROM_UNIX" --expires-at-unix "$EXPIRES_AT_UNIX" \
+  --reason 'Approved this exact release scope.' --ticket HW-1459 \
+  --output fabrication-a.approval.json
+
+pcbex verify-fabrication-authorization pipeline-plan.json \
+  --report pipeline-report.json \
+  --manufacturing-package manufacturing.zip \
+  --factory-receipt factory-receipt.json \
+  --policy-pack organization-policy-pack.json \
+  --approval fabrication-a.approval.json \
+  --approval fabrication-b.approval.json \
+  --output fabrication-authorization.json --require-authorized
+```
+
+Both commands freshly reproduce the approved pipeline and independently
+revalidate the exact ZIP, passing DFM receipt, and policy pack. The verifier
+requires distinct trusted signatures, retains the complete policy pack and
+full signer-sorted envelopes, and writes truthful `not_authorized` evidence for
+a submitted valid rejection, insufficient quorum, inactive window, or
+policy-window excess before the optional gate fails. The plan, retained report,
+ZIP, receipt, pack, and submitted approvals are reread before the current
+evaluation time is captured; the destination is rechecked against the same
+replayed plan before the no-clobber report is published.
+
+This authorizes only release of those exact bytes and signed limits to a
+separately controlled fabrication handoff. The receipt is not factory-signed,
+the opaque quote is not a typed order contract, the policy pack is an externally
+selected trust root, and the challenge has no durable consumption state. No
+network call, upload, order, inventory reservation, fabrication execution,
+payment, spend authority, MCP tool, or Action is added. See
+[`docs/FABRICATION_AUTHORIZATION.md`](docs/FABRICATION_AUTHORIZATION.md) for the
+closed schemas, bounds, verification order, and non-claims.
+
+The authorization report is an audit snapshot, not an outer-signed trusted
+timestamp. A release consumer must freshly rerun the verifier from the original
+sources and submitted approvals; parsing or editing that report cannot confer
+current authority. Only rejections present in the submitted set veto that run;
+withheld decisions and later revocation require an external durable ledger.
 
 Version 1.433.0 adds a closed intent-to-plan compiler as a CLI boundary.
 Emit its schema and compile a plan by naming every role path explicitly:
