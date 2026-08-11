@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+import pcbex_agent.catalog_provenance as catalog_provenance
 from pcbex_agent.catalog import (
     canonical_sha256,
     load_catalog_snapshot,
@@ -323,6 +324,108 @@ class CatalogGenerationProvenanceV1421Tests(unittest.TestCase):
         finally:
             server.shutdown()
             server.server_close()
+
+    def test_injected_scalar_subclasses_cannot_forge_digest_equality(self):
+        class PlainStringSubclass(str):
+            pass
+
+        class AlwaysEqualString(str):
+            def __eq__(self, _other):
+                return True
+
+            __hash__ = str.__hash__
+
+        server = self._server()
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fetch, snapshot, bundle, skidl = self._make_artifacts(root, server)
+                provenance = build_catalog_generation_provenance(
+                    fetch, snapshot, bundle, skidl, allow_insecure_loopback=True
+                )
+
+                subclassed = {
+                    PlainStringSubclass(key): (
+                        PlainStringSubclass(value)
+                        if isinstance(value, str)
+                        else value
+                    )
+                    for key, value in provenance.items()
+                }
+                admitted = validate_catalog_generation_provenance(
+                    subclassed,
+                    fetch,
+                    snapshot,
+                    bundle,
+                    skidl,
+                    allow_insecure_loopback=True,
+                )
+                self.assertTrue(all(type(key) is str for key in admitted))
+                self.assertTrue(
+                    all(
+                        type(value) is str
+                        for value in admitted.values()
+                        if isinstance(value, str)
+                    )
+                )
+
+                forged = dict(provenance)
+                forged["fetch_receipt_sha256"] = AlwaysEqualString("0" * 64)
+                with self.assertRaises(CatalogGenerationProvenanceError):
+                    validate_catalog_generation_provenance(
+                        forged,
+                        fetch,
+                        snapshot,
+                        bundle,
+                        skidl,
+                        allow_insecure_loopback=True,
+                    )
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_oversized_scalar_subclasses_fail_before_exact_type_copy(self):
+        class LyingString(str):
+            def __len__(self):
+                return 0
+
+            def __iter__(self):
+                return iter(())
+
+        class LyingInteger(int):
+            def bit_length(self):
+                return 0
+
+        oversized_string = LyingString("x" * 64)
+        oversized_integer = LyingInteger(10**100)
+        with patch.object(
+            catalog_provenance,
+            "_exact_json_string",
+            side_effect=AssertionError("string copied before its bound was checked"),
+        ):
+            with self.assertRaises(CatalogGenerationProvenanceError):
+                catalog_provenance._preflight_injected_json(
+                    [oversized_string],
+                    label="injected JSON",
+                    maximum=32,
+                )
+            with self.assertRaises(CatalogGenerationProvenanceError):
+                catalog_provenance._preflight_injected_json(
+                    {oversized_string: None},
+                    label="injected JSON",
+                    maximum=32,
+                )
+        with patch.object(
+            catalog_provenance,
+            "_exact_json_integer",
+            side_effect=AssertionError("integer copied before its bound was checked"),
+        ):
+            with self.assertRaises(CatalogGenerationProvenanceError):
+                catalog_provenance._preflight_injected_json(
+                    [oversized_integer],
+                    label="injected JSON",
+                    maximum=32,
+                )
 
     def test_recomputed_provenance_rejects_final_history_digest_forgery(self):
         server = self._server()

@@ -61,6 +61,26 @@ identity checks. Mutation by another process under the same OS identity remains
 outside this boundary. A failure after the rename can leave the directory in
 place; such an ambiguously finalized directory must not be consumed.
 
+The v1.464 `verify-final-bom` boundary stable-reads one nonempty board and one
+nonempty manufacturing ZIP at up to 128 MiB each. The ZIP then passes the full
+manufacturing validator, including its 4,096-entry, 512 MiB expanded-payload,
+1 MiB manifest, and 100,000-part limits. The board may contain at most 256
+populated BOM references. The actual package BOM and freshly regenerated
+canonical BOM are each bounded by 128 MiB; the closed report is bounded by
+16 MiB. Present reference, value, footprint, and MPN fields accept one to 4,096
+UTF-8 bytes and reject NUL. Both inputs are reread against their initially
+captured identities before the optional report is atomically published to a
+new file. A valid source or canonical-BOM mismatch is retained before
+`--require-approved` fails. Invalid package/board content, an input mutation,
+an alias, an unsafe destination, or an over-limit value produces no report.
+Omitting `--output` writes the same bounded bytes to standard output.
+
+The final-BOM JSON Schema is a closed structural contract. Its `maxLength`
+keywords count Unicode code points, while the runtime limits above count UTF-8
+bytes. Runtime validation is authoritative for byte and aggregate ceilings,
+package semantics, exact source identities, canonical BOM bytes, sorting, and
+cross-field approval invariants; schema validation alone is not approval.
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

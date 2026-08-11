@@ -14,6 +14,7 @@ use crate::manufacturing_limits::{
     validate_manufacturing_basename,
 };
 use crate::physical_profile::{PhysicalProfileBinding, validate_physical_profile_binding};
+use flate2::{Decompress, FlushDecompress, Status};
 use pcbex_kicad::MAX_MANUFACTURING_PARTS;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1176,6 +1177,18 @@ pub(crate) struct ManufacturingPackageIdentity {
     pub(crate) dfm_profile: Option<DfmProfileBinding>,
 }
 
+/// Exact evidence retained while performing the full manufacturing-package
+/// validation. The final-BOM verifier needs the validated manifest and BOM
+/// bytes, not a second, weaker ZIP parser.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ManufacturingPackageDetails {
+    pub(crate) identity: ManufacturingPackageIdentity,
+    pub(crate) manifest_bytes: Vec<u8>,
+    pub(crate) bom_bytes: Vec<u8>,
+    pub(crate) manifest_parts_total: u64,
+    pub(crate) manifest_parts_bom: u64,
+}
+
 fn validate_expected_physical_profile(
     identity: &ManufacturingPackageIdentity,
     expected: Option<&PhysicalProfileBinding>,
@@ -1230,26 +1243,45 @@ pub(crate) fn validate_manufacturing_package(
     validate_manufacturing_package_with_expanded_limit(package, MAX_ARCHIVE_UNCOMPRESSED_BYTES)
 }
 
+pub(crate) fn validate_manufacturing_package_details(
+    package: &[u8],
+) -> Result<ManufacturingPackageDetails, String> {
+    validate_manufacturing_package_details_with_expanded_limit(
+        package,
+        MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+    )
+}
+
 fn validate_manufacturing_package_with_expanded_limit(
     package: &[u8],
     max_expanded_bytes: u64,
 ) -> Result<ManufacturingPackageIdentity, String> {
-    let central_entries = central_directory_entry_count(package);
-    if central_entries.is_some_and(|entries| entries > MAX_ARCHIVE_ENTRIES) {
+    validate_manufacturing_package_details_with_expanded_limit(package, max_expanded_bytes)
+        .map(|details| details.identity)
+}
+
+fn validate_manufacturing_package_details_with_expanded_limit(
+    package: &[u8],
+    max_expanded_bytes: u64,
+) -> Result<ManufacturingPackageDetails, String> {
+    let central_directory = validate_classic_zip_directory(package)?;
+    if central_directory.entries > MAX_ARCHIVE_ENTRIES {
         return Err(format!(
             "factory package contains more than {MAX_ARCHIVE_ENTRIES} ZIP entries"
         ));
     }
     let mut archive = ZipArchive::new(Cursor::new(package))
         .map_err(|error| format!("factory package is not a valid ZIP archive: {error}"))?;
+    if archive.offset() != 0 || archive.central_directory_start() != central_directory.offset as u64
+    {
+        return Err("factory package ZIP parser and raw central-directory views differ".into());
+    }
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err(format!(
             "factory package contains more than {MAX_ARCHIVE_ENTRIES} ZIP entries"
         ));
     }
-    if let Some(central_entries) = central_entries
-        && central_entries != archive.len()
-    {
+    if central_directory.entries != archive.len() {
         return Err("factory package contains duplicate ZIP entry names".into());
     }
     let manifest = archive
@@ -1376,6 +1408,7 @@ fn validate_manufacturing_package_with_expanded_limit(
         physical_profile,
         dfm_profile,
     };
+    let manifest_parts_total = manifest.parts.total;
     let expected_bom_quantity = manifest.parts.bom;
     let expected_placement_rows = manifest.parts.placement;
     let mut provenance_paths = BTreeSet::from([manifest.input.path.clone()]);
@@ -1430,6 +1463,11 @@ fn validate_manufacturing_package_with_expanded_limit(
         let mut entry = archive
             .by_index(index)
             .map_err(|error| format!("reading factory package ZIP entry {index}: {error}"))?;
+        if entry.name_raw() != entry.name().as_bytes() {
+            return Err(format!(
+                "factory package ZIP entry {index} raw and decoded names differ"
+            ));
+        }
         let name = entry.name().to_string();
         if !is_safe_manifest_path(&name) {
             return Err(format!(
@@ -1483,7 +1521,14 @@ fn validate_manufacturing_package_with_expanded_limit(
     validate_gerber_job(package, &gerber_job, &expected)?;
     validate_bom_csv(package, expected_bom_quantity)?;
     validate_cpl_csv(package, expected_placement_rows)?;
-    Ok(identity)
+    let bom_bytes = read_validated_zip_entry(package, "bom.csv", MAX_PACKAGE_BYTES)?;
+    Ok(ManufacturingPackageDetails {
+        identity,
+        manifest_bytes,
+        bom_bytes,
+        manifest_parts_total,
+        manifest_parts_bom: expected_bom_quantity,
+    })
 }
 
 fn validate_manifest_text(value: &str, field: &str) -> Result<(), String> {
@@ -2172,33 +2217,408 @@ fn add_archive_size_with_limit(
     Ok(())
 }
 
-fn central_directory_entry_count(package: &[u8]) -> Option<usize> {
+struct ClassicZipDirectory {
+    entries: usize,
+    offset: usize,
+}
+
+fn validate_classic_zip_directory(package: &[u8]) -> Result<ClassicZipDirectory, String> {
     const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+    const ZIP64_LOCATOR_SIGNATURE: &[u8; 4] = b"PK\x06\x07";
     const EOCD_LENGTH: usize = 22;
     let search_start = package
         .len()
         .saturating_sub(EOCD_LENGTH + u16::MAX as usize);
-    let search_end = package.len().checked_sub(EOCD_LENGTH)?;
+    let Some(search_end) = package.len().checked_sub(EOCD_LENGTH) else {
+        return Err(
+            "factory package is not a valid ZIP archive under the canonical classic contract: missing end record"
+                .into(),
+        );
+    };
     for offset in (search_start..=search_end).rev() {
-        if package.get(offset..offset + 4)? != EOCD_SIGNATURE {
+        if package.get(offset..offset + 4) != Some(EOCD_SIGNATURE) {
             continue;
         }
-        let entries = u16::from_le_bytes(package.get(offset + 10..offset + 12)?.try_into().ok()?);
-        if entries == u16::MAX {
-            // ZIP64 central-directory counts need a separate locator parse;
-            // ZipArchive already bounds the entry table in this case.
-            return None;
-        }
-        let central_size =
-            u32::from_le_bytes(package.get(offset + 12..offset + 16)?.try_into().ok()?) as usize;
-        let central_offset =
-            u32::from_le_bytes(package.get(offset + 16..offset + 20)?.try_into().ok()?) as usize;
-        if central_offset.checked_add(central_size)? > offset {
+
+        let Some(comment_length) = zip_u16(package, offset + 20) else {
+            continue;
+        };
+        if offset
+            .checked_add(EOCD_LENGTH)
+            .and_then(|end| end.checked_add(comment_length as usize))
+            != Some(package.len())
+        {
             continue;
         }
-        return Some(entries as usize);
+
+        let (Some(disk), Some(central_disk), Some(disk_entries), Some(entries)) = (
+            zip_u16(package, offset + 4),
+            zip_u16(package, offset + 6),
+            zip_u16(package, offset + 8),
+            zip_u16(package, offset + 10),
+        ) else {
+            continue;
+        };
+        let (Some(central_size), Some(central_offset)) =
+            (zip_u32(package, offset + 12), zip_u32(package, offset + 16))
+        else {
+            continue;
+        };
+        let has_zip64_locator =
+            offset >= 20 && package.get(offset - 20..offset - 16) == Some(ZIP64_LOCATOR_SIGNATURE);
+        if disk == u16::MAX
+            || central_disk == u16::MAX
+            || disk_entries == u16::MAX
+            || entries == u16::MAX
+            || central_size == u32::MAX
+            || central_offset == u32::MAX
+            || has_zip64_locator
+        {
+            return Err("factory package ZIP64 archives are not supported".into());
+        }
+        if disk != 0 || central_disk != 0 || disk_entries != entries {
+            return Err("factory package must be a single-disk classic ZIP archive".into());
+        }
+        let central_offset = central_offset as usize;
+        let central_size = central_size as usize;
+        let Some(central_end) = central_offset.checked_add(central_size) else {
+            continue;
+        };
+        if central_end != offset {
+            continue;
+        }
+        if entries as usize > MAX_ARCHIVE_ENTRIES {
+            return Ok(ClassicZipDirectory {
+                entries: entries as usize,
+                offset: central_offset,
+            });
+        }
+        validate_classic_zip_structure(package, central_offset, central_end, entries as usize)?;
+        return Ok(ClassicZipDirectory {
+            entries: entries as usize,
+            offset: central_offset,
+        });
     }
-    None
+    Err(
+        "factory package is not a valid ZIP archive under the canonical classic contract: missing end record"
+            .into(),
+    )
+}
+
+fn validate_classic_zip_structure(
+    package: &[u8],
+    central_offset: usize,
+    central_end: usize,
+    entries: usize,
+) -> Result<(), String> {
+    const CENTRAL_SIGNATURE: &[u8; 4] = b"PK\x01\x02";
+    const LOCAL_SIGNATURE: &[u8; 4] = b"PK\x03\x04";
+    const CENTRAL_HEADER_LENGTH: usize = 46;
+    const LOCAL_HEADER_LENGTH: usize = 30;
+    const ZIP_FLAG_ENCRYPTED: u16 = 1 << 0;
+    const ZIP_FLAG_DATA_DESCRIPTOR: u16 = 1 << 3;
+    const UNIX_SYSTEM: u8 = 3;
+    const UNIX_FILE_TYPE_MASK: u32 = 0o170000;
+    const UNIX_REGULAR_FILE: u32 = 0o100000;
+    const DOS_DIRECTORY_ATTRIBUTE: u32 = 0x10;
+
+    let mut central_cursor = central_offset;
+    let mut local_spans = Vec::with_capacity(entries);
+    let mut declared_artifact_bytes = 0_u64;
+    let mut saw_manifest = false;
+    for _ in 0..entries {
+        let fixed_end = central_cursor
+            .checked_add(CENTRAL_HEADER_LENGTH)
+            .ok_or_else(|| "factory package central-directory offset overflow".to_string())?;
+        if fixed_end > central_end
+            || package.get(central_cursor..central_cursor + 4) != Some(CENTRAL_SIGNATURE)
+        {
+            return Err("factory package has an invalid central-directory entry".into());
+        }
+
+        let made_by_system = *package
+            .get(central_cursor + 5)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+        let flags = zip_u16(package, central_cursor + 8)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+        let method = zip_u16(package, central_cursor + 10)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+        let crc = zip_u32(package, central_cursor + 16)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+        let compressed_size = zip_u32(package, central_cursor + 20)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+        let uncompressed_size = zip_u32(package, central_cursor + 24)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+        let name_length = zip_u16(package, central_cursor + 28)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?
+            as usize;
+        let extra_length = zip_u16(package, central_cursor + 30)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?
+            as usize;
+        let comment_length = zip_u16(package, central_cursor + 32)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?
+            as usize;
+        let disk_start = zip_u16(package, central_cursor + 34)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+        let external_attributes = zip_u32(package, central_cursor + 38)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+        let local_offset = zip_u32(package, central_cursor + 42)
+            .ok_or_else(|| "factory package has a truncated central-directory entry".to_string())?;
+
+        if compressed_size == u32::MAX
+            || uncompressed_size == u32::MAX
+            || local_offset == u32::MAX
+            || disk_start == u16::MAX
+        {
+            return Err("factory package ZIP64 archives are not supported".into());
+        }
+        if flags & ZIP_FLAG_ENCRYPTED != 0 {
+            return Err("factory package encrypted ZIP entries are not supported".into());
+        }
+        // The canonical pcbex writer uses seekable output and emits neither
+        // data descriptors nor extra fields. Rejecting them keeps the raw and
+        // library ZIP views identical instead of accepting alternate metadata.
+        if flags & ZIP_FLAG_DATA_DESCRIPTOR != 0 {
+            return Err("factory package ZIP data descriptors are not supported".into());
+        }
+        if disk_start != 0 {
+            return Err("factory package must be a single-disk classic ZIP archive".into());
+        }
+        if extra_length != 0 {
+            return Err("factory package central ZIP extra fields are not supported".into());
+        }
+        let unix_mode = external_attributes >> 16;
+        let unix_file_type = unix_mode & UNIX_FILE_TYPE_MASK;
+        if external_attributes & DOS_DIRECTORY_ATTRIBUTE != 0
+            || (unix_file_type != UNIX_REGULAR_FILE
+                && (made_by_system == UNIX_SYSTEM || unix_mode != 0))
+        {
+            return Err("factory package ZIP entries must be regular files".into());
+        }
+
+        let central_name_start = fixed_end;
+        let central_name_end = central_name_start
+            .checked_add(name_length)
+            .ok_or_else(|| "factory package central-directory name overflow".to_string())?;
+        let next_central = central_name_end
+            .checked_add(extra_length)
+            .and_then(|end| end.checked_add(comment_length))
+            .ok_or_else(|| "factory package central-directory entry overflow".to_string())?;
+        if next_central > central_end {
+            return Err("factory package has a truncated central-directory entry".into());
+        }
+        let central_name = package
+            .get(central_name_start..central_name_end)
+            .ok_or_else(|| "factory package has a truncated central-directory name".to_string())?;
+
+        let local_offset = local_offset as usize;
+        let local_fixed_end = local_offset
+            .checked_add(LOCAL_HEADER_LENGTH)
+            .ok_or_else(|| "factory package local-header offset overflow".to_string())?;
+        if local_fixed_end > central_offset
+            || package.get(local_offset..local_offset + 4) != Some(LOCAL_SIGNATURE)
+        {
+            return Err(
+                "factory package central directory references an invalid local header".into(),
+            );
+        }
+        let local_flags = zip_u16(package, local_offset + 6)
+            .ok_or_else(|| "factory package has a truncated local header".to_string())?;
+        let local_method = zip_u16(package, local_offset + 8)
+            .ok_or_else(|| "factory package has a truncated local header".to_string())?;
+        let local_crc = zip_u32(package, local_offset + 14)
+            .ok_or_else(|| "factory package has a truncated local header".to_string())?;
+        let local_compressed_size = zip_u32(package, local_offset + 18)
+            .ok_or_else(|| "factory package has a truncated local header".to_string())?;
+        let local_uncompressed_size = zip_u32(package, local_offset + 22)
+            .ok_or_else(|| "factory package has a truncated local header".to_string())?;
+        let local_name_length = zip_u16(package, local_offset + 26)
+            .ok_or_else(|| "factory package has a truncated local header".to_string())?
+            as usize;
+        let local_extra_length = zip_u16(package, local_offset + 28)
+            .ok_or_else(|| "factory package has a truncated local header".to_string())?
+            as usize;
+        if local_extra_length != 0 {
+            return Err("factory package local ZIP extra fields are not supported".into());
+        }
+        if local_flags != flags
+            || local_method != method
+            || local_crc != crc
+            || local_compressed_size != compressed_size
+            || local_uncompressed_size != uncompressed_size
+        {
+            return Err("factory package local and central ZIP metadata differ".into());
+        }
+
+        let local_name_start = local_fixed_end;
+        let local_name_end = local_name_start
+            .checked_add(local_name_length)
+            .ok_or_else(|| "factory package local-header name overflow".to_string())?;
+        let local_data_start = local_name_end
+            .checked_add(local_extra_length)
+            .ok_or_else(|| "factory package local-header entry overflow".to_string())?;
+        let local_end = local_data_start
+            .checked_add(compressed_size as usize)
+            .ok_or_else(|| "factory package local-entry size overflow".to_string())?;
+        if local_end > central_offset {
+            return Err("factory package local ZIP entry overlaps the central directory".into());
+        }
+        let local_name = package
+            .get(local_name_start..local_name_end)
+            .ok_or_else(|| "factory package has a truncated local-header name".to_string())?;
+        if local_name != central_name {
+            return Err("factory package local and central ZIP entry names differ".into());
+        }
+        if central_name == b"manifest.json" {
+            if saw_manifest {
+                return Err("factory package contains duplicate ZIP entry manifest.json".into());
+            }
+            saw_manifest = true;
+            if u64::from(uncompressed_size) > MAX_MANIFEST_BYTES {
+                return Err(format!(
+                    "factory package manifest.json must contain 1 to {MAX_MANIFEST_BYTES} bytes"
+                ));
+            }
+        } else {
+            declared_artifact_bytes = declared_artifact_bytes
+                .checked_add(u64::from(uncompressed_size))
+                .ok_or_else(|| "factory package ZIP entry size overflow".to_string())?;
+            if declared_artifact_bytes > MAX_ARCHIVE_UNCOMPRESSED_BYTES {
+                return Err(format!(
+                    "factory package decompressed artifact bytes exceed {MAX_ARCHIVE_UNCOMPRESSED_BYTES}"
+                ));
+            }
+        }
+        let compressed_data = package
+            .get(local_data_start..local_end)
+            .ok_or_else(|| "factory package has truncated local ZIP entry data".to_string())?;
+        validate_classic_zip_entry_stream(method, compressed_data, uncompressed_size)?;
+        local_spans.push((local_offset, local_end));
+        central_cursor = next_central;
+    }
+    if central_cursor != central_end {
+        return Err("factory package central-directory size does not match its entries".into());
+    }
+
+    local_spans.sort_unstable_by_key(|(start, _)| *start);
+    let mut local_cursor = 0_usize;
+    for (start, end) in local_spans {
+        if start != local_cursor {
+            return Err("factory package contains unlisted or overlapping local ZIP data".into());
+        }
+        local_cursor = end;
+    }
+    if local_cursor != central_offset {
+        return Err("factory package contains unlisted local ZIP data".into());
+    }
+    Ok(())
+}
+
+fn validate_classic_zip_entry_stream(
+    method: u16,
+    compressed_data: &[u8],
+    uncompressed_size: u32,
+) -> Result<(), String> {
+    const STORED_METHOD: u16 = 0;
+    const DEFLATED_METHOD: u16 = 8;
+
+    if u64::from(uncompressed_size) > MAX_PACKAGE_BYTES {
+        return Err("factory package ZIP entry exceeds size limit".into());
+    }
+
+    match method {
+        STORED_METHOD => {
+            if compressed_data.len() as u64 != u64::from(uncompressed_size) {
+                return Err(
+                    "factory package stored ZIP entry sizes do not match its byte stream".into(),
+                );
+            }
+            Ok(())
+        }
+        DEFLATED_METHOD => {
+            let mut decompressor = Decompress::new(false);
+            let mut output = [0_u8; 64 * 1024];
+            let declared_output = u64::from(uncompressed_size);
+
+            loop {
+                let before_input = decompressor.total_in();
+                let before_output = decompressor.total_out();
+                let input_start = usize::try_from(before_input).map_err(|_| {
+                    "factory package deflated ZIP entry input offset overflow".to_string()
+                })?;
+                let remaining_input = compressed_data.get(input_start..).ok_or_else(|| {
+                    "factory package deflated ZIP entry consumed beyond its declared compressed size"
+                        .to_string()
+                })?;
+                // Permit one byte beyond the declaration so an understated
+                // uncompressed size is detected without expanding attacker-
+                // controlled data beyond that bound.
+                let output_limit = declared_output
+                    .saturating_sub(before_output)
+                    .saturating_add(1)
+                    .min(output.len() as u64) as usize;
+                let status = decompressor
+                    .decompress(
+                        remaining_input,
+                        &mut output[..output_limit],
+                        FlushDecompress::None,
+                    )
+                    .map_err(|error| {
+                        format!("factory package has an invalid deflated ZIP entry: {error}")
+                    })?;
+                let after_input = decompressor.total_in();
+                let after_output = decompressor.total_out();
+                if after_output > declared_output {
+                    return Err(
+                        "factory package deflated ZIP entry expands beyond its declared uncompressed size"
+                            .into(),
+                    );
+                }
+
+                if status == Status::StreamEnd {
+                    if after_input != compressed_data.len() as u64 {
+                        return Err(
+                            "factory package deflated ZIP entry does not consume exactly its declared compressed size"
+                                .into(),
+                        );
+                    }
+                    if after_output != declared_output {
+                        return Err(
+                            "factory package deflated ZIP entry size does not match its byte stream"
+                                .into(),
+                        );
+                    }
+                    return Ok(());
+                }
+
+                if after_input == before_input && after_output == before_output {
+                    return Err(
+                        "factory package deflated ZIP entry does not terminate within its declared compressed size"
+                            .into(),
+                    );
+                }
+            }
+        }
+        _ => Err(format!(
+            "factory package ZIP compression method {method} is not supported"
+        )),
+    }
+}
+
+fn zip_u16(package: &[u8], offset: usize) -> Option<u16> {
+    package
+        .get(offset..offset.checked_add(2)?)?
+        .try_into()
+        .ok()
+        .map(u16::from_le_bytes)
+}
+
+fn zip_u32(package: &[u8], offset: usize) -> Option<u32> {
+    package
+        .get(offset..offset.checked_add(4)?)?
+        .try_into()
+        .ok()
+        .map(u32::from_le_bytes)
 }
 
 fn validate_manifest_descriptor(
@@ -2277,6 +2697,29 @@ fn hash_zip_entry<R: Read>(
         digest.update(&buffer[..read]);
     }
     Ok((bytes, hex::encode(digest.finalize())))
+}
+
+fn read_validated_zip_entry(
+    package: &[u8],
+    name: &str,
+    maximum_bytes: u64,
+) -> Result<Vec<u8>, String> {
+    let mut archive = ZipArchive::new(Cursor::new(package))
+        .map_err(|error| format!("factory package is not a valid ZIP archive: {error}"))?;
+    let entry = archive
+        .by_name(name)
+        .map_err(|_| format!("factory package must contain {name}"))?;
+    let mut bytes = Vec::new();
+    entry
+        .take(maximum_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("reading factory package ZIP entry {name}: {error}"))?;
+    if bytes.len() as u64 > maximum_bytes {
+        return Err(format!(
+            "factory package ZIP entry {name} exceeds size limit"
+        ));
+    }
+    Ok(bytes)
 }
 
 fn normalize_response(value: &Value) -> Result<NormalizedResponse, String> {
@@ -3338,7 +3781,254 @@ mod tests {
     }
 
     #[test]
-    fn aggregate_archive_limit_uses_actual_decompressed_bytes() {
+    fn rejects_zip64_eocd_sentinels_and_locator_during_bounded_precheck() {
+        const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+        let package = manufacturing_package();
+        let eocd = package
+            .windows(EOCD_SIGNATURE.len())
+            .rposition(|window| window == EOCD_SIGNATURE)
+            .unwrap();
+
+        for (field_offset, width) in [(4, 2), (6, 2), (8, 2), (10, 2), (12, 4), (16, 4)] {
+            let mut zip64 = package.clone();
+            zip64[eocd + field_offset..eocd + field_offset + width].fill(0xff);
+            let error = validate_manufacturing_package(&zip64).unwrap_err();
+            assert!(
+                error.contains("ZIP64 archives are not supported"),
+                "{error}"
+            );
+        }
+
+        let mut zip64_locator = package;
+        zip64_locator[eocd - 20..eocd - 16].copy_from_slice(b"PK\x06\x07");
+        let error = validate_manufacturing_package(&zip64_locator).unwrap_err();
+        assert!(
+            error.contains("ZIP64 archives are not supported"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_inconsistent_or_unlisted_raw_zip_records() {
+        const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+        let package = manufacturing_package();
+        validate_manufacturing_package(&package).unwrap();
+        let eocd = package
+            .windows(EOCD_SIGNATURE.len())
+            .rposition(|window| window == EOCD_SIGNATURE)
+            .unwrap();
+        let central_offset = zip_u32(&package, eocd + 16).unwrap() as usize;
+
+        let (local_offset, local_name_start) = {
+            let mut archive = ZipArchive::new(Cursor::new(package.as_slice())).unwrap();
+            let entry = archive.by_index(0).unwrap();
+            let local_offset = entry.header_start() as usize;
+            (local_offset, local_offset + 30)
+        };
+        let mut mismatched_name = package.clone();
+        mismatched_name[local_name_start] ^= 1;
+        let error = validate_manufacturing_package(&mismatched_name).unwrap_err();
+        assert!(error.contains("entry names differ"), "{error}");
+
+        let mut undecodable_name = package.clone();
+        undecodable_name[local_name_start] = 0xff;
+        undecodable_name[central_offset + 46] = 0xff;
+        let error = validate_manufacturing_package(&undecodable_name).unwrap_err();
+        assert!(error.contains("raw and decoded names differ"), "{error}");
+
+        let mut encrypted = package.clone();
+        encrypted[central_offset + 8..central_offset + 10].copy_from_slice(&1_u16.to_le_bytes());
+        encrypted[local_offset + 6..local_offset + 8].copy_from_slice(&1_u16.to_le_bytes());
+        let error = validate_manufacturing_package(&encrypted).unwrap_err();
+        assert!(error.contains("encrypted ZIP entries"), "{error}");
+
+        let mut nonregular = package.clone();
+        nonregular[central_offset + 5] = 3;
+        nonregular[central_offset + 38..central_offset + 42]
+            .copy_from_slice(&(0o120777_u32 << 16).to_le_bytes());
+        let error = validate_manufacturing_package(&nonregular).unwrap_err();
+        assert!(error.contains("must be regular files"), "{error}");
+
+        let mut dos_nonregular = package.clone();
+        dos_nonregular[central_offset + 5] = 0;
+        dos_nonregular[central_offset + 38..central_offset + 42]
+            .copy_from_slice(&(0o140777_u32 << 16).to_le_bytes());
+        let error = validate_manufacturing_package(&dos_nonregular).unwrap_err();
+        assert!(error.contains("must be regular files"), "{error}");
+
+        let mut dos_directory = package.clone();
+        dos_directory[central_offset + 5] = 0;
+        dos_directory[central_offset + 38..central_offset + 42]
+            .copy_from_slice(&0x10_u32.to_le_bytes());
+        let error = validate_manufacturing_package(&dos_directory).unwrap_err();
+        assert!(error.contains("must be regular files"), "{error}");
+
+        let mut ambiguous_unix_mode = package.clone();
+        ambiguous_unix_mode[central_offset + 5] = 3;
+        ambiguous_unix_mode[central_offset + 38..central_offset + 42]
+            .copy_from_slice(&(0o777_u32 << 16).to_le_bytes());
+        let error = validate_manufacturing_package(&ambiguous_unix_mode).unwrap_err();
+        assert!(error.contains("must be regular files"), "{error}");
+
+        let mut missing_unix_file_type = package.clone();
+        missing_unix_file_type[central_offset + 5] = 3;
+        missing_unix_file_type[central_offset + 38..central_offset + 42]
+            .copy_from_slice(&0_u32.to_le_bytes());
+        let error = validate_manufacturing_package(&missing_unix_file_type).unwrap_err();
+        assert!(error.contains("must be regular files"), "{error}");
+
+        let central_name_length = zip_u16(&package, central_offset + 28).unwrap() as usize;
+        let safe_name =
+            package[central_offset + 46..central_offset + 46 + central_name_length].to_vec();
+        let mut unsafe_name = vec![b'x'; central_name_length];
+        unsafe_name[..3].copy_from_slice(b"../");
+        let crc32 = |bytes: &[u8]| {
+            let mut crc = u32::MAX;
+            for byte in bytes {
+                crc ^= *byte as u32;
+                for _ in 0..8 {
+                    crc = (crc >> 1) ^ (0xedb8_8320 & 0_u32.wrapping_sub(crc & 1));
+                }
+            }
+            !crc
+        };
+        let mut unicode_path_extra = Vec::new();
+        unicode_path_extra.extend_from_slice(&0x7075_u16.to_le_bytes());
+        unicode_path_extra.extend_from_slice(&(safe_name.len() as u16 + 5).to_le_bytes());
+        unicode_path_extra.push(1);
+        unicode_path_extra.extend_from_slice(&crc32(&unsafe_name).to_le_bytes());
+        unicode_path_extra.extend_from_slice(&safe_name);
+        let mut central_extra = package.clone();
+        central_extra[local_name_start..local_name_start + central_name_length]
+            .copy_from_slice(&unsafe_name);
+        central_extra[central_offset + 46..central_offset + 46 + central_name_length]
+            .copy_from_slice(&unsafe_name);
+        let extra_start = central_offset + 46 + central_name_length;
+        central_extra.splice(extra_start..extra_start, unicode_path_extra.iter().copied());
+        central_extra[central_offset + 30..central_offset + 32]
+            .copy_from_slice(&(unicode_path_extra.len() as u16).to_le_bytes());
+        let shifted_eocd = eocd + unicode_path_extra.len();
+        let shifted_central_size =
+            zip_u32(&package, eocd + 12).unwrap() + unicode_path_extra.len() as u32;
+        central_extra[shifted_eocd + 12..shifted_eocd + 16]
+            .copy_from_slice(&shifted_central_size.to_le_bytes());
+        let error = validate_manufacturing_package(&central_extra).unwrap_err();
+        assert!(error.contains("central ZIP extra fields"), "{error}");
+
+        let mut local_extra = package.clone();
+        local_extra[local_offset + 28..local_offset + 30].copy_from_slice(&1_u16.to_le_bytes());
+        let error = validate_manufacturing_package(&local_extra).unwrap_err();
+        assert!(error.contains("local ZIP extra fields"), "{error}");
+
+        let mut split_disk_entry = package.clone();
+        split_disk_entry[central_offset + 34..central_offset + 36]
+            .copy_from_slice(&1_u16.to_le_bytes());
+        let error = validate_manufacturing_package(&split_disk_entry).unwrap_err();
+        assert!(error.contains("single-disk classic ZIP"), "{error}");
+
+        let orphan_name = b"orphan.txt";
+        let mut orphan_prefix = Vec::new();
+        orphan_prefix.extend_from_slice(b"PK\x03\x04");
+        orphan_prefix.extend_from_slice(&20_u16.to_le_bytes());
+        orphan_prefix.extend_from_slice(&0_u16.to_le_bytes());
+        orphan_prefix.extend_from_slice(&0_u16.to_le_bytes());
+        orphan_prefix.extend_from_slice(&0_u16.to_le_bytes());
+        orphan_prefix.extend_from_slice(&0_u16.to_le_bytes());
+        orphan_prefix.extend_from_slice(&0_u32.to_le_bytes());
+        orphan_prefix.extend_from_slice(&0_u32.to_le_bytes());
+        orphan_prefix.extend_from_slice(&0_u32.to_le_bytes());
+        orphan_prefix.extend_from_slice(&(orphan_name.len() as u16).to_le_bytes());
+        orphan_prefix.extend_from_slice(&0_u16.to_le_bytes());
+        orphan_prefix.extend_from_slice(orphan_name);
+        let prefix_length = orphan_prefix.len();
+        orphan_prefix.extend_from_slice(&package);
+        let error = validate_manufacturing_package(&orphan_prefix).unwrap_err();
+        assert!(
+            error.contains("valid ZIP archive under the canonical classic contract"),
+            "{error}"
+        );
+
+        let shifted_eocd = eocd + prefix_length;
+        let shifted_central = central_offset + prefix_length;
+        orphan_prefix[shifted_eocd + 16..shifted_eocd + 20]
+            .copy_from_slice(&(shifted_central as u32).to_le_bytes());
+        let entries = zip_u16(&orphan_prefix, shifted_eocd + 10).unwrap() as usize;
+        let mut central_cursor = shifted_central;
+        for _ in 0..entries {
+            assert_eq!(
+                orphan_prefix.get(central_cursor..central_cursor + 4),
+                Some(b"PK\x01\x02".as_slice())
+            );
+            let shifted_local =
+                zip_u32(&orphan_prefix, central_cursor + 42).unwrap() as usize + prefix_length;
+            orphan_prefix[central_cursor + 42..central_cursor + 46]
+                .copy_from_slice(&(shifted_local as u32).to_le_bytes());
+            central_cursor += 46
+                + zip_u16(&orphan_prefix, central_cursor + 28).unwrap() as usize
+                + zip_u16(&orphan_prefix, central_cursor + 30).unwrap() as usize
+                + zip_u16(&orphan_prefix, central_cursor + 32).unwrap() as usize;
+        }
+        let error = validate_manufacturing_package(&orphan_prefix).unwrap_err();
+        assert!(
+            error.contains("unlisted or overlapping local ZIP data"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_trailing_bytes_after_a_deflated_stream_end() {
+        const EOCD_SIGNATURE: &[u8; 4] = b"PK\x05\x06";
+        let mut package =
+            manufacturing_package_with_front_copper(vec![b'x'; 4096], CompressionMethod::Deflated);
+        validate_manufacturing_package(&package).unwrap();
+        let eocd = package
+            .windows(EOCD_SIGNATURE.len())
+            .rposition(|window| window == EOCD_SIGNATURE)
+            .unwrap();
+        let central_offset = zip_u32(&package, eocd + 16).unwrap() as usize;
+        let (local_header, data_end, central_header) = {
+            let mut archive = ZipArchive::new(Cursor::new(package.as_slice())).unwrap();
+            let entry = archive.by_name("manifest.json").unwrap();
+            assert_eq!(entry.compression(), CompressionMethod::Deflated);
+            (
+                entry.header_start() as usize,
+                (entry.data_start().unwrap() + entry.compressed_size()) as usize,
+                entry.central_header_start() as usize,
+            )
+        };
+        assert_eq!(data_end, central_offset);
+
+        let trailing = [0xde, 0xad, 0xbe, 0xef];
+        package.splice(data_end..data_end, trailing);
+        let compressed_size =
+            zip_u32(&package, local_header + 18).unwrap() + u32::try_from(trailing.len()).unwrap();
+        package[local_header + 18..local_header + 22]
+            .copy_from_slice(&compressed_size.to_le_bytes());
+        let shifted_central_header = central_header + trailing.len();
+        package[shifted_central_header + 20..shifted_central_header + 24]
+            .copy_from_slice(&compressed_size.to_le_bytes());
+        let shifted_eocd = eocd + trailing.len();
+        let shifted_central_offset = central_offset + trailing.len();
+        package[shifted_eocd + 16..shifted_eocd + 20]
+            .copy_from_slice(&(shifted_central_offset as u32).to_le_bytes());
+
+        // The generic ZIP reader stops at the DEFLATE end marker and ignores
+        // the opaque suffix inside the declared compressed range.
+        let mut archive = ZipArchive::new(Cursor::new(package.as_slice())).unwrap();
+        let mut manifest = archive.by_name("manifest.json").unwrap();
+        let mut decoded = Vec::new();
+        manifest.read_to_end(&mut decoded).unwrap();
+        assert!(!decoded.is_empty());
+
+        let error = validate_manufacturing_package(&package).unwrap_err();
+        assert!(
+            error.contains("does not consume exactly its declared compressed size"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rejects_deflated_streams_that_exceed_declared_uncompressed_size() {
         let payload = vec![b'x'; 4096];
         let mut package =
             manufacturing_package_with_front_copper(payload.clone(), CompressionMethod::Deflated);
@@ -3356,26 +4046,9 @@ mod tests {
         package[local_header + 22..local_header + 26].copy_from_slice(&1_u32.to_le_bytes());
         package[central_header + 24..central_header + 28].copy_from_slice(&1_u32.to_le_bytes());
 
-        let declared_total = {
-            let mut archive = ZipArchive::new(Cursor::new(package.as_slice())).unwrap();
-            let mut total = 0_u64;
-            for index in 0..archive.len() {
-                let entry = archive.by_index(index).unwrap();
-                if entry.name() != "manifest.json" {
-                    total += entry.size();
-                }
-            }
-            total
-        };
-
-        // The package is otherwise valid under the production cap.  A test
-        // cap equal to the forged declarations must still reject it because
-        // the streamed payload is larger than those declarations.
-        validate_manufacturing_package(&package).unwrap();
-        let error = validate_manufacturing_package_with_expanded_limit(&package, declared_total)
-            .unwrap_err();
+        let error = validate_manufacturing_package(&package).unwrap_err();
         assert!(
-            error.contains("decompressed artifact bytes exceed"),
+            error.contains("expands beyond its declared uncompressed size"),
             "{error}"
         );
     }
@@ -3553,15 +4226,25 @@ mod tests {
     fn validates_fixture_identity_and_rejects_tampering() {
         let input = b"board-bytes";
         let mut package = manufacturing_package();
+        let expected_identity = ManufacturingPackageIdentity {
+            input_path: "board.kicad_pcb".into(),
+            input_bytes: input.len() as u64,
+            input_sha256: sha256(input),
+            physical_profile: None,
+            dfm_profile: None,
+        };
         assert_eq!(
             validate_manufacturing_package(&package).unwrap(),
-            ManufacturingPackageIdentity {
-                input_path: "board.kicad_pcb".into(),
-                input_bytes: input.len() as u64,
-                input_sha256: sha256(input),
-                physical_profile: None,
-                dfm_profile: None,
-            }
+            expected_identity
+        );
+        let details = validate_manufacturing_package_details(&package).unwrap();
+        assert_eq!(details.identity, expected_identity);
+        assert_eq!(details.manifest_parts_total, 0);
+        assert_eq!(details.manifest_parts_bom, 0);
+        assert_eq!(details.bom_bytes, TestManufacturingCsv::empty().bom);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&details.manifest_bytes).unwrap()["input"]["sha256"],
+            sha256(input)
         );
 
         let index = {

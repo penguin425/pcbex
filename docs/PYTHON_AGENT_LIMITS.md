@@ -104,6 +104,29 @@ command and the complete injected argv are each limited to 256 arguments and
 32,768 aggregate UTF-8 bytes. The rendered Windows command line, including its
 terminating null, is additionally limited to 32,767 UTF-16 code units.
 
+The v1.464 offline procurement-intent adapter captures four distinct inputs:
+a board and manufacturing ZIP at up to 128 MiB each, a retained catalog-backed
+circuit-generation bundle at up to 32 MiB, and its retained catalog snapshot
+at up to 4 MiB. Their combined source bytes may not exceed 384 MiB. The private
+Rust final-BOM report and final procurement-intent report are each limited to
+16 MiB. The final result retains the complete validated Rust report and the
+raw report's separate byte/SHA-256 identity. The adapter accepts at most 256
+populated BOM references. It preserves
+the Rust report's deliberately broad nonempty reference, value, footprint, and
+optional MPN fields through 4,096 UTF-8 bytes each and rejects NUL. Every caller
+`PathLike` is frozen once; inputs must be distinct, nonempty stable regular
+non-link files with portable board/snapshot basenames. Staged artifacts, the
+child report, and caller-visible inputs are reread before success. The CLI
+publishes one atomic no-clobber result; a valid semantic rejection is retained
+before `--require-approved` fails, while malformed, forged, changed, aliased,
+or over-limit evidence produces no output.
+
+The closed procurement-intent schema is structural. JSON Schema string
+`maxLength` counts Unicode code points rather than UTF-8 bytes, so the runtime
+byte, duplicate-key, basename, aggregate, exact-replay, digest, ordering, and
+cross-field checks remain authoritative. A schema-valid document alone is not
+an approved final BOM or procurement intent.
+
 The composed v1.457 handoff-to-manufacturing replay requires the complete v5
 board-binding inputs and one retained package. It keeps the existing 224 MiB
 handoff-archive ceiling, the 128 MiB board / 12 MiB canonical report plus one
@@ -219,6 +242,7 @@ limit before network access.
 | Circuit handoff chain/native ERC/AI quorum/catalog-provenance replay (`replay-circuit-handoff-bundle`) | one aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Circuit handoff retained-board binding replay | same aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Fresh manufacturing-package replay (`replay-manufacturing-package`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; inner Rust deadline reserves up to 15 seconds or half of remaining time and must convert to a positive Rust `Duration` | closed | 1 MiB | 1 MiB |
+| Offline final-BOM/catalog intent (`build-procurement-intent`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; the child reserves up to 15 seconds or half of the remaining time for process cleanup and outer rereads | closed | 1 MiB | 1 MiB |
 | Fresh deterministic-pipeline report replay (`replay-deterministic-pipeline`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; child execution reserves up to 30 seconds or half of the remaining time, split between bounded process cleanup and outer rereads/cleanup | closed | 64 KiB | 1 MiB |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
@@ -393,6 +417,14 @@ network, syscall, or privilege sandbox. It neither updates nor replaces a
 deterministic-pipeline report, factory receipt, AI approval, fabrication
 authorization, procurement authorization, or order record. MCP and GitHub
 Action exposure are not part of this standalone boundary.
+The v1.464 procurement-intent adapter also performs no network operation. It
+replays one historical catalog selection and compares only final-BOM
+reference/value/footprint/MPN metadata. It does not establish an electrical
+circuit/schematic/board binding, bind the package manifest's input basename,
+verify current stock, price, lifecycle, authenticity, or reservation, multiply
+an assembly quantity, authorize procurement, or place an order. Its quantities
+are per-board populated-reference counts only, and a rejected result contains
+no partial line items. The selected pcbex command remains unauthenticated.
 The v1.456 deterministic-pipeline replay likewise makes no producer or network
 call beyond its caller-selected local pcbex process. The child runs only the
 existing runner against the privately staged closure; the adapter does not run

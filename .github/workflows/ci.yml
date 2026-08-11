@@ -1811,6 +1811,13 @@ jobs:
         run: |
           cargo +stable test --package pcbex --test capabilities --release --locked board_producer
           cargo +stable test --package pcbex --test circuit_kicad_board_writer --release --locked
+      - name: Run cross-platform v1.464 procurement-intent boundaries
+        env:
+          PCBEX_TEST_BINARY: ${{ matrix.pcbex }}
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest discover -s agent/tests
+          -p test_procurement_intent_v1464.py -v
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

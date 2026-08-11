@@ -844,6 +844,11 @@
     {
       "id": "deterministic-circuit-kicad-board-producer",
       "release": "v1.463.0",
+      "status": "released"
+    },
+    {
+      "id": "final-bom-catalog-procurement-intent",
+      "release": "v1.464.0",
       "status": "current"
     }
   ]

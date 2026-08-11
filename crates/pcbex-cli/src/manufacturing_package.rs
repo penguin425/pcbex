@@ -1008,22 +1008,53 @@ fn write_bom(
         plan.bytes,
         limits.max_file_bytes,
         "manufacturing BOM",
-        |output| {
-            output.write_all(BOM_HEADER)?;
-            for ((value, footprint, mpn, side, kind), references) in &plan.groups {
-                let quantity = references.len().to_string();
-                write_csv_field(output, value)?;
-                output.write_all(b",")?;
-                write_joined_designators(output, references)?;
-                for value in [*footprint, quantity.as_str(), *mpn, *side, *kind] {
-                    output.write_all(b",")?;
-                    write_csv_field(output, value)?;
-                }
-                output.write_all(b"\n")?;
-            }
-            Ok(())
-        },
+        |output| render_bom_plan(output, plan),
     )
+}
+
+/// Render the exact canonical `bom.csv` bytes used by manufacturing packages.
+///
+/// The final-BOM verifier calls this instead of maintaining a second grouping,
+/// ordering, quoting, or byte-limit implementation.
+pub(crate) fn render_canonical_bom(parts: &[ManufacturingPart]) -> Result<Vec<u8>> {
+    let limits = ManufacturingLimits::production();
+    let plan = plan_bom(parts, limits)?;
+    let capacity = usize::try_from(plan.bytes)
+        .map_err(|_| anyhow::anyhow!("manufacturing BOM byte count cannot be represented"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    {
+        let mut output = BoundedStream {
+            inner: &mut bytes,
+            max_bytes: limits.max_file_bytes,
+            written: 0,
+            label: "manufacturing BOM",
+        };
+        render_bom_plan(&mut output, &plan)?;
+        if output.written != plan.bytes {
+            bail!(
+                "manufacturing BOM rendered {} bytes; expected {}",
+                output.written,
+                plan.bytes
+            );
+        }
+    }
+    Ok(bytes)
+}
+
+fn render_bom_plan<W: Write>(output: &mut BoundedStream<'_, W>, plan: &BomPlan<'_>) -> Result<()> {
+    output.write_all(BOM_HEADER)?;
+    for ((value, footprint, mpn, side, kind), references) in &plan.groups {
+        let quantity = references.len().to_string();
+        write_csv_field(output, value)?;
+        output.write_all(b",")?;
+        write_joined_designators(output, references)?;
+        for value in [*footprint, quantity.as_str(), *mpn, *side, *kind] {
+            output.write_all(b",")?;
+            write_csv_field(output, value)?;
+        }
+        output.write_all(b"\n")?;
+    }
+    Ok(())
 }
 
 fn plan_cpl<'a>(
@@ -2274,6 +2305,7 @@ mod tests {
                 "10k,\"R1,R2\",Test:Footprint,2,C123,F,SMD\n"
             )
         );
+        assert_eq!(render_canonical_bom(&parts).unwrap(), bom.as_bytes());
         let cpl = fs::read_to_string(path.join("cpl.csv")).unwrap();
         assert_eq!(
             cpl,

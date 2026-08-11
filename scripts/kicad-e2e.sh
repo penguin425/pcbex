@@ -1089,3 +1089,142 @@ for offset in range(0, len(arguments), 2):
     assert f"** Found {expected_unconnected} unconnected pads **" in report
     assert "** Found 0 Footprint errors **" in report
 PY
+
+# v1.464 composes the real retained manufacturing ZIP with a fully replayed
+# historical catalog selection.  The unrelated catalog circuit is
+# intentionally a semantic mismatch: the Rust final-BOM verifier must approve
+# the exact upgraded board/package bytes, while the outer procurement intent
+# retains a rejected, empty-line-item artifact instead of presenting a partial
+# order list.  This is a cross-language canonical-BOM/catalog bridge test, not
+# a procurement authorization or live-supplier test.
+procurement_snapshot="$output_directory/procurement.catalog-snapshot.json"
+procurement_requirements="$output_directory/procurement.requirements.txt"
+procurement_generation="$output_directory/procurement.generation.json"
+procurement_intent="$output_directory/procurement.intent.json"
+procurement_gated_intent="$output_directory/procurement.gated.intent.json"
+procurement_gated_error="$output_directory/procurement.gated.stderr"
+python3 - examples/catalog-snapshot-v1.json "$procurement_snapshot" <<'PY'
+import json
+from pathlib import Path
+import sys
+import time
+
+source, destination = map(Path, sys.argv[1:])
+snapshot = json.loads(source.read_text(encoding="utf-8"))
+now = int(time.time())
+snapshot["snapshot_id"] = "kicad-e2e-v1464"
+snapshot["captured_at_unix"] = now - 60
+snapshot["expires_at_unix"] = now + 3600
+destination.write_text(
+    json.dumps(snapshot, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+printf '%s\n' 'Generate the catalog-backed circuit-spec-v2 example.' \
+  >"$procurement_requirements"
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
+  "$procurement_requirements" \
+  --output "$procurement_generation" \
+  --pcbex "$pcbex_binary" \
+  --max-attempts 1 \
+  --timeout-seconds 120 \
+  --catalog-snapshot "$procurement_snapshot" \
+  --allow-footprint-fallback \
+  --provider-command python3 -c \
+  'import sys; from pathlib import Path; sys.stdout.buffer.write(Path(sys.argv[1]).read_bytes())' \
+  examples/circuit-spec-v2.json
+PYTHONPATH=agent/src python3 -m pcbex_agent build-procurement-intent \
+  "$upgraded_multilayer" "$retained_manufacturing_zip" \
+  --circuit-generation "$procurement_generation" \
+  --catalog-snapshot "$procurement_snapshot" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 180 \
+  --output "$procurement_intent"
+if PYTHONPATH=agent/src python3 -m pcbex_agent build-procurement-intent \
+  "$upgraded_multilayer" "$retained_manufacturing_zip" \
+  --circuit-generation "$procurement_generation" \
+  --catalog-snapshot "$procurement_snapshot" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 180 \
+  --output "$procurement_gated_intent" \
+  --require-approved \
+  2>"$procurement_gated_error"; then
+  echo "expected catalog/final-BOM reference mismatch to fail the final gate" >&2
+  exit 1
+fi
+python3 - \
+  "$procurement_intent" \
+  "$procurement_gated_intent" \
+  "$procurement_gated_error" \
+  "$upgraded_multilayer" \
+  "$retained_manufacturing_zip" \
+  "$procurement_generation" \
+  "$procurement_snapshot" \
+  "$output_directory" <<'PY'
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+(
+    intent_path,
+    gated_path,
+    gated_error_path,
+    board_path,
+    package_path,
+    generation_path,
+    snapshot_path,
+    output_directory,
+) = map(Path, sys.argv[1:])
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+intent = json.loads(intent_path.read_text(encoding="utf-8"))
+gated = json.loads(gated_path.read_text(encoding="utf-8"))
+assert gated == intent
+assert gated_error_path.read_bytes()
+assert intent["schema_version"] == 1
+assert intent["scope"] == "offline-final-bom-catalog-selection-intent-v1"
+assert intent["status"] == "rejected"
+assert intent["approved"] is False
+assert intent["procurement_authorized"] is False
+assert intent["network_performed"] is False
+assert intent["order_placed"] is False
+assert intent["current_availability_verified"] is False
+assert intent["supplier_authenticity_verified"] is False
+assert intent["quantity_basis"] == "per_board"
+assert intent["line_items"] == []
+assert intent["validation"]["final_bom_verified"] is True
+assert intent["validation"]["catalog_selection_replayed"] is True
+assert intent["validation"]["reference_sets_matched"] is False
+assert "reference_set_mismatch" in {
+    finding["code"] for finding in intent["findings"]
+}
+assert intent["sources"]["board"] == {
+    "name": board_path.name,
+    **identity(board_path),
+}
+assert intent["sources"]["manufacturing_package"] == identity(package_path)
+assert intent["sources"]["generation_bundle"] == identity(generation_path)
+assert intent["sources"]["catalog_snapshot"] == identity(snapshot_path)
+assert intent["sources"]["bom"] == intent["sources"]["canonical_bom"]
+assert intent["sources"]["package_board_source"] == identity(board_path)
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(intent)
+PY
