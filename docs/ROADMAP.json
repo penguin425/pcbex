@@ -869,6 +869,11 @@
     {
       "id": "exact-offline-supplier-offer-coverage",
       "release": "v1.468.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-supplier-offer-https-acquisition-receipt",
+      "release": "v1.469.0",
       "status": "current"
     }
   ]

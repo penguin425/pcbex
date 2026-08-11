@@ -192,6 +192,37 @@ duplicate keys, sorting, exact source digests, checked multiplication and
 summation, finding/decision equivalences, canonical bytes, and fresh replay.
 See [`SUPPLIER_OFFER_COVERAGE.md`](SUPPLIER_OFFER_COVERAGE.md).
 
+The v1.469 supplier-offer acquisition boundary accepts one exact normalized
+JSON response and publishes an offer up to 4 MiB followed by a receipt up to
+1 MiB. Its response ceiling is an exact integer from 1 through 4 MiB. At most
+64 response header fields and 64 KiB of combined header name/value bytes are
+accepted. Endpoint and bearer-token values are capped at 4 KiB and 8 KiB;
+tokens are environment-only and are not retained. Case-insensitive
+`SystemRoot` is reserved as a bearer environment name because it is the only
+runtime variable forwarded to the isolated Windows resolver. For hostname
+endpoints on Windows, an exact bearer-token byte sequence occurring anywhere
+in that bounded forwarded value also fails before DNS; literal-IP endpoints do
+not invoke the resolver helper. The offline receipt validator limits receipt
+plus offer input to 5 MiB.
+
+One exact-integer 1–60 second monotonic deadline covers bounded resolver
+execution and cleanup, TCP, platform-default TLS, request, response headers,
+and entity-body reads. A one-slot transaction gate prevents another
+acquisition from reaching DNS/connect while a prior request/response worker is
+active; a separate one-slot connect-worker gate caps late connects. Both are
+independent of the v1.420 catalog-fetch boundary. Earlier destination preflight
+and token lookup plus later normalization, hashing, fsync, and sequential
+offer/receipt publication are outside that network deadline. The adapter
+accepts no redirect, retry, response-body spill, or raw-response output.
+
+The test-only insecure transport accepts only literal loopback and is not a
+CLI option. Production HTTPS has no private-address denylist and must not be
+exposed to untrusted MCP or Action inputs. The schema and offline validator can
+recompute canonical offer and request identities but, without the raw response
+or transport evidence, cannot authenticate the recorded network/status/time/
+response observations. See
+[`SUPPLIER_OFFER_ACQUISITION.md`](SUPPLIER_OFFER_ACQUISITION.md).
+
 The composed v1.457 handoff-to-manufacturing replay requires the complete v5
 board-binding inputs and one retained package. It keeps the existing 224 MiB
 handoff-archive ceiling, the 128 MiB board / 12 MiB canonical report plus one
@@ -499,6 +530,12 @@ shipping/tax/duty/fee/discount/landed cost, MOQ/order multiple, reservation,
 authorization, order readiness, ordering, payment, or spend. It does not use
 the v1.467 composition as authority and changes none of the v1.464/v1.467
 schema or serialized-byte contracts.
+The v1.469 supplier-offer acquisition adapter performs one explicit bounded
+network GET and records that local observation separately. It does not retain
+or authenticate the raw response or TLS session and proves no supplier,
+endpoint, transport, offer, price, currentness, trusted time, reservation,
+authorization, order readiness, ordering, payment, or spend. v1.468 remains
+offline even when its input file came from this adapter.
 The v1.456 deterministic-pipeline replay likewise makes no producer or network
 call beyond its caller-selected local pcbex process. The child runs only the
 existing runner against the privately staged closure; the adapter does not run

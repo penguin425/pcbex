@@ -1879,13 +1879,16 @@ def reject_paths(value):
 reject_paths(result)
 PY
 
-# v1.468 reuses the exact approved procurement-intent fixture created for the
-# v1.467 E2E, not the v1.467 assembly-evidence result. The caller-normalized
-# offer below binds the raw intent bytes, quotes exactly 25 populated boards at
-# one explicit untrusted instant, and remains a local fixture: no supplier
-# request, authenticity/currentness claim, stock reservation, procurement
-# authorization, payment, or order is performed.
+# v1.469 first acquires one exact normalized offer through a genuine local TLS
+# socket and the real CLI, then feeds the canonical published bytes into the
+# unchanged v1.468 coverage boundary. The test-only endpoint is not a live
+# supplier or production-CA interoperability claim. The receipt records only
+# the adapter's bounded network observation; supplier/offer/price authenticity,
+# currentness, reservation, authorization, payment, and ordering remain false.
 supplier_offer="$output_directory/assembly.supplier-offer.json"
+supplier_offer_response="$output_directory/assembly.supplier-offer.response.json"
+supplier_offer_fetch_receipt="$output_directory/assembly.supplier-offer-fetch-receipt.json"
+supplier_offer_fetch_schema="$output_directory/supplier-offer-fetch-receipt.schema.json"
 supplier_offer_schema="$output_directory/supplier-offer.schema.json"
 supplier_offer_coverage_schema="$output_directory/supplier-offer-coverage.schema.json"
 supplier_offer_coverage="$output_directory/assembly.supplier-offer-coverage.json"
@@ -1896,7 +1899,7 @@ supplier_offer_shortfall_error="$output_directory/assembly.supplier-offer.shortf
 supplier_offer_evaluated_at=1785715200
 python3 - \
   "$assembly_procurement" \
-  "$supplier_offer" \
+  "$supplier_offer_response" \
   "$supplier_offer_evaluated_at" <<'PY'
 import hashlib
 import json
@@ -1943,6 +1946,150 @@ offer_path.write_bytes(
     + b"\n"
 )
 PY
+supplier_offer_tls_key="$output_directory/supplier-offer-test-server.key.pem"
+supplier_offer_tls_certificate="$output_directory/supplier-offer-test-server.cert.pem"
+supplier_offer_tls_config="$output_directory/supplier-offer-test-server.openssl.cnf"
+supplier_offer_server_script="$output_directory/supplier-offer-test-server.py"
+supplier_offer_server_ready="$output_directory/supplier-offer-test-server.ready"
+supplier_offer_server_request="$output_directory/supplier-offer-test-server.request.json"
+supplier_offer_token='pcbex-e2e-v1469-token'
+cat >"$supplier_offer_tls_config" <<'EOF'
+[req]
+distinguished_name = distinguished_name
+prompt = no
+x509_extensions = extensions
+[distinguished_name]
+CN = 127.0.0.1
+[extensions]
+subjectAltName = IP:127.0.0.1
+basicConstraints = critical,CA:TRUE
+keyUsage = critical,digitalSignature,keyEncipherment,keyCertSign
+extendedKeyUsage = serverAuth
+EOF
+openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 1 \
+  -keyout "$supplier_offer_tls_key" \
+  -out "$supplier_offer_tls_certificate" \
+  -config "$supplier_offer_tls_config" \
+  -extensions extensions >/dev/null 2>&1
+cat >"$supplier_offer_server_script" <<'PY'
+import http.server
+import json
+from pathlib import Path
+import ssl
+import sys
+
+certificate, key, response_path, ready_path, request_path, token = sys.argv[1:]
+body = Path(response_path).read_bytes()
+
+class Server(http.server.HTTPServer):
+    allow_reuse_address = True
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format, *_arguments):
+        pass
+
+    def do_GET(self):
+        observed = {
+            "path": self.path,
+            "accept": self.headers.get("Accept"),
+            "accept_encoding": self.headers.get("Accept-Encoding"),
+            "authorization": self.headers.get("Authorization"),
+        }
+        expected = {
+            "path": "/v1/quote",
+            "accept": "application/json",
+            "accept_encoding": "identity",
+            "authorization": f"Bearer {token}",
+        }
+        Path(request_path).write_text(
+            json.dumps(
+                {
+                    "path": observed["path"],
+                    "accept": observed["accept"],
+                    "accept_encoding": observed["accept_encoding"],
+                    "authorization_matched": observed["authorization"]
+                    == expected["authorization"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        if observed != expected:
+            self.send_error(400)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+server = Server(("127.0.0.1", 0), Handler)
+context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+context.load_cert_chain(certificate, key)
+server.socket = context.wrap_socket(server.socket, server_side=True)
+Path(ready_path).write_text(str(server.server_address[1]) + "\n", encoding="ascii")
+server.timeout = 30
+server.handle_request()
+server.server_close()
+if not Path(request_path).is_file():
+    raise SystemExit("supplier-offer test server received no request")
+PY
+python3 "$supplier_offer_server_script" \
+  "$supplier_offer_tls_certificate" \
+  "$supplier_offer_tls_key" \
+  "$supplier_offer_response" \
+  "$supplier_offer_server_ready" \
+  "$supplier_offer_server_request" \
+  "$supplier_offer_token" &
+supplier_offer_server_pid=$!
+for _attempt in $(seq 1 200); do
+  if [[ -s "$supplier_offer_server_ready" ]]; then
+    break
+  fi
+  if ! kill -0 "$supplier_offer_server_pid" 2>/dev/null; then
+    wait "$supplier_offer_server_pid"
+    echo "supplier-offer test TLS server exited before readiness" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+test -s "$supplier_offer_server_ready"
+supplier_offer_server_port="$(tr -d '[:space:]' < "$supplier_offer_server_ready")"
+supplier_offer_intent_sha256="$(sha256sum "$assembly_procurement" | cut -d ' ' -f 1)"
+supplier_offer_supplier="$(python3 - "$assembly_procurement" <<'PY'
+import json
+from pathlib import Path
+import sys
+print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["catalog"]["supplier"])
+PY
+)"
+if ! SSL_CERT_FILE="$supplier_offer_tls_certificate" \
+  PCBEX_E2E_SUPPLIER_OFFER_TOKEN="$supplier_offer_token" \
+  PYTHONPATH=agent/src python3 -m pcbex_agent fetch-supplier-offer \
+    --endpoint "https://127.0.0.1:${supplier_offer_server_port}/v1/quote" \
+    --supplier "$supplier_offer_supplier" \
+    --procurement-intent-sha256 "$supplier_offer_intent_sha256" \
+    --output "$supplier_offer" \
+    --receipt "$supplier_offer_fetch_receipt" \
+    --timeout-seconds 30 \
+    --maximum-response-bytes 4194304 \
+    --bearer-token-environment PCBEX_E2E_SUPPLIER_OFFER_TOKEN; then
+  kill "$supplier_offer_server_pid" 2>/dev/null || true
+  wait "$supplier_offer_server_pid" 2>/dev/null || true
+  exit 1
+fi
+wait "$supplier_offer_server_pid"
+rm -f -- \
+  "$supplier_offer_tls_key" \
+  "$supplier_offer_tls_certificate" \
+  "$supplier_offer_tls_config" \
+  "$supplier_offer_server_script"
+PYTHONPATH=agent/src python3 -m pcbex_agent supplier-offer-fetch-receipt-schema \
+  --output "$supplier_offer_fetch_schema"
 PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
   "$assembly_board" "$assembly_manufacturing_zip" \
   --circuit-generation "$assembly_generation" \
@@ -1959,8 +2106,12 @@ PYTHONPATH=agent/src python3 -m pcbex_agent supplier-offer-schema \
   --output "$supplier_offer_schema"
 PYTHONPATH=agent/src python3 -m pcbex_agent supplier-offer-coverage-schema \
   --output "$supplier_offer_coverage_schema"
-python3 - \
+PYTHONPATH=agent/src python3 - \
   "$supplier_offer_coverage" \
+  "$supplier_offer_fetch_receipt" \
+  "$supplier_offer_fetch_schema" \
+  "$supplier_offer_response" \
+  "$supplier_offer_server_request" \
   "$supplier_offer_schema" \
   "$supplier_offer_coverage_schema" \
   "$supplier_offer" \
@@ -1976,8 +2127,14 @@ import json
 from pathlib import Path, PureWindowsPath
 import sys
 
+from pcbex_agent import validate_supplier_offer_fetch_receipt
+
 (
     result_path,
+    fetch_receipt_path,
+    fetch_schema_path,
+    response_path,
+    server_request_path,
     offer_schema_path,
     coverage_schema_path,
     offer_path,
@@ -1994,10 +2151,16 @@ def identity(path):
     return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 
 result_raw = result_path.read_bytes()
+fetch_receipt_raw = fetch_receipt_path.read_bytes()
+fetch_schema_raw = fetch_schema_path.read_bytes()
+response_raw = response_path.read_bytes()
 offer_raw = offer_path.read_bytes()
 offer_schema_raw = offer_schema_path.read_bytes()
 coverage_schema_raw = coverage_schema_path.read_bytes()
 result = json.loads(result_raw)
+fetch_receipt = json.loads(fetch_receipt_raw)
+fetch_schema = json.loads(fetch_schema_raw)
+server_request = json.loads(server_request_path.read_text(encoding="utf-8"))
 offer = json.loads(offer_raw)
 intent = json.loads(intent_path.read_text(encoding="utf-8"))
 offer_schema = json.loads(offer_schema_raw)
@@ -2005,8 +2168,18 @@ coverage_schema = json.loads(coverage_schema_raw)
 assert result_raw == (
     json.dumps(result, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
 )
+assert fetch_receipt_raw == (
+    json.dumps(fetch_receipt, indent=2, ensure_ascii=False, sort_keys=True).encode(
+        "utf-8"
+    )
+    + b"\n"
+)
+assert fetch_schema_raw == (
+    json.dumps(fetch_schema, indent=2, ensure_ascii=False).encode("utf-8")
+    + b"\n"
+)
 assert offer_raw == (
-    json.dumps(offer, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    json.dumps(offer, indent=2, ensure_ascii=False, sort_keys=True).encode("utf-8")
     + b"\n"
 )
 assert offer_schema_raw == (
@@ -2016,6 +2189,94 @@ assert coverage_schema_raw == (
     json.dumps(coverage_schema, indent=2, ensure_ascii=False).encode("utf-8")
     + b"\n"
 )
+
+assert set(fetch_receipt) == {
+    "adapter",
+    "adapter_network_performed",
+    "current_availability_verified",
+    "endpoint_id",
+    "fetched_at_unix",
+    "inventory_reserved",
+    "offer_authenticity_verified",
+    "offer_bytes",
+    "offer_sha256",
+    "order_placed",
+    "order_ready",
+    "payment_performed",
+    "price_authenticity_verified",
+    "procurement_authorized",
+    "procurement_intent_sha256",
+    "request_sha256",
+    "response_bytes",
+    "response_sha256",
+    "schema_version",
+    "scope",
+    "status",
+    "supplier",
+    "supplier_authenticity_verified",
+    "trusted_time_verified",
+}
+assert fetch_receipt["schema_version"] == 1
+assert fetch_receipt["scope"] == "https-supplier-offer-acquisition-receipt-v1"
+assert fetch_receipt["adapter"] == "supplier-offer-http-v1"
+assert fetch_receipt["adapter_network_performed"] is True
+assert fetch_receipt["status"] == 200
+assert isinstance(fetch_receipt["fetched_at_unix"], int)
+assert not isinstance(fetch_receipt["fetched_at_unix"], bool)
+assert fetch_receipt["fetched_at_unix"] >= 0
+assert fetch_receipt["supplier"] == intent["catalog"]["supplier"]
+assert fetch_receipt["procurement_intent_sha256"] == identity(intent_path)["sha256"]
+assert fetch_receipt["endpoint_id"].startswith("https://127.0.0.1:")
+assert fetch_receipt["endpoint_id"].endswith("/v1/quote")
+assert fetch_receipt["response_bytes"] == len(response_raw)
+assert fetch_receipt["response_sha256"] == hashlib.sha256(response_raw).hexdigest()
+assert fetch_receipt["offer_bytes"] == len(offer_raw)
+assert fetch_receipt["offer_sha256"] == hashlib.sha256(offer_raw).hexdigest()
+request_material = {
+    "adapter": "supplier-offer-http-v1",
+    "endpoint_id": fetch_receipt["endpoint_id"],
+    "method": "GET",
+    "procurement_intent_sha256": fetch_receipt["procurement_intent_sha256"],
+    "supplier": fetch_receipt["supplier"],
+}
+assert fetch_receipt["request_sha256"] == hashlib.sha256(
+    b"pcbex:https-supplier-offer-acquisition-request-v1\0"
+    + json.dumps(
+        request_material, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+).hexdigest()
+for field in (
+    "current_availability_verified",
+    "inventory_reserved",
+    "offer_authenticity_verified",
+    "order_placed",
+    "order_ready",
+    "payment_performed",
+    "price_authenticity_verified",
+    "procurement_authorized",
+    "supplier_authenticity_verified",
+    "trusted_time_verified",
+):
+    assert fetch_receipt[field] is False, field
+assert server_request == {
+    "accept": "application/json",
+    "accept_encoding": "identity",
+    "authorization_matched": True,
+    "path": "/v1/quote",
+}
+assert fetch_schema["$id"].endswith(
+    "/schemas/supplier-offer-fetch-receipt-v1.json"
+)
+assert fetch_schema["additionalProperties"] is False
+assert fetch_schema["properties"]["scope"] == {
+    "const": "https-supplier-offer-acquisition-receipt-v1"
+}
+assert fetch_schema["properties"]["adapter_network_performed"] == {
+    "const": True
+}
+assert validate_supplier_offer_fetch_receipt(
+    fetch_receipt_path, offer_path
+) == fetch_receipt
 
 assert set(result) == {
     "schema_version",
@@ -2091,6 +2352,9 @@ assert result["sources"] == {
     "procurement_intent": identity(intent_path),
     "supplier_offer": identity(offer_path),
 }
+assert fetch_receipt["offer_sha256"] == result["sources"]["supplier_offer"][
+    "sha256"
+]
 expected_procurement = copy.deepcopy(intent)
 del expected_procurement["final_bom"]
 del expected_procurement["binding_sha256"]

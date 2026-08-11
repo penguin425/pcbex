@@ -763,6 +763,36 @@ board-binding/CPL replay and compact procurement projection cannot replace
 fresh validation of the original intent. See [Exact offline supplier-offer
 coverage](docs/SUPPLIER_OFFER_COVERAGE.md).
 
+### Bounded supplier-offer HTTPS acquisition
+
+Version 1.469 adds an explicit network pre-step for that unchanged normalized
+offer contract. The endpoint must return `offline-normalized-supplier-offer-v1`
+directly; the adapter performs no supplier-native mapping or search:
+
+```sh
+export PCBEX_SUPPLIER_OFFER_TOKEN='deployment-owned-secret'
+PYTHONPATH=agent/src python3 -m pcbex_agent fetch-supplier-offer \
+  --endpoint https://offers.example.test/v1/quote \
+  --supplier example-supplier \
+  --procurement-intent-sha256 "$INTENT_SHA256" \
+  --output supplier-offer.json \
+  --receipt supplier-offer-fetch-receipt.json \
+  --bearer-token-environment PCBEX_SUPPLIER_OFFER_TOKEN
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  supplier-offer-fetch-receipt-schema \
+  --output supplier-offer-fetch-receipt.schema.json
+```
+
+The adapter performs one bounded no-redirect HTTPS GET, strictly normalizes the
+response, requires the declared supplier and exact procurement-intent digest,
+then publishes the canonical offer followed by a closed receipt containing the
+credential-free request, raw entity-body, and canonical-offer identities. It
+does not retain the response body or a TLS transcript. The receipt's network
+observation is true while all currentness, supplier/offer/price authenticity,
+trusted-time, reservation, authorization, order, and payment claims remain
+false. See [Bounded supplier-offer HTTPS
+acquisition](docs/SUPPLIER_OFFER_ACQUISITION.md).
+
 Submit the exact manufacturing archive to a deployment-owned JLCPCB, PCBWay,
 or generic quote/DFM adapter without putting credentials in argv:
 

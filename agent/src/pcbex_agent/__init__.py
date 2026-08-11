@@ -90,6 +90,13 @@ from .supplier_offer import (
     supplier_offer_coverage_json_schema,
     validate_supplier_offer_coverage,
 )
+from .supplier_offer_acquisition import (
+    MAXIMUM_SUPPLIER_OFFER_FETCH_RECEIPT_BYTES,
+    SupplierOfferAcquisitionError,
+    fetch_supplier_offer,
+    supplier_offer_fetch_receipt_json_schema,
+    validate_supplier_offer_fetch_receipt,
+)
 
 __all__ = [
     "PlanningError",
@@ -97,6 +104,7 @@ __all__ = [
     "ReviewError",
     "SupplierInventoryError",
     "SupplierOfferError",
+    "SupplierOfferAcquisitionError",
     "CatalogGenerationProvenanceError",
     "CircuitGenerationError",
     "CircuitCandidateRejected",
@@ -109,6 +117,7 @@ __all__ = [
     "MAXIMUM_ASSEMBLY_EVIDENCE_BYTES",
     "MAXIMUM_SUPPLIER_OFFER_BYTES",
     "MAXIMUM_SUPPLIER_OFFER_COVERAGE_BYTES",
+    "MAXIMUM_SUPPLIER_OFFER_FETCH_RECEIPT_BYTES",
     "build_plan",
     "build_procurement_intent",
     "build_assembly_evidence",
@@ -125,6 +134,7 @@ __all__ = [
     "assembly_evidence_json_schema",
     "normalized_supplier_offer_json_schema",
     "supplier_offer_coverage_json_schema",
+    "supplier_offer_fetch_receipt_json_schema",
     "run_provider_command",
     "circuit_generation_json_schema",
     "circuit_handoff_bundle_json_schema",
@@ -149,6 +159,7 @@ __all__ = [
     "evaluate_assembly_evidence",
     "evaluate_supplier_offer_coverage",
     "fetch_catalog_snapshot",
+    "fetch_supplier_offer",
     "review_schematic_with_managed_provider",
     "review_schematic_with_command",
     "review_schematic_with_llm",
@@ -157,6 +168,7 @@ __all__ = [
     "validate_procurement_intent",
     "validate_assembly_evidence",
     "validate_supplier_offer_coverage",
+    "validate_supplier_offer_fetch_receipt",
     "render_assembly_evidence",
     "render_supplier_offer_coverage",
     "validate_circuit_handoff_archive",
