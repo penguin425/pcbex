@@ -1087,17 +1087,49 @@ fn write_cpl(
         plan.bytes,
         limits.max_file_bytes,
         "manufacturing CPL",
-        |output| {
-            output.write_all(CPL_HEADER)?;
-            for part in &plan.placed {
-                let x = format_mm(part.x_nm);
-                let y = format_mm(part.y_nm);
-                let rotation = format_mdeg(part.rotation_mdeg);
-                write_csv_row(output, &[&part.reference, &x, &y, &rotation, &part.side])?;
-            }
-            Ok(())
-        },
+        |output| render_cpl_plan(output, plan),
     )
+}
+
+/// Render the exact canonical `cpl.csv` bytes used by manufacturing packages.
+///
+/// The final-CPL verifier calls this instead of maintaining a second
+/// placement filter, ordering, numeric-formatting, quoting, or byte-limit
+/// implementation.
+pub(crate) fn render_canonical_cpl(parts: &[ManufacturingPart]) -> Result<Vec<u8>> {
+    let limits = ManufacturingLimits::production();
+    let plan = plan_cpl(parts, limits)?;
+    let capacity = usize::try_from(plan.bytes)
+        .map_err(|_| anyhow::anyhow!("manufacturing CPL byte count cannot be represented"))?;
+    let mut bytes = Vec::with_capacity(capacity);
+    {
+        let mut output = BoundedStream {
+            inner: &mut bytes,
+            max_bytes: limits.max_file_bytes,
+            written: 0,
+            label: "manufacturing CPL",
+        };
+        render_cpl_plan(&mut output, &plan)?;
+        if output.written != plan.bytes {
+            bail!(
+                "manufacturing CPL rendered {} bytes; expected {}",
+                output.written,
+                plan.bytes
+            );
+        }
+    }
+    Ok(bytes)
+}
+
+fn render_cpl_plan<W: Write>(output: &mut BoundedStream<'_, W>, plan: &CplPlan<'_>) -> Result<()> {
+    output.write_all(CPL_HEADER)?;
+    for part in &plan.placed {
+        let x = format_mm(part.x_nm);
+        let y = format_mm(part.y_nm);
+        let rotation = format_mdeg(part.rotation_mdeg);
+        write_csv_row(output, &[&part.reference, &x, &y, &rotation, &part.side])?;
+    }
+    Ok(())
 }
 
 fn ensure_manufacturing_part_count(parts: &[ManufacturingPart]) -> Result<()> {
@@ -2315,6 +2347,7 @@ mod tests {
                 "R2,1.250000,2.500000,90,F\n"
             )
         );
+        assert_eq!(render_canonical_cpl(&parts).unwrap(), cpl.as_bytes());
         assert!(archive.is_file());
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(path.join(MANIFEST_NAME)).unwrap()).unwrap();
@@ -2371,6 +2404,10 @@ mod tests {
         let cpl_path = staging.path().join("cpl.csv");
         write_cpl(&directory, &cpl_path, &cpl_plan, exact_cpl).unwrap();
         assert_eq!(fs::read_to_string(&cpl_path).unwrap(), expected_cpl);
+        assert_eq!(
+            render_canonical_cpl(&parts).unwrap(),
+            expected_cpl.as_bytes()
+        );
 
         fs::write(&bom_path, b"known-good BOM").unwrap();
         let mut one_under_bom = production;

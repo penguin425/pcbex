@@ -1811,6 +1811,8 @@ jobs:
         run: |
           cargo +stable test --package pcbex --test capabilities --release --locked board_producer
           cargo +stable test --package pcbex --test circuit_kicad_board_writer --release --locked
+      - name: Run cross-platform v1.465 exact final-CPL boundaries
+        run: cargo +stable test --package pcbex --test final_cpl --release --locked
       - name: Run cross-platform v1.464 procurement-intent boundaries
         env:
           PCBEX_TEST_BINARY: ${{ matrix.pcbex }}
@@ -1920,3 +1922,5 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: Run Windows Rust process regressions
         run: cargo +stable test --package pcbex --bin pcbex --release --locked windows_
+      - name: Run Windows v1.465 exact final-CPL boundaries
+        run: cargo +stable test --package pcbex --test final_cpl --release --locked

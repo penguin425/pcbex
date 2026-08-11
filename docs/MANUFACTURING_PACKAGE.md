@@ -255,6 +255,55 @@ procurement or ordering. The optional downstream offline catalog composition
 is documented in [Final BOM verification and offline procurement
 intent](PROCUREMENT_INTENT.md).
 
+## Exact final-CPL verification (v1.465)
+
+`verify-final-cpl` checks the parallel board-to-package placement boundary
+without regenerating Gerbers or invoking KiCad:
+
+```sh
+pcbex verify-final-cpl \
+  board.kicad_pcb manufacturing/manufacturing.zip \
+  --output final-cpl.json \
+  --require-approved
+
+pcbex final-cpl-report-schema --output final-cpl-report-v1.schema.json
+```
+
+The verifier runs the complete package validator, extracts every exact
+in-position manufacturing part from the supplied board, and regenerates
+`cpl.csv` with the production plan and renderer used by `fabricate`. Approval
+requires byte-for-byte equality between the regenerated CPL and ZIP entry plus
+equality between the supplied board byte-count/SHA-256 identity and the
+manifest input descriptor. Alternative row order, quoting, line endings,
+decimal rendering, reference, coordinate, rotation, or side remains rejected.
+
+The path-free schema-v1 report uses scope
+`final_cpl_source_and_canonical_placement_v1`. It records identities for the
+board, package, manifest, actual and canonical CPLs, and package board source;
+board/package part and placement counts; and at most 256 strictly
+reference-sorted `in_pos_parts`. Each part contains exactly `reference`,
+`x_nm`, `y_nm`, `rotation_mdeg`, and `layer`. The only findings are
+`canonical_cpl_mismatch` and `package_board_source_mismatch`; `approved` is
+true exactly when neither is present.
+
+The basename is informational, and the package input filename is neither
+emitted nor compared. A fully valid semantic mismatch is published before an
+optional `--require-approved` gate fails. Malformed or unsafe input is a hard
+error with no report. Both inputs are captured and final-reread, which detects
+an observed sequential change but is not an atomic snapshot against another
+same-principal process that changes and restores bytes between checks.
+
+Coordinates are exact board-origin integer nanometres and rotations are exact
+integer milli-degrees as imported from KiCad; the canonical CSV renders these
+under the existing vendor-neutral convention. This boundary does not prove a
+circuit or schematic authored those positions, authenticate a tool or vendor,
+apply a factory origin/axis/bottom/rotation transform, prove DRC/DFM,
+manufacturability, panelization, or assembly readiness, operate a machine,
+authorize fabrication/procurement, contact a supplier, submit a package,
+reserve inventory, order, pay, or spend funds. See [Exact final CPL
+verification](FINAL_CPL.md) for the complete report, limit, race, and nonclaim
+contract.
+
 ## Fresh exact replay
 
 Version 1.455 adds a standalone consumer which freshly regenerates that

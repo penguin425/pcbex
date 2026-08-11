@@ -210,6 +210,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "fabricate",
         "final-bom-report-schema",
         "verify-final-bom",
+        "final-cpl-report-schema",
+        "verify-final-cpl",
         "factory-schema",
         "factory-feedback-loop-schema",
         "factory-submit",

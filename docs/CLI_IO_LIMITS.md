@@ -81,6 +81,24 @@ bytes. Runtime validation is authoritative for byte and aggregate ceilings,
 package semantics, exact source identities, canonical BOM bytes, sorting, and
 cross-field approval invariants; schema validation alone is not approval.
 
+The v1.465 `verify-final-cpl` boundary uses the same input, package, output,
+and no-clobber limits. The board may contain at most 256 in-position references;
+the actual and freshly regenerated canonical CPL are each bounded by 128 MiB,
+and the closed report is bounded by 16 MiB. Each emitted placement reference is
+one to 4,096 UTF-8 bytes without NUL; X/Y and rotation are checked signed
+integer nanometre/milli-degree values and the side is `F` or `B`. The complete
+package validator's independent part, archive, expanded-payload, manifest, CSV,
+and portable-name ceilings remain authoritative.
+
+A valid board-source or canonical-CPL mismatch is retained before the optional
+gate fails. Invalid board/package content, a link, alias, mutation observed at
+the checkpoints, unsafe destination, or over-limit report produces no output.
+The initial capture and final stable reread are sequential observations, not an
+atomic snapshot against a same-principal writer which changes and restores the
+bytes between them. The final-CPL schema is likewise structural; runtime checks
+remain authoritative for byte/aggregate ceilings, exact identities, canonical
+rendering, ordering, and approval invariants.
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

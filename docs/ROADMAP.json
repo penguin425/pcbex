@@ -849,6 +849,11 @@
     {
       "id": "final-bom-catalog-procurement-intent",
       "release": "v1.464.0",
+      "status": "released"
+    },
+    {
+      "id": "exact-final-cpl-board-bound-placement-evidence",
+      "release": "v1.465.0",
       "status": "current"
     }
   ]
