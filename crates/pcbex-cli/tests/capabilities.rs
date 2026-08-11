@@ -238,6 +238,8 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "pipeline-verify",
         "firmware-schema",
         "generate-firmware",
+        "verify-firmware-build",
+        "firmware-build-report-schema",
     ] {
         let command = commands
             .iter()
@@ -299,6 +301,7 @@ fn publishes_a_complete_versioned_capability_inventory() {
         "Deterministic pipeline plan v1",
         "Deterministic pipeline runner report v1",
         "Firmware bundle manifest v2",
+        "Fresh firmware bundle build report v1",
         "C11 firmware source bundle",
         "C++17 firmware source bundle",
         "Python host pinout helper",

@@ -171,6 +171,9 @@ use std::{
 };
 
 #[cfg(unix)]
+use std::io::{Read, Seek, SeekFrom};
+
+#[cfg(unix)]
 unsafe extern "C" {
     fn geteuid() -> std::os::raw::c_uint;
 }
@@ -271,8 +274,11 @@ use factory::{
 use final_bom::{final_bom_report_json_schema, render_final_bom_report, verify_final_bom_sources};
 use final_cpl::{final_cpl_report_json_schema, render_final_cpl_report, verify_final_cpl_sources};
 use firmware::{
-    FIRMWARE_ARTIFACTS, FirmwareBuildOptions, FirmwareManifest, firmware_bundle_schema,
-    generate_firmware_bundle, parse_pin_map,
+    FIRMWARE_ARTIFACTS, FRESH_FIRMWARE_BUILD_MAX_MANIFEST_BYTES, FirmwareBuildOptions,
+    FirmwareManifest, FreshFirmwareBuildArtifactInput, FreshFirmwareBuildInput,
+    FreshFirmwareBuildOptions, firmware_bundle_schema, fresh_firmware_build_report_schema,
+    generate_firmware_bundle, parse_pin_map, render_fresh_firmware_build_report,
+    verify_fresh_firmware_bundle_build,
 };
 use manufacturing_feedback::{
     EvidenceDescriptor, bind_manufacturing_feedback, compare_manufacturing_feedback,
@@ -1283,6 +1289,38 @@ enum Command {
             value_parser = clap::value_parser!(u64).range(1..=3600)
         )]
         timeout_seconds: u64,
+    },
+    /// Rebuild and execute every check for an exact generated firmware bundle.
+    VerifyFirmwareBuild {
+        /// Exact manifest.json beside the seven fixed firmware source artifacts.
+        manifest: PathBuf,
+        /// GCC/Clang-compatible C11 compiler executable name resolved through PATH.
+        #[arg(long, default_value = "cc")]
+        cc: String,
+        /// GCC/Clang-compatible C++17 compiler executable name resolved through PATH.
+        #[arg(long, default_value = "c++")]
+        cxx: String,
+        /// Python interpreter executable name resolved through PATH.
+        #[arg(long, default_value = "python3")]
+        python: String,
+        /// Per-process timeout for compile, syntax-check, and smoke commands.
+        #[arg(
+            long,
+            default_value_t = 120,
+            value_parser = clap::value_parser!(u64).range(1..=3600)
+        )]
+        timeout_seconds: u64,
+        /// Optional new report path; existing, aliased, or symlinked destinations are refused.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Fail after retaining the report unless every fresh build check passed.
+        #[arg(long)]
+        require_approved: bool,
+    },
+    /// Print the closed fresh firmware bundle build report JSON Schema.
+    FirmwareBuildReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
     /// Normalize a KiCad schematic into the versioned electrical-design IR.
     ImportSchematic {
@@ -6264,6 +6302,7 @@ fn capabilities_report() -> CapabilitiesReport {
             "Fabrication authorization reservation v1",
             "Fabrication authorization reservation ledger manifest v1",
             "Firmware bundle manifest v2",
+            "Fresh firmware bundle build report v1",
             "C11 firmware source bundle",
             "C++17 firmware source bundle",
             "Python host pinout helper",
@@ -7187,6 +7226,94 @@ fn run_cli() -> Result<()> {
                     "generated firmware bundle retained, but one or more compile/smoke checks failed"
                 );
             }
+        }
+        Command::VerifyFirmwareBuild {
+            manifest,
+            cc,
+            cxx,
+            python,
+            timeout_seconds,
+            output,
+            require_approved,
+        } => {
+            // Reserve the publication boundary before an untrusted manifest
+            // can select any work. The verifier itself never consumes the
+            // historical command arrays retained in that manifest.
+            let prepared_output = output
+                .as_deref()
+                .map(|path| prepare_fresh_firmware_build_output(path, &manifest))
+                .transpose()?;
+            let bundle = capture_fresh_firmware_bundle(&manifest)?;
+            let parsed_manifest: FirmwareManifest = serde_json::from_slice(bundle.manifest_bytes())
+                .context("fresh firmware manifest is not valid closed JSON")?;
+            if parsed_manifest.artifacts.len() != FIRMWARE_ARTIFACTS.len() {
+                bail!("fresh firmware manifest must describe the seven fixed artifacts");
+            }
+            if !parsed_manifest
+                .artifacts
+                .iter()
+                .map(|artifact| artifact.path.as_str())
+                .eq(FIRMWARE_ARTIFACTS)
+            {
+                bail!("fresh firmware manifest must list the exact ordered artifact set");
+            }
+            let artifact_inputs = parsed_manifest
+                .artifacts
+                .iter()
+                .zip(bundle.artifacts())
+                .map(
+                    |(identity, (_, contents))| FreshFirmwareBuildArtifactInput {
+                        identity,
+                        contents,
+                    },
+                )
+                .collect::<Vec<_>>();
+            let report = verify_fresh_firmware_bundle_build(
+                FreshFirmwareBuildInput {
+                    manifest_bytes: bundle.manifest_bytes(),
+                    artifacts: &artifact_inputs,
+                },
+                FreshFirmwareBuildOptions {
+                    cc: &cc,
+                    cxx: &cxx,
+                    python: &python,
+                    timeout: Duration::from_secs(timeout_seconds),
+                },
+                None,
+            )?;
+            let rendered = render_fresh_firmware_build_report(&report)?;
+
+            // A report about a snapshot is published only while the complete
+            // caller-owned exact-eight bundle still equals that snapshot.
+            revalidate_fresh_firmware_bundle(&bundle)?;
+            if let (Some(prepared), Some(path)) = (prepared_output, output.as_deref()) {
+                persist_atomic_new_file_bytes(prepared, path, &rendered).map_err(|_| {
+                    anyhow::anyhow!(
+                        "cannot publish fresh firmware build report without overwrite"
+                    )
+                })?;
+            } else {
+                io::stdout().write_all(&rendered)?;
+                io::stdout().flush()?;
+            }
+            eprintln!(
+                "fresh firmware bundle build: {}",
+                if report.approved {
+                    "approved"
+                } else {
+                    "rejected"
+                }
+            );
+            if require_approved && !report.approved {
+                bail!("fresh firmware bundle build rejected");
+            }
+        }
+        Command::FirmwareBuildReportSchema { output } => {
+            write_closed_schema(
+                &fresh_firmware_build_report_schema(),
+                output.as_deref(),
+                "fresh firmware build report schema output",
+            )?;
         }
         Command::ImportSchematic {
             input,
@@ -18761,6 +18888,476 @@ fn firmware_checks_passed(manifest: &FirmwareManifest) -> bool {
             && build.smoke.passed
             && build.smoke.exit_code == Some(0)
     })
+}
+
+struct CapturedFreshFirmwareEntry {
+    name: String,
+    bytes: Vec<u8>,
+}
+
+struct CapturedFreshFirmwareBundle {
+    requested_manifest: PathBuf,
+    directory: PathBuf,
+    directory_handle: fs::File,
+    entries: Vec<CapturedFreshFirmwareEntry>,
+}
+
+impl CapturedFreshFirmwareBundle {
+    fn manifest_bytes(&self) -> &[u8] {
+        &self.entries[0].bytes
+    }
+
+    fn artifacts(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.entries[1..]
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.bytes.as_slice()))
+    }
+}
+
+fn prepare_fresh_firmware_build_output(
+    output: &Path,
+    manifest: &Path,
+) -> Result<tempfile::NamedTempFile> {
+    reject_fresh_firmware_path_components(output, "fresh firmware build report output").map_err(
+        |_| anyhow::anyhow!("fresh firmware build report output path must be symlink-free"),
+    )?;
+    ensure_new_file_path(output)
+        .map_err(|_| anyhow::anyhow!("fresh firmware build report output already exists"))?;
+
+    let output_parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let manifest_parent = manifest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    if let (Ok(output_parent), Ok(manifest_parent)) = (
+        fs::canonicalize(output_parent),
+        fs::canonicalize(manifest_parent),
+    ) && destinations_alias(&output_parent, &manifest_parent)
+    {
+        bail!("fresh firmware build report output must be outside the exact bundle directory");
+    }
+
+    prepare_atomic_new_file(output)
+        .map_err(|_| anyhow::anyhow!("cannot prepare fresh firmware build report output"))
+}
+
+fn capture_fresh_firmware_bundle(manifest: &Path) -> Result<CapturedFreshFirmwareBundle> {
+    if manifest.file_name().and_then(|name| name.to_str()) != Some("manifest.json") {
+        bail!("fresh firmware bundle manifest must be named manifest.json");
+    }
+    reject_fresh_firmware_path_components(manifest, "fresh firmware bundle")
+        .map_err(|_| anyhow::anyhow!("fresh firmware bundle path must be symlink-free"))?;
+    let parent = manifest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let directory = fs::canonicalize(parent).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot resolve fresh firmware bundle directory ({})",
+            error.kind()
+        )
+    })?;
+    let metadata = fs::symlink_metadata(&directory).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot inspect fresh firmware bundle directory ({})",
+            error.kind()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_dir() {
+        bail!("fresh firmware bundle parent must be a regular non-symlink directory");
+    }
+    let directory_handle = open_circuit_kicad_board_directory(&directory).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot pin fresh firmware bundle directory ({})",
+            error.kind()
+        )
+    })?;
+    if !circuit_kicad_board_directory_matches(&directory_handle, &directory).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot verify fresh firmware bundle directory ({})",
+            error.kind()
+        )
+    })? {
+        bail!("fresh firmware bundle directory changed while it was being pinned");
+    }
+    require_requested_fresh_firmware_directory(manifest, &directory, &directory_handle)?;
+
+    require_exact_fresh_firmware_entries(&directory)?;
+    let mut entries = Vec::with_capacity(FIRMWARE_ARTIFACTS.len() + 1);
+    entries.push(CapturedFreshFirmwareEntry {
+        name: "manifest.json".into(),
+        bytes: read_fresh_firmware_entry(
+            &directory,
+            &directory_handle,
+            "manifest.json",
+            FRESH_FIRMWARE_BUILD_MAX_MANIFEST_BYTES as u64,
+        )?,
+    });
+    for name in FIRMWARE_ARTIFACTS {
+        entries.push(CapturedFreshFirmwareEntry {
+            name: name.into(),
+            bytes: read_fresh_firmware_entry(
+                &directory,
+                &directory_handle,
+                name,
+                firmware::MAX_FIRMWARE_ARTIFACT_BYTES,
+            )?,
+        });
+    }
+    require_exact_fresh_firmware_entries(&directory)?;
+    if !circuit_kicad_board_directory_matches(&directory_handle, &directory).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot finish verifying fresh firmware bundle directory ({})",
+            error.kind()
+        )
+    })? {
+        bail!("fresh firmware bundle directory changed during stable capture");
+    }
+    require_requested_fresh_firmware_directory(manifest, &directory, &directory_handle)?;
+    Ok(CapturedFreshFirmwareBundle {
+        requested_manifest: manifest.to_path_buf(),
+        directory,
+        directory_handle,
+        entries,
+    })
+}
+
+fn require_requested_fresh_firmware_directory(
+    manifest: &Path,
+    expected_directory: &Path,
+    directory_handle: &fs::File,
+) -> Result<()> {
+    reject_fresh_firmware_path_components(manifest, "fresh firmware bundle")
+        .map_err(|_| anyhow::anyhow!("fresh firmware bundle path must remain symlink-free"))?;
+    let parent = manifest
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let current = fs::canonicalize(parent).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot re-resolve fresh firmware bundle directory ({})",
+            error.kind()
+        )
+    })?;
+    // Repeat the component walk after resolution so a symlink installed
+    // during canonicalization cannot become the retained caller spelling.
+    reject_fresh_firmware_path_components(manifest, "fresh firmware bundle")
+        .map_err(|_| anyhow::anyhow!("fresh firmware bundle path must remain symlink-free"))?;
+    if !destinations_alias(&current, expected_directory)
+        || !circuit_kicad_board_directory_matches(directory_handle, &current).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot recheck fresh firmware bundle directory ({})",
+                error.kind()
+            )
+        })?
+    {
+        bail!("fresh firmware bundle directory changed during stable capture");
+    }
+    Ok(())
+}
+
+fn read_fresh_firmware_entry(
+    directory: &Path,
+    directory_handle: &fs::File,
+    name: &str,
+    maximum_bytes: u64,
+) -> Result<Vec<u8>> {
+    let bytes = read_fresh_firmware_entry_from_pinned_directory(
+        directory,
+        directory_handle,
+        name,
+        maximum_bytes,
+    )
+    .map_err(|error| {
+        anyhow::anyhow!(
+            "cannot read stable fresh firmware bundle entry {name} ({})",
+            error.kind()
+        )
+    })?;
+    if bytes.is_empty() {
+        bail!("fresh firmware bundle entry {name} must not be empty");
+    }
+    Ok(bytes)
+}
+
+#[cfg(unix)]
+fn read_fresh_firmware_entry_from_pinned_directory(
+    _directory: &Path,
+    directory_handle: &fs::File,
+    name: &str,
+    maximum_bytes: u64,
+) -> io::Result<Vec<u8>> {
+    use rustix::fs::{AtFlags, Mode, OFlags, fstat, openat, statat};
+
+    // NONBLOCK is immaterial for ordinary files, but makes a same-principal
+    // regular-file-to-FIFO race fail promptly rather than escaping every
+    // process deadline in a blocking open. NOFOLLOW keeps a leaf swap from
+    // redirecting the read outside the already pinned exact-eight directory.
+    let mut file: fs::File = openat(
+        directory_handle,
+        Path::new(name),
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )?
+    .into();
+    let opened = file.metadata()?;
+    if !opened.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fresh firmware bundle entry is not a regular non-symlink file",
+        ));
+    }
+    if opened.len() > maximum_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fresh firmware bundle entry exceeds its byte limit",
+        ));
+    }
+    let opened_stat = fstat(&file)?;
+    let visible_stat = statat(directory_handle, Path::new(name), AtFlags::SYMLINK_NOFOLLOW)?;
+    if opened_stat.st_dev != visible_stat.st_dev || opened_stat.st_ino != visible_stat.st_ino {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "fresh firmware bundle entry changed while it was being opened",
+        ));
+    }
+
+    let capacity = usize::try_from(opened.len()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fresh firmware bundle entry size cannot be represented",
+        )
+    })?;
+    let read_limit = maximum_bytes.checked_add(1).ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "bounded file size overflows")
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::by_ref(&mut file)
+        .take(read_limit)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > maximum_bytes {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fresh firmware bundle entry exceeds its byte limit",
+        ));
+    }
+
+    file.seek(SeekFrom::Start(0))?;
+    let mut compare_buffer = [0_u8; 64 * 1024];
+    let mut compared = 0_usize;
+    loop {
+        let read = file.read(&mut compare_buffer)?;
+        if read == 0 {
+            break;
+        }
+        let end = compared.checked_add(read).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "bounded read byte count overflow",
+            )
+        })?;
+        if end > bytes.len() || compare_buffer[..read] != bytes[compared..end] {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "fresh firmware bundle entry changed while it was being read",
+            ));
+        }
+        compared = end;
+    }
+    let after = file.metadata()?;
+    let after_stat = fstat(&file)?;
+    let final_visible_stat = statat(directory_handle, Path::new(name), AtFlags::SYMLINK_NOFOLLOW)?;
+    if !after.file_type().is_file()
+        || !fs::same_file(&opened, &after)
+        || opened.len() != after.len()
+        || opened.len() != bytes.len() as u64
+        || compared != bytes.len()
+        || opened_stat.st_dev != after_stat.st_dev
+        || opened_stat.st_ino != after_stat.st_ino
+        || after_stat.st_dev != final_visible_stat.st_dev
+        || after_stat.st_ino != final_visible_stat.st_ino
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "fresh firmware bundle entry identity changed during stable capture",
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(not(unix))]
+fn read_fresh_firmware_entry_from_pinned_directory(
+    directory: &Path,
+    _directory_handle: &fs::File,
+    name: &str,
+    maximum_bytes: u64,
+) -> io::Result<Vec<u8>> {
+    let path = directory.join(name);
+    #[cfg(windows)]
+    if windows_path_has_reparse_component(&path)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "fresh firmware bundle entry is a reparse point",
+        ));
+    }
+    let bytes = fs::read_with_limit(&path, maximum_bytes)?;
+    #[cfg(windows)]
+    if windows_path_has_reparse_component(&path)? {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "fresh firmware bundle entry became a reparse point during capture",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn require_exact_fresh_firmware_entries(directory: &Path) -> Result<()> {
+    let entries = fs::read_dir(directory).map_err(|error| {
+        anyhow::anyhow!(
+            "cannot list fresh firmware bundle directory ({})",
+            error.kind()
+        )
+    })?;
+    let mut actual = Vec::with_capacity(FIRMWARE_ARTIFACTS.len() + 1);
+    for entry in entries {
+        if actual.len() > FIRMWARE_ARTIFACTS.len() {
+            bail!("fresh firmware bundle directory must contain exactly eight files");
+        }
+        let entry = entry.map_err(|error| {
+            anyhow::anyhow!(
+                "cannot inspect fresh firmware bundle entry ({})",
+                error.kind()
+            )
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            anyhow::anyhow!(
+                "cannot inspect fresh firmware bundle entry type ({})",
+                error.kind()
+            )
+        })?;
+        if file_type.is_symlink() || !file_type.is_file() {
+            bail!("fresh firmware bundle entries must be regular non-symlink files");
+        }
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+            anyhow::anyhow!(
+                "cannot inspect fresh firmware bundle entry metadata ({})",
+                error.kind()
+            )
+        })?;
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || fresh_firmware_metadata_is_reparse_point(&metadata)
+        {
+            bail!("fresh firmware bundle entries must be regular non-symlink, non-reparse files");
+        }
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("fresh firmware bundle filenames must be UTF-8"))?;
+        actual.push(name);
+    }
+    actual.sort();
+    let mut expected = FIRMWARE_ARTIFACTS
+        .iter()
+        .map(ToString::to_string)
+        .chain(std::iter::once("manifest.json".to_string()))
+        .collect::<Vec<_>>();
+    expected.sort();
+    if actual != expected {
+        bail!(
+            "fresh firmware bundle directory must contain exactly manifest.json and the seven fixed artifacts"
+        );
+    }
+    Ok(())
+}
+
+fn reject_fresh_firmware_path_components(path: &Path, label: &str) -> Result<()> {
+    reject_output_symlink_components(path, label)?;
+    #[cfg(windows)]
+    if windows_path_has_reparse_component(path)? {
+        bail!("{label} path contains a reparse-point component");
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_path_has_reparse_component(path: &Path) -> io::Result<bool> {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut current = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => {
+                current.push(component.as_os_str());
+                continue;
+            }
+            Component::CurDir => continue,
+            Component::ParentDir | Component::Normal(_) => current.push(component.as_os_str()),
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 => {
+                return Ok(true);
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(windows)]
+fn fresh_firmware_metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn fresh_firmware_metadata_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+fn revalidate_fresh_firmware_bundle(initial: &CapturedFreshFirmwareBundle) -> Result<()> {
+    if !circuit_kicad_board_directory_matches(&initial.directory_handle, &initial.directory)
+        .unwrap_or(false)
+    {
+        bail!("fresh firmware bundle changed during final source revalidation");
+    }
+    require_requested_fresh_firmware_directory(
+        &initial.requested_manifest,
+        &initial.directory,
+        &initial.directory_handle,
+    )
+    .map_err(|_| {
+        anyhow::anyhow!("fresh firmware bundle changed during final source revalidation")
+    })?;
+    let manifest = initial.directory.join("manifest.json");
+    let current = capture_fresh_firmware_bundle(&manifest).map_err(|_| {
+        anyhow::anyhow!("fresh firmware bundle changed during final source revalidation")
+    })?;
+    if current.entries.len() != initial.entries.len()
+        || current
+            .entries
+            .iter()
+            .zip(&initial.entries)
+            .any(|(current, initial)| {
+                current.name != initial.name || current.bytes != initial.bytes
+            })
+    {
+        bail!("fresh firmware bundle changed during final source revalidation");
+    }
+    Ok(())
 }
 
 fn write_or_print_json(value: &serde_json::Value, output: Option<&PathBuf>) -> Result<()> {

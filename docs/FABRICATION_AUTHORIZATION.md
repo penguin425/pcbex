@@ -11,6 +11,23 @@ an order, reserves inventory, executes payment, or contacts a fabrication API
 as part of verification or reservation. The Action may still download its Rust
 toolchain and upload the retained GitHub artifact.
 
+Version 1.466's `verify-firmware-build` report remains completely separate
+from this authorization chain. Fabrication signing, quorum verification, MCP,
+the focused Action, and local reservation neither invoke that command nor
+accept its report. An approved fresh firmware build cannot replace the required
+factory-bound deterministic report, organization policy, package/receipt
+validation, or human signatures, and a fabrication authorization does not
+claim that firmware was freshly built. Firmware manifest v2 and every pipeline
+and fabrication schema and serialized byte contract remain unchanged.
+
+The fresh firmware verifier executes selected PATH tools, the C/C++ smoke
+programs they produce, and supplied `host.py`; its bounded supervisor is not a
+sandbox. Use a trusted private bundle directory and trusted toolchain or a
+separate OS sandbox. That standalone result does not prove toolchain or
+producer provenance, reproducibility, cross-compilation, target-MCU behavior,
+hardware safety, procurement authority, or ordering. See
+[`FIRMWARE_BUILD_VERIFICATION.md`](FIRMWARE_BUILD_VERIFICATION.md).
+
 The authorization starts from an existing factory-required deterministic
 pipeline plan and retained report. pcbex runs that plan again in-process and
 requires the fresh compact report plus trailing LF to equal the retained bytes

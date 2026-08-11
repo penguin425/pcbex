@@ -854,6 +854,11 @@
     {
       "id": "exact-final-cpl-board-bound-placement-evidence",
       "release": "v1.465.0",
+      "status": "released"
+    },
+    {
+      "id": "fresh-exact-firmware-bundle-build-verification",
+      "release": "v1.466.0",
       "status": "current"
     }
   ]

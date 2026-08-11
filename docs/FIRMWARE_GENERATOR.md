@@ -109,3 +109,42 @@ stable across pcbex releases that keep this manifest contract unchanged.
 The generator does not claim signatures, compiler/toolchain provenance,
 full operating-system containment, or cross-compilation; those are later trust
 boundaries.
+
+## Fresh verification of a retained bundle
+
+Version 1.466 adds `verify-firmware-build` as a standalone consumer of the
+unchanged manifest-v2 bundle:
+
+```sh
+pcbex verify-firmware-build generated/manifest.json \
+  --output firmware-build-verification.json \
+  --require-approved
+```
+
+Unlike `generate-firmware`, this command does not import a schematic or create
+sources. It captures the complete exact-eight directory, validates each
+manifest descriptor against the adjacent source bytes, and builds only private
+copies through six fixed C, C++, and Python compile/smoke checks. Historical
+manifest command arrays and success booleans remain validated v2 evidence but
+are never executed or treated as the fresh decision. This permits independent
+fresh verification of a source-only `--skip-build` bundle without changing its
+manifest bytes.
+
+The closed report is path-free and separate from the bundle. A well-formed
+compile or smoke failure is retained before the optional approval gate fails;
+an inexact bundle, unsafe path, mutation observed at capture/final reread,
+cancellation, or report-publication preflight failure produces no report.
+The pcbex verifier itself does not intentionally modify the generator directory
+or manifest v2; executed tools and bundle code remain inside the trust boundary
+described below.
+
+Fresh verification executes the selected PATH toolchain, newly compiled smoke
+binaries, and captured `host.py`. The shared deadlines, output ceilings,
+private staging, and ordinary managed-process cleanup are not a sandbox. Only
+verify a trusted bundle with trusted tools, or isolate the entire command in a
+separate OS sandbox. The result does not authenticate the producer or
+toolchain, prove provenance, reproducibility, cross-compilation, target-MCU
+behavior, or hardware safety, and is not a
+pipeline/fabrication/MCP/Action/procurement/order authority. See
+[`FIRMWARE_BUILD_VERIFICATION.md`](FIRMWARE_BUILD_VERIFICATION.md)
+for the exact report, retention, and trust contract.

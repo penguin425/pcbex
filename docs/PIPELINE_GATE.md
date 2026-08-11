@@ -268,6 +268,24 @@ inside the hash-checked sources; the gate does not receive a separate expected
 MCU reference, so policy that mandates one particular MCU must check the
 generated `PCBEX_MCU_REFERENCE` value before invoking the gate.
 
+Version 1.466 deliberately leaves this phase, its schema versions, and its
+serialization contracts unchanged. The separate `verify-firmware-build` command can capture an
+exact-eight bundle and freshly run six fixed C11, C++17, and Python
+compile/smoke checks, including against a source-only manifest. Its path-free
+`fresh_firmware_bundle_build_v1` report is not a new pipeline phase or input,
+does not replace the gate's canonical-schematic binding, and is not consulted
+by `pipeline-verify`. Call both commands explicitly when an operator wants both
+fresh local build evidence and the existing end-to-end pipeline decision.
+
+Fresh build verification executes the selected toolchain, its newly built
+smoke binaries, and the supplied `host.py`; its bounded process supervisor is
+not a sandbox. Use a trusted bundle and tools or isolate that separate command
+at the OS level. Even an approved fresh report does not prove producer or
+toolchain identity/provenance, reproducibility, cross-compilation, target-MCU
+behavior, or hardware safety and cannot authorize pipeline acceptance,
+fabrication, procurement, or an order. See
+[`FIRMWARE_BUILD_VERIFICATION.md`](FIRMWARE_BUILD_VERIFICATION.md).
+
 ## Factory receipt v1 (v2 phase)
 
 `factory-submit` writes a closed, normalized receipt. Its top-level shape is:
