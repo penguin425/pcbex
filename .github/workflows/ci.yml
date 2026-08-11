@@ -1834,6 +1834,13 @@ jobs:
           python -m unittest
           agent.tests.test_supplier_offer_v1468
           agent.tests.test_supplier_offer_cli_v1468 -v
+      - name: Run cross-platform v1.469 supplier-offer acquisition boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_supplier_offer_acquisition_v1469
+          agent.tests.test_supplier_offer_acquisition_cli_v1469 -v
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

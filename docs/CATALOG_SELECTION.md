@@ -133,6 +133,12 @@ Supplier-native API mapping, search, autonomous substitution, reservation,
 purchase, datasheet validation, and supplier qualification remain outside the
 contract.
 
+Version 1.469 applies the same explicit-pre-step sequencing to the separate
+[supplier-offer acquisition](SUPPLIER_OFFER_ACQUISITION.md) boundary, but it
+does not alter this adapter or receipt. The two acquisitions use independent
+connection slots, schemas, request domains, and normalized payload contracts.
+Neither receipt authenticates a supplier or retained HTTP/TLS exchange.
+
 ## Fetch-to-generation provenance
 
 v1.421 adds an opt-in bridge from the retained v1.420 fetch evidence to the

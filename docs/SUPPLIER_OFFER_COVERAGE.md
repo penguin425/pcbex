@@ -217,3 +217,13 @@ compact procurement projection still cannot replace fresh validation of the
 original procurement intent. A later consumer may cross-bind the two reports
 through the identical raw procurement-intent identity and compact procurement
 projection.
+
+Version 1.469 adds a separate
+[bounded HTTPS acquisition](SUPPLIER_OFFER_ACQUISITION.md) pre-step for this
+same normalized-offer schema. It may produce the exact offer file consumed
+here plus an independent receipt whose `offer_sha256` can be compared with
+`sources.supplier_offer.sha256`. This evaluator remains offline and its own
+`adapter_network_performed` stays false. The acquisition receipt's network
+observation does not authenticate a supplier, offer, price, endpoint,
+transport, or time, and it adds no coverage, reservation, authorization,
+ordering, or payment claim.

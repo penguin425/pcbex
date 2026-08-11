@@ -257,3 +257,10 @@ the full original intent from all four sources, binds the exact raw retained
 intent bytes, and applies only an explicit requested-board multiplier to the
 intent's per-board quantities before comparing the caller-normalized offer.
 Its covered decision remains unsigned, historical, and non-authorizing.
+
+Version 1.469 adds a separate
+[bounded supplier-offer acquisition](SUPPLIER_OFFER_ACQUISITION.md) adapter.
+That adapter requires the normalized offer's raw procurement-intent digest to
+equal the caller-declared digest before publication, but it does not validate
+or authorize this procurement intent. Fresh v1.464 replay remains the
+responsibility of the unchanged v1.468 coverage consumer.

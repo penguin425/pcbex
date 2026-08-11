@@ -194,6 +194,24 @@ The schema commands write canonical one-LF JSON to standard output or a new
 no-clobber path. Runtime replay and validation, not schema validation alone,
 remain authoritative.
 
+The v1.469 Python `fetch-supplier-offer` CLI requires two distinct explicit
+new destinations: a normalized offer up to 4 MiB and a receipt up to 1 MiB.
+Both are frozen and preflighted before environment lookup or network access.
+The response ceiling is an exact integer from 1 through 4 MiB; the network
+timeout is an exact integer from 1 through 60 seconds and covers bounded DNS,
+TCP, platform-default TLS, headers, and entity-body reads. Endpoint and header
+bounds, exact framing rules, token limits, and canonical output details are in
+[`SUPPLIER_OFFER_ACQUISITION.md`](SUPPLIER_OFFER_ACQUISITION.md).
+
+The canonical offer is published first and the receipt second with the shared
+atomic no-clobber writer. This is not a two-file transaction: a valid offer is
+retained if receipt publication later loses a race. The schema command writes
+canonical one-LF JSON to stdout or one new no-clobber path. The offline receipt
+validator caps offer plus receipt inputs at 5 MiB, stable-reads path sources,
+and performs no network or output write. The network deadline does not cover
+earlier output preflight/token lookup or later normalization, hashing, fsync,
+and publication.
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

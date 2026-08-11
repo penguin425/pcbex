@@ -49,6 +49,11 @@ from .supplier_offer import (
     render_supplier_offer_coverage,
     supplier_offer_coverage_json_schema,
 )
+from .supplier_offer_acquisition import (
+    SupplierOfferAcquisitionError,
+    fetch_supplier_offer,
+    supplier_offer_fetch_receipt_json_schema,
+)
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -654,6 +659,53 @@ def main() -> None:
         help="write the closed offline procurement-intent report JSON Schema",
     )
     procurement_intent_schema.add_argument("-o", "--output", type=Path)
+    supplier_offer_fetch_help = (
+        "fetch one bounded HTTPS supplier offer and retain its receipt"
+    )
+    supplier_offer_fetch = sub.add_parser(
+        "fetch-supplier-offer",
+        help=supplier_offer_fetch_help,
+        description=supplier_offer_fetch_help,
+    )
+    supplier_offer_fetch.add_argument(
+        "--endpoint", required=True, metavar="URL"
+    )
+    supplier_offer_fetch.add_argument(
+        "--supplier", required=True, metavar="ID"
+    )
+    supplier_offer_fetch.add_argument(
+        "--procurement-intent-sha256", required=True, metavar="HEX"
+    )
+    supplier_offer_fetch.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="OFFER"
+    )
+    supplier_offer_fetch.add_argument(
+        "--receipt", type=Path, required=True, metavar="RECEIPT"
+    )
+    supplier_offer_fetch.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=30,
+        metavar="SECONDS",
+        help="whole-request timeout in seconds (default: 30)",
+    )
+    supplier_offer_fetch.add_argument(
+        "--maximum-response-bytes",
+        type=int,
+        default=4 * 1024 * 1024,
+        metavar="BYTES",
+        help="maximum response size in bytes (default: 4194304)",
+    )
+    supplier_offer_fetch.add_argument(
+        "--bearer-token-environment", metavar="NAME"
+    )
+    supplier_offer_fetch_schema = sub.add_parser(
+        "supplier-offer-fetch-receipt-schema",
+        help="write the closed supplier-offer fetch receipt JSON Schema",
+    )
+    supplier_offer_fetch_schema.add_argument(
+        "-o", "--output", type=Path, metavar="PATH"
+    )
     supplier_offer_help = (
         "evaluate whether one normalized supplier offer covers a procurement intent"
     )
@@ -1621,6 +1673,48 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, ProcurementIntentError) as error:
             raise SystemExit(f"procurement intent schema failed: {error}") from error
+    elif args.command == "fetch-supplier-offer":
+        try:
+            receipt = fetch_supplier_offer(
+                args.endpoint,
+                args.supplier,
+                args.output,
+                args.receipt,
+                procurement_intent_sha256=args.procurement_intent_sha256,
+                timeout_seconds=args.timeout_seconds,
+                maximum_response_bytes=args.maximum_response_bytes,
+                bearer_token_environment=args.bearer_token_environment,
+            )
+        except SupplierOfferAcquisitionError as error:
+            raise SystemExit(f"supplier offer fetch failed: {error}") from None
+        print(
+            "supplier offer written with response "
+            f"{receipt['response_sha256']} and offer {receipt['offer_sha256']}"
+        )
+    elif args.command == "supplier-offer-fetch-receipt-schema":
+        try:
+            if args.output:
+                validate_no_clobber_path(args.output)
+            rendered = (
+                json.dumps(
+                    supplier_offer_fetch_receipt_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, SupplierOfferAcquisitionError) as error:
+            raise SystemExit(
+                f"supplier offer fetch receipt schema failed: {error}"
+            ) from error
     elif args.command == "build-supplier-offer-coverage":
         try:
             validate_no_clobber_path(args.output)

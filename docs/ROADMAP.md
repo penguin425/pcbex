@@ -180,6 +180,7 @@ auditable release.
 | v1.466.0 | Fresh exact firmware-bundle build verification | Capture one exact-eight manifest-v2 firmware bundle, privately rerun the six fixed C11, C++17, and Python compile/smoke checks, retain a closed path-free rejection before an optional final gate, and reject unsafe input, observed mutation, or cancellation without a report while preserving every manifest, pipeline, and fabrication schema and adding no downstream composition or authority |
 | v1.467.0 | Exact per-board assembly evidence composition | Freshly reproduce one schema-v6 handoff/manufacturing chain, semantically replay one exact catalog-backed procurement intent from the handoff generation entry and supplied snapshot, byte-replay one exact final-CPL report, and hard-cross-bind shared board/package/handoff-generation identities plus the final-BOM/final-CPL manifest and package-board-source identities into one closed Python-only per-board result; retain truthful incomplete evidence before an optional final gate without claiming assembly readiness, authorization, live supplier facts, vendor transforms, or an atomic multi-input snapshot |
 | v1.468.0 | Exact offline supplier-offer coverage | Freshly replay one exact retained procurement intent from its board, manufacturing package, generation bundle, and historical catalog snapshot; bind one caller-normalized local offer to the exact intent bytes; multiply only explicit per-board quantities by an explicit requested board count; and retain covered or not-covered component-line evidence using fixed-scale integer subtotals, without claiming current availability, offer or supplier authenticity, landed cost, reservation, authorization, payment, or ordering |
+| v1.469.0 | Bounded supplier-offer HTTPS acquisition receipt | Explicitly fetch one already-normalized supplier offer through a bounded no-redirect HTTPS GET, preserve exact response-entity and canonical-offer identities in a closed local receipt, and publish the normalized offer for unchanged v1.468 offline coverage without claiming supplier, offer, price, transport, or time authenticity, current availability, reservation, authorization, ordering, or payment |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1233,7 +1234,7 @@ adds no manifest-filename or firmware claim. All previous handoff,
 manufacturing, procurement, final-CPL, pipeline, and firmware schemas remain
 unchanged.
 
-The current v1.468.0 milestone adds a narrower Python-only commercial-line
+The released v1.468.0 milestone adds a narrower Python-only commercial-line
 boundary without changing that assembly composition. One normalized local
 offer identifies the exact raw retained procurement-intent bytes and supplies
 one supplier, half-open validity interval, syntactic currency, and at most 256
@@ -1264,3 +1265,36 @@ assembly authorization, order readiness, ordering, payment, network side
 effect, producer provenance, sandbox, or atomic multi-input snapshot. The
 catalog, procurement-intent, and assembly-evidence schemas and serialized-byte
 contracts remain unchanged.
+
+The current v1.469.0 milestone adds an explicit network pre-step for the same
+closed normalized offer contract. `fetch-supplier-offer` performs exactly one
+bounded no-redirect GET against a credential-free absolute HTTPS endpoint,
+strictly validates the response as `offline-normalized-supplier-offer-v1`,
+requires its supplier and procurement-intent digest to match the caller's
+declared expectations, and publishes canonical offer bytes followed by a
+separate closed acquisition receipt. The receipt retains the credential-free
+endpoint, a domain-separated request digest, the response status, exact
+entity-body byte/SHA-256 observations, the local fetch time, and exact
+canonical-offer byte/SHA-256 identity.
+
+Production use accepts HTTPS only; an API-only literal-loopback HTTP switch is
+reserved for tests. DNS, TCP, platform-default TLS, headers, and entity-body
+reads share one monotonic network deadline. Redirects, retries, queries,
+fragments, user information, ambiguous framing, non-JSON media, non-identity
+content encoding, oversized headers or bodies, malformed offers, supplier or
+intent misbinding, exact bearer-token bytes reflected in the entity body or
+canonical offer, and unsafe or occupied output paths fail without a valid
+receipt. Offer and receipt publication are two
+atomic no-clobber operations rather than one transaction, so a canonical offer
+remains if the later receipt publication loses a race.
+
+This is bounded acquisition provenance, not an authenticated supplier
+statement. The local receipt is unsigned and retains neither the raw response
+body nor an HTTP/TLS transcript, certificate chain, signature, or trusted
+clock. It cannot prove on replay that the request occurred, authenticate the
+supplier, offer, endpoint, transport, price, or time, establish current stock,
+reservation, procurement authority, order readiness, ordering, payment, or
+spend, or interpret unit prices, tiers, MOQ, shipping, tax, duty, fees,
+discounts, exchange rates, or landed cost. v1.468 remains offline and keeps
+its exact schemas, serialized bytes, and `adapter_network_performed: false`;
+the acquisition receipt's independent network-observation flag is true.
