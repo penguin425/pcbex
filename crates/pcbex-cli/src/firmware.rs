@@ -23,6 +23,22 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+#[path = "firmware_build.rs"]
+mod firmware_build;
+
+#[allow(unused_imports)]
+pub(crate) use firmware_build::{
+    FRESH_FIRMWARE_BUILD_MAX_MANIFEST_BYTES, FRESH_FIRMWARE_BUILD_MAX_REPORT_BYTES,
+    FRESH_FIRMWARE_BUILD_REPORT_SCHEMA_VERSION, FRESH_FIRMWARE_BUILD_SCOPE,
+    FRESH_FIRMWARE_BUILD_STDERR_BYTES, FRESH_FIRMWARE_BUILD_STDOUT_BYTES,
+    FreshFirmwareBuildArtifactInput, FreshFirmwareBuildBundle, FreshFirmwareBuildCheck,
+    FreshFirmwareBuildFailure, FreshFirmwareBuildFileIdentity, FreshFirmwareBuildInput,
+    FreshFirmwareBuildOptions, FreshFirmwareBuildProcessLimits, FreshFirmwareBuildReport,
+    decode_fresh_firmware_build_report, fresh_firmware_build_report_schema,
+    render_fresh_firmware_build_report, validate_fresh_firmware_build_report,
+    verify_fresh_firmware_bundle_build,
+};
+
 /// The source files in a v2 firmware bundle, in canonical order.
 pub(crate) const FIRMWARE_ARTIFACTS: [&str; 7] = [
     "pinout.h",

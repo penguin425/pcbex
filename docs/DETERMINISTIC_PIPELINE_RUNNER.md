@@ -211,6 +211,30 @@ are accepted and remain content-bound by the bytes and SHA-256 read through
 each named path. The boundary does not pin inodes or claim to be race-free
 against an adversarial filesystem.
 
+## Standalone fresh firmware build verification (v1.466.0)
+
+The separate Rust `verify-firmware-build` command can capture one exact-eight
+manifest-v2 bundle and freshly run the fixed C11, C++17, and Python compile and
+smoke checks. It emits a new closed path-free report under scope
+`fresh_firmware_bundle_build_v1`; a valid negative build outcome is retained
+before its optional final approval gate. Unsafe input, observed mutation, and
+cancellation produce no report.
+
+This command is not called by the compiler, deterministic runner, pipeline
+gate, pipeline replay adapter, circuit/manufacturing composition, or
+fabrication authorization. Plan schema v1, deterministic report schema v1,
+firmware manifest v2, and the existing pipeline/fabrication serialization
+contracts remain unchanged. Consumers that require both evidence sets must run and retain them
+separately; neither report upgrades the authority of the other.
+
+Fresh verification executes selected PATH tools, the C/C++ smoke programs they
+build, and captured `host.py`. Its shell-free bounded process supervisor is not
+a sandbox, so use a trusted private bundle directory and trusted tools or
+isolate the entire command separately. It does not establish producer or
+toolchain provenance, reproducibility, cross-compilation, target-MCU behavior,
+hardware safety, MCP/Action parity, procurement, fabrication authority, or an
+order. See [`FIRMWARE_BUILD_VERIFICATION.md`](FIRMWARE_BUILD_VERIFICATION.md).
+
 ## Required CI check (v1.438.0)
 
 The repository runs an independent `Deterministic Pipeline` job on every normal

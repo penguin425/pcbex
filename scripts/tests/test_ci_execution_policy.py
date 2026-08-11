@@ -544,6 +544,11 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         self.assertIn(final_cpl_command, boundaries)
         self.assertNotIn(final_cpl_command, rust_windows)
+        firmware_build_command = (
+            "cargo +stable test --package pcbex --test firmware_build --release --locked"
+        )
+        self.assertEqual(document.count(firmware_build_command), 1)
+        self.assertNotIn(firmware_build_command, rust_windows)
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
@@ -552,6 +557,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("rustup toolchain install stable --profile minimal", rust_windows)
         toolchain_step = boundaries.index(
             "- name: Configure Windows GNU firmware toolchain"
+        )
+        firmware_build_step = boundaries.index(
+            "- name: Run cross-platform v1.466 fresh firmware build boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -591,7 +599,8 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "- name: Run cross-platform boundary tests"
         )
         self.assertLess(board_regressions_step, toolchain_step)
-        self.assertLess(toolchain_step, fixture_step)
+        self.assertLess(toolchain_step, firmware_build_step)
+        self.assertLess(firmware_build_step, fixture_step)
         self.assertLess(fixture_step, diagnostic_step)
         self.assertLess(diagnostic_step, accepted_step)
         self.assertIn(

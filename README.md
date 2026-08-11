@@ -776,6 +776,41 @@ command evidence, so the same contract holds on Windows. See the [firmware
 generator contract](docs/FIRMWARE_GENERATOR.md) for the staging, subprocess,
 and no-overwrite boundaries.
 
+Version 1.466 adds a separate fresh verifier for an already-generated exact
+bundle, including a source-only bundle whose historical build records are not
+trusted:
+
+```sh
+pcbex verify-firmware-build build/firmware/manifest.json \
+  --output build/firmware-build-verification.json \
+  --require-approved
+pcbex firmware-build-report-schema \
+  --output fresh-firmware-bundle-build-v1.schema.json
+```
+
+The command captures and validates `manifest.json` in memory, recreates only
+the seven captured manifest-v2 source artifacts privately, and freshly runs the
+fixed C compile and smoke, C++ compile and smoke, Python compile, and
+`host.py --self-test` checks.
+Its closed path-free `fresh_firmware_bundle_build_v1` report binds the exact
+manifest and artifact bytes, records the process limits and all six ordered
+outcomes, leaves `toolchain_provenance_verified` false, and is approved only
+when every check passes. A valid rejection is written before
+`--require-approved` fails; unsafe input, cancellation, observed source
+mutation, or output-boundary failure produces no report.
+
+This operation executes the selected PATH compilers/interpreter, the C/C++
+programs they build, and the supplied Python program. Its shell-free bounded
+supervisor and private staging directory are not a sandbox. Use only a trusted
+bundle and toolchain, or run the complete command inside a separately enforced
+OS sandbox; stdout/stderr limits do not cap compiler-created files or storage
+consumption. This evidence does not prove producer/toolchain provenance,
+reproducibility, cross-compilation, target-MCU behavior, or hardware safety and
+is not composed into pipeline or fabrication decisions, MCP, an Action,
+procurement, or ordering. Firmware manifest v2 and all existing pipeline and
+fabrication schemas remain byte-compatible. See [fresh exact firmware-bundle
+build verification](docs/FIRMWARE_BUILD_VERIFICATION.md).
+
 ## Component placement
 
 The placement engine combines graph-clustered initialization with deterministic

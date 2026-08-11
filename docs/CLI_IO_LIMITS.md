@@ -99,6 +99,58 @@ bytes between them. The final-CPL schema is likewise structural; runtime checks
 remain authoritative for byte/aggregate ceilings, exact identities, canonical
 rendering, ordering, and approval invariants.
 
+The v1.466 `verify-firmware-build` boundary accepts only a file named
+`manifest.json` in an exact-eight directory containing the seven fixed
+manifest-v2 artifacts. The manifest is capped at 4 MiB; every nonempty source
+is capped at 16 MiB. The directory and entries must be regular and symlink-free
+when inspected, and source bytes must match the exact ordered manifest
+descriptors. Historical manifest build argv are validated but never executed.
+The seven captured sources are recreated in a private workspace for six fixed
+fresh C, C++, and Python compile/smoke checks. Ordinary regular hardlinks remain
+allowed and content-bound; inode uniqueness and link count are not enforced,
+and a write through an outside hardlink is rejected only when a checkpoint
+observes changed bytes.
+
+Each child has a caller-selected 1–3600 second timeout (120 seconds by default)
+and independent 1 MiB stdout and stderr ceilings. A C, C++, or Python compile
+failure skips only its dependent smoke/self-test check; unrelated families
+continue so an ordinary build rejection retains all meaningful outcomes. The
+closed path-free report is capped at 1 MiB. It is written with a final LF to
+stdout or atomically to a new no-clobber file outside the bundle directory. A
+valid rejected report is published before `--require-approved` fails.
+Malformed, symbolic-link or junction/name-surrogate-reparse-point, special,
+missing, extra, empty, oversized, descriptor-mismatched, or observed-mutated
+input, unsafe/aliased/existing output, report overflow, and cancellation are
+hard failures with no report.
+Post-spawn setup or pipe-read failure is retained as `supervision_failure` only
+after successful cleanup/reaping or observed child completion; an invalid core
+timeout or wait/cleanup/reap failure remains a no-report hard error.
+
+Capture and the final exact-eight reread immediately before publication are
+sequential checks, not an input/output transaction or an atomic snapshot.
+They reject mutation or special-file replacement that they observe, but do not
+prevent every change-and-restore race by another process with the same OS
+principal. Unix opens fixed entries relative to a pinned directory with
+no-follow/nonblocking flags and performs regular-file identity plus two-pass
+content checks, so an observed leaf symlink/FIFO race fails promptly. Non-Unix
+uses the shared path reader and retains the adversarial leaf link/special-file
+race and blocking-open denial-of-service nonclaim. Either platform permits
+mutation after the last checkpoint. Use a private isolated trusted bundle
+directory.
+
+This verifier starts selected PATH compilers/interpreter, the C/C++ smoke
+programs they build, and supplied `host.py`. Shell-free argv, private staging,
+deadlines, stream ceilings, and ordinary managed-descendant cleanup are process
+bounds, not a sandbox; accessible filesystem, network, credentials, syscalls,
+privileges, CPU/memory, process count, and deliberate process escape remain
+outside the contract. Compiler outputs, Python bytecode, arbitrary stage files,
+and aggregate disk/storage consumption have no quota. Use trusted
+bundle/toolchain inputs or an independent OS sandbox.
+The report is not toolchain/producer provenance, reproducibility,
+cross-compilation, target-MCU, hardware-safety, pipeline, fabrication, MCP,
+Action, procurement, or order evidence. See
+[`FIRMWARE_BUILD_VERIFICATION.md`](FIRMWARE_BUILD_VERIFICATION.md).
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each
