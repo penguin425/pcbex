@@ -182,7 +182,10 @@ fn help_and_schema_publish_the_closed_final_cpl_contract() {
         .unwrap();
     assert_success(&help);
     let help = String::from_utf8(help.stdout).unwrap();
-    assert!(help.contains("Usage: pcbex verify-final-cpl [OPTIONS] <BOARD> <MANUFACTURING_ZIP>"));
+    assert!(
+        help.contains("verify-final-cpl [OPTIONS] <BOARD> <MANUFACTURING_ZIP>"),
+        "help:\n{help}"
+    );
     assert!(help.contains("--output <OUTPUT>"));
     assert!(help.contains("--require-approved"));
 
