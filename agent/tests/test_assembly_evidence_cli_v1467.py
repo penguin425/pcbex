@@ -72,7 +72,7 @@ class AssemblyEvidenceCliV1467Tests(unittest.TestCase):
 
     def test_parser_routes_every_option_and_writes_one_lf(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             output = root / "assembly-evidence.json"
             result = {
                 "schema_version": 1,
@@ -140,7 +140,7 @@ class AssemblyEvidenceCliV1467Tests(unittest.TestCase):
 
     def test_profile_options_are_mutually_exclusive_before_evaluation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             output = root / "assembly-evidence.json"
             argv = [
                 *self._required_arguments(root, output),
@@ -161,7 +161,7 @@ class AssemblyEvidenceCliV1467Tests(unittest.TestCase):
 
     def test_existing_output_fails_before_evaluation_and_is_not_clobbered(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             output = root / "assembly-evidence.json"
             retained = b"do not replace\n"
             output.write_bytes(retained)
@@ -179,7 +179,7 @@ class AssemblyEvidenceCliV1467Tests(unittest.TestCase):
 
     def test_incomplete_report_is_retained_before_require_complete_gate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve(strict=True)
             output = root / "assembly-evidence.json"
             result = {
                 "schema_version": 1,
@@ -242,7 +242,8 @@ class AssemblyEvidenceCliV1467Tests(unittest.TestCase):
         self.assertFalse(schema["additionalProperties"])
 
         with tempfile.TemporaryDirectory() as directory:
-            output = Path(directory) / "assembly-evidence.schema.json"
+            root = Path(directory).resolve(strict=True)
+            output = root / "assembly-evidence.schema.json"
             argv = [
                 "pcbex-agent",
                 "assembly-evidence-schema",
