@@ -132,3 +132,14 @@ The verifier does not operate assembly equipment, submit the package, contact a
 supplier, reserve inventory, authorize fabrication or procurement, place an
 order, make a payment, or spend funds. Those remain separate deployment-owned
 boundaries.
+
+Version 1.467 can byte-replay this complete retained report inside the separate
+exact per-board [assembly-evidence composition](ASSEMBLY_EVIDENCE.md), using
+the same captured board and manufacturing ZIP as its handoff/manufacturing and
+procurement children. The composer requires the final-BOM and final-CPL
+manifest identities to agree and separately requires their retained
+package-board-source identities to agree. Equality between that package source
+and the supplied board remains each child report's approval condition, so a
+truthful source-mismatch rejection can remain visible. The informational
+BOM/CPL reference partition does not require CPL membership to be a BOM subset
+and does not establish assembly readiness.

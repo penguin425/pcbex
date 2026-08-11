@@ -1446,3 +1446,434 @@ def reject_paths(value):
 
 reject_paths(intent)
 PY
+
+# v1.467 closes the exact per-board composition gap. Describe the two populated
+# terminals of the real multilayer fixture as a catalog-backed circuit, remove
+# its two routing-only obstacle footprints after routing, and require the real
+# handoff, approved board binding, manufacturing package, procurement intent,
+# and CPL to reproduce and cross-bind as one complete result. The snapshot is
+# retained historical fixture data; this starts no supplier request and grants
+# no assembly, fabrication, procurement, or order authority.
+assembly_snapshot="$output_directory/assembly.catalog-snapshot.json"
+assembly_spec="$output_directory/assembly.circuit-spec-v2.json"
+assembly_requirements="$output_directory/assembly.requirements.txt"
+assembly_generation="$output_directory/assembly.generation.json"
+assembly_handoff_zip="$output_directory/assembly.handoff.zip"
+assembly_handoff_extract="$output_directory/assembly.handoff"
+assembly_handoff_log="$output_directory/assembly.handoff.log"
+assembly_extract_result="$output_directory/assembly.extract.json"
+assembly_board_with_obstacles="$output_directory/assembly.routed.with-obstacles.kicad_pcb"
+assembly_board="$output_directory/assembly.routed.kicad_pcb"
+assembly_board_binding="$output_directory/assembly.board-binding.json"
+assembly_manufacturing_directory="$output_directory/assembly.manufacturing"
+assembly_manufacturing_zip="$assembly_manufacturing_directory/manufacturing.zip"
+assembly_procurement="$output_directory/assembly.procurement.json"
+assembly_final_cpl="$output_directory/assembly.final-cpl.json"
+assembly_evidence="$output_directory/assembly.evidence.json"
+assembly_schema="$output_directory/assembly-evidence.schema.json"
+python3 - "$assembly_snapshot" "$assembly_spec" <<'PY'
+import json
+from pathlib import Path
+import sys
+import time
+
+snapshot_path, spec_path = map(Path, sys.argv[1:])
+now = int(time.time())
+snapshot = {
+    "schema_version": 1,
+    "supplier": "pcbex-kicad-e2e",
+    "snapshot_id": "assembly-complete-v1467",
+    "captured_at_unix": now - 60,
+    "expires_at_unix": now + 3600,
+    "parts": [
+        {
+            "mpn": "C-LIVE-1",
+            "supplier_part_number": "PCBEX-C1001",
+            "description": "TEST_POINT terminal fixture",
+            "footprint": "terminal",
+            "tags": ["test", "point", "terminal"],
+            "vendor": "pcbex fixture",
+            "stock": 100,
+            "basic": True,
+            "datasheet_url": None,
+        },
+    ],
+}
+spec = {
+    "schema_version": 2,
+    "parts": [
+        {
+            "reference": reference,
+            "lib_id": "Connector:TestPoint",
+            "value": "TEST_POINT",
+            "footprint": "terminal",
+            "mpn": None,
+            "power": {
+                "rail_voltage_uv": None,
+                "max_voltage_uv": None,
+                "requires_decoupling": False,
+                "decoupling": False,
+            },
+            "pins": [
+                {
+                    "number": "1",
+                    "name": "1",
+                    "net": "SIGNAL",
+                    "electrical_type": "passive",
+                }
+            ],
+        }
+        for reference in ("J1", "J2")
+    ],
+    "nets": [
+        {
+            "name": "SIGNAL",
+            "voltage_uv": None,
+            "connections": [
+                {"reference": "J1", "pin": "1"},
+                {"reference": "J2", "pin": "1"},
+            ],
+        }
+    ],
+}
+snapshot_path.write_text(
+    json.dumps(snapshot, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+spec_path.write_text(
+    json.dumps(spec, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+printf '%s\n' 'Generate the catalog-backed multilayer terminal fixture.' \
+  >"$assembly_requirements"
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
+  "$assembly_requirements" \
+  --output "$assembly_generation" \
+  --pcbex "$pcbex_binary" \
+  --max-attempts 1 \
+  --timeout-seconds 120 \
+  --catalog-snapshot "$assembly_snapshot" \
+  --allow-footprint-fallback \
+  --provider-command python3 -c \
+  'import sys; from pathlib import Path; sys.stdout.buffer.write(Path(sys.argv[1]).read_bytes())' \
+  "$assembly_spec"
+PYTHONPATH=agent/src python3 -m pcbex_agent handoff-circuit \
+  "$assembly_generation" \
+  --output "$assembly_handoff_zip" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 120 \
+  >"$assembly_handoff_log"
+PYTHONPATH=agent/src python3 -m pcbex_agent extract-circuit-handoff-bundle \
+  "$assembly_handoff_zip" \
+  --output-dir "$assembly_handoff_extract" \
+  >"$assembly_extract_result"
+"$pcbex_binary" route-kicad examples/multilayer.kicad_pcb \
+  --output "$assembly_board_with_obstacles" \
+  --drc
+python3 - "$assembly_board_with_obstacles" "$assembly_board" <<'PY'
+from pathlib import Path
+import sys
+
+source, destination = map(Path, sys.argv[1:])
+text = source.read_text(encoding="utf-8")
+
+def remove_form(value, marker):
+    start = value.find(marker)
+    if start < 0:
+        raise SystemExit(f"missing routing-only fixture form: {marker}")
+    depth = 0
+    quoted = False
+    escaped = False
+    for index in range(start, len(value)):
+        character = value[index]
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+            continue
+        if character == '"':
+            quoted = True
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return value[:start] + value[index + 1:]
+    raise SystemExit(f"unterminated routing-only fixture form: {marker}")
+
+for name in ("front-obstacle", "back-obstacle"):
+    text = remove_form(text, f'(footprint "{name}"')
+destination.write_text(text, encoding="utf-8")
+PY
+kicad-cli pcb upgrade --force "$assembly_board"
+"$pcbex_binary" verify-circuit-kicad-board-binding \
+  "$assembly_handoff_extract/circuit-spec-v2.json" \
+  "$assembly_handoff_extract/circuit-spec.kicad_sch" \
+  "$assembly_board" \
+  --output "$assembly_board_binding" \
+  --require-approved
+mkdir "$assembly_manufacturing_directory"
+"$pcbex_binary" fabricate "$assembly_board" \
+  --output-dir "$assembly_manufacturing_directory"
+"$pcbex_binary" verify-final-cpl \
+  "$assembly_board" "$assembly_manufacturing_zip" \
+  --output "$assembly_final_cpl" \
+  --require-approved
+PYTHONPATH=agent/src python3 -m pcbex_agent build-procurement-intent \
+  "$assembly_board" "$assembly_manufacturing_zip" \
+  --circuit-generation "$assembly_generation" \
+  --catalog-snapshot "$assembly_snapshot" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 180 \
+  --output "$assembly_procurement" \
+  --require-approved
+PYTHONPATH=agent/src python3 -m pcbex_agent build-assembly-evidence \
+  "$assembly_handoff_zip" "$assembly_board" "$assembly_manufacturing_zip" \
+  --board-binding-report "$assembly_board_binding" \
+  --procurement-intent "$assembly_procurement" \
+  --catalog-snapshot "$assembly_snapshot" \
+  --final-cpl-report "$assembly_final_cpl" \
+  --pcbex "$pcbex_binary" \
+  --manufacturing-kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 600 \
+  --output "$assembly_evidence" \
+  --require-complete
+PYTHONPATH=agent/src python3 -m pcbex_agent assembly-evidence-schema \
+  --output "$assembly_schema"
+python3 - \
+  "$assembly_evidence" \
+  "$assembly_schema" \
+  "$assembly_board" \
+  "$assembly_manufacturing_zip" \
+  "$assembly_generation" \
+  "$assembly_snapshot" \
+  "$output_directory" <<'PY'
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+(
+    result_path,
+    schema_path,
+    board_path,
+    package_path,
+    generation_path,
+    snapshot_path,
+    output_directory,
+) = map(Path, sys.argv[1:])
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+result = json.loads(result_path.read_text(encoding="utf-8"))
+schema = json.loads(schema_path.read_text(encoding="utf-8"))
+assert set(result) == {
+    "schema_version", "scope", "status", "complete", "quantity_basis",
+    "assembly_ready", "assembly_authorized", "fabrication_authorized",
+    "procurement_authorized", "order_placed", "adapter_network_performed",
+    "machine_operation_performed", "sources", "circuit_manufacturing",
+    "final_bom", "procurement", "final_cpl", "membership", "findings",
+    "validation", "binding_sha256",
+}
+assert result["schema_version"] == 1
+assert result["scope"] == "offline-exact-board-assembly-evidence-v1"
+assert result["status"] == "complete"
+assert result["complete"] is True
+assert result["quantity_basis"] == "per_board"
+for field in (
+    "assembly_ready", "assembly_authorized", "fabrication_authorized",
+    "procurement_authorized", "order_placed", "adapter_network_performed",
+    "machine_operation_performed",
+):
+    assert result[field] is False, field
+assert result["circuit_manufacturing"]["schema_version"] == 6
+assert result["circuit_manufacturing"]["verified"] is True
+assert result["circuit_manufacturing"]["board_binding"]["approved"] is True
+assert result["procurement"]["approved"] is True
+assert result["final_bom"]["approved"] is True
+assert result["final_cpl"]["approved"] is True
+assert "in_bom_parts" not in result["final_bom"]
+assert "final_bom" not in result["procurement"]
+assert "binding_sha256" not in result["procurement"]
+assert result["membership"]["both"] == ["J1", "J2"]
+assert result["membership"]["bom_only"] == []
+assert result["membership"]["cpl_only"] == []
+assert result["findings"] == []
+assert all(result["validation"].values())
+assert result["sources"]["board"] == {
+    "name": board_path.name,
+    **identity(board_path),
+}
+assert result["sources"]["manufacturing_package"] == identity(package_path)
+assert result["sources"]["handoff_generation_bundle"] == identity(generation_path)
+assert result["sources"]["catalog_snapshot"] == identity(snapshot_path)
+assert schema["$id"].endswith(
+    "/schemas/offline-exact-board-assembly-evidence-v1.json"
+)
+assert schema["additionalProperties"] is False
+assert schema["properties"]["scope"] == {
+    "const": "offline-exact-board-assembly-evidence-v1"
+}
+assert schema["properties"]["assembly_ready"] == {"const": False}
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(result)
+PY
+
+# Repeat the same exact board/package/CPL composition with a historical catalog
+# selection that truthfully has no supplier part number. Handoff, board binding,
+# final BOM, and final CPL remain positive; only procurement is rejected with no
+# partial line items. --require-complete must retain that exact incomplete result
+# before returning nonzero.
+assembly_incomplete_snapshot="$output_directory/assembly.incomplete.catalog-snapshot.json"
+assembly_incomplete_generation="$output_directory/assembly.incomplete.generation.json"
+assembly_incomplete_handoff="$output_directory/assembly.incomplete.handoff.zip"
+assembly_incomplete_extract="$output_directory/assembly.incomplete.handoff"
+assembly_incomplete_handoff_log="$output_directory/assembly.incomplete.handoff.log"
+assembly_incomplete_extract_result="$output_directory/assembly.incomplete.extract.json"
+assembly_incomplete_binding="$output_directory/assembly.incomplete.board-binding.json"
+assembly_incomplete_procurement="$output_directory/assembly.incomplete.procurement.json"
+assembly_incomplete_evidence="$output_directory/assembly.incomplete.evidence.json"
+assembly_incomplete_error="$output_directory/assembly.incomplete.stderr"
+python3 - "$assembly_snapshot" "$assembly_incomplete_snapshot" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, destination = map(Path, sys.argv[1:])
+snapshot = json.loads(source.read_text(encoding="utf-8"))
+snapshot["snapshot_id"] = "assembly-incomplete-v1467"
+assert len(snapshot["parts"]) == 1
+snapshot["parts"][0]["supplier_part_number"] = None
+destination.write_text(
+    json.dumps(snapshot, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
+PY
+PYTHONPATH=agent/src python3 -m pcbex_agent generate-circuit \
+  "$assembly_requirements" \
+  --output "$assembly_incomplete_generation" \
+  --pcbex "$pcbex_binary" \
+  --max-attempts 1 \
+  --timeout-seconds 120 \
+  --catalog-snapshot "$assembly_incomplete_snapshot" \
+  --allow-footprint-fallback \
+  --provider-command python3 -c \
+  'import sys; from pathlib import Path; sys.stdout.buffer.write(Path(sys.argv[1]).read_bytes())' \
+  "$assembly_spec"
+PYTHONPATH=agent/src python3 -m pcbex_agent handoff-circuit \
+  "$assembly_incomplete_generation" \
+  --output "$assembly_incomplete_handoff" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 120 \
+  >"$assembly_incomplete_handoff_log"
+PYTHONPATH=agent/src python3 -m pcbex_agent extract-circuit-handoff-bundle \
+  "$assembly_incomplete_handoff" \
+  --output-dir "$assembly_incomplete_extract" \
+  >"$assembly_incomplete_extract_result"
+"$pcbex_binary" verify-circuit-kicad-board-binding \
+  "$assembly_incomplete_extract/circuit-spec-v2.json" \
+  "$assembly_incomplete_extract/circuit-spec.kicad_sch" \
+  "$assembly_board" \
+  --output "$assembly_incomplete_binding" \
+  --require-approved
+PYTHONPATH=agent/src python3 -m pcbex_agent build-procurement-intent \
+  "$assembly_board" "$assembly_manufacturing_zip" \
+  --circuit-generation "$assembly_incomplete_generation" \
+  --catalog-snapshot "$assembly_incomplete_snapshot" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 180 \
+  --output "$assembly_incomplete_procurement"
+jq -e '
+  .approved == false and
+  .status == "rejected" and
+  .line_items == [] and
+  .final_bom.approved == true and
+  any(.findings[]; .code == "supplier_part_number_missing")
+' "$assembly_incomplete_procurement" >/dev/null
+if PYTHONPATH=agent/src python3 -m pcbex_agent build-assembly-evidence \
+  "$assembly_incomplete_handoff" \
+  "$assembly_board" \
+  "$assembly_manufacturing_zip" \
+  --board-binding-report "$assembly_incomplete_binding" \
+  --procurement-intent "$assembly_incomplete_procurement" \
+  --catalog-snapshot "$assembly_incomplete_snapshot" \
+  --final-cpl-report "$assembly_final_cpl" \
+  --pcbex "$pcbex_binary" \
+  --manufacturing-kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 600 \
+  --output "$assembly_incomplete_evidence" \
+  --require-complete \
+  2>"$assembly_incomplete_error"; then
+  echo "expected incomplete assembly evidence to fail the final gate" >&2
+  exit 1
+fi
+python3 - \
+  "$assembly_incomplete_evidence" \
+  "$assembly_incomplete_error" \
+  "$output_directory" <<'PY'
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+result_path, error_path, output_directory = map(Path, sys.argv[1:])
+result = json.loads(result_path.read_text(encoding="utf-8"))
+assert error_path.read_bytes()
+assert result["schema_version"] == 1
+assert result["scope"] == "offline-exact-board-assembly-evidence-v1"
+assert result["status"] == "incomplete"
+assert result["complete"] is False
+assert result["circuit_manufacturing"]["verified"] is True
+assert result["circuit_manufacturing"]["board_binding"]["approved"] is True
+assert result["procurement"]["approved"] is False
+assert result["procurement"]["line_items"] == []
+assert result["final_bom"]["approved"] is True
+assert result["final_cpl"]["approved"] is True
+assert "in_bom_parts" not in result["final_bom"]
+assert "final_bom" not in result["procurement"]
+assert "binding_sha256" not in result["procurement"]
+assert [finding["code"] for finding in result["findings"]] == [
+    "procurement_intent_rejected",
+]
+assert result["membership"] == {
+    "both": ["J1", "J2"],
+    "bom_only": [],
+    "cpl_only": [],
+}
+assert all(result["validation"].values())
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(result)
+PY

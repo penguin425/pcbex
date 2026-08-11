@@ -217,6 +217,19 @@ duplicate-key rejection, basename safety, exact source bytes and digests,
 sorting, cross-field equality, canonical replay, and aggregate limits. Passing
 the schema alone is not final-BOM or procurement-intent approval.
 
+Version 1.467 can consume this retained result inside the separate exact
+per-board [assembly-evidence composition](ASSEMBLY_EVIDENCE.md). The composer
+does not accept an independent circuit-generation file: it replays the
+procurement result from the exact `generation-bundle.json` entry in the freshly
+reproduced handoff archive and the supplied snapshot, then cross-binds the
+board and manufacturing ZIP across the children and requires the final-BOM and
+final-CPL manifest and package-board-source identities to agree with each
+other. Equality of that common package source to the captured board remains a
+child approval condition rather than a hard outer binding, so a truthful
+source-mismatch rejection remains representable. The historical snapshot
+remains procurement-only evidence, and the composed result does not turn a
+per-board intent into a batch quantity or procurement authorization.
+
 ## Deliberate nonclaims
 
 These boundaries do not establish circuit-to-schematic or schematic-to-board

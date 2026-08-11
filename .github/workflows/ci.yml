@@ -1820,6 +1820,13 @@ jobs:
         run: >-
           python -m unittest discover -s agent/tests
           -p test_procurement_intent_v1464.py -v
+      - name: Run cross-platform v1.467 assembly-evidence boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_assembly_evidence_v1467
+          agent.tests.test_assembly_evidence_cli_v1467 -v
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

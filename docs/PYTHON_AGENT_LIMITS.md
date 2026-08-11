@@ -127,6 +127,44 @@ byte, duplicate-key, basename, aggregate, exact-replay, digest, ordering, and
 cross-field checks remain authoritative. A schema-valid document alone is not
 an approved final BOM or procurement intent.
 
+The v1.467 assembly-evidence composer captures the 224 MiB handoff archive,
+128 MiB board, 128 MiB manufacturing ZIP, 12 MiB-plus-LF board-binding report,
+16 MiB procurement-intent report, 4 MiB catalog snapshot, 16 MiB final-CPL
+report, and optional existing board/manufacturing replay sidecars under their
+role-specific ceilings and one 768 MiB caller-source aggregate. Its result is
+limited to 32 MiB. At most 256 populated BOM references are construction-time
+validated; the outer result retains them only in membership arrays and approved
+procurement line references, because its compact final-BOM projection omits
+`in_bom_parts` and its compact procurement projection omits nested final BOM.
+The procurement projection also omits the original procurement binding digest,
+which covered that omitted nested object; the raw source identity, full replay,
+and outer binding remain.
+At most 256 in-position CPL references remain in the exact retained final-CPL
+evidence and membership partition. Every caller `PathLike` is frozen before
+capture, and the direct sources must be distinct, nonempty stable regular files
+accepted by the shared link/reparse-aware reader.
+
+The composer privately invokes only existing local replay/verifier paths. It
+requires a closed schema-v6 handoff/manufacturing replay, semantically reruns
+the complete procurement intent from the exact handoff
+`generation-bundle.json` bytes and supplied snapshot, and requires the fresh
+final-CPL report bytes plus final LF to equal the retained source exactly. One
+outer finite 1–600 second deadline (default 120) covers all captures, nested
+deadlines, child cleanup, comparisons, cross-bindings, final union rereads, and
+result construction. The pcbex command and injected argv are limited to 256
+arguments and 32,768 UTF-8 bytes; stdout and stderr are each capped at 1 MiB,
+and the existing Windows UTF-16 rendered-command ceiling still applies.
+
+An exact negative board-binding, procurement, or final-CPL decision produces a
+truthful incomplete result before the optional final gate. Hard input, replay,
+identity, mutation, deadline, cleanup, output, or validation failure produces
+no result. Publication requires an explicit new output path. The membership
+partition is informational and non-gating; completion does not require the CPL
+reference set to be a BOM subset. The schema is structural, while runtime
+validation remains authoritative for exact child contracts, bytes, sorting,
+identity equivalences, decision invariants, and the binding digest. See
+[`ASSEMBLY_EVIDENCE.md`](ASSEMBLY_EVIDENCE.md).
+
 The composed v1.457 handoff-to-manufacturing replay requires the complete v5
 board-binding inputs and one retained package. It keeps the existing 224 MiB
 handoff-archive ceiling, the 128 MiB board / 12 MiB canonical report plus one
@@ -243,6 +281,7 @@ limit before network access.
 | Circuit handoff retained-board binding replay | same aggregate `--timeout-seconds`, 1–600 seconds; default 120 | closed | 1 MiB per child | 1 MiB per child |
 | Fresh manufacturing-package replay (`replay-manufacturing-package`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; inner Rust deadline reserves up to 15 seconds or half of remaining time and must convert to a positive Rust `Duration` | closed | 1 MiB | 1 MiB |
 | Offline final-BOM/catalog intent (`build-procurement-intent`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; the child reserves up to 15 seconds or half of the remaining time for process cleanup and outer rereads | closed | 1 MiB | 1 MiB |
+| Exact per-board assembly composition (`build-assembly-evidence`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 120; every handoff/manufacturing, procurement, final-CPL, cleanup, cross-binding, and reread reserve remains nested inside it | closed | 1 MiB per child | 1 MiB per child |
 | Fresh deterministic-pipeline report replay (`replay-deterministic-pipeline`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; child execution reserves up to 30 seconds or half of the remaining time, split between bounded process cleanup and outer rereads/cleanup | closed | 64 KiB | 1 MiB |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
