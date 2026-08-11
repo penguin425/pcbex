@@ -1827,6 +1827,13 @@ jobs:
           python -m unittest
           agent.tests.test_assembly_evidence_v1467
           agent.tests.test_assembly_evidence_cli_v1467 -v
+      - name: Run cross-platform v1.468 supplier-offer coverage boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_supplier_offer_v1468
+          agent.tests.test_supplier_offer_cli_v1468 -v
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
