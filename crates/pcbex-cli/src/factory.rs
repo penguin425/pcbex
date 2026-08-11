@@ -1178,15 +1178,17 @@ pub(crate) struct ManufacturingPackageIdentity {
 }
 
 /// Exact evidence retained while performing the full manufacturing-package
-/// validation. The final-BOM verifier needs the validated manifest and BOM
-/// bytes, not a second, weaker ZIP parser.
+/// validation. The final-BOM and final-CPL verifiers need the validated
+/// manifest and exact CSV bytes, not a second, weaker ZIP parser.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ManufacturingPackageDetails {
     pub(crate) identity: ManufacturingPackageIdentity,
     pub(crate) manifest_bytes: Vec<u8>,
     pub(crate) bom_bytes: Vec<u8>,
+    pub(crate) cpl_bytes: Vec<u8>,
     pub(crate) manifest_parts_total: u64,
     pub(crate) manifest_parts_bom: u64,
+    pub(crate) manifest_parts_placement: u64,
 }
 
 fn validate_expected_physical_profile(
@@ -1522,12 +1524,15 @@ fn validate_manufacturing_package_details_with_expanded_limit(
     validate_bom_csv(package, expected_bom_quantity)?;
     validate_cpl_csv(package, expected_placement_rows)?;
     let bom_bytes = read_validated_zip_entry(package, "bom.csv", MAX_PACKAGE_BYTES)?;
+    let cpl_bytes = read_validated_zip_entry(package, "cpl.csv", MAX_PACKAGE_BYTES)?;
     Ok(ManufacturingPackageDetails {
         identity,
         manifest_bytes,
         bom_bytes,
+        cpl_bytes,
         manifest_parts_total,
         manifest_parts_bom: expected_bom_quantity,
+        manifest_parts_placement: expected_placement_rows,
     })
 }
 
@@ -4241,7 +4246,9 @@ mod tests {
         assert_eq!(details.identity, expected_identity);
         assert_eq!(details.manifest_parts_total, 0);
         assert_eq!(details.manifest_parts_bom, 0);
+        assert_eq!(details.manifest_parts_placement, 0);
         assert_eq!(details.bom_bytes, TestManufacturingCsv::empty().bom);
+        assert_eq!(details.cpl_bytes, TestManufacturingCsv::empty().cpl);
         assert_eq!(
             serde_json::from_slice::<Value>(&details.manifest_bytes).unwrap()["input"]["sha256"],
             sha256(input)

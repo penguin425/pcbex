@@ -638,6 +638,36 @@ See [Final BOM verification
 and offline procurement intent](docs/PROCUREMENT_INTENT.md) for the exact field,
 limit, replay, schema, and nonclaim contract.
 
+### Exact final CPL placement evidence
+
+Version 1.465 adds the corresponding board-bound pick-and-place verifier. It
+fully validates the package, regenerates canonical `cpl.csv` bytes through the
+production fabrication renderer, and compares the exact board source identity:
+
+```sh
+pcbex verify-final-cpl \
+  board.kicad_pcb manufacturing/manufacturing.zip \
+  --output final-cpl.json --require-approved
+pcbex final-cpl-report-schema --output final-cpl.schema.json
+```
+
+The closed `final_cpl_source_and_canonical_placement_v1` report identifies the
+actual and canonical CPL bytes, the package's board-source identity, and at
+most 256 reference-sorted in-position parts with exact integer-nanometre X/Y,
+milli-degree rotation, and `F`/`B` side. A valid CPL/source mismatch retains an
+`approved: false` report before the optional gate fails; malformed or unsafe
+input produces no report. The board basename is informational, and approval
+does not compare the manifest's input filename.
+
+This is exact evidence for the supplied board and vendor-neutral package, not
+proof that a circuit or schematic authored the positions. It performs no
+vendor origin/axis/bottom/rotation transform, assembly or machine operation,
+network access, fabrication/procurement authorization, reservation, ordering,
+or payment. Sequential capture and final reread detect observed input changes
+but are not an atomic snapshot against a same-principal change-and-restore
+race. See [Exact final CPL verification](docs/FINAL_CPL.md) for the field,
+coordinate, limit, race, and nonclaim contract.
+
 Submit that exact archive to a deployment-owned JLCPCB, PCBWay, or generic
 quote/DFM adapter without putting credentials in argv:
 

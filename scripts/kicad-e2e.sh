@@ -569,6 +569,224 @@ cmp "$manufacturing_directory/first.manufacturing.zip" \
 retained_manufacturing_zip="$manufacturing_directory/manufacturing.zip"
 retained_manufacturing_sha_before="$(sha256sum "$retained_manufacturing_zip" | awk '{print $1}')"
 retained_manufacturing_bytes_before="$(wc -c <"$retained_manufacturing_zip" | tr -d '[:space:]')"
+
+# v1.465 binds the real upgraded KiCad board to the exact placement list in
+# the retained package. This is a vendor-neutral board-coordinate assertion;
+# it does not claim circuit-authored positions, a factory transform, assembly,
+# procurement authorization, or order placement.
+final_cpl_report="$output_directory/multilayer.final-cpl.json"
+final_cpl_schema="$output_directory/final-cpl.schema.json"
+"$pcbex_binary" verify-final-cpl \
+  "$upgraded_multilayer" "$retained_manufacturing_zip" \
+  --output "$final_cpl_report" \
+  --require-approved
+"$pcbex_binary" final-cpl-report-schema --output "$final_cpl_schema"
+python3 - \
+  "$upgraded_multilayer" \
+  "$retained_manufacturing_zip" \
+  "$final_cpl_report" \
+  "$final_cpl_schema" \
+  "$output_directory" <<'PY'
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+import zipfile
+
+board_path, package_path, report_path, schema_path, output_directory = map(
+    Path, sys.argv[1:]
+)
+
+def identity(raw):
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+board = board_path.read_bytes()
+package = package_path.read_bytes()
+with zipfile.ZipFile(package_path) as archive:
+    manifest = archive.read("manifest.json")
+    cpl = archive.read("cpl.csv")
+
+report = json.loads(report_path.read_text(encoding="utf-8"))
+assert set(report) == {
+    "schema_version", "scope", "engine_version", "board_basename", "sources",
+    "counts", "in_pos_parts", "findings", "approved",
+}
+assert report["schema_version"] == 1
+assert report["scope"] == "final_cpl_source_and_canonical_placement_v1"
+assert report["engine_version"]
+assert report["board_basename"] == board_path.name
+assert report["approved"] is True
+assert report["findings"] == []
+assert report["sources"] == {
+    "board": identity(board),
+    "manufacturing_package": identity(package),
+    "manifest": identity(manifest),
+    "cpl": identity(cpl),
+    "canonical_cpl": identity(cpl),
+    "package_board_source": identity(board),
+}
+assert report["counts"] == {
+    "board_parts": 4,
+    "board_in_pos_parts": 2,
+    "package_parts": 4,
+    "package_placement_parts": 2,
+    "findings": 0,
+}
+assert len(report["in_pos_parts"]) == 2
+assert [part["reference"] for part in report["in_pos_parts"]] == sorted(
+    part["reference"] for part in report["in_pos_parts"]
+)
+for part in report["in_pos_parts"]:
+    assert set(part) == {"reference", "x_nm", "y_nm", "rotation_mdeg", "layer"}
+    assert part["reference"]
+    assert type(part["x_nm"]) is int
+    assert type(part["y_nm"]) is int
+    assert type(part["rotation_mdeg"]) is int
+    assert part["layer"] in {"F", "B"}
+
+schema = json.loads(schema_path.read_text(encoding="utf-8"))
+assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+assert schema["$id"].endswith("/schema/final-cpl-report-v1.json")
+assert schema["additionalProperties"] is False
+assert set(schema["required"]) == set(report)
+assert schema["properties"]["scope"] == {
+    "const": "final_cpl_source_and_canonical_placement_v1"
+}
+assert schema["properties"]["sources"]["additionalProperties"] is False
+assert schema["properties"]["counts"]["additionalProperties"] is False
+assert schema["properties"]["in_pos_parts"]["maxItems"] == 256
+assert schema["properties"]["in_pos_parts"]["items"]["additionalProperties"] is False
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(report)
+PY
+
+# Rebuild a second, structurally and semantically valid classic ZIP after
+# changing one CPL coordinate and its manifest artifact digest. The package
+# still names the original board identity, so this isolates the canonical-CPL
+# finding and proves that a valid mismatch is retained before the final gate.
+final_cpl_tampered_package="$output_directory/multilayer.final-cpl.tampered.zip"
+final_cpl_tampered_report="$output_directory/multilayer.final-cpl.tampered.json"
+final_cpl_tampered_gated_report="$output_directory/multilayer.final-cpl.tampered.gated.json"
+final_cpl_tampered_error="$output_directory/multilayer.final-cpl.tampered.stderr"
+python3 - "$retained_manufacturing_zip" "$final_cpl_tampered_package" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import re
+import stat
+import sys
+import zipfile
+
+source, destination = map(Path, sys.argv[1:])
+with zipfile.ZipFile(source) as archive:
+    members = {item.filename: archive.read(item) for item in archive.infolist()}
+
+cpl = members["cpl.csv"]
+match = re.search(rb"(?m)^([^,\r\n]+),(-?[0-9]+\.[0-9]{6}),", cpl)
+if match is None:
+    raise SystemExit("real manufacturing CPL has no canonical placement row")
+coordinate = bytearray(match.group(2))
+coordinate[-1] = ord("1") if coordinate[-1] != ord("1") else ord("2")
+members["cpl.csv"] = cpl[:match.start(2)] + bytes(coordinate) + cpl[match.end(2):]
+assert len(members["cpl.csv"]) == len(cpl)
+
+manifest = json.loads(members["manifest.json"].decode("utf-8"))
+cpl_artifacts = [
+    artifact for artifact in manifest["artifacts"] if artifact["path"] == "cpl.csv"
+]
+assert len(cpl_artifacts) == 1
+cpl_artifacts[0]["bytes"] = len(members["cpl.csv"])
+cpl_artifacts[0]["sha256"] = hashlib.sha256(members["cpl.csv"]).hexdigest()
+members["manifest.json"] = (
+    json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
+).encode("utf-8")
+
+with zipfile.ZipFile(
+    destination, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=6
+) as archive:
+    for name in sorted(members):
+        item = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+        item.compress_type = zipfile.ZIP_DEFLATED
+        item.create_system = 3
+        item.external_attr = (stat.S_IFREG | 0o644) << 16
+        item.extra = b""
+        item.comment = b""
+        archive.writestr(
+            item,
+            members[name],
+            compress_type=zipfile.ZIP_DEFLATED,
+            compresslevel=6,
+        )
+PY
+"$pcbex_binary" verify-final-cpl \
+  "$upgraded_multilayer" "$final_cpl_tampered_package" \
+  --output "$final_cpl_tampered_report"
+if "$pcbex_binary" verify-final-cpl \
+  "$upgraded_multilayer" "$final_cpl_tampered_package" \
+  --output "$final_cpl_tampered_gated_report" \
+  --require-approved \
+  2>"$final_cpl_tampered_error"; then
+  echo "expected exact final-CPL gate to reject a canonical placement mismatch" >&2
+  exit 1
+fi
+python3 - \
+  "$upgraded_multilayer" \
+  "$final_cpl_tampered_package" \
+  "$final_cpl_tampered_report" \
+  "$final_cpl_tampered_gated_report" \
+  "$final_cpl_tampered_error" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+import zipfile
+
+board_path, package_path, report_path, gated_path, error_path = map(
+    Path, sys.argv[1:]
+)
+
+def identity(raw):
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+report = json.loads(report_path.read_text(encoding="utf-8"))
+gated = json.loads(gated_path.read_text(encoding="utf-8"))
+assert gated == report
+assert error_path.read_bytes()
+assert report["approved"] is False
+assert report["findings"] == [{
+    "code": "canonical_cpl_mismatch",
+    "message": (
+        "manufacturing package cpl.csv does not equal the canonical CPL "
+        "regenerated from the board"
+    ),
+}]
+board = board_path.read_bytes()
+package = package_path.read_bytes()
+with zipfile.ZipFile(package_path) as archive:
+    cpl = archive.read("cpl.csv")
+assert report["sources"]["board"] == identity(board)
+assert report["sources"]["package_board_source"] == identity(board)
+assert report["sources"]["manufacturing_package"] == identity(package)
+assert report["sources"]["cpl"] == identity(cpl)
+assert report["sources"]["canonical_cpl"] != identity(cpl)
+assert report["counts"]["findings"] == 1
+assert report["counts"]["board_in_pos_parts"] == 2
+assert report["counts"]["package_placement_parts"] == 2
+PY
 manufacturing_replay_result="$output_directory/multilayer.manufacturing.replay.json"
 PYTHONPATH=agent/src python3 -m pcbex_agent replay-manufacturing-package \
   "$upgraded_multilayer" "$retained_manufacturing_zip" \
