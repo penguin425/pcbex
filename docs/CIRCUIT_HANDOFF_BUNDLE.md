@@ -553,6 +553,19 @@ layout beyond the exact reproduced producer evidence; authorize procurement,
 manufacturing, fabrication, deployment, or ordering; add MCP/Action/pipeline
 schema parity; or generate and build firmware.
 
+Version 1.467 consumes this exact base schema-v6 result inside a separate
+Python-only assembly-evidence composer. That composer does not change the
+handoff archive or v1–v7 replay schemas: it additionally replays procurement
+from the exact archived `generation-bundle.json`, byte-replays a retained
+final-CPL report, cross-binds the shared board/package identities and exact
+handoff generation, and requires the final-BOM and final-CPL manifest and
+package-board-source identities to agree with each other. Equality of that
+common package-board-source identity to the captured board remains a child
+approval condition, so a truthful source-mismatch rejection remains
+representable. See
+[`ASSEMBLY_EVIDENCE.md`](ASSEMBLY_EVIDENCE.md). Its `complete` decision is not
+an assembly, fabrication, procurement, or order authorization.
+
 ## Pipeline-bound manufacturing replay (v1.458)
 
 Version 1.458.0 accepts `--deterministic-pipeline-plan` and

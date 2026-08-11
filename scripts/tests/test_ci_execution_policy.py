@@ -549,6 +549,19 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         self.assertEqual(document.count(firmware_build_command), 1)
         self.assertNotIn(firmware_build_command, rust_windows)
+        assembly_evidence_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_assembly_evidence_v1467\n"
+            "          agent.tests.test_assembly_evidence_cli_v1467 -v"
+        )
+        self.assertEqual(document.count(assembly_evidence_command), 1)
+        self.assertIn(assembly_evidence_command, boundaries)
+        self.assertEqual(
+            document.count("agent.tests.test_assembly_evidence_v1467"), 1
+        )
+        self.assertEqual(
+            document.count("agent.tests.test_assembly_evidence_cli_v1467"), 1
+        )
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
@@ -561,6 +574,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         firmware_build_step = boundaries.index(
             "- name: Run cross-platform v1.466 fresh firmware build boundaries"
         )
+        assembly_evidence_step = boundaries.index(
+            "- name: Run cross-platform v1.467 assembly-evidence boundaries"
+        )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
         )
@@ -568,6 +584,11 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("C:\\mingw64\\bin", boundaries)
         self.assertIn("@('gcc.exe', 'g++.exe')", boundaries)
         self.assertIn("$env:GITHUB_PATH", boundaries)
+        assembly_evidence_block = boundaries[
+            assembly_evidence_step:toolchain_step
+        ]
+        self.assertIn("PYTHONPATH: agent/src", assembly_evidence_block)
+        self.assertIn(assembly_evidence_command, assembly_evidence_block)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(
@@ -599,6 +620,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "- name: Run cross-platform boundary tests"
         )
         self.assertLess(board_regressions_step, toolchain_step)
+        self.assertLess(assembly_evidence_step, toolchain_step)
         self.assertLess(toolchain_step, firmware_build_step)
         self.assertLess(firmware_build_step, fixture_step)
         self.assertLess(fixture_step, diagnostic_step)

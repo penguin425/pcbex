@@ -178,6 +178,7 @@ auditable release.
 | v1.464.0 | Exact final BOM and offline procurement intent | Reuse the complete manufacturing-package validator and canonical BOM renderer to compare one exact board with one retained ZIP, then optionally replay one retained catalog selection into closed per-board SKU intent without claiming electrical binding, manifest input-name binding, live supplier facts, procurement authority, network access, or order placement |
 | v1.465.0 | Exact final CPL board-bound placement evidence | Reuse the complete manufacturing-package validator and production CPL renderer to compare one exact board with one retained ZIP, retain exact board-coordinate placement evidence, and reject canonical CPL or board-source mismatches without claiming circuit-authored coordinates, vendor transforms, assembly execution, fabrication/procurement authority, or order placement |
 | v1.466.0 | Fresh exact firmware-bundle build verification | Capture one exact-eight manifest-v2 firmware bundle, privately rerun the six fixed C11, C++17, and Python compile/smoke checks, retain a closed path-free rejection before an optional final gate, and reject unsafe input, observed mutation, or cancellation without a report while preserving every manifest, pipeline, and fabrication schema and adding no downstream composition or authority |
+| v1.467.0 | Exact per-board assembly evidence composition | Freshly reproduce one schema-v6 handoff/manufacturing chain, semantically replay one exact catalog-backed procurement intent from the handoff generation entry and supplied snapshot, byte-replay one exact final-CPL report, and hard-cross-bind shared board/package/handoff-generation identities plus the final-BOM/final-CPL manifest and package-board-source identities into one closed Python-only per-board result; retain truthful incomplete evidence before an optional final gate without claiming assembly readiness, authorization, live supplier facts, vendor transforms, or an atomic multi-input snapshot |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1148,7 +1149,7 @@ funds. Runtime validation remains authoritative for byte and aggregate limits,
 exact identities, canonical rendering, sorting, and approval invariants; the
 JSON Schema is a closed structural contract.
 
-The current v1.466.0 milestone adds the standalone
+The released v1.466.0 milestone adds the standalone
 `verify-firmware-build` boundary. It captures `manifest.json` and the seven
 fixed firmware-manifest-v2 source artifacts as one exact-eight closure before
 starting a child, validates the manifest in memory, recreates only the seven
@@ -1189,3 +1190,44 @@ validate target-MCU behavior or hardware safety, prove cross-compilation, or
 compose with the deterministic pipeline, fabrication authorization, MCP, an
 Action, procurement, or ordering. Firmware manifest v2 and all pipeline and
 fabrication schema versions and serialization contracts remain unchanged.
+
+The current v1.467.0 milestone closes the next per-board composition gap in a
+separate Python-only boundary. `build-assembly-evidence` first requires a fresh
+base schema-v6 replay of the canonical handoff archive, exact retained
+board-binding report, shared raw board, and exact manufacturing ZIP. It then
+extracts the exact `generation-bundle.json` entry from that verified archive,
+uses it with the supplied historical catalog snapshot to semantically and fully
+replay the retained procurement intent, and freshly requires the retained
+final-CPL report to reproduce byte-for-byte for the same captured board and
+package.
+
+The closed `offline-exact-board-assembly-evidence-v1` result cross-binds the
+shared board and package identities, the exact handoff generation entry, the
+common package manifest, and the final-BOM/final-CPL package-board-source
+identities. The last two must agree with each other; equality to the supplied
+board remains each child decision's approval condition so a valid source-
+mismatch rejection stays representable. Completion requires positive
+board-binding, procurement-intent, and final-CPL decisions. A valid negative
+decision is retained before `--require-complete` fails, while malformed,
+forged, mismatched, unsafe, mutable, or over-limit evidence produces no result.
+The deterministic BOM/CPL reference membership partition is informational and
+does not impose an otherwise invalid subset policy. The complete procurement
+and nested final-BOM graph is validated during construction, but the retained
+outer projections are compact: `final_bom` omits `in_bom_parts`, procurement
+omits nested final BOM and its now-non-recomputable original binding digest,
+and populated BOM references remain only in membership plus approved
+procurement-line references rather than standalone BOM value/type/layer
+records. The exact nested final-CPL evidence separately keeps its original
+in-position reference and coordinate records. Exact raw procurement identity,
+full fresh replay, and the outer binding remain.
+
+This is exact evidence composition, not assembly readiness or authorization.
+It does not prove BOM/CPL subset completeness; component polarity; fiducials;
+panelization; vendor origin, axis, bottom-side, or rotation transforms; feeder,
+nozzle, or machine programming/operation; batch, yield, loss, spare, or order
+quantity; current supplier facts; ordering or payment. The adapter itself makes
+no network request, authenticates neither pcbex nor KiCad, provides no process
+sandbox or producer/tool provenance, takes no atomic multi-input snapshot, and
+adds no manifest-filename or firmware claim. All previous handoff,
+manufacturing, procurement, final-CPL, pipeline, and firmware schemas remain
+unchanged.

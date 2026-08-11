@@ -859,6 +859,11 @@
     {
       "id": "fresh-exact-firmware-bundle-build-verification",
       "release": "v1.466.0",
+      "status": "released"
+    },
+    {
+      "id": "exact-per-board-assembly-evidence-composition",
+      "release": "v1.467.0",
       "status": "current"
     }
   ]

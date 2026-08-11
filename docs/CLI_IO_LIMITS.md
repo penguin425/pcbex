@@ -151,6 +151,28 @@ cross-compilation, target-MCU, hardware-safety, pipeline, fabrication, MCP,
 Action, procurement, or order evidence. See
 [`FIRMWARE_BUILD_VERIFICATION.md`](FIRMWARE_BUILD_VERIFICATION.md).
 
+The v1.467 Python `build-assembly-evidence` CLI composes existing bounded
+children and requires an explicit no-clobber `--output`. Its direct handoff
+archive, board, manufacturing ZIP, board-binding report, retained procurement
+intent, catalog snapshot, retained final-CPL report, and optional replay
+sidecars retain their original role ceilings under one 768 MiB caller-input
+aggregate. The final closed report is capped at 32 MiB. The selected pcbex
+command and complete child argv retain the 256-argument/32,768-UTF-8-byte
+limits; child stdout and stderr are capped independently at 1 MiB. The finite
+outer timeout is 1–600 seconds and defaults to 120.
+
+Every nested report is validated through its runtime contract. The retained
+final-CPL bytes, including the final LF, must equal the fresh verifier output
+exactly;
+the procurement object is semantically and fully replayed from the exact
+handoff generation entry rather than accepted by digest alone. A valid
+incomplete decision is published before `--require-complete` fails. Malformed,
+forged, cross-boundary-inconsistent, aliased, unsafe, over-limit, or observed-
+mutated input produces no report. The outer capture and final union reread are
+sequential checks, not an atomic multi-input snapshot. See
+[`ASSEMBLY_EVIDENCE.md`](ASSEMBLY_EVIDENCE.md) and
+[`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md).
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

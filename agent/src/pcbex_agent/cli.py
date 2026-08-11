@@ -5,9 +5,17 @@ import json
 import os
 from pathlib import Path
 
+from .assembly_evidence import (
+    MAXIMUM_ASSEMBLY_EVIDENCE_BYTES,
+    AssemblyEvidenceError,
+    assembly_evidence_json_schema,
+    evaluate_assembly_evidence,
+    render_assembly_evidence,
+)
 from .bounded_io import (
     BoundedIOError,
     atomic_write,
+    atomic_write_no_clobber,
     atomic_write_text_no_clobber,
     read_bytes,
     read_text,
@@ -638,6 +646,75 @@ def main() -> None:
         help="write the closed offline procurement-intent report JSON Schema",
     )
     procurement_intent_schema.add_argument("-o", "--output", type=Path)
+    assembly_evidence = sub.add_parser(
+        "build-assembly-evidence",
+        help=(
+            "compose exact handoff, board, manufacturing, procurement, and "
+            "placement evidence"
+        ),
+    )
+    assembly_evidence.add_argument("handoff_zip", type=Path, metavar="HANDOFF_ZIP")
+    assembly_evidence.add_argument("board", type=Path, metavar="BOARD")
+    assembly_evidence.add_argument(
+        "manufacturing_zip", type=Path, metavar="MANUFACTURING_ZIP"
+    )
+    assembly_evidence.add_argument(
+        "--board-binding-report", type=Path, required=True, metavar="REPORT"
+    )
+    assembly_evidence.add_argument(
+        "--procurement-intent", type=Path, required=True, metavar="INTENT"
+    )
+    assembly_evidence.add_argument(
+        "--catalog-snapshot", type=Path, required=True, metavar="SNAPSHOT"
+    )
+    assembly_evidence.add_argument(
+        "--final-cpl-report", type=Path, required=True, metavar="REPORT"
+    )
+    assembly_evidence.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    assembly_evidence.add_argument(
+        "--board-binding-policy", type=Path, metavar="POLICY"
+    )
+    assembly_evidence.add_argument(
+        "--manufacturing-kicad-cli", default="kicad-cli", metavar="CMD"
+    )
+    assembly_evidence.add_argument(
+        "--manufacturing-kicad-project", type=Path, metavar="PATH"
+    )
+    assembly_evidence.add_argument(
+        "--manufacturing-kicad-rules", type=Path, metavar="PATH"
+    )
+    assembly_manufacturing_profile = assembly_evidence.add_mutually_exclusive_group()
+    assembly_manufacturing_profile.add_argument("--manufacturing-fab", metavar="ID")
+    assembly_manufacturing_profile.add_argument(
+        "--manufacturing-fab-profile", type=Path, metavar="PATH"
+    )
+    assembly_manufacturing_profile.add_argument(
+        "--manufacturing-physical-profile", type=Path, metavar="PATH"
+    )
+    assembly_evidence.add_argument(
+        "--expected-handoff-archive-sha256", metavar="HEX"
+    )
+    assembly_evidence.add_argument(
+        "--expected-handoff-bundle-sha256", metavar="HEX"
+    )
+    assembly_evidence.add_argument("--pcbex", default="pcbex", metavar="CMD")
+    assembly_evidence.add_argument(
+        "--timeout-seconds", type=float, default=120.0, metavar="SECONDS"
+    )
+    assembly_evidence.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="fail after retaining an incomplete assembly-evidence report",
+    )
+    assembly_evidence_schema = sub.add_parser(
+        "assembly-evidence-schema",
+        help="write the closed exact assembly-evidence report JSON Schema",
+    )
+    assembly_evidence_schema.add_argument(
+        "-o", "--output", type=Path, metavar="PATH"
+    )
     repair = sub.add_parser(
         "repair-kicad",
         help="route and repeatedly validate a KiCad board until DRC is clean",
@@ -1482,6 +1559,62 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, ProcurementIntentError) as error:
             raise SystemExit(f"procurement intent schema failed: {error}") from error
+    elif args.command == "build-assembly-evidence":
+        try:
+            validate_no_clobber_path(args.output)
+            result = evaluate_assembly_evidence(
+                args.handoff_zip,
+                args.board,
+                args.manufacturing_zip,
+                args.board_binding_report,
+                args.procurement_intent,
+                args.catalog_snapshot,
+                args.final_cpl_report,
+                args.pcbex,
+                board_binding_policy=args.board_binding_policy,
+                kicad_cli=args.manufacturing_kicad_cli,
+                manufacturing_kicad_project=args.manufacturing_kicad_project,
+                manufacturing_kicad_rules=args.manufacturing_kicad_rules,
+                manufacturing_fab=args.manufacturing_fab,
+                manufacturing_fab_profile=args.manufacturing_fab_profile,
+                manufacturing_physical_profile=args.manufacturing_physical_profile,
+                expected_archive_sha256=args.expected_handoff_archive_sha256,
+                expected_bundle_sha256=args.expected_handoff_bundle_sha256,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_assembly_evidence(result)
+            atomic_write_no_clobber(
+                args.output,
+                rendered,
+                max_bytes=MAXIMUM_ASSEMBLY_EVIDENCE_BYTES,
+            )
+        except (OSError, BoundedIOError, AssemblyEvidenceError) as error:
+            raise SystemExit(f"assembly evidence evaluation failed: {error}") from error
+        if args.require_complete and not result["complete"]:
+            raise SystemExit(
+                "assembly evidence report was retained but assembly evidence is incomplete"
+            )
+    elif args.command == "assembly-evidence-schema":
+        try:
+            rendered = (
+                json.dumps(
+                    assembly_evidence_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, AssemblyEvidenceError) as error:
+            raise SystemExit(f"assembly evidence schema failed: {error}") from error
     else:
         if _paths_are_same(args.output, args.report):
             raise SystemExit("repair board output and report paths must differ")

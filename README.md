@@ -668,6 +668,58 @@ but are not an atomic snapshot against a same-principal change-and-restore
 race. See [Exact final CPL verification](docs/FINAL_CPL.md) for the field,
 coordinate, limit, race, and nonclaim contract.
 
+### Exact per-board assembly evidence composition
+
+Version 1.467 composes the preceding exact boundaries without creating a new
+authorization. It freshly reproduces the handoff archive, board binding, and
+manufacturing ZIP as the existing schema-v6 chain; replays the retained
+procurement intent from the exact `generation-bundle.json` entry inside that
+handoff and the supplied historical snapshot; and requires the retained
+final-CPL report to reproduce byte-for-byte for the same board and package:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent build-assembly-evidence \
+  circuit-handoff.zip board.kicad_pcb manufacturing.zip \
+  --board-binding-report board-binding.json \
+  --procurement-intent procurement-intent.json \
+  --catalog-snapshot catalog-snapshot.json \
+  --final-cpl-report final-cpl.json \
+  --pcbex target/release/pcbex \
+  --manufacturing-kicad-cli kicad-cli \
+  --output assembly-evidence.json --require-complete
+PYTHONPATH=agent/src python3 -m pcbex_agent assembly-evidence-schema \
+  --output assembly-evidence.schema.json
+```
+
+The closed `offline-exact-board-assembly-evidence-v1` result hard-cross-binds
+the board, manufacturing package, handoff generation entry, and package
+manifest roles across the nested evidence. The final-BOM and final-CPL
+package-board-source identities must agree with each other; equality to the
+captured board remains each child decision's approval condition, so a truthful
+source mismatch stays representable. The result is complete exactly when the
+replayed board-binding, procurement-intent, and final-CPL decisions are all
+positive. A valid negative decision is retained before the optional final gate
+fails. Its BOM/CPL reference membership partition is informational and
+deliberately non-gating; CPL membership is not assumed to be a BOM subset.
+The full procurement intent and nested final-BOM report are freshly validated
+during construction, but the outer result retains only compact projections:
+`final_bom` omits `in_bom_parts`, and `procurement` omits its nested
+`final_bom` plus the original procurement `binding_sha256` that covered it.
+The raw procurement source identity, full fresh replay, and outer binding remain.
+The compact BOM/procurement projections retain populated BOM references only
+through membership arrays and approved procurement line references, not
+standalone BOM value/type/layer records; the exact nested final-CPL evidence
+separately retains its original in-position reference and coordinate records.
+
+Completion is not assembly readiness or authorization. The composer performs
+no vendor coordinate transform, polarity/fiducial/panel/feeder/nozzle/machine
+validation, batch/yield/spares calculation, supplier refresh, network request,
+ordering, payment, or firmware work. Its caller-selected tools remain
+unauthenticated and unsandboxed, and sequential source rereads are not an
+atomic multi-input snapshot. See [Exact per-board assembly evidence
+composition](docs/ASSEMBLY_EVIDENCE.md) for the full API, identity, limit,
+schema, and nonclaim contract.
+
 Submit that exact archive to a deployment-owned JLCPCB, PCBWay, or generic
 quote/DFM adapter without putting credentials in argv:
 
