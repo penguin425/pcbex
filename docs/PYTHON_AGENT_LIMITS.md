@@ -165,6 +165,33 @@ validation remains authoritative for exact child contracts, bytes, sorting,
 identity equivalences, decision invariants, and the binding digest. See
 [`ASSEMBLY_EVIDENCE.md`](ASSEMBLY_EVIDENCE.md).
 
+The v1.468 supplier-offer coverage boundary captures the same 128 MiB board,
+128 MiB manufacturing ZIP, 32 MiB generation bundle, 4 MiB historical catalog
+snapshot, and 16 MiB retained procurement intent, plus one normalized offer up
+to 4 MiB. Those six direct sources, and the optional retained coverage result
+during fresh validation, remain under a 384 MiB aggregate ceiling. The closed
+coverage result is at most 16 MiB. Offers contain at most 256 strictly
+supplier-part-number-sorted lines. Requested boards are limited to
+1..1,000,000, required and quoted quantities to 1..2,147,483,647, and
+fixed-scale monetary integers and checked sums to 9,007,199,254,740,991.
+
+One finite 1–600 second monotonic deadline covers capture, private staging,
+the complete public procurement-intent replay, comparison, rendering, cleanup,
+and staged and caller-visible final rereads. The existing 256-argument,
+32,768-byte argv, 1 MiB child-stream, and Windows 32,767 UTF-16-unit command
+ceilings still apply. Every caller path is frozen once before a stateful
+command iterable is consumed. Sources must be distinct stable regular
+link/reparse-safe files. Exact intent-byte misbinding, unsafe input, observed
+mutation, timeout, cleanup failure, or malformed evidence produces no result.
+
+A valid supplier, offer-line set/identity, quantity, window, or upstream
+approval mismatch produces a closed `not_covered` result before the optional
+gate. The normalized-offer and coverage schemas are structural; runtime
+validation remains authoritative for UTF-8 byte bounds, strict types,
+duplicate keys, sorting, exact source digests, checked multiplication and
+summation, finding/decision equivalences, canonical bytes, and fresh replay.
+See [`SUPPLIER_OFFER_COVERAGE.md`](SUPPLIER_OFFER_COVERAGE.md).
+
 The composed v1.457 handoff-to-manufacturing replay requires the complete v5
 board-binding inputs and one retained package. It keeps the existing 224 MiB
 handoff-archive ceiling, the 128 MiB board / 12 MiB canonical report plus one
@@ -464,6 +491,14 @@ verify current stock, price, lifecycle, authenticity, or reservation, multiply
 an assembly quantity, authorize procurement, or place an order. Its quantities
 are per-board populated-reference counts only, and a rejected result contains
 no partial line items. The selected pcbex command remains unauthenticated.
+The v1.468 supplier-offer boundary likewise performs no adapter network call.
+Its caller-normalized offer, explicit untrusted evaluation instant, fixed-scale
+component-line subtotals, and checked requested-board multiplication prove no
+supplier or offer authenticity, current stock, unit-price or rounding truth,
+shipping/tax/duty/fee/discount/landed cost, MOQ/order multiple, reservation,
+authorization, order readiness, ordering, payment, or spend. It does not use
+the v1.467 composition as authority and changes none of the v1.464/v1.467
+schema or serialized-byte contracts.
 The v1.456 deterministic-pipeline replay likewise makes no producer or network
 call beyond its caller-selected local pcbex process. The child runs only the
 existing runner against the privately staged closure; the adapter does not run

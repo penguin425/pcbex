@@ -562,6 +562,20 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertEqual(
             document.count("agent.tests.test_assembly_evidence_cli_v1467"), 1
         )
+        supplier_offer_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_supplier_offer_v1468\n"
+            "          agent.tests.test_supplier_offer_cli_v1468 -v"
+        )
+        self.assertEqual(document.count(supplier_offer_command), 1)
+        self.assertIn(supplier_offer_command, boundaries)
+        self.assertNotIn(supplier_offer_command, rust_windows)
+        self.assertEqual(
+            document.count("agent.tests.test_supplier_offer_v1468"), 1
+        )
+        self.assertEqual(
+            document.count("agent.tests.test_supplier_offer_cli_v1468"), 1
+        )
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
@@ -577,6 +591,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         assembly_evidence_step = boundaries.index(
             "- name: Run cross-platform v1.467 assembly-evidence boundaries"
         )
+        supplier_offer_step = boundaries.index(
+            "- name: Run cross-platform v1.468 supplier-offer coverage boundaries"
+        )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
         )
@@ -585,10 +602,13 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("@('gcc.exe', 'g++.exe')", boundaries)
         self.assertIn("$env:GITHUB_PATH", boundaries)
         assembly_evidence_block = boundaries[
-            assembly_evidence_step:toolchain_step
+            assembly_evidence_step:supplier_offer_step
         ]
         self.assertIn("PYTHONPATH: agent/src", assembly_evidence_block)
         self.assertIn(assembly_evidence_command, assembly_evidence_block)
+        supplier_offer_block = boundaries[supplier_offer_step:toolchain_step]
+        self.assertIn("PYTHONPATH: agent/src", supplier_offer_block)
+        self.assertIn(supplier_offer_command, supplier_offer_block)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

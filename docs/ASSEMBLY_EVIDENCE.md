@@ -248,3 +248,11 @@ See [Circuit handoff bundle](CIRCUIT_HANDOFF_BUNDLE.md), [final BOM and
 procurement intent](PROCUREMENT_INTENT.md), [final CPL](FINAL_CPL.md), and
 [bounded Python execution](PYTHON_AGENT_LIMITS.md) for the authoritative child
 contracts that this boundary composes.
+
+Version 1.468 deliberately evaluates
+[offline supplier-offer coverage](SUPPLIER_OFFER_COVERAGE.md) from the original
+procurement intent and its four replay sources rather than from this compact
+composition. A later consumer may correlate the two through their exact
+procurement-intent source identity and identical compact procurement
+projection; v1.468 does not alter this report or make it an offer, price,
+current-stock, or procurement-authority artifact.

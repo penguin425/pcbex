@@ -173,6 +173,27 @@ sequential checks, not an atomic multi-input snapshot. See
 [`ASSEMBLY_EVIDENCE.md`](ASSEMBLY_EVIDENCE.md) and
 [`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md).
 
+The v1.468 Python `build-supplier-offer-coverage` CLI requires an explicit
+no-clobber `--output` and preflights it before fresh replay. Its board,
+manufacturing ZIP, generation bundle, historical catalog snapshot, retained
+procurement intent, and normalized offer are capped at 128 MiB, 128 MiB,
+32 MiB, 4 MiB, 16 MiB, and 4 MiB under a 384 MiB aggregate. The result is at
+most 16 MiB. At most 256 offer lines are accepted; requested boards,
+quantities, and fixed-scale monetary integers use the stricter bounds in
+[`SUPPLIER_OFFER_COVERAGE.md`](SUPPLIER_OFFER_COVERAGE.md). The selected pcbex
+command, child streams, and Windows command rendering retain the
+procurement-intent limits. The v1.468 outer deadline is finite and restricted
+to 1–600 seconds.
+
+A valid `not_covered` result is atomically published before
+`--require-covered` fails. Exact intent-byte misbinding, malformed/unsafe/
+aliased/oversized input, replay or cleanup failure, and mutation observed by
+the staged or caller-visible rereads produce no report. The output gate and
+input observations are sequential rather than an atomic multi-input snapshot.
+The schema commands write canonical one-LF JSON to standard output or a new
+no-clobber path. Runtime replay and validation, not schema validation alone,
+remain authoritative.
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

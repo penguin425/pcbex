@@ -249,3 +249,11 @@ panel/order/build quantity, reserve stock, submit a cart, place an order, spend
 funds, or approve fabrication. A separately controlled procurement system must
 refresh and authenticate live supplier facts, apply requested build quantities
 and policy, and require its own authorization before any external side effect.
+
+Version 1.468 adds a separate
+[offline supplier-offer coverage](SUPPLIER_OFFER_COVERAGE.md) consumer without
+changing this schema or its serialized bytes. That consumer freshly replays
+the full original intent from all four sources, binds the exact raw retained
+intent bytes, and applies only an explicit requested-board multiplier to the
+intent's per-board quantities before comparing the caller-normalized offer.
+Its covered decision remains unsigned, historical, and non-authorizing.

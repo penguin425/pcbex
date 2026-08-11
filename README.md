@@ -720,8 +720,51 @@ atomic multi-input snapshot. See [Exact per-board assembly evidence
 composition](docs/ASSEMBLY_EVIDENCE.md) for the full API, identity, limit,
 schema, and nonclaim contract.
 
-Submit that exact archive to a deployment-owned JLCPCB, PCBWay, or generic
-quote/DFM adapter without putting credentials in argv:
+### Exact offline supplier-offer coverage
+
+Version 1.468 adds a separate commercial-line reconciliation boundary. It
+freshly validates one retained v1.464 procurement intent from the exact board,
+manufacturing package, generation bundle, and historical catalog snapshot,
+then checks a caller-normalized local offer at one explicit board quantity and
+evaluation instant:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
+  board.kicad_pcb manufacturing.zip \
+  --circuit-generation generation-bundle.json \
+  --catalog-snapshot catalog-snapshot.json \
+  --procurement-intent procurement-intent.json \
+  --supplier-offer supplier-offer.json \
+  --requested-boards 100 \
+  --evaluated-at-unix 1785715200 \
+  --pcbex target/release/pcbex \
+  --output supplier-offer-coverage.json --require-covered
+PYTHONPATH=agent/src python3 -m pcbex_agent supplier-offer-schema \
+  --output supplier-offer.schema.json
+PYTHONPATH=agent/src python3 -m pcbex_agent supplier-offer-coverage-schema \
+  --output supplier-offer-coverage.schema.json
+```
+
+Coverage requires an approved exact intent, a matching supplier, identical SKU
+sets, matching MPN and historical catalog-part identities, sufficient quoted
+quantities after checked per-board multiplication, and an explicit evaluation
+instant inside the offer's half-open validity window. Offer lines carry only a
+quoted quantity and an integer subtotal at a fixed 10^-6 major-currency scale;
+the evaluator does not infer unit prices, rounding, tiers, MOQ, order multiples,
+shipping, tax, discounts, panels, yield, loss, or spares. A valid mismatch is
+retained before the optional final gate. Misbound, malformed, unsafe, or
+observably changed evidence produces no report.
+
+The offer is an unsigned caller-normalized observation. Coverage proves no
+current stock, supplier or offer authenticity, trusted time, price truth,
+landed cost, reservation, procurement authority, order readiness, payment, or
+external side effect. v1.467 is not a required parent because its unrelated
+board-binding/CPL replay and compact procurement projection cannot replace
+fresh validation of the original intent. See [Exact offline supplier-offer
+coverage](docs/SUPPLIER_OFFER_COVERAGE.md).
+
+Submit the exact manufacturing archive to a deployment-owned JLCPCB, PCBWay,
+or generic quote/DFM adapter without putting credentials in argv:
 
 ```sh
 export PCBEX_FACTORY_TOKEN=replace-with-secret

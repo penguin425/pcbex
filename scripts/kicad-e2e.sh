@@ -857,6 +857,7 @@ def reject_paths(value):
 reject_paths(result)
 PY
 
+
 # Compose the retained manufacturing ZIP with an exact circuit-handoff replay
 # and the same upgraded board. The board intentionally need not be approved by
 # this unrelated sample circuit: v6 reproduces the retained board-binding
@@ -1860,6 +1861,433 @@ assert result["membership"] == {
     "cpl_only": [],
 }
 assert all(result["validation"].values())
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(result)
+PY
+
+# v1.468 reuses the exact approved procurement-intent fixture created for the
+# v1.467 E2E, not the v1.467 assembly-evidence result. The caller-normalized
+# offer below binds the raw intent bytes, quotes exactly 25 populated boards at
+# one explicit untrusted instant, and remains a local fixture: no supplier
+# request, authenticity/currentness claim, stock reservation, procurement
+# authorization, payment, or order is performed.
+supplier_offer="$output_directory/assembly.supplier-offer.json"
+supplier_offer_schema="$output_directory/supplier-offer.schema.json"
+supplier_offer_coverage_schema="$output_directory/supplier-offer-coverage.schema.json"
+supplier_offer_coverage="$output_directory/assembly.supplier-offer-coverage.json"
+supplier_offer_shortfall="$output_directory/assembly.supplier-offer.shortfall.json"
+supplier_offer_shortfall_coverage="$output_directory/assembly.supplier-offer.shortfall.coverage.json"
+supplier_offer_shortfall_gated_coverage="$output_directory/assembly.supplier-offer.shortfall.gated.coverage.json"
+supplier_offer_shortfall_error="$output_directory/assembly.supplier-offer.shortfall.stderr"
+supplier_offer_evaluated_at=1785715200
+python3 - \
+  "$assembly_procurement" \
+  "$supplier_offer" \
+  "$supplier_offer_evaluated_at" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+intent_path = Path(sys.argv[1])
+offer_path = Path(sys.argv[2])
+evaluated_at = int(sys.argv[3])
+intent_raw = intent_path.read_bytes()
+intent = json.loads(intent_raw)
+assert intent["approved"] is True
+assert intent["quantity_basis"] == "per_board"
+assert intent["line_items"]
+
+lines = []
+for index, item in enumerate(
+    sorted(intent["line_items"], key=lambda value: value["supplier_part_number"])
+):
+    required_quantity = item["quantity"] * 25
+    lines.append(
+        {
+            "mpn": item["mpn"],
+            "supplier_part_number": item["supplier_part_number"],
+            "catalog_part_sha256": item["catalog_part_sha256"],
+            "quoted_quantity": required_quantity,
+            "line_subtotal_micros": required_quantity * (index + 1) * 10_000,
+        }
+    )
+
+offer = {
+    "schema_version": 1,
+    "scope": "offline-normalized-supplier-offer-v1",
+    "procurement_intent_sha256": hashlib.sha256(intent_raw).hexdigest(),
+    "supplier": intent["catalog"]["supplier"],
+    "offer_id": "kicad-e2e-v1468-25-boards",
+    "valid_from_unix": evaluated_at - 60,
+    "valid_until_unix": evaluated_at + 60,
+    "currency": "USD",
+    "lines": lines,
+}
+offer_path.write_bytes(
+    json.dumps(offer, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    + b"\n"
+)
+PY
+PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
+  "$assembly_board" "$assembly_manufacturing_zip" \
+  --circuit-generation "$assembly_generation" \
+  --catalog-snapshot "$assembly_snapshot" \
+  --procurement-intent "$assembly_procurement" \
+  --supplier-offer "$supplier_offer" \
+  --requested-boards 25 \
+  --evaluated-at-unix "$supplier_offer_evaluated_at" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 180 \
+  --output "$supplier_offer_coverage" \
+  --require-covered
+PYTHONPATH=agent/src python3 -m pcbex_agent supplier-offer-schema \
+  --output "$supplier_offer_schema"
+PYTHONPATH=agent/src python3 -m pcbex_agent supplier-offer-coverage-schema \
+  --output "$supplier_offer_coverage_schema"
+python3 - \
+  "$supplier_offer_coverage" \
+  "$supplier_offer_schema" \
+  "$supplier_offer_coverage_schema" \
+  "$supplier_offer" \
+  "$assembly_procurement" \
+  "$assembly_board" \
+  "$assembly_manufacturing_zip" \
+  "$assembly_generation" \
+  "$assembly_snapshot" \
+  "$output_directory" <<'PY'
+import copy
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+(
+    result_path,
+    offer_schema_path,
+    coverage_schema_path,
+    offer_path,
+    intent_path,
+    board_path,
+    package_path,
+    generation_path,
+    snapshot_path,
+    output_directory,
+) = map(Path, sys.argv[1:])
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+result_raw = result_path.read_bytes()
+offer_raw = offer_path.read_bytes()
+offer_schema_raw = offer_schema_path.read_bytes()
+coverage_schema_raw = coverage_schema_path.read_bytes()
+result = json.loads(result_raw)
+offer = json.loads(offer_raw)
+intent = json.loads(intent_path.read_text(encoding="utf-8"))
+offer_schema = json.loads(offer_schema_raw)
+coverage_schema = json.loads(coverage_schema_raw)
+assert result_raw == (
+    json.dumps(result, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+)
+assert offer_raw == (
+    json.dumps(offer, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    + b"\n"
+)
+assert offer_schema_raw == (
+    json.dumps(offer_schema, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+)
+assert coverage_schema_raw == (
+    json.dumps(coverage_schema, indent=2, ensure_ascii=False).encode("utf-8")
+    + b"\n"
+)
+
+assert set(result) == {
+    "schema_version",
+    "scope",
+    "status",
+    "covered",
+    "requested_boards",
+    "evaluated_at_unix",
+    "quantity_basis",
+    "cost_scope",
+    "adapter_network_performed",
+    "current_availability_verified",
+    "supplier_authenticity_verified",
+    "offer_authenticity_verified",
+    "price_authenticity_verified",
+    "trusted_time_verified",
+    "inventory_reserved",
+    "procurement_authorized",
+    "order_ready",
+    "order_placed",
+    "payment_performed",
+    "sources",
+    "procurement",
+    "supplier_offer",
+    "coverage_lines",
+    "component_subtotal_micros",
+    "findings",
+    "validation",
+    "binding_sha256",
+}
+assert result["schema_version"] == 1
+assert result["scope"] == "offline-procurement-supplier-offer-coverage-v1"
+assert result["status"] == "covered"
+assert result["covered"] is True
+assert result["requested_boards"] == 25
+assert result["evaluated_at_unix"] == 1785715200
+assert result["quantity_basis"] == "explicit_board_quantity"
+assert result["cost_scope"] == "component_lines_only"
+assert result["findings"] == []
+assert result["validation"] == {
+    "procurement_intent_replayed": True,
+    "procurement_intent_approved": True,
+    "procurement_intent_digest_matched": True,
+    "offer_normalized": True,
+    "supplier_matched": True,
+    "line_set_matched": True,
+    "line_identities_matched": True,
+    "quantities_covered": True,
+    "validity_window_matched": True,
+    "component_subtotal_checked": True,
+    "caller_inputs_unchanged": True,
+}
+for field in (
+    "adapter_network_performed",
+    "current_availability_verified",
+    "supplier_authenticity_verified",
+    "offer_authenticity_verified",
+    "price_authenticity_verified",
+    "trusted_time_verified",
+    "inventory_reserved",
+    "procurement_authorized",
+    "order_ready",
+    "order_placed",
+    "payment_performed",
+):
+    assert result[field] is False, field
+
+assert result["sources"] == {
+    "board": {"name": board_path.name, **identity(board_path)},
+    "manufacturing_package": identity(package_path),
+    "generation_bundle": identity(generation_path),
+    "catalog_snapshot": identity(snapshot_path),
+    "procurement_intent": identity(intent_path),
+    "supplier_offer": identity(offer_path),
+}
+expected_procurement = copy.deepcopy(intent)
+del expected_procurement["final_bom"]
+del expected_procurement["binding_sha256"]
+assert result["procurement"] == expected_procurement
+assert result["supplier_offer"] == offer
+assert len(result["coverage_lines"]) == len(intent["line_items"])
+intent_by_supplier_part = {
+    line["supplier_part_number"]: line for line in intent["line_items"]
+}
+offer_by_supplier_part = {
+    line["supplier_part_number"]: line for line in offer["lines"]
+}
+assert [
+    line["supplier_part_number"] for line in result["coverage_lines"]
+] == sorted(intent_by_supplier_part)
+for line in result["coverage_lines"]:
+    assert set(line) == {
+        "mpn",
+        "supplier_part_number",
+        "catalog_part_sha256",
+        "footprint",
+        "references",
+        "per_board_quantity",
+        "requested_boards",
+        "required_quantity",
+        "quoted_quantity",
+        "surplus_quantity",
+        "line_subtotal_micros",
+    }
+    intent_line = intent_by_supplier_part[line["supplier_part_number"]]
+    offer_line = offer_by_supplier_part[line["supplier_part_number"]]
+    assert line["mpn"] == intent_line["mpn"]
+    assert line["catalog_part_sha256"] == intent_line["catalog_part_sha256"]
+    assert line["footprint"] == intent_line["footprint"]
+    assert line["references"] == intent_line["references"]
+    assert line["per_board_quantity"] == intent_line["quantity"]
+    assert line["requested_boards"] == 25
+    assert line["required_quantity"] == intent_line["quantity"] * 25
+    assert line["quoted_quantity"] == offer_line["quoted_quantity"]
+    assert line["surplus_quantity"] == 0
+    assert line["line_subtotal_micros"] == offer_line["line_subtotal_micros"]
+assert result["component_subtotal_micros"] == sum(
+    line["line_subtotal_micros"] for line in offer["lines"]
+)
+assert offer_schema["$id"].endswith(
+    "/schemas/offline-normalized-supplier-offer-v1.json"
+)
+assert offer_schema["additionalProperties"] is False
+assert offer_schema["properties"]["scope"] == {
+    "const": "offline-normalized-supplier-offer-v1"
+}
+assert coverage_schema["$id"].endswith(
+    "/schemas/offline-procurement-supplier-offer-coverage-v1.json"
+)
+assert coverage_schema["additionalProperties"] is False
+assert coverage_schema["properties"]["scope"] == {
+    "const": "offline-procurement-supplier-offer-coverage-v1"
+}
+assert coverage_schema["properties"]["adapter_network_performed"] == {
+    "const": False
+}
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(result)
+PY
+
+# Preserve structural validity and every exact identity while lowering the
+# sole quoted line below the 25-board requirement. The first run retains only
+# the truthful shortfall; the gated rerun must publish identical bytes before
+# returning nonzero.
+python3 - "$supplier_offer" "$supplier_offer_shortfall" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source, destination = map(Path, sys.argv[1:])
+offer = json.loads(source.read_text(encoding="utf-8"))
+assert len(offer["lines"]) == 1
+assert offer["lines"][0]["quoted_quantity"] > 0
+offer["offer_id"] = "kicad-e2e-v1468-one-line-shortfall"
+offer["lines"][0]["quoted_quantity"] -= 1
+destination.write_bytes(
+    json.dumps(offer, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    + b"\n"
+)
+PY
+PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
+  "$assembly_board" "$assembly_manufacturing_zip" \
+  --circuit-generation "$assembly_generation" \
+  --catalog-snapshot "$assembly_snapshot" \
+  --procurement-intent "$assembly_procurement" \
+  --supplier-offer "$supplier_offer_shortfall" \
+  --requested-boards 25 \
+  --evaluated-at-unix "$supplier_offer_evaluated_at" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 180 \
+  --output "$supplier_offer_shortfall_coverage"
+if PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
+  "$assembly_board" "$assembly_manufacturing_zip" \
+  --circuit-generation "$assembly_generation" \
+  --catalog-snapshot "$assembly_snapshot" \
+  --procurement-intent "$assembly_procurement" \
+  --supplier-offer "$supplier_offer_shortfall" \
+  --requested-boards 25 \
+  --evaluated-at-unix "$supplier_offer_evaluated_at" \
+  --pcbex "$pcbex_binary" \
+  --timeout-seconds 180 \
+  --output "$supplier_offer_shortfall_gated_coverage" \
+  --require-covered \
+  2>"$supplier_offer_shortfall_error"; then
+  echo "expected supplier-offer shortfall to fail the final gate" >&2
+  exit 1
+fi
+cmp "$supplier_offer_shortfall_coverage" \
+  "$supplier_offer_shortfall_gated_coverage"
+python3 - \
+  "$supplier_offer_shortfall_coverage" \
+  "$supplier_offer_shortfall_error" \
+  "$output_directory" <<'PY'
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+result_path, error_path, output_directory = map(Path, sys.argv[1:])
+result_raw = result_path.read_bytes()
+result = json.loads(result_raw)
+assert result_raw == (
+    json.dumps(result, indent=2, ensure_ascii=False).encode("utf-8") + b"\n"
+)
+assert error_path.read_bytes() == (
+    b"supplier offer coverage report was retained but the offer does not cover "
+    b"the procurement intent\n"
+)
+assert set(result) == {
+    "schema_version",
+    "scope",
+    "status",
+    "covered",
+    "requested_boards",
+    "evaluated_at_unix",
+    "quantity_basis",
+    "cost_scope",
+    "adapter_network_performed",
+    "current_availability_verified",
+    "supplier_authenticity_verified",
+    "offer_authenticity_verified",
+    "price_authenticity_verified",
+    "trusted_time_verified",
+    "inventory_reserved",
+    "procurement_authorized",
+    "order_ready",
+    "order_placed",
+    "payment_performed",
+    "sources",
+    "procurement",
+    "supplier_offer",
+    "coverage_lines",
+    "component_subtotal_micros",
+    "findings",
+    "validation",
+    "binding_sha256",
+}
+assert result["schema_version"] == 1
+assert result["scope"] == "offline-procurement-supplier-offer-coverage-v1"
+assert result["status"] == "not_covered"
+assert result["covered"] is False
+assert [finding["code"] for finding in result["findings"]] == [
+    "quoted_quantity_shortfall",
+]
+assert result["coverage_lines"] == []
+assert result["component_subtotal_micros"] is None
+assert result["validation"] == {
+    "procurement_intent_replayed": True,
+    "procurement_intent_approved": True,
+    "procurement_intent_digest_matched": True,
+    "offer_normalized": True,
+    "supplier_matched": True,
+    "line_set_matched": True,
+    "line_identities_matched": True,
+    "quantities_covered": False,
+    "validity_window_matched": True,
+    "component_subtotal_checked": True,
+    "caller_inputs_unchanged": True,
+}
 
 def reject_paths(value):
     if isinstance(value, dict):

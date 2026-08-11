@@ -179,6 +179,7 @@ auditable release.
 | v1.465.0 | Exact final CPL board-bound placement evidence | Reuse the complete manufacturing-package validator and production CPL renderer to compare one exact board with one retained ZIP, retain exact board-coordinate placement evidence, and reject canonical CPL or board-source mismatches without claiming circuit-authored coordinates, vendor transforms, assembly execution, fabrication/procurement authority, or order placement |
 | v1.466.0 | Fresh exact firmware-bundle build verification | Capture one exact-eight manifest-v2 firmware bundle, privately rerun the six fixed C11, C++17, and Python compile/smoke checks, retain a closed path-free rejection before an optional final gate, and reject unsafe input, observed mutation, or cancellation without a report while preserving every manifest, pipeline, and fabrication schema and adding no downstream composition or authority |
 | v1.467.0 | Exact per-board assembly evidence composition | Freshly reproduce one schema-v6 handoff/manufacturing chain, semantically replay one exact catalog-backed procurement intent from the handoff generation entry and supplied snapshot, byte-replay one exact final-CPL report, and hard-cross-bind shared board/package/handoff-generation identities plus the final-BOM/final-CPL manifest and package-board-source identities into one closed Python-only per-board result; retain truthful incomplete evidence before an optional final gate without claiming assembly readiness, authorization, live supplier facts, vendor transforms, or an atomic multi-input snapshot |
+| v1.468.0 | Exact offline supplier-offer coverage | Freshly replay one exact retained procurement intent from its board, manufacturing package, generation bundle, and historical catalog snapshot; bind one caller-normalized local offer to the exact intent bytes; multiply only explicit per-board quantities by an explicit requested board count; and retain covered or not-covered component-line evidence using fixed-scale integer subtotals, without claiming current availability, offer or supplier authenticity, landed cost, reservation, authorization, payment, or ordering |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1191,7 +1192,7 @@ compose with the deterministic pipeline, fabrication authorization, MCP, an
 Action, procurement, or ordering. Firmware manifest v2 and all pipeline and
 fabrication schema versions and serialization contracts remain unchanged.
 
-The current v1.467.0 milestone closes the next per-board composition gap in a
+The released v1.467.0 milestone closes the next per-board composition gap in a
 separate Python-only boundary. `build-assembly-evidence` first requires a fresh
 base schema-v6 replay of the canonical handoff archive, exact retained
 board-binding report, shared raw board, and exact manufacturing ZIP. It then
@@ -1231,3 +1232,35 @@ sandbox or producer/tool provenance, takes no atomic multi-input snapshot, and
 adds no manifest-filename or firmware claim. All previous handoff,
 manufacturing, procurement, final-CPL, pipeline, and firmware schemas remain
 unchanged.
+
+The current v1.468.0 milestone adds a narrower Python-only commercial-line
+boundary without changing that assembly composition. One normalized local
+offer identifies the exact raw retained procurement-intent bytes and supplies
+one supplier, half-open validity interval, syntactic currency, and at most 256
+strictly supplier-part-number-sorted MPN/SKU/catalog-digest lines. Each line
+carries only a quoted quantity and an integer subtotal at a fixed 10^-6
+major-currency scale. The boundary captures the exact board, package,
+generation bundle, historical snapshot, intent, and offer, then freshly reruns
+the complete v1.464 procurement-intent validator before comparing any
+commercial line.
+
+Coverage requires an approved replayed intent, exact supplier and line
+identity/set agreement, checked per-board multiplication by an explicit
+requested board count, sufficient quoted quantities, and an explicit caller
+evaluation instant within the declared half-open window. A valid mismatch is
+retained before `--require-covered` fails; exact intent-byte misbinding,
+malformed/unsafe/aliased/oversized input, failed replay, deadline/cleanup
+failure, or observed mutation produces no result. The report keeps exact six-
+source identities, the same compact procurement projection used by v1.467,
+the complete normalized offer, covered-only line evidence and component
+subtotal, stable findings/validation, and a domain-separated binding.
+
+This is offline coverage of a caller assertion, not current or authenticated
+supplier evidence. It does not interpret unit prices, rounding, price tiers,
+MOQ, order multiples, discounts, shipping, tax, duty, fees, exchange rates,
+landed cost, panels, yield, loss, or spares. It provides no trusted time,
+supplier/offer/price authenticity, inventory reservation, procurement or
+assembly authorization, order readiness, ordering, payment, network side
+effect, producer provenance, sandbox, or atomic multi-input snapshot. The
+catalog, procurement-intent, and assembly-evidence schemas and serialized-byte
+contracts remain unchanged.

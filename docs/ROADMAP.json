@@ -864,6 +864,11 @@
     {
       "id": "exact-per-board-assembly-evidence-composition",
       "release": "v1.467.0",
+      "status": "released"
+    },
+    {
+      "id": "exact-offline-supplier-offer-coverage",
+      "release": "v1.468.0",
       "status": "current"
     }
   ]

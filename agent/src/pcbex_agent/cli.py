@@ -41,6 +41,14 @@ from .supplier_inventory import (
     fetch_catalog_snapshot,
     validate_catalog_fetch_receipt,
 )
+from .supplier_offer import (
+    MAXIMUM_SUPPLIER_OFFER_COVERAGE_BYTES,
+    SupplierOfferError,
+    evaluate_supplier_offer_coverage,
+    normalized_supplier_offer_json_schema,
+    render_supplier_offer_coverage,
+    supplier_offer_coverage_json_schema,
+)
 from .drc import normalize_kicad_report
 from .executor import apply_constraints
 from .ipc import apply_routes_to_open_board
@@ -646,6 +654,60 @@ def main() -> None:
         help="write the closed offline procurement-intent report JSON Schema",
     )
     procurement_intent_schema.add_argument("-o", "--output", type=Path)
+    supplier_offer_help = (
+        "evaluate whether one normalized supplier offer covers a procurement intent"
+    )
+    supplier_offer = sub.add_parser(
+        "build-supplier-offer-coverage",
+        help=supplier_offer_help,
+        description=supplier_offer_help,
+    )
+    supplier_offer.add_argument("board", type=Path, metavar="BOARD")
+    supplier_offer.add_argument(
+        "manufacturing_package", type=Path, metavar="MANUFACTURING_ZIP"
+    )
+    supplier_offer.add_argument(
+        "--circuit-generation", type=Path, required=True, metavar="GENERATION"
+    )
+    supplier_offer.add_argument(
+        "--catalog-snapshot", type=Path, required=True, metavar="SNAPSHOT"
+    )
+    supplier_offer.add_argument(
+        "--procurement-intent", type=Path, required=True, metavar="INTENT"
+    )
+    supplier_offer.add_argument(
+        "--supplier-offer", type=Path, required=True, metavar="OFFER"
+    )
+    supplier_offer.add_argument(
+        "--requested-boards", type=int, required=True, metavar="N"
+    )
+    supplier_offer.add_argument(
+        "--evaluated-at-unix", type=int, required=True, metavar="N"
+    )
+    supplier_offer.add_argument("--pcbex", default="pcbex", metavar="CMD")
+    supplier_offer.add_argument(
+        "--timeout-seconds", type=float, default=120.0, metavar="SECONDS"
+    )
+    supplier_offer.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    supplier_offer.add_argument(
+        "--require-covered",
+        action="store_true",
+        help="fail after retaining a report when the offer does not cover the intent",
+    )
+    supplier_offer_schema = sub.add_parser(
+        "supplier-offer-schema",
+        help="write the closed normalized supplier-offer JSON Schema",
+    )
+    supplier_offer_schema.add_argument("-o", "--output", type=Path, metavar="PATH")
+    supplier_offer_coverage_schema = sub.add_parser(
+        "supplier-offer-coverage-schema",
+        help="write the closed supplier-offer coverage report JSON Schema",
+    )
+    supplier_offer_coverage_schema.add_argument(
+        "-o", "--output", type=Path, metavar="PATH"
+    )
     assembly_evidence = sub.add_parser(
         "build-assembly-evidence",
         help=(
@@ -1559,6 +1621,57 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, ProcurementIntentError) as error:
             raise SystemExit(f"procurement intent schema failed: {error}") from error
+    elif args.command == "build-supplier-offer-coverage":
+        try:
+            validate_no_clobber_path(args.output)
+            result = evaluate_supplier_offer_coverage(
+                args.board,
+                args.manufacturing_package,
+                args.circuit_generation,
+                args.catalog_snapshot,
+                args.procurement_intent,
+                args.supplier_offer,
+                args.pcbex,
+                requested_boards=args.requested_boards,
+                evaluated_at_unix=args.evaluated_at_unix,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_supplier_offer_coverage(result)
+            atomic_write_no_clobber(
+                args.output,
+                rendered,
+                max_bytes=MAXIMUM_SUPPLIER_OFFER_COVERAGE_BYTES,
+            )
+        except (OSError, BoundedIOError, SupplierOfferError) as error:
+            raise SystemExit(
+                f"supplier offer coverage evaluation failed: {error}"
+            ) from error
+        if args.require_covered and not result["covered"]:
+            raise SystemExit(
+                "supplier offer coverage report was retained but the offer does not "
+                "cover the procurement intent"
+            )
+    elif args.command in {
+        "supplier-offer-schema",
+        "supplier-offer-coverage-schema",
+    }:
+        try:
+            if args.command == "supplier-offer-schema":
+                schema = normalized_supplier_offer_json_schema()
+            else:
+                schema = supplier_offer_coverage_json_schema()
+            rendered = json.dumps(schema, indent=2, ensure_ascii=False) + "\n"
+            if args.output:
+                validate_no_clobber_path(args.output)
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (OSError, BoundedIOError, SupplierOfferError) as error:
+            raise SystemExit(f"supplier offer schema failed: {error}") from error
     elif args.command == "build-assembly-evidence":
         try:
             validate_no_clobber_path(args.output)
