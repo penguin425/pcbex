@@ -543,7 +543,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "cargo +stable test --package pcbex --test final_cpl --release --locked"
         )
         self.assertIn(final_cpl_command, boundaries)
-        self.assertIn(final_cpl_command, rust_windows)
+        self.assertNotIn(final_cpl_command, rust_windows)
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
