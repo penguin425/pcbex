@@ -927,9 +927,9 @@ class SupplierOfferAcquisitionV1469Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve(strict=True)
             same = root / "same.json"
-            double_slash = "//" + str(same).lstrip("/")
+            double_separator = str(root) + os.sep + os.sep + same.name
             cases = (
-                (same, double_slash),
+                (same, double_separator),
                 (root / "case.json", root / "CASE.JSON"),
             )
             for index, (output, receipt) in enumerate(cases):
