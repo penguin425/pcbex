@@ -793,6 +793,55 @@ trusted-time, reservation, authorization, order, and payment claims remain
 false. See [Bounded supplier-offer HTTPS
 acquisition](docs/SUPPLIER_OFFER_ACQUISITION.md).
 
+### Exact assembly and acquired supplier-offer evidence
+
+Version 1.470 composes the three preceding retained boundaries without
+turning them into an authorization or live-supplier claim. It validates the
+v1.469 receipt against the exact canonical offer, freshly replays the complete
+v1.467 assembly evidence and v1.468 coverage from one privately staged source
+union, and cross-binds their board, package, handoff-generation, snapshot,
+procurement, offer, and timestamp identities:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  build-assembly-supplier-offer-evidence \
+  circuit-handoff.zip board.kicad_pcb manufacturing.zip \
+  --board-binding-report board-binding.json \
+  --procurement-intent procurement-intent.json \
+  --catalog-snapshot catalog-snapshot.json \
+  --final-cpl-report final-cpl.json \
+  --assembly-evidence assembly-evidence.json \
+  --supplier-offer supplier-offer.json \
+  --supplier-offer-fetch-receipt supplier-offer-fetch-receipt.json \
+  --supplier-offer-coverage supplier-offer-coverage.json \
+  --requested-boards 100 --evaluated-at-unix "$FETCHED_AT_UNIX" \
+  --pcbex target/release/pcbex \
+  --output assembly-supplier-offer-evidence.json --require-complete
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  assembly-supplier-offer-evidence-schema \
+  --output assembly-supplier-offer-evidence.schema.json
+```
+
+The composer accepts no separate generation path: it extracts the exact
+`generation-bundle.json` entry from the validated handoff for the coverage
+replay. `--evaluated-at-unix` must equal both the retained coverage value and
+the receipt's recorded `fetched_at_unix`; that equality is untrusted
+correlation, not trusted time. The closed result retains all three full child
+reports and is complete
+exactly when assembly evidence is complete and supplier-offer coverage is
+covered. A valid negative child remains inspectable before the optional final
+gate; a bad receipt, replay, source binding, timestamp correlation, or observed
+mutation produces no result. The nested receipt keeps its unsigned local
+network observation true while both replay children and the outer offline
+composer remain false.
+
+This does not prove current inventory, supplier/offer/price/transport/time
+authenticity, landed cost, reservation, assembly readiness, authorization,
+ordering, or payment. The requested-board count scales only the coverage
+quantities, not board/package/placement evidence. See [Exact assembly and
+acquired supplier-offer evidence
+composition](docs/ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md).
+
 Submit the exact manufacturing archive to a deployment-owned JLCPCB, PCBWay,
 or generic quote/DFM adapter without putting credentials in argv:
 

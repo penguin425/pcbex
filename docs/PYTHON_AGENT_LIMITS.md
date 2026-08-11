@@ -223,6 +223,47 @@ or transport evidence, cannot authenticate the recorded network/status/time/
 response observations. See
 [`SUPPLIER_OFFER_ACQUISITION.md`](SUPPLIER_OFFER_ACQUISITION.md).
 
+The v1.470 assembly/supplier-offer composer captures the complete v1.467
+validation union, including the retained assembly report, then adds the 4 MiB
+canonical offer, 16 MiB retained coverage report, and 1 MiB acquisition
+receipt. The direct caller-source aggregate is capped at 789 MiB. Fresh
+validation of a retained outer result additionally admits that result under
+its 128 MiB ceiling, for a 917 MiB aggregate. The exact handoff
+`generation-bundle.json` entry is bounded at 32 MiB and staged as a derived
+source rather than accepted or counted as a second caller path. Every
+role-specific v1.467–v1.469 source ceiling remains unchanged.
+
+One finite 1–600 second monotonic deadline, defaulting to 300, covers source
+capture, strict preparse, archive validation and generation extraction,
+private staging, offline receipt validation, both complete child validations,
+cross-binding, cleanup, result construction, and final staged/caller union
+rereads. After staging, the assembly child receives at most half the remaining
+budget. The coverage child then receives the remainder minus the smaller of
+15 seconds or half that remainder, reserving time for final composition and
+rereads. Both children share the outer clock and cannot extend its absolute
+deadline. The existing 256-argument, 32,768-byte argv, 1 MiB per-child-stream,
+and Windows 32,767-UTF-16-unit command ceilings remain in force.
+
+All path-backed sources must be distinct stable regular link/reparse-safe
+files. Retained child and outer reports may instead be copied from bounded
+canonical bytes or one-pass Mapping snapshots; the raw offer and original
+replay closure remain path inputs. The inherited v1.467 path union is captured
+first, the raw offer PathLike is frozen and read next, and each path-backed
+child is then frozen and read immediately in positional order rather than
+through a freeze-all/read-all child pass. The first alias check precedes child
+bytes and then Mapping snapshots. The validator intentionally captures its
+retained outer artifact wholly last regardless of representation and applies a
+second alias check if it is path-backed; that outer artifact is excluded from
+the earlier path-before-child-Mapping rule. The composer stages one captured
+union, rereads that entire union after each fresh child validation, validates
+and renders one bounded outer snapshot, then rereads both the staged and
+caller-visible path unions. These observations detect changes but are not an
+atomic snapshot against a same-principal change-and-restore race. A valid
+incomplete assembly or not-covered offer is retained; a malformed receipt,
+replay or identity mismatch, unsafe/aliased/oversized source,
+deadline/cleanup failure, or observed mutation produces no outer result. See
+[`ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md`](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md).
+
 The composed v1.457 handoff-to-manufacturing replay requires the complete v5
 board-binding inputs and one retained package. It keeps the existing 224 MiB
 handoff-archive ceiling, the 128 MiB board / 12 MiB canonical report plus one
@@ -536,6 +577,15 @@ or authenticate the raw response or TLS session and proves no supplier,
 endpoint, transport, offer, price, currentness, trusted time, reservation,
 authorization, order readiness, ordering, payment, or spend. v1.468 remains
 offline even when its input file came from this adapter.
+The v1.470 assembly/supplier-offer composer is offline. It validates the
+unsigned receipt against the exact offer and freshly validates the full
+assembly and coverage children, but cannot authenticate the receipt's
+historical response/network/TLS/time observations. Timestamp equality is only
+an untrusted cross-binding. The requested-board multiplier applies only to
+commercial coverage and creates no batch/panel/assembly evidence. The outer
+result proves no current stock, supplier/offer/price authenticity, landed
+cost, reservation, readiness, authorization, ordering, payment, or spend and
+changes none of the v1.467–v1.469 schemas or bytes.
 The v1.456 deterministic-pipeline replay likewise makes no producer or network
 call beyond its caller-selected local pcbex process. The child runs only the
 existing runner against the privately staged closure; the adapter does not run

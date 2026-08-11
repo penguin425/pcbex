@@ -858,6 +858,7 @@ reject_paths(result)
 PY
 
 
+
 # Compose the retained manufacturing ZIP with an exact circuit-handoff replay
 # and the same upgraded board. The board intentionally need not be approved by
 # this unrelated sample circuit: v6 reproduces the retained board-binding
@@ -1893,10 +1894,19 @@ supplier_offer_schema="$output_directory/supplier-offer.schema.json"
 supplier_offer_coverage_schema="$output_directory/supplier-offer-coverage.schema.json"
 supplier_offer_coverage="$output_directory/assembly.supplier-offer-coverage.json"
 supplier_offer_shortfall="$output_directory/assembly.supplier-offer.shortfall.json"
+supplier_offer_shortfall_response="$output_directory/assembly.supplier-offer.shortfall.response.json"
+supplier_offer_shortfall_fetch_receipt="$output_directory/assembly.supplier-offer.shortfall-fetch-receipt.json"
+supplier_offer_shortfall_server_ready="$output_directory/supplier-offer-shortfall-test-server.ready"
+supplier_offer_shortfall_server_request="$output_directory/supplier-offer-shortfall-test-server.request.json"
 supplier_offer_shortfall_coverage="$output_directory/assembly.supplier-offer.shortfall.coverage.json"
 supplier_offer_shortfall_gated_coverage="$output_directory/assembly.supplier-offer.shortfall.gated.coverage.json"
 supplier_offer_shortfall_error="$output_directory/assembly.supplier-offer.shortfall.stderr"
-supplier_offer_evaluated_at=1785715200
+supplier_offer_composition="$output_directory/assembly.supplier-offer-evidence.json"
+supplier_offer_composition_schema="$output_directory/assembly-supplier-offer-evidence.schema.json"
+supplier_offer_shortfall_composition="$output_directory/assembly.supplier-offer.shortfall.evidence.json"
+supplier_offer_shortfall_gated_composition="$output_directory/assembly.supplier-offer.shortfall.gated.evidence.json"
+supplier_offer_shortfall_composition_error="$output_directory/assembly.supplier-offer.shortfall.evidence.stderr"
+supplier_offer_evaluated_at="$(date +%s)"
 python3 - \
   "$assembly_procurement" \
   "$supplier_offer_response" \
@@ -1936,8 +1946,8 @@ offer = {
     "procurement_intent_sha256": hashlib.sha256(intent_raw).hexdigest(),
     "supplier": intent["catalog"]["supplier"],
     "offer_id": "kicad-e2e-v1468-25-boards",
-    "valid_from_unix": evaluated_at - 60,
-    "valid_until_unix": evaluated_at + 60,
+    "valid_from_unix": evaluated_at - 86_400,
+    "valid_until_unix": evaluated_at + 86_400,
     "currency": "USD",
     "lines": lines,
 }
@@ -2083,11 +2093,14 @@ if ! SSL_CERT_FILE="$supplier_offer_tls_certificate" \
   exit 1
 fi
 wait "$supplier_offer_server_pid"
-rm -f -- \
-  "$supplier_offer_tls_key" \
-  "$supplier_offer_tls_certificate" \
-  "$supplier_offer_tls_config" \
-  "$supplier_offer_server_script"
+supplier_offer_evaluated_at="$(python3 - "$supplier_offer_fetch_receipt" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["fetched_at_unix"])
+PY
+)"
 PYTHONPATH=agent/src python3 -m pcbex_agent supplier-offer-fetch-receipt-schema \
   --output "$supplier_offer_fetch_schema"
 PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
@@ -2312,7 +2325,7 @@ assert result["scope"] == "offline-procurement-supplier-offer-coverage-v1"
 assert result["status"] == "covered"
 assert result["covered"] is True
 assert result["requested_boards"] == 25
-assert result["evaluated_at_unix"] == 1785715200
+assert result["evaluated_at_unix"] == fetch_receipt["fetched_at_unix"]
 assert result["quantity_basis"] == "explicit_board_quantity"
 assert result["cost_scope"] == "component_lines_only"
 assert result["findings"] == []
@@ -2438,7 +2451,7 @@ PY
 # sole quoted line below the 25-board requirement. The first run retains only
 # the truthful shortfall; the gated rerun must publish identical bytes before
 # returning nonzero.
-python3 - "$supplier_offer" "$supplier_offer_shortfall" <<'PY'
+python3 - "$supplier_offer" "$supplier_offer_shortfall_response" <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -2454,6 +2467,56 @@ destination.write_bytes(
     + b"\n"
 )
 PY
+python3 "$supplier_offer_server_script" \
+  "$supplier_offer_tls_certificate" \
+  "$supplier_offer_tls_key" \
+  "$supplier_offer_shortfall_response" \
+  "$supplier_offer_shortfall_server_ready" \
+  "$supplier_offer_shortfall_server_request" \
+  "$supplier_offer_token" &
+supplier_offer_shortfall_server_pid=$!
+for _attempt in $(seq 1 200); do
+  if [[ -s "$supplier_offer_shortfall_server_ready" ]]; then
+    break
+  fi
+  if ! kill -0 "$supplier_offer_shortfall_server_pid" 2>/dev/null; then
+    wait "$supplier_offer_shortfall_server_pid"
+    echo "supplier-offer shortfall TLS server exited before readiness" >&2
+    exit 1
+  fi
+  sleep 0.05
+done
+test -s "$supplier_offer_shortfall_server_ready"
+supplier_offer_shortfall_server_port="$(tr -d '[:space:]' < "$supplier_offer_shortfall_server_ready")"
+if ! SSL_CERT_FILE="$supplier_offer_tls_certificate" \
+  PCBEX_E2E_SUPPLIER_OFFER_TOKEN="$supplier_offer_token" \
+  PYTHONPATH=agent/src python3 -m pcbex_agent fetch-supplier-offer \
+    --endpoint "https://127.0.0.1:${supplier_offer_shortfall_server_port}/v1/quote" \
+    --supplier "$supplier_offer_supplier" \
+    --procurement-intent-sha256 "$supplier_offer_intent_sha256" \
+    --output "$supplier_offer_shortfall" \
+    --receipt "$supplier_offer_shortfall_fetch_receipt" \
+    --timeout-seconds 30 \
+    --maximum-response-bytes 4194304 \
+    --bearer-token-environment PCBEX_E2E_SUPPLIER_OFFER_TOKEN; then
+  kill "$supplier_offer_shortfall_server_pid" 2>/dev/null || true
+  wait "$supplier_offer_shortfall_server_pid" 2>/dev/null || true
+  exit 1
+fi
+wait "$supplier_offer_shortfall_server_pid"
+supplier_offer_shortfall_evaluated_at="$(python3 - "$supplier_offer_shortfall_fetch_receipt" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+print(json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["fetched_at_unix"])
+PY
+)"
+rm -f -- \
+  "$supplier_offer_tls_key" \
+  "$supplier_offer_tls_certificate" \
+  "$supplier_offer_tls_config" \
+  "$supplier_offer_server_script"
 PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
   "$assembly_board" "$assembly_manufacturing_zip" \
   --circuit-generation "$assembly_generation" \
@@ -2461,7 +2524,7 @@ PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
   --procurement-intent "$assembly_procurement" \
   --supplier-offer "$supplier_offer_shortfall" \
   --requested-boards 25 \
-  --evaluated-at-unix "$supplier_offer_evaluated_at" \
+  --evaluated-at-unix "$supplier_offer_shortfall_evaluated_at" \
   --pcbex "$pcbex_binary" \
   --timeout-seconds 180 \
   --output "$supplier_offer_shortfall_coverage"
@@ -2472,7 +2535,7 @@ if PYTHONPATH=agent/src python3 -m pcbex_agent build-supplier-offer-coverage \
   --procurement-intent "$assembly_procurement" \
   --supplier-offer "$supplier_offer_shortfall" \
   --requested-boards 25 \
-  --evaluated-at-unix "$supplier_offer_evaluated_at" \
+  --evaluated-at-unix "$supplier_offer_shortfall_evaluated_at" \
   --pcbex "$pcbex_binary" \
   --timeout-seconds 180 \
   --output "$supplier_offer_shortfall_gated_coverage" \
@@ -2568,4 +2631,341 @@ def reject_paths(value):
         assert str(Path("/tmp").resolve()) not in value, value
 
 reject_paths(result)
+PY
+
+# v1.470 composes the full v1.467 assembly result, v1.468 coverage result, and
+# v1.469 receipt from one freshly replayed source union. The composer receives
+# no independent generation path: coverage is replayed from the exact entry in
+# the handoff archive. Receipt/fetch timestamp equality is untrusted
+# correlation, not a currentness or trusted-clock claim.
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  assembly-supplier-offer-evidence-schema \
+  --output "$supplier_offer_composition_schema"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  build-assembly-supplier-offer-evidence \
+  "$assembly_handoff_zip" "$assembly_board" "$assembly_manufacturing_zip" \
+  --board-binding-report "$assembly_board_binding" \
+  --procurement-intent "$assembly_procurement" \
+  --catalog-snapshot "$assembly_snapshot" \
+  --final-cpl-report "$assembly_final_cpl" \
+  --assembly-evidence "$assembly_evidence" \
+  --supplier-offer "$supplier_offer" \
+  --supplier-offer-fetch-receipt "$supplier_offer_fetch_receipt" \
+  --supplier-offer-coverage "$supplier_offer_coverage" \
+  --requested-boards 25 \
+  --evaluated-at-unix "$supplier_offer_evaluated_at" \
+  --pcbex "$pcbex_binary" \
+  --manufacturing-kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 600 \
+  --output "$supplier_offer_composition" \
+  --require-complete
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  build-assembly-supplier-offer-evidence \
+  "$assembly_handoff_zip" "$assembly_board" "$assembly_manufacturing_zip" \
+  --board-binding-report "$assembly_board_binding" \
+  --procurement-intent "$assembly_procurement" \
+  --catalog-snapshot "$assembly_snapshot" \
+  --final-cpl-report "$assembly_final_cpl" \
+  --assembly-evidence "$assembly_evidence" \
+  --supplier-offer "$supplier_offer_shortfall" \
+  --supplier-offer-fetch-receipt "$supplier_offer_shortfall_fetch_receipt" \
+  --supplier-offer-coverage "$supplier_offer_shortfall_coverage" \
+  --requested-boards 25 \
+  --evaluated-at-unix "$supplier_offer_shortfall_evaluated_at" \
+  --pcbex "$pcbex_binary" \
+  --manufacturing-kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 600 \
+  --output "$supplier_offer_shortfall_composition"
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  build-assembly-supplier-offer-evidence \
+  "$assembly_handoff_zip" "$assembly_board" "$assembly_manufacturing_zip" \
+  --board-binding-report "$assembly_board_binding" \
+  --procurement-intent "$assembly_procurement" \
+  --catalog-snapshot "$assembly_snapshot" \
+  --final-cpl-report "$assembly_final_cpl" \
+  --assembly-evidence "$assembly_evidence" \
+  --supplier-offer "$supplier_offer_shortfall" \
+  --supplier-offer-fetch-receipt "$supplier_offer_shortfall_fetch_receipt" \
+  --supplier-offer-coverage "$supplier_offer_shortfall_coverage" \
+  --requested-boards 25 \
+  --evaluated-at-unix "$supplier_offer_shortfall_evaluated_at" \
+  --pcbex "$pcbex_binary" \
+  --manufacturing-kicad-cli "$kicad_cli_binary" \
+  --timeout-seconds 600 \
+  --output "$supplier_offer_shortfall_gated_composition" \
+  --require-complete \
+  2>"$supplier_offer_shortfall_composition_error"; then
+  echo "expected incomplete assembly/supplier-offer evidence to fail the final gate" >&2
+  exit 1
+fi
+cmp "$supplier_offer_shortfall_composition" \
+  "$supplier_offer_shortfall_gated_composition"
+
+PYTHONPATH=agent/src python3 - \
+  "$supplier_offer_composition" \
+  "$supplier_offer_shortfall_composition" \
+  "$supplier_offer_shortfall_composition_error" \
+  "$supplier_offer_composition_schema" \
+  "$assembly_evidence" \
+  "$supplier_offer_coverage" \
+  "$supplier_offer_fetch_receipt" \
+  "$supplier_offer_shortfall_coverage" \
+  "$supplier_offer_shortfall_fetch_receipt" \
+  "$assembly_handoff_zip" \
+  "$assembly_board" \
+  "$assembly_manufacturing_zip" \
+  "$assembly_board_binding" \
+  "$assembly_procurement" \
+  "$assembly_snapshot" \
+  "$assembly_final_cpl" \
+  "$supplier_offer" \
+  "$supplier_offer_shortfall" \
+  "$assembly_generation" \
+  "$output_directory" <<'PY'
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+(
+    complete_path,
+    incomplete_path,
+    incomplete_error_path,
+    schema_path,
+    assembly_path,
+    coverage_path,
+    receipt_path,
+    shortfall_coverage_path,
+    shortfall_receipt_path,
+    handoff_path,
+    board_path,
+    package_path,
+    board_binding_path,
+    intent_path,
+    snapshot_path,
+    final_cpl_path,
+    offer_path,
+    shortfall_offer_path,
+    generation_path,
+    output_directory,
+) = map(Path, sys.argv[1:])
+
+def load_canonical(path):
+    raw = path.read_bytes()
+    value = json.loads(raw)
+    assert raw == json.dumps(
+        value, indent=2, ensure_ascii=False, sort_keys=True
+    ).encode("utf-8") + b"\n"
+    return value
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+complete = load_canonical(complete_path)
+incomplete = load_canonical(incomplete_path)
+schema = json.loads(schema_path.read_text(encoding="utf-8"))
+assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+coverage = json.loads(coverage_path.read_text(encoding="utf-8"))
+receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+shortfall_coverage = json.loads(
+    shortfall_coverage_path.read_text(encoding="utf-8")
+)
+shortfall_receipt = json.loads(
+    shortfall_receipt_path.read_text(encoding="utf-8")
+)
+
+expected_keys = {
+    "schema_version",
+    "scope",
+    "status",
+    "complete",
+    "adapter_network_performed",
+    "current_availability_verified",
+    "supplier_authenticity_verified",
+    "offer_authenticity_verified",
+    "price_authenticity_verified",
+    "trusted_time_verified",
+    "inventory_reserved",
+    "assembly_ready",
+    "assembly_authorized",
+    "fabrication_authorized",
+    "procurement_authorized",
+    "order_ready",
+    "order_placed",
+    "payment_performed",
+    "machine_operation_performed",
+    "sources",
+    "assembly_evidence",
+    "supplier_offer_fetch_receipt",
+    "supplier_offer_coverage",
+    "findings",
+    "validation",
+    "binding_sha256",
+}
+assert set(complete) == expected_keys
+assert complete["schema_version"] == 1
+assert complete["scope"] == (
+    "offline-exact-board-assembly-supplier-offer-evidence-v1"
+)
+assert complete["status"] == "complete"
+assert complete["complete"] is True
+assert complete["assembly_evidence"] == assembly
+assert complete["supplier_offer_coverage"] == coverage
+assert complete["supplier_offer_fetch_receipt"] == receipt
+assert complete["findings"] == []
+
+expected_validation = {
+    "assembly_evidence_replayed",
+    "supplier_offer_coverage_replayed",
+    "supplier_offer_fetch_receipt_validated",
+    "board_identity_cross_bound",
+    "manufacturing_package_identity_cross_bound",
+    "handoff_generation_identity_cross_bound",
+    "catalog_snapshot_identity_cross_bound",
+    "procurement_intent_identity_cross_bound",
+    "procurement_projection_cross_bound",
+    "supplier_offer_identity_cross_bound",
+    "receipt_request_binding_validated",
+    "evaluation_timestamp_cross_bound",
+    "network_semantics_preserved",
+    "caller_inputs_unchanged",
+}
+assert set(complete["validation"]) == expected_validation
+assert all(complete["validation"].values())
+for key in (
+    "adapter_network_performed",
+    "current_availability_verified",
+    "supplier_authenticity_verified",
+    "offer_authenticity_verified",
+    "price_authenticity_verified",
+    "trusted_time_verified",
+    "inventory_reserved",
+    "assembly_ready",
+    "assembly_authorized",
+    "fabrication_authorized",
+    "procurement_authorized",
+    "order_ready",
+    "order_placed",
+    "payment_performed",
+    "machine_operation_performed",
+):
+    assert complete[key] is False, key
+assert assembly["adapter_network_performed"] is False
+assert coverage["adapter_network_performed"] is False
+assert receipt["adapter_network_performed"] is True
+assert coverage["evaluated_at_unix"] == receipt["fetched_at_unix"]
+
+expected_source_keys = {
+    "assembly_evidence",
+    "board",
+    "board_binding_report",
+    "catalog_snapshot",
+    "circuit_handoff_bundle",
+    "final_cpl_report",
+    "handoff_generation_bundle",
+    "manufacturing_package",
+    "procurement_intent",
+    "supplier_offer",
+    "supplier_offer_coverage",
+    "supplier_offer_fetch_receipt",
+}
+assert set(complete["sources"]) == expected_source_keys
+assert complete["sources"] == {
+    "assembly_evidence": identity(assembly_path),
+    "board": {"name": board_path.name, **identity(board_path)},
+    "board_binding_report": identity(board_binding_path),
+    "catalog_snapshot": identity(snapshot_path),
+    "circuit_handoff_bundle": identity(handoff_path),
+    "final_cpl_report": identity(final_cpl_path),
+    "handoff_generation_bundle": identity(generation_path),
+    "manufacturing_package": identity(package_path),
+    "procurement_intent": identity(intent_path),
+    "supplier_offer": identity(offer_path),
+    "supplier_offer_coverage": identity(coverage_path),
+    "supplier_offer_fetch_receipt": identity(receipt_path),
+}
+assert complete["assembly_evidence"]["procurement"] == complete[
+    "supplier_offer_coverage"
+]["procurement"]
+assert complete["sources"]["handoff_generation_bundle"] == complete[
+    "supplier_offer_coverage"
+]["sources"]["generation_bundle"]
+assert complete["sources"]["supplier_offer"]["sha256"] == receipt[
+    "offer_sha256"
+]
+assert complete["sources"]["procurement_intent"]["sha256"] == receipt[
+    "procurement_intent_sha256"
+]
+
+binding_material = dict(complete)
+binding_digest = binding_material.pop("binding_sha256")
+assert binding_digest == hashlib.sha256(
+    b"pcbex:offline-exact-board-assembly-supplier-offer-evidence-v1\0"
+    + json.dumps(
+        binding_material, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+).hexdigest()
+
+assert set(incomplete) == expected_keys
+assert incomplete["status"] == "incomplete"
+assert incomplete["complete"] is False
+assert incomplete["assembly_evidence"] == assembly
+assert incomplete["supplier_offer_coverage"] == shortfall_coverage
+assert incomplete["supplier_offer_fetch_receipt"] == shortfall_receipt
+assert incomplete["findings"] == [
+    {
+        "code": "supplier_offer_not_covered",
+        "message": (
+            "the freshly replayed supplier-offer coverage is not covered"
+        ),
+    }
+]
+assert set(incomplete["validation"]) == expected_validation
+assert all(incomplete["validation"].values())
+assert shortfall_coverage["covered"] is False
+assert shortfall_receipt["adapter_network_performed"] is True
+assert shortfall_coverage["evaluated_at_unix"] == shortfall_receipt[
+    "fetched_at_unix"
+]
+assert incomplete["sources"]["supplier_offer"] == identity(
+    shortfall_offer_path
+)
+assert incomplete["sources"]["supplier_offer_fetch_receipt"] == identity(
+    shortfall_receipt_path
+)
+assert incomplete["sources"]["supplier_offer_coverage"] == identity(
+    shortfall_coverage_path
+)
+assert incomplete_error_path.read_bytes() == (
+    b"assembly supplier-offer evidence report was retained but evidence "
+    b"is incomplete\n"
+)
+
+assert schema["$id"].endswith(
+    "/schemas/offline-exact-board-assembly-supplier-offer-evidence-v1.json"
+)
+assert schema["additionalProperties"] is False
+assert schema["properties"]["scope"] == {
+    "const": "offline-exact-board-assembly-supplier-offer-evidence-v1"
+}
+assert schema["properties"]["adapter_network_performed"] == {"const": False}
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(output_directory.resolve()) not in value, value
+        assert str(Path("/tmp").resolve()) not in value, value
+
+reject_paths(complete)
+reject_paths(incomplete)
 PY

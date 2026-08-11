@@ -222,3 +222,14 @@ from this pre-step, its own `adapter_network_performed` remains false. A later
 consumer may cross-bind `receipt.offer_sha256` to
 `coverage.sources.supplier_offer.sha256`; v1.469 does not compose, authorize,
 or order those artifacts.
+
+Version 1.470 performs that correlation inside the separate [exact assembly
+and acquired supplier-offer evidence
+composition](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md). It runs only the offline
+receipt validator against the canonical offer, then freshly validates the
+unchanged coverage and assembly children from one staged source union. The
+nested receipt retains its local network-observation flag while the coverage,
+assembly, and outer composer flags remain false. Because the response entity
+and transport evidence are not retained, v1.470 still cannot authenticate the
+recorded response digest/status, network event, endpoint, TLS, or fetch time.
+This receipt schema and its canonical bytes remain unchanged.

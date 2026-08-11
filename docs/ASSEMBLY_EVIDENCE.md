@@ -256,3 +256,12 @@ composition. A later consumer may correlate the two through their exact
 procurement-intent source identity and identical compact procurement
 projection; v1.468 does not alter this report or make it an offer, price,
 current-stock, or procurement-authority artifact.
+
+Version 1.470 adds the separate [exact assembly and acquired supplier-offer
+evidence composition](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md). That outer
+boundary does not trust this compact result by digest alone: it freshly runs
+`validate_assembly_evidence` against the original handoff, board, package,
+board-binding report, intent, snapshot, and final-CPL sources from one private
+staged union. It then requires this compact procurement projection and the
+exact raw intent identity to equal the independently replayed v1.468 coverage
+child. This schema and its canonical bytes remain unchanged.

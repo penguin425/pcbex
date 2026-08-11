@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import unicodedata
 
 from .assembly_evidence import (
     MAXIMUM_ASSEMBLY_EVIDENCE_BYTES,
@@ -11,6 +12,13 @@ from .assembly_evidence import (
     assembly_evidence_json_schema,
     evaluate_assembly_evidence,
     render_assembly_evidence,
+)
+from .assembly_supplier_offer_evidence import (
+    MAXIMUM_ASSEMBLY_SUPPLIER_OFFER_EVIDENCE_BYTES,
+    AssemblySupplierOfferEvidenceError,
+    assembly_supplier_offer_evidence_json_schema,
+    evaluate_assembly_supplier_offer_evidence,
+    render_assembly_supplier_offer_evidence,
 )
 from .bounded_io import (
     BoundedIOError,
@@ -173,6 +181,57 @@ def _paths_are_same(left: Path, right: Path) -> bool:
     return os.path.normcase(os.path.abspath(left)) == os.path.normcase(
         os.path.abspath(right)
     )
+
+
+def _assembly_supplier_offer_comparison_path(path: Path) -> str:
+    try:
+        rendered = os.path.realpath(os.path.abspath(path))
+        normalized = os.path.normcase(rendered)
+        return unicodedata.normalize("NFC", normalized).casefold()
+    except (OSError, TypeError, ValueError, UnicodeError):
+        raise BoundedIOError(
+            "assembly supplier-offer evidence path identity is invalid"
+        ) from None
+
+
+def _preflight_assembly_supplier_offer_output(
+    output: Path, inputs: tuple[Path | None, ...]
+) -> Path:
+    validate_no_clobber_path(output)
+    try:
+        frozen_output = Path(os.path.abspath(output))
+    except (OSError, TypeError, ValueError, UnicodeError):
+        raise BoundedIOError(
+            "assembly supplier-offer evidence path identity is invalid"
+        ) from None
+    output_identity = _assembly_supplier_offer_comparison_path(output)
+    for source in inputs:
+        if source is None:
+            continue
+        aliases = _assembly_supplier_offer_comparison_path(source) == output_identity
+        if not aliases:
+            try:
+                same_parent = os.path.samefile(output.parent, source.parent)
+            except FileNotFoundError:
+                same_parent = False
+            except OSError:
+                raise BoundedIOError(
+                    "assembly supplier-offer evidence path identity is invalid"
+                ) from None
+            if same_parent:
+                output_leaf = unicodedata.normalize(
+                    "NFC", os.path.normcase(output.name)
+                ).casefold()
+                source_leaf = unicodedata.normalize(
+                    "NFC", os.path.normcase(source.name)
+                ).casefold()
+                aliases = output_leaf == source_leaf
+        if aliases:
+            raise BoundedIOError(
+                "assembly supplier-offer evidence output must differ from every "
+                "input path"
+            )
+    return frozen_output
 
 
 def main() -> None:
@@ -827,6 +886,111 @@ def main() -> None:
         help="write the closed exact assembly-evidence report JSON Schema",
     )
     assembly_evidence_schema.add_argument(
+        "-o", "--output", type=Path, metavar="PATH"
+    )
+    assembly_supplier_offer_help = (
+        "compose exact assembly evidence with retained supplier-offer acquisition "
+        "and coverage evidence"
+    )
+    assembly_supplier_offer = sub.add_parser(
+        "build-assembly-supplier-offer-evidence",
+        help=assembly_supplier_offer_help,
+        description=assembly_supplier_offer_help,
+    )
+    assembly_supplier_offer.add_argument(
+        "handoff_zip", type=Path, metavar="HANDOFF_ZIP"
+    )
+    assembly_supplier_offer.add_argument("board", type=Path, metavar="BOARD")
+    assembly_supplier_offer.add_argument(
+        "manufacturing_zip", type=Path, metavar="MANUFACTURING_ZIP"
+    )
+    assembly_supplier_offer.add_argument(
+        "--board-binding-report", type=Path, required=True, metavar="REPORT"
+    )
+    assembly_supplier_offer.add_argument(
+        "--procurement-intent", type=Path, required=True, metavar="INTENT"
+    )
+    assembly_supplier_offer.add_argument(
+        "--catalog-snapshot", type=Path, required=True, metavar="SNAPSHOT"
+    )
+    assembly_supplier_offer.add_argument(
+        "--final-cpl-report", type=Path, required=True, metavar="REPORT"
+    )
+    assembly_supplier_offer.add_argument(
+        "--assembly-evidence", type=Path, required=True, metavar="REPORT"
+    )
+    assembly_supplier_offer.add_argument(
+        "--supplier-offer", type=Path, required=True, metavar="OFFER"
+    )
+    assembly_supplier_offer.add_argument(
+        "--supplier-offer-fetch-receipt",
+        type=Path,
+        required=True,
+        metavar="RECEIPT",
+    )
+    assembly_supplier_offer.add_argument(
+        "--supplier-offer-coverage",
+        type=Path,
+        required=True,
+        metavar="COVERAGE",
+    )
+    assembly_supplier_offer.add_argument(
+        "--requested-boards", type=int, required=True, metavar="N"
+    )
+    assembly_supplier_offer.add_argument(
+        "--evaluated-at-unix", type=int, required=True, metavar="N"
+    )
+    assembly_supplier_offer.add_argument(
+        "--board-binding-policy", type=Path, metavar="POLICY"
+    )
+    assembly_supplier_offer.add_argument(
+        "--manufacturing-kicad-cli", default="kicad-cli", metavar="CMD"
+    )
+    assembly_supplier_offer.add_argument(
+        "--manufacturing-kicad-project", type=Path, metavar="PATH"
+    )
+    assembly_supplier_offer.add_argument(
+        "--manufacturing-kicad-rules", type=Path, metavar="PATH"
+    )
+    assembly_supplier_offer_profile = (
+        assembly_supplier_offer.add_mutually_exclusive_group()
+    )
+    assembly_supplier_offer_profile.add_argument(
+        "--manufacturing-fab", metavar="ID"
+    )
+    assembly_supplier_offer_profile.add_argument(
+        "--manufacturing-fab-profile", type=Path, metavar="PATH"
+    )
+    assembly_supplier_offer_profile.add_argument(
+        "--manufacturing-physical-profile", type=Path, metavar="PATH"
+    )
+    assembly_supplier_offer.add_argument(
+        "--expected-handoff-archive-sha256", metavar="HEX"
+    )
+    assembly_supplier_offer.add_argument(
+        "--expected-handoff-bundle-sha256", metavar="HEX"
+    )
+    assembly_supplier_offer.add_argument("--pcbex", default="pcbex", metavar="CMD")
+    assembly_supplier_offer.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help="whole-evaluation timeout in seconds (default: 300.0)",
+    )
+    assembly_supplier_offer.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    assembly_supplier_offer.add_argument(
+        "--require-complete",
+        action="store_true",
+        help="fail after retaining incomplete assembly supplier-offer evidence",
+    )
+    assembly_supplier_offer_schema = sub.add_parser(
+        "assembly-supplier-offer-evidence-schema",
+        help="write the closed assembly supplier-offer evidence JSON Schema",
+    )
+    assembly_supplier_offer_schema.add_argument(
         "-o", "--output", type=Path, metavar="PATH"
     )
     repair = sub.add_parser(
@@ -1822,6 +1986,98 @@ def main() -> None:
                 print(rendered, end="")
         except (OSError, BoundedIOError, AssemblyEvidenceError) as error:
             raise SystemExit(f"assembly evidence schema failed: {error}") from error
+    elif args.command == "build-assembly-supplier-offer-evidence":
+        try:
+            frozen_output = _preflight_assembly_supplier_offer_output(
+                args.output,
+                (
+                    args.handoff_zip,
+                    args.board,
+                    args.manufacturing_zip,
+                    args.board_binding_report,
+                    args.procurement_intent,
+                    args.catalog_snapshot,
+                    args.final_cpl_report,
+                    args.assembly_evidence,
+                    args.supplier_offer,
+                    args.supplier_offer_fetch_receipt,
+                    args.supplier_offer_coverage,
+                    args.board_binding_policy,
+                    args.manufacturing_kicad_project,
+                    args.manufacturing_kicad_rules,
+                    args.manufacturing_fab_profile,
+                    args.manufacturing_physical_profile,
+                ),
+            )
+            result = evaluate_assembly_supplier_offer_evidence(
+                args.handoff_zip,
+                args.board,
+                args.manufacturing_zip,
+                args.board_binding_report,
+                args.procurement_intent,
+                args.catalog_snapshot,
+                args.final_cpl_report,
+                args.assembly_evidence,
+                args.supplier_offer,
+                args.supplier_offer_fetch_receipt,
+                args.supplier_offer_coverage,
+                args.pcbex,
+                requested_boards=args.requested_boards,
+                evaluated_at_unix=args.evaluated_at_unix,
+                board_binding_policy=args.board_binding_policy,
+                kicad_cli=args.manufacturing_kicad_cli,
+                manufacturing_kicad_project=args.manufacturing_kicad_project,
+                manufacturing_kicad_rules=args.manufacturing_kicad_rules,
+                manufacturing_fab=args.manufacturing_fab,
+                manufacturing_fab_profile=args.manufacturing_fab_profile,
+                manufacturing_physical_profile=args.manufacturing_physical_profile,
+                expected_archive_sha256=args.expected_handoff_archive_sha256,
+                expected_bundle_sha256=args.expected_handoff_bundle_sha256,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_assembly_supplier_offer_evidence(result)
+            atomic_write_no_clobber(
+                frozen_output,
+                rendered,
+                max_bytes=MAXIMUM_ASSEMBLY_SUPPLIER_OFFER_EVIDENCE_BYTES,
+            )
+        except (OSError, BoundedIOError, AssemblySupplierOfferEvidenceError) as error:
+            raise SystemExit(
+                f"assembly supplier-offer evidence evaluation failed: {error}"
+            ) from None
+        if args.require_complete and not result["complete"]:
+            raise SystemExit(
+                "assembly supplier-offer evidence report was retained but evidence "
+                "is incomplete"
+            )
+    elif args.command == "assembly-supplier-offer-evidence-schema":
+        try:
+            if args.output:
+                validate_no_clobber_path(args.output)
+            rendered = (
+                json.dumps(
+                    assembly_supplier_offer_evidence_json_schema(),
+                    indent=2,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+            if args.output:
+                atomic_write_text_no_clobber(
+                    args.output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            else:
+                print(rendered, end="")
+        except (
+            OSError,
+            BoundedIOError,
+            AssemblySupplierOfferEvidenceError,
+        ) as error:
+            raise SystemExit(
+                f"assembly supplier-offer evidence schema failed: {error}"
+            ) from None
     else:
         if _paths_are_same(args.output, args.report):
             raise SystemExit("repair board output and report paths must differ")

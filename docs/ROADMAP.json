@@ -874,6 +874,11 @@
     {
       "id": "bounded-supplier-offer-https-acquisition-receipt",
       "release": "v1.469.0",
+      "status": "released"
+    },
+    {
+      "id": "exact-assembly-acquired-supplier-offer-evidence-composition",
+      "release": "v1.470.0",
       "status": "current"
     }
   ]
