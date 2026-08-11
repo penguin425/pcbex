@@ -227,3 +227,16 @@ here plus an independent receipt whose `offer_sha256` can be compared with
 observation does not authenticate a supplier, offer, price, endpoint,
 transport, or time, and it adds no coverage, reservation, authorization,
 ordering, or payment claim.
+
+Version 1.470 adds the separate [exact assembly and acquired supplier-offer
+evidence composition](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md). It freshly invokes
+this complete validator inside the private staged union also used for assembly
+replay and receipt validation. Coverage consumes that union's board, package,
+historical snapshot, raw intent, and canonical offer; its generation input is
+the exact entry extracted from the validated handoff, not a second caller
+path. The outer composer also requires the explicit coverage evaluation
+instant to equal the receipt's recorded fetch instant;
+that equality remains untrusted correlation and does not establish freshness.
+A valid `not_covered` report stays evidence rather than becoming a hard
+composition error. This schema, serialized bytes, and offline network flag
+remain unchanged.

@@ -264,3 +264,12 @@ That adapter requires the normalized offer's raw procurement-intent digest to
 equal the caller-declared digest before publication, but it does not validate
 or authorize this procurement intent. Fresh v1.464 replay remains the
 responsibility of the unchanged v1.468 coverage consumer.
+
+Version 1.470 adds the separate [exact assembly and acquired supplier-offer
+evidence composition](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md). It independently
+freshly replays this same raw intent through both the full v1.467 assembly
+validator and the full v1.468 coverage validator, then requires their compact
+procurement projections and exact raw intent identities to agree. The coverage
+replay receives the generation entry extracted from the same validated
+handoff. Neither replay grants procurement authority, and this schema and its
+canonical serialized bytes remain unchanged.

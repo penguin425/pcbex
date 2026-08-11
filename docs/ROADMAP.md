@@ -181,6 +181,7 @@ auditable release.
 | v1.467.0 | Exact per-board assembly evidence composition | Freshly reproduce one schema-v6 handoff/manufacturing chain, semantically replay one exact catalog-backed procurement intent from the handoff generation entry and supplied snapshot, byte-replay one exact final-CPL report, and hard-cross-bind shared board/package/handoff-generation identities plus the final-BOM/final-CPL manifest and package-board-source identities into one closed Python-only per-board result; retain truthful incomplete evidence before an optional final gate without claiming assembly readiness, authorization, live supplier facts, vendor transforms, or an atomic multi-input snapshot |
 | v1.468.0 | Exact offline supplier-offer coverage | Freshly replay one exact retained procurement intent from its board, manufacturing package, generation bundle, and historical catalog snapshot; bind one caller-normalized local offer to the exact intent bytes; multiply only explicit per-board quantities by an explicit requested board count; and retain covered or not-covered component-line evidence using fixed-scale integer subtotals, without claiming current availability, offer or supplier authenticity, landed cost, reservation, authorization, payment, or ordering |
 | v1.469.0 | Bounded supplier-offer HTTPS acquisition receipt | Explicitly fetch one already-normalized supplier offer through a bounded no-redirect HTTPS GET, preserve exact response-entity and canonical-offer identities in a closed local receipt, and publish the normalized offer for unchanged v1.468 offline coverage without claiming supplier, offer, price, transport, or time authenticity, current availability, reservation, authorization, ordering, or payment |
+| v1.470.0 | Exact assembly and acquired supplier-offer evidence composition | Capture one shared source union, validate the exact acquisition receipt and offer offline, freshly replay the complete v1.467 assembly and v1.468 coverage children from the same staged board/package/handoff-generation/snapshot/intent closure, and retain their full cross-bound results with truthful incomplete evidence before an optional gate, without claiming current supplier facts, trusted time, assembly readiness, authorization, ordering, or payment |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1266,7 +1267,7 @@ effect, producer provenance, sandbox, or atomic multi-input snapshot. The
 catalog, procurement-intent, and assembly-evidence schemas and serialized-byte
 contracts remain unchanged.
 
-The current v1.469.0 milestone adds an explicit network pre-step for the same
+The released v1.469.0 milestone adds an explicit network pre-step for the same
 closed normalized offer contract. `fetch-supplier-offer` performs exactly one
 bounded no-redirect GET against a credential-free absolute HTTPS endpoint,
 strictly validates the response as `offline-normalized-supplier-offer-v1`,
@@ -1298,3 +1299,43 @@ spend, or interpret unit prices, tiers, MOQ, shipping, tax, duty, fees,
 discounts, exchange rates, or landed cost. v1.468 remains offline and keeps
 its exact schemas, serialized bytes, and `adapter_network_performed: false`;
 the acquisition receipt's independent network-observation flag is true.
+
+The current v1.470.0 milestone closes both deliberately deferred correlation
+gaps in one new offline Python-only boundary. It captures the complete caller
+source union once, validates the v1.469 receipt against the exact canonical
+offer without contacting the endpoint, freshly validates the full retained
+v1.467 assembly result, and freshly validates the full retained v1.468
+coverage result from the same privately staged board, manufacturing package,
+historical snapshot, procurement intent, and offer. The coverage replay uses
+the exact `generation-bundle.json` entry extracted from the validated handoff;
+the composer accepts no independent generation path.
+
+The closed `offline-exact-board-assembly-supplier-offer-evidence-v1` result
+retains all three complete child objects and exact canonical child-source
+identities. It hard-cross-binds the named board, manufacturing package,
+handoff generation, snapshot, raw procurement intent, identical compact
+procurement projections, normalized offer, receipt request/offer bindings, and
+the explicit coverage evaluation timestamp to the receipt's recorded fetch
+timestamp. Timestamp equality is untrusted correlation, not a freshness or
+clock-authenticity claim. The nested network states remain deliberately
+different: assembly and coverage are false, the unsigned receipt observation
+is true, and the outer offline composer is false.
+
+Completion is exactly the conjunction of complete assembly evidence and
+covered supplier-offer evidence. A valid incomplete assembly child or
+not-covered offer remains in the full result before `--require-complete`
+fails; a malformed receipt, fresh replay mismatch, cross-binding mismatch,
+unsafe/oversized/aliased source, deadline/cleanup failure, or observed
+mutation produces no result. One absolute deadline covers capture, both fresh
+child validations, cleanup, composition, and final staged/caller union
+rereads. The existing v1.467, v1.468, and v1.469 schemas and bytes remain
+unchanged.
+
+This is not an authenticated or current quote, landed-cost calculation,
+assembly-readiness decision, or procurement workflow. It cannot authenticate
+the receipt's historical response/network/TLS/time observations, establish
+stock or supplier/offer/price authenticity, reserve inventory, validate
+polarity/panel/vendor-machine transforms, multiply technical evidence into a
+batch, authorize assembly/fabrication/procurement, order, pay, or spend. Its
+caller-selected tools remain unauthenticated and unsandboxed, and sequential
+rereads are not an atomic multi-input snapshot.

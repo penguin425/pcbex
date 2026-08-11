@@ -212,6 +212,31 @@ and performs no network or output write. The network deadline does not cover
 earlier output preflight/token lookup or later normalization, hashing, fsync,
 and publication.
 
+The v1.470 Python `build-assembly-supplier-offer-evidence` CLI is a separate
+offline consumer. It requires explicit retained assembly, normalized-offer,
+fetch-receipt, and coverage paths in addition to the original v1.467 source
+closure and an explicit requested-board count and evaluation timestamp. It
+accepts no independent generation path and no endpoint, token, or network
+option; coverage uses the exact generation entry extracted from the validated
+handoff. The output is one explicit new no-clobber path and is capped at
+128 MiB.
+
+The complete captured v1.467 validation union plus the 4 MiB offer, 16 MiB
+coverage result, and 1 MiB receipt is capped at 789 MiB. Validation of a
+retained outer result additionally includes that result under a 917 MiB total.
+The selected commands, profile exclusion, argv, child-stream, and Windows
+rendering limits are unchanged. One 1–600 second outer timeout defaults to
+300 and reserves bounded time across both complete fresh child validations,
+cleanup, composition, and final staged/caller union rereads.
+
+A valid incomplete assembly child or `not_covered` coverage child is fully
+retained before `--require-complete` fails. Malformed/misbound receipt or
+offer evidence, fresh replay mismatch, cross-boundary inconsistency, unsafe/
+aliased/oversized input, deadline/cleanup failure, or observed mutation
+produces no report. Schema output is canonical one-LF JSON to stdout or a new
+no-clobber path. See
+[`ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md`](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md).
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

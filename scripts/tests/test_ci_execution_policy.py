@@ -594,6 +594,26 @@ class CiExecutionPolicyTests(unittest.TestCase):
             ),
             1,
         )
+        assembly_supplier_offer_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_assembly_supplier_offer_evidence_v1470\n"
+            "          agent.tests.test_assembly_supplier_offer_evidence_cli_v1470 -v"
+        )
+        self.assertEqual(document.count(assembly_supplier_offer_command), 1)
+        self.assertIn(assembly_supplier_offer_command, boundaries)
+        self.assertNotIn(assembly_supplier_offer_command, rust_windows)
+        self.assertEqual(
+            document.count(
+                "agent.tests.test_assembly_supplier_offer_evidence_v1470"
+            ),
+            1,
+        )
+        self.assertEqual(
+            document.count(
+                "agent.tests.test_assembly_supplier_offer_evidence_cli_v1470"
+            ),
+            1,
+        )
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
@@ -615,6 +635,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         supplier_offer_acquisition_step = boundaries.index(
             "- name: Run cross-platform v1.469 supplier-offer acquisition boundaries"
         )
+        assembly_supplier_offer_step = boundaries.index(
+            "- name: Run cross-platform v1.470 assembly/supplier-offer boundaries"
+        )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
         )
@@ -633,7 +656,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn("PYTHONPATH: agent/src", supplier_offer_block)
         self.assertIn(supplier_offer_command, supplier_offer_block)
         supplier_offer_acquisition_block = boundaries[
-            supplier_offer_acquisition_step:toolchain_step
+            supplier_offer_acquisition_step:assembly_supplier_offer_step
         ]
         self.assertIn(
             "PYTHONPATH: agent/src", supplier_offer_acquisition_block
@@ -641,6 +664,14 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertIn(
             supplier_offer_acquisition_command,
             supplier_offer_acquisition_block,
+        )
+        assembly_supplier_offer_block = boundaries[
+            assembly_supplier_offer_step:toolchain_step
+        ]
+        self.assertIn("PYTHONPATH: agent/src", assembly_supplier_offer_block)
+        self.assertIn(
+            assembly_supplier_offer_command,
+            assembly_supplier_offer_block,
         )
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
@@ -674,6 +705,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         self.assertLess(board_regressions_step, toolchain_step)
         self.assertLess(assembly_evidence_step, toolchain_step)
+        self.assertLess(assembly_supplier_offer_step, toolchain_step)
         self.assertLess(toolchain_step, firmware_build_step)
         self.assertLess(firmware_build_step, fixture_step)
         self.assertLess(fixture_step, diagnostic_step)
