@@ -7,7 +7,9 @@
 //! files through [`PinnedDirectory::create_temp`] and publish them with
 //! [`PinnedDirectory::persist_replace`].  Durable local ledgers use
 //! [`PinnedDirectory::persist_no_replace_with_guards`], whose `linkat`
-//! compare-and-swap never overwrites an existing entry.
+//! compare-and-swap never overwrites an existing entry. Ordinary artifacts
+//! that need the same no-clobber guarantee on every supported platform use
+//! [`PinnedDirectory::persist_no_replace_pinned_with_guards`].
 
 #[cfg(all(not(unix), not(windows)))]
 use crate::bounded_io::opened_path_matches;
@@ -241,6 +243,20 @@ impl PinnedDirectory {
         }
     }
 
+    /// Pin a directory while additionally rejecting Windows reparse points
+    /// in every visible path component and on the retained handle.
+    ///
+    /// This opt-in form preserves the existing `open` contract for legacy
+    /// callers while giving security-sensitive publication paths a stricter
+    /// cross-platform boundary.
+    pub(crate) fn open_no_reparse(path: impl AsRef<Path>) -> io::Result<Self> {
+        let path = path.as_ref();
+        inspect_directory_no_reparse(path)?;
+        let pinned = Self::open(path)?;
+        pinned.ensure_pinned_no_reparse()?;
+        Ok(pinned)
+    }
+
     /// Return the path that was used when the directory was pinned.
     pub(crate) fn path(&self) -> &Path {
         &self.path
@@ -250,6 +266,11 @@ impl PinnedDirectory {
     /// by this instance.
     pub(crate) fn revalidate(&self) -> io::Result<()> {
         self.ensure_pinned()
+    }
+
+    /// Revalidate the pinned parent and the strict non-reparse path contract.
+    pub(crate) fn revalidate_no_reparse(&self) -> io::Result<()> {
+        self.ensure_pinned_no_reparse()
     }
 
     /// Require the pinned directory to be owned by the effective user and to
@@ -650,6 +671,101 @@ impl PinnedDirectory {
         Err(unsupported_error())
     }
 
+    /// Publish an ordinary artifact without replacement while retaining and
+    /// revalidating the destination parent.
+    ///
+    /// Unix delegates to the descriptor-relative `linkat` implementation.
+    /// Windows and other targets use `persist_noclobber`, bracketed by pinned
+    /// parent and caller-supplied path guards. A post-install validation
+    /// failure is reported as committed-but-uncertain because the installed
+    /// entry must never be removed after publication.
+    #[cfg(unix)]
+    pub(crate) fn persist_no_replace_pinned_with_guards<Before, After>(
+        &self,
+        temporary: AnchoredTempFile,
+        destination: impl AsRef<Path>,
+        before_install: Before,
+        after_install: After,
+    ) -> io::Result<NoReplacePublicationOutcome>
+    where
+        Before: FnOnce() -> io::Result<()>,
+        After: FnOnce() -> io::Result<()>,
+    {
+        self.persist_no_replace_with_guards(temporary, destination, before_install, after_install)
+    }
+
+    /// Guarded path-based counterpart to the Unix descriptor-relative
+    /// no-replace publication.
+    #[cfg(not(unix))]
+    pub(crate) fn persist_no_replace_pinned_with_guards<Before, After>(
+        &self,
+        mut temporary: AnchoredTempFile,
+        destination: impl AsRef<Path>,
+        before_install: Before,
+        after_install: After,
+    ) -> io::Result<NoReplacePublicationOutcome>
+    where
+        Before: FnOnce() -> io::Result<()>,
+        After: FnOnce() -> io::Result<()>,
+    {
+        let destination = destination.as_ref();
+        self.destination_name(destination)?;
+        if !temporary.as_file().metadata()?.file_type().is_file() {
+            return Err(invalid_path(
+                "temporary publication source must be a regular file",
+            ));
+        }
+
+        self.ensure_pinned_no_reparse()?;
+        temporary.flush()?;
+        temporary.as_file().sync_all()?;
+        self.ensure_pinned_no_reparse()?;
+        self.destination_name(destination)?;
+        before_install()?;
+        self.ensure_pinned_no_reparse()?;
+
+        let installed = match temporary.inner.persist_noclobber(destination) {
+            Ok(installed) => installed,
+            Err(error) => {
+                if error.error.kind() == io::ErrorKind::AlreadyExists
+                    || symlink_metadata(destination).is_ok()
+                {
+                    return Ok(NoReplacePublicationOutcome::AlreadyExists);
+                }
+                return Err(error.error);
+            }
+        };
+
+        let mut post_install_errors: Vec<(&str, io::Error)> = Vec::new();
+        if let Err(error) = after_install() {
+            post_install_errors.push(("post-install validation", error));
+        }
+        #[cfg(test)]
+        if let Err(error) = invoke_after_noreplace_install_hook() {
+            post_install_errors.push(("after final-name installation", error));
+        }
+        if let Err(error) = self.ensure_pinned_no_reparse() {
+            post_install_errors.push(("pinned directory revalidation", error));
+        }
+        if let Err(error) = published_file_matches_path(&installed, destination).and_then(|same| {
+            if same {
+                Ok(())
+            } else {
+                Err(changed_error(
+                    destination,
+                    "published file identity does not match its visible path",
+                ))
+            }
+        }) {
+            post_install_errors.push(("published file identity validation", error));
+        }
+        if post_install_errors.is_empty() {
+            Ok(NoReplacePublicationOutcome::CommittedDurable)
+        } else {
+            Ok(committed_but_completion_failed(post_install_errors))
+        }
+    }
+
     /// Windows and other non-Unix guarded fallback.  The destination and
     /// parent are checked immediately before and after `persist`; unlike the
     /// Unix implementation, a swap in the narrow syscall window can redirect
@@ -712,6 +828,20 @@ impl PinnedDirectory {
                 "directory path no longer names the pinned directory",
             ));
         }
+        Ok(())
+    }
+
+    fn ensure_pinned_no_reparse(&self) -> io::Result<()> {
+        inspect_directory_no_reparse(&self.path)?;
+        self.ensure_pinned()?;
+        #[cfg(windows)]
+        if metadata_is_reparse_point(&self.directory.metadata()?) {
+            return Err(changed_error(
+                &self.path,
+                "pinned directory handle is a reparse point",
+            ));
+        }
+        inspect_directory_no_reparse(&self.path)?;
         Ok(())
     }
 
@@ -846,6 +976,40 @@ fn reject_existing_non_regular(path: &Path) -> io::Result<()> {
     }
 }
 
+fn inspect_directory_no_reparse(path: &Path) -> io::Result<Metadata> {
+    let metadata = inspect_directory(path)?;
+    #[cfg(windows)]
+    {
+        let absolute = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()?.join(path)
+        };
+        let mut current = PathBuf::new();
+        for component in absolute.components() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => {
+                    current.push(component.as_os_str());
+                    continue;
+                }
+                Component::CurDir => continue,
+                Component::ParentDir | Component::Normal(_) => current.push(component.as_os_str()),
+            }
+            let component_metadata = symlink_metadata(&current)?;
+            if metadata_is_reparse_point(&component_metadata) {
+                return Err(changed_error(
+                    path,
+                    "directory path contains a reparse point",
+                ));
+            }
+        }
+        if metadata_is_reparse_point(&metadata) {
+            return Err(changed_error(path, "directory path is a reparse point"));
+        }
+    }
+    Ok(metadata)
+}
+
 #[cfg(unix)]
 fn single_leaf_name(path: &Path) -> io::Result<&std::ffi::OsStr> {
     let mut components = path.components();
@@ -883,7 +1047,6 @@ fn unsupported_error() -> io::Error {
     )
 }
 
-#[cfg(unix)]
 fn committed_but_completion_failed(
     errors: Vec<(&'static str, io::Error)>,
 ) -> NoReplacePublicationOutcome {
@@ -900,6 +1063,34 @@ fn committed_but_completion_failed(
         kind,
         format!("post-install completion failed: {details}"),
     ))
+}
+
+#[cfg(windows)]
+fn metadata_is_reparse_point(metadata: &Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_REPARSE_POINT;
+
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(windows)]
+fn published_file_matches_path(opened: &File, path: &Path) -> io::Result<bool> {
+    let visible = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+    let metadata = visible.metadata()?;
+    Ok(metadata.file_type().is_file()
+        && !metadata_is_reparse_point(&metadata)
+        && windows_directory_identity(opened)? == windows_directory_identity(&visible)?)
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn published_file_matches_path(opened: &File, path: &Path) -> io::Result<bool> {
+    let metadata = symlink_metadata(path)?;
+    Ok(metadata.file_type().is_file()
+        && !metadata.file_type().is_symlink()
+        && opened_path_matches(opened, path)?)
 }
 
 #[cfg(windows)]
@@ -1020,6 +1211,54 @@ mod tests {
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         let contents = fs::read(&destination)?;
         assert!(contents.starts_with(b"winner-"));
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_no_replace_api_publishes_and_refuses_overwrite() -> io::Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let output = workspace.path().join("output");
+        fs::create_dir(&output)?;
+        let pinned = PinnedDirectory::open(&output)?;
+        let destination = output.join("artifact.json");
+        let first = pinned.persist_no_replace_pinned_with_guards(
+            staged(&pinned, b"first")?,
+            &destination,
+            || Ok(()),
+            || Ok(()),
+        )?;
+        assert!(matches!(
+            first,
+            NoReplacePublicationOutcome::CommittedDurable
+        ));
+        let second = pinned.persist_no_replace_pinned_with_guards(
+            staged(&pinned, b"second")?,
+            &destination,
+            || Ok(()),
+            || Ok(()),
+        )?;
+        assert!(matches!(second, NoReplacePublicationOutcome::AlreadyExists));
+        assert_eq!(fs::read(destination)?, b"first");
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_no_replace_api_rejects_swapped_parent_before_install() -> io::Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let output = workspace.path().join("output");
+        let moved = workspace.path().join("moved-output");
+        fs::create_dir(&output)?;
+        let pinned = PinnedDirectory::open(&output)?;
+        let temporary = staged(&pinned, b"not published")?;
+        fs::rename(&output, &moved)?;
+        fs::create_dir(&output)?;
+        let destination = output.join("artifact.json");
+        let error = pinned
+            .persist_no_replace_pinned_with_guards(temporary, &destination, || Ok(()), || Ok(()))
+            .expect_err("a swapped parent must fail before publication");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(!destination.exists());
+        assert!(!moved.join("artifact.json").exists());
         Ok(())
     }
 
@@ -1330,6 +1569,61 @@ mod non_unix_tests {
                 .kind(),
             io::ErrorKind::Unsupported
         );
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_no_replace_api_is_guarded_and_no_clobber() -> io::Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let output = workspace.path().join("output");
+        fs::create_dir(&output)?;
+        let pinned = PinnedDirectory::open(&output)?;
+        let destination = output.join("artifact.json");
+        let mut first = pinned.create_temp(".pcbex-pinned-noreplace-")?;
+        first.write_all(b"first")?;
+        assert!(matches!(
+            pinned.persist_no_replace_pinned_with_guards(
+                first,
+                &destination,
+                || Ok(()),
+                || Ok(()),
+            )?,
+            NoReplacePublicationOutcome::CommittedDurable
+        ));
+        let mut second = pinned.create_temp(".pcbex-pinned-noreplace-")?;
+        second.write_all(b"second")?;
+        assert!(matches!(
+            pinned.persist_no_replace_pinned_with_guards(
+                second,
+                &destination,
+                || Ok(()),
+                || Ok(()),
+            )?,
+            NoReplacePublicationOutcome::AlreadyExists
+        ));
+        assert_eq!(fs::read(destination)?, b"first");
+        Ok(())
+    }
+
+    #[test]
+    fn pinned_no_replace_api_honors_preinstall_failure() -> io::Result<()> {
+        let workspace = tempfile::tempdir()?;
+        let output = workspace.path().join("output");
+        fs::create_dir(&output)?;
+        let pinned = PinnedDirectory::open(&output)?;
+        let destination = output.join("artifact.json");
+        let mut temporary = pinned.create_temp(".pcbex-pinned-noreplace-")?;
+        temporary.write_all(b"not published")?;
+        let error = pinned
+            .persist_no_replace_pinned_with_guards(
+                temporary,
+                &destination,
+                || Err(io::Error::other("injected path guard failure")),
+                || Ok(()),
+            )
+            .expect_err("a failed preinstall guard must abort publication");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(!destination.exists());
         Ok(())
     }
 }

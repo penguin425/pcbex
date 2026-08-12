@@ -163,15 +163,12 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
 use std::{
     convert::Infallible,
-    io::{self, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
     process::Command as ProcessCommand,
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-
-#[cfg(unix)]
-use std::io::{Read, Seek, SeekFrom};
 
 #[cfg(unix)]
 unsafe extern "C" {
@@ -218,6 +215,7 @@ mod policy_rollback_recovery;
 mod policy_rollout;
 mod policy_rollout_approval;
 mod policy_suspension;
+mod procurement_authorization;
 mod remote_approval_gossip;
 mod remote_approval_gossip_registry_checkpoint_witness;
 mod remote_policy;
@@ -494,6 +492,15 @@ use policy_suspension::{
     policy_suspension_state_json_schema, render_policy_suspension_summary,
     sign_policy_suspension_decision, signed_policy_suspension_decision_json_schema,
 };
+use procurement_authorization::{
+    MAX_PROCUREMENT_APPROVAL_AGGREGATE_BYTES, MAX_PROCUREMENT_APPROVALS,
+    MAX_PROCUREMENT_CRYPTOGRAPHIC_ASSESSMENT_BYTES, MAX_PROCUREMENT_POLICY_PACK_BYTES,
+    MAX_PROCUREMENT_SIGNING_REQUEST_BYTES, MAX_SIGNED_PROCUREMENT_APPROVAL_BYTES,
+    ProcurementApprovalDecision, parse_and_bind_procurement_policy_pack,
+    parse_procurement_approval_signing_request, parse_signed_procurement_approval,
+    sign_procurement_approval, validate_procurement_approval_signing_inputs,
+    verify_procurement_cryptographic_assessment,
+};
 use remote_approval_gossip::{
     remote_approval_log_gossip_receipt_json_schema, request_remote_approval_log_gossip,
 };
@@ -688,6 +695,15 @@ impl From<HumanDecisionArg> for RolloutApprovalDecision {
 }
 
 impl From<HumanDecisionArg> for FabricationApprovalDecision {
+    fn from(value: HumanDecisionArg) -> Self {
+        match value {
+            HumanDecisionArg::Approve => Self::Approve,
+            HumanDecisionArg::Reject => Self::Reject,
+        }
+    }
+}
+
+impl From<HumanDecisionArg> for ProcurementApprovalDecision {
     fn from(value: HumanDecisionArg) -> Self {
         match value {
             HumanDecisionArg::Approve => Self::Approve,
@@ -1081,6 +1097,40 @@ enum Command {
         /// Echo digest-bound retained-report metadata to stdout for the MCP subprocess bridge.
         #[arg(long, hide = true)]
         mcp_echo_report_summary: bool,
+    },
+    #[command(name = "internal-sign-procurement-approval", hide = true)]
+    InternalSignProcurementApproval {
+        request: CompactPath,
+        #[arg(long)]
+        policy_pack: CompactPath,
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_pack_canonical_sha256: String,
+        #[arg(long)]
+        private_key: CompactPath,
+        #[arg(long)]
+        signer_id: String,
+        #[arg(long, value_enum)]
+        decision: HumanDecisionArg,
+        #[arg(long)]
+        reason: String,
+        #[arg(long)]
+        ticket: String,
+        #[arg(long)]
+        output: CompactPath,
+    },
+    #[command(name = "internal-verify-procurement-authorization", hide = true)]
+    InternalVerifyProcurementAuthorization {
+        request: CompactPath,
+        #[arg(long)]
+        policy_pack: CompactPath,
+        #[arg(long, value_parser = parse_lowercase_sha256)]
+        expected_policy_pack_canonical_sha256: String,
+        #[arg(long = "approval", required = true)]
+        approvals: Vec<CompactPath>,
+        #[arg(long)]
+        evaluated_at_unix: u64,
+        #[arg(long)]
+        output: CompactPath,
     },
     /// Sign one human decision over a freshly replayed exact fabrication evidence set.
     SignFabricationApproval {
@@ -6251,6 +6301,7 @@ fn doctor_report(require_kicad: bool) -> DoctorReport {
 fn capabilities_report() -> CapabilitiesReport {
     let commands = Cli::command()
         .get_subcommands()
+        .filter(|command| !command.is_hide_set())
         .map(|command| CapabilityCommand {
             name: command.get_name().to_string(),
             description: command
@@ -6789,6 +6840,194 @@ fn run_cli() -> Result<()> {
             if require_approved && !report.approved {
                 bail!("deterministic hardware pipeline rejected");
             }
+        }
+        Command::InternalSignProcurementApproval {
+            request,
+            policy_pack,
+            expected_policy_pack_canonical_sha256,
+            private_key,
+            signer_id,
+            decision,
+            reason,
+            ticket,
+            output,
+        } => {
+            let inputs: [&Path; 2] = [&request, &policy_pack];
+            let prepared = prepare_procurement_helper_output(&output, &inputs)?;
+            let named_inputs: [(&str, &Path); 2] = [
+                ("procurement signing request", &*request),
+                ("organization policy pack", &*policy_pack),
+            ];
+            reject_procurement_input_aliases(&named_inputs)?;
+            let (request_source, request_identity) = read_exact_artifact(
+                &request,
+                MAX_PROCUREMENT_SIGNING_REQUEST_BYTES,
+                "procurement approval signing request",
+            )?;
+            let request_document = parse_procurement_approval_signing_request(&request_source)
+                .map_err(anyhow::Error::msg)?;
+            let (policy_source, policy_identity) = read_exact_artifact(
+                &policy_pack,
+                MAX_PROCUREMENT_POLICY_PACK_BYTES,
+                "organization policy pack",
+            )?;
+            let policy = parse_and_bind_procurement_policy_pack(
+                &policy_source,
+                &expected_policy_pack_canonical_sha256,
+                &request_document.evidence.policy_pack,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let decision: ProcurementApprovalDecision = decision.into();
+            validate_procurement_approval_signing_inputs(
+                &request_document,
+                &policy,
+                decision,
+                &reason,
+                &ticket,
+                &signer_id,
+            )
+            .map_err(anyhow::Error::msg)?;
+            // Private material is opened only after every public request,
+            // policy, signer, scope, text, and destination check has passed.
+            let secret =
+                read_procurement_private_key(&private_key, &named_inputs, &output)?;
+            let signed = sign_procurement_approval(
+                &request_document,
+                &policy,
+                decision,
+                &reason,
+                &ticket,
+                &signer_id,
+                &secret,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                &request,
+                MAX_PROCUREMENT_SIGNING_REQUEST_BYTES,
+                &request_identity,
+                "procurement approval signing request",
+            )?;
+            require_exact_artifact(
+                &policy_pack,
+                MAX_PROCUREMENT_POLICY_PACK_BYTES,
+                &policy_identity,
+                "organization policy pack",
+            )?;
+            reject_procurement_input_aliases(&named_inputs)?;
+            let rendered = format!("{}\n", serde_json::to_string_pretty(&signed)?);
+            if rendered.len() as u64 > MAX_SIGNED_PROCUREMENT_APPROVAL_BYTES {
+                bail!(
+                    "signed procurement approval exceeds {} bytes",
+                    MAX_SIGNED_PROCUREMENT_APPROVAL_BYTES
+                );
+            }
+            persist_procurement_helper_output(prepared, &output, rendered.as_bytes())?;
+        }
+        Command::InternalVerifyProcurementAuthorization {
+            request,
+            policy_pack,
+            expected_policy_pack_canonical_sha256,
+            approvals,
+            evaluated_at_unix,
+            output,
+        } => {
+            if approvals.len() > MAX_PROCUREMENT_APPROVALS {
+                bail!(
+                    "procurement approval set cannot contain more than {} entries",
+                    MAX_PROCUREMENT_APPROVALS
+                );
+            }
+            let mut inputs: Vec<&Path> = Vec::with_capacity(2 + approvals.len());
+            inputs.push(&request);
+            inputs.push(&policy_pack);
+            inputs.extend(approvals.iter().map(|path| &**path as &Path));
+            let prepared = prepare_procurement_helper_output(&output, &inputs)?;
+            let mut named_inputs: Vec<(&str, &Path)> = Vec::with_capacity(inputs.len());
+            named_inputs.push(("procurement signing request", &request));
+            named_inputs.push(("organization policy pack", &policy_pack));
+            named_inputs.extend(
+                approvals
+                    .iter()
+                    .map(|path| ("signed procurement approval", &**path as &Path)),
+            );
+            reject_procurement_input_aliases(&named_inputs)?;
+            let (request_source, request_identity) = read_exact_artifact(
+                &request,
+                MAX_PROCUREMENT_SIGNING_REQUEST_BYTES,
+                "procurement approval signing request",
+            )?;
+            let request_document = parse_procurement_approval_signing_request(&request_source)
+                .map_err(anyhow::Error::msg)?;
+            let (policy_source, policy_identity) = read_exact_artifact(
+                &policy_pack,
+                MAX_PROCUREMENT_POLICY_PACK_BYTES,
+                "organization policy pack",
+            )?;
+            let policy = parse_and_bind_procurement_policy_pack(
+                &policy_source,
+                &expected_policy_pack_canonical_sha256,
+                &request_document.evidence.policy_pack,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let mut approval_documents = Vec::with_capacity(approvals.len());
+            let mut approval_identities = Vec::with_capacity(approvals.len());
+            let mut aggregate_bytes = 0_u64;
+            for path in &approvals {
+                let (source, identity) = read_exact_artifact(
+                    path,
+                    MAX_SIGNED_PROCUREMENT_APPROVAL_BYTES,
+                    "signed procurement approval",
+                )?;
+                aggregate_bytes = aggregate_bytes
+                    .checked_add(identity.bytes)
+                    .ok_or_else(|| anyhow::anyhow!("procurement approval aggregate size overflow"))?;
+                if aggregate_bytes > MAX_PROCUREMENT_APPROVAL_AGGREGATE_BYTES {
+                    bail!(
+                        "procurement approvals exceed the {}-byte aggregate limit",
+                        MAX_PROCUREMENT_APPROVAL_AGGREGATE_BYTES
+                    );
+                }
+                approval_documents.push(
+                    parse_signed_procurement_approval(&source).map_err(anyhow::Error::msg)?,
+                );
+                approval_identities.push(identity);
+            }
+            let assessment = verify_procurement_cryptographic_assessment(
+                &request_document,
+                &policy,
+                &approval_documents,
+                evaluated_at_unix,
+            )
+            .map_err(anyhow::Error::msg)?;
+            require_exact_artifact(
+                &request,
+                MAX_PROCUREMENT_SIGNING_REQUEST_BYTES,
+                &request_identity,
+                "procurement approval signing request",
+            )?;
+            require_exact_artifact(
+                &policy_pack,
+                MAX_PROCUREMENT_POLICY_PACK_BYTES,
+                &policy_identity,
+                "organization policy pack",
+            )?;
+            for (path, identity) in approvals.iter().zip(&approval_identities) {
+                require_exact_artifact(
+                    path,
+                    MAX_SIGNED_PROCUREMENT_APPROVAL_BYTES,
+                    identity,
+                    "signed procurement approval",
+                )?;
+            }
+            reject_procurement_input_aliases(&named_inputs)?;
+            let rendered = format!("{}\n", serde_json::to_string_pretty(&assessment)?);
+            if rendered.len() as u64 > MAX_PROCUREMENT_CRYPTOGRAPHIC_ASSESSMENT_BYTES {
+                bail!(
+                    "procurement cryptographic assessment exceeds {} bytes",
+                    MAX_PROCUREMENT_CRYPTOGRAPHIC_ASSESSMENT_BYTES
+                );
+            }
+            persist_procurement_helper_output(prepared, &output, rendered.as_bytes())?;
         }
         Command::SignFabricationApproval {
             plan,
@@ -19687,6 +19926,271 @@ fn prepare_pipeline_output(output: &Path, inputs: &[&Path]) -> Result<tempfile::
     prepare_atomic_new_file(output)
 }
 
+fn prepare_procurement_helper_output(
+    output: &Path,
+    inputs: &[&Path],
+) -> Result<PreparedProcurementHelperOutput> {
+    reject_procurement_path_components(output, "internal procurement helper output")?;
+    reject_pipeline_output_aliases(output, inputs, "internal procurement helper output")?;
+    ensure_new_file_path(output)?;
+    let parent_path = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let parent = anchored_io::PinnedDirectory::open_no_reparse(parent_path).with_context(|| {
+        format!(
+            "pinning internal procurement helper output parent {}",
+            parent_path.display()
+        )
+    })?;
+    parent
+        .revalidate_no_reparse()
+        .context("revalidating internal procurement helper output parent")?;
+    reject_procurement_path_components(output, "internal procurement helper output")?;
+    ensure_new_file_path(output)?;
+    let temporary = parent
+        .create_temp(".pcbex-procurement-output-")
+        .with_context(|| format!("preparing output beside {}", output.display()))?;
+    parent
+        .revalidate_no_reparse()
+        .context("revalidating internal procurement helper output parent after staging")?;
+    reject_procurement_path_components(output, "internal procurement helper output")?;
+    ensure_new_file_path(output)?;
+    Ok(PreparedProcurementHelperOutput { parent, temporary })
+}
+
+struct PreparedProcurementHelperOutput {
+    parent: anchored_io::PinnedDirectory,
+    temporary: anchored_io::AnchoredTempFile,
+}
+
+fn procurement_output_before_install(path: &Path) -> io::Result<()> {
+    reject_procurement_path_components(path, "internal procurement helper output")
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:#}")))?;
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("refusing to overwrite existing output {}", path.display()),
+        )),
+        Err(error) => Err(error),
+    }
+}
+
+fn procurement_output_after_install(path: &Path) -> io::Result<()> {
+    reject_procurement_path_components(path, "internal procurement helper output")
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, format!("{error:#}")))?;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || !metadata.file_type().is_file()
+        || procurement_metadata_is_reparse_point(&metadata)
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "published internal procurement helper output is not a regular non-link file: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn persist_procurement_helper_output(
+    mut prepared: PreparedProcurementHelperOutput,
+    path: &Path,
+    contents: &[u8],
+) -> Result<()> {
+    if contents.len() as u128 > MAX_PROCUREMENT_CRYPTOGRAPHIC_ASSESSMENT_BYTES as u128 {
+        bail!(
+            "internal procurement helper output exceeds the {}-byte limit ({} bytes)",
+            MAX_PROCUREMENT_CRYPTOGRAPHIC_ASSESSMENT_BYTES,
+            contents.len()
+        );
+    }
+    prepared
+        .temporary
+        .write_all(contents)
+        .with_context(|| format!("writing prepared output for {}", path.display()))?;
+    let outcome = prepared
+        .parent
+        .persist_no_replace_pinned_with_guards(
+            prepared.temporary,
+            path,
+            || procurement_output_before_install(path),
+            || procurement_output_after_install(path),
+        )
+        .with_context(|| format!("publishing {} without overwrite", path.display()))?;
+    match outcome {
+        anchored_io::NoReplacePublicationOutcome::CommittedDurable => Ok(()),
+        anchored_io::NoReplacePublicationOutcome::AlreadyExists => {
+            bail!("refusing to overwrite existing output {}", path.display())
+        }
+        anchored_io::NoReplacePublicationOutcome::CommittedButCompletionFailed(error) => bail!(
+            "internal procurement helper output was committed, but post-install completion failed: {error}"
+        ),
+    }
+}
+
+fn reject_procurement_input_aliases(inputs: &[(&str, &Path)]) -> Result<()> {
+    let mut inspected = Vec::with_capacity(inputs.len());
+    for (label, path) in inputs {
+        reject_procurement_path_components(path, label)?;
+        let metadata = fs::symlink_metadata(path)
+            .with_context(|| format!("inspecting {label} {}", path.display()))?;
+        if metadata.file_type().is_symlink()
+            || !metadata.file_type().is_file()
+            || procurement_metadata_is_reparse_point(&metadata)
+        {
+            bail!(
+                "{label} must be a regular non-link file: {}",
+                path.display()
+            );
+        }
+        let handle = open_procurement_input_nofollow(path)
+            .with_context(|| format!("opening {label} {}", path.display()))?;
+        let opened = handle
+            .metadata()
+            .with_context(|| format!("inspecting opened {label} {}", path.display()))?;
+        if !opened.file_type().is_file()
+            || procurement_metadata_is_reparse_point(&opened)
+            || !procurement_initial_metadata_matches_opened(&metadata, &handle)?
+            || !procurement_opened_path_matches(&handle, path)?
+        {
+            bail!(
+                "{label} changed while it was being opened: {}",
+                path.display()
+            );
+        }
+        let canonical = fs::canonicalize(path)
+            .with_context(|| format!("resolving {label} {}", path.display()))?;
+        reject_procurement_path_components(path, label)?;
+        inspected.push((*label, path, handle, canonical));
+    }
+    for (index, (left_label, left_path, left_handle, left_canonical)) in
+        inspected.iter().enumerate()
+    {
+        for (right_label, right_path, right_handle, right_canonical) in &inspected[index + 1..] {
+            if procurement_file_handles_match(left_handle, right_handle)?
+                || destinations_alias(left_canonical, right_canonical)
+            {
+                bail!(
+                    "{left_label} {} and {right_label} {} must not alias",
+                    left_path.display(),
+                    right_path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reject_procurement_path_components(path: &Path, label: &str) -> Result<()> {
+    reject_output_symlink_components(path, label)?;
+    #[cfg(windows)]
+    if windows_path_has_reparse_component(path)? {
+        bail!("{label} path contains a reparse-point component");
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_procurement_input_nofollow(path: &Path) -> io::Result<fs::File> {
+    use rustix::fs::{CWD, Mode, OFlags, openat};
+
+    Ok(openat(
+        CWD,
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )?
+    .into())
+}
+
+#[cfg(windows)]
+fn open_procurement_input_nofollow(path: &Path) -> io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+
+    std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_procurement_input_nofollow(path: &Path) -> io::Result<fs::File> {
+    fs::File::open(path)
+}
+
+#[cfg(unix)]
+fn procurement_file_handles_match(left: &fs::File, right: &fs::File) -> io::Result<bool> {
+    Ok(fs::same_file(&left.metadata()?, &right.metadata()?))
+}
+
+#[cfg(windows)]
+fn procurement_file_handles_match(left: &fs::File, right: &fs::File) -> io::Result<bool> {
+    Ok(circuit_kicad_board_windows_file_identity(left)?
+        == circuit_kicad_board_windows_file_identity(right)?)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn procurement_file_handles_match(left: &fs::File, right: &fs::File) -> io::Result<bool> {
+    Ok(fs::same_file(&left.metadata()?, &right.metadata()?))
+}
+
+#[cfg(unix)]
+fn procurement_initial_metadata_matches_opened(
+    visible: &fs::Metadata,
+    opened: &fs::File,
+) -> io::Result<bool> {
+    Ok(fs::same_file(visible, &opened.metadata()?))
+}
+
+#[cfg(windows)]
+fn procurement_initial_metadata_matches_opened(
+    _visible: &fs::Metadata,
+    _opened: &fs::File,
+) -> io::Result<bool> {
+    // Windows metadata does not expose a stable file index.  The immediately
+    // following opened-handle/path comparison uses the volume serial and
+    // file index from two live handles instead.
+    Ok(true)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn procurement_initial_metadata_matches_opened(
+    visible: &fs::Metadata,
+    opened: &fs::File,
+) -> io::Result<bool> {
+    Ok(fs::same_file(visible, &opened.metadata()?))
+}
+
+#[cfg(windows)]
+fn procurement_opened_path_matches(opened: &fs::File, path: &Path) -> io::Result<bool> {
+    let visible = open_procurement_input_nofollow(path)?;
+    let metadata = visible.metadata()?;
+    Ok(metadata.file_type().is_file()
+        && !procurement_metadata_is_reparse_point(&metadata)
+        && procurement_file_handles_match(opened, &visible)?)
+}
+
+#[cfg(windows)]
+fn procurement_metadata_is_reparse_point(metadata: &fs::Metadata) -> bool {
+    fresh_firmware_metadata_is_reparse_point(metadata)
+}
+
+#[cfg(not(windows))]
+fn procurement_metadata_is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+fn procurement_opened_path_matches(opened: &fs::File, path: &Path) -> io::Result<bool> {
+    let visible = fs::symlink_metadata(path)?;
+    Ok(visible.file_type().is_file() && fs::same_file(&opened.metadata()?, &visible))
+}
+
 fn prepare_fabrication_authorization_output(
     output: &Path,
     plan: &Path,
@@ -19982,6 +20486,252 @@ fn read_hex_key(path: &Path, description: &str) -> Result<[u8; 32]> {
     let value = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     decode_hex_key(value.trim(), description)
 }
+
+fn read_procurement_private_key(
+    path: &Path,
+    public_inputs: &[(&str, &Path)],
+    output: &Path,
+) -> Result<[u8; 32]> {
+    reject_procurement_path_components(path, "procurement approval private key")?;
+    let initial = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "inspecting procurement approval private key {}",
+            path.display()
+        )
+    })?;
+    if initial.file_type().is_symlink()
+        || !initial.file_type().is_file()
+        || procurement_metadata_is_reparse_point(&initial)
+    {
+        bail!(
+            "procurement approval private key must be a regular non-link file: {}",
+            path.display()
+        );
+    }
+    let mut file = open_procurement_input_nofollow(path).with_context(|| {
+        format!(
+            "opening procurement approval private key {}",
+            path.display()
+        )
+    })?;
+    let opened = file.metadata().with_context(|| {
+        format!(
+            "inspecting opened procurement approval private key {}",
+            path.display()
+        )
+    })?;
+    if !opened.file_type().is_file()
+        || procurement_metadata_is_reparse_point(&opened)
+        || opened.len() > 65
+        || !procurement_initial_metadata_matches_opened(&initial, &file)?
+        || !procurement_opened_path_matches(&file, path)?
+    {
+        bail!(
+            "procurement approval private key changed while it was being opened: {}",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    validate_procurement_private_key_unix_metadata(&opened, path)?;
+
+    for (label, public_path) in public_inputs {
+        reject_procurement_path_components(public_path, label)?;
+        let public_file = open_procurement_input_nofollow(public_path)
+            .with_context(|| format!("reopening {label} {}", public_path.display()))?;
+        let public_metadata = public_file
+            .metadata()
+            .with_context(|| format!("inspecting reopened {label} {}", public_path.display()))?;
+        if !public_metadata.file_type().is_file()
+            || procurement_metadata_is_reparse_point(&public_metadata)
+            || !procurement_opened_path_matches(&public_file, public_path)?
+        {
+            bail!(
+                "{label} changed while checking private-key aliases: {}",
+                public_path.display()
+            );
+        }
+        if procurement_file_handles_match(&file, &public_file)? {
+            bail!(
+                "procurement approval private key {} must not alias {label} {}",
+                path.display(),
+                public_path.display()
+            );
+        }
+        reject_procurement_path_components(public_path, label)?;
+    }
+    reject_procurement_private_key_output_alias(&file, path, output)?;
+
+    let mut source = Vec::with_capacity(opened.len() as usize);
+    Read::by_ref(&mut file)
+        .take(66)
+        .read_to_end(&mut source)
+        .with_context(|| {
+            format!(
+                "reading procurement approval private key {}",
+                path.display()
+            )
+        })?;
+    invoke_after_procurement_private_key_first_read_hook();
+    file.seek(SeekFrom::Start(0)).with_context(|| {
+        format!(
+            "rewinding procurement approval private key {}",
+            path.display()
+        )
+    })?;
+    let mut compared = Vec::with_capacity(source.len());
+    Read::by_ref(&mut file)
+        .take(66)
+        .read_to_end(&mut compared)
+        .with_context(|| {
+            format!(
+                "re-reading procurement approval private key {}",
+                path.display()
+            )
+        })?;
+    let after = file.metadata().with_context(|| {
+        format!(
+            "rechecking opened procurement approval private key {}",
+            path.display()
+        )
+    })?;
+    if source != compared
+        || source.len() as u64 != opened.len()
+        || after.len() != opened.len()
+        || !after.file_type().is_file()
+        || procurement_metadata_is_reparse_point(&after)
+        || !procurement_opened_path_matches(&file, path)?
+    {
+        bail!(
+            "procurement approval private key identity or contents changed while it was being read: {}",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    validate_procurement_private_key_unix_metadata(&after, path)?;
+    reject_procurement_path_components(path, "procurement approval private key")?;
+    reject_procurement_private_key_output_alias(&file, path, output)?;
+
+    let encoded = match source.as_slice() {
+        value if value.len() == 64 => value,
+        value if value.len() == 65 && value[64] == b'\n' => &value[..64],
+        _ => bail!(
+            "procurement approval private key must contain exactly 64 lowercase hexadecimal digits and at most one trailing LF"
+        ),
+    };
+    let value = std::str::from_utf8(encoded)
+        .context("decoding procurement approval private key as UTF-8")?;
+    decode_hex_key(value, "procurement approval private key")
+}
+
+fn reject_procurement_private_key_output_alias(
+    private_key: &fs::File,
+    private_key_path: &Path,
+    output: &Path,
+) -> Result<()> {
+    reject_procurement_path_components(output, "internal procurement helper output")?;
+    match fs::symlink_metadata(output) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink()
+                || !metadata.file_type().is_file()
+                || procurement_metadata_is_reparse_point(&metadata)
+            {
+                bail!(
+                    "internal procurement helper output became a non-regular or linked path: {}",
+                    output.display()
+                );
+            }
+            let output_file = open_procurement_input_nofollow(output)
+                .with_context(|| format!("opening raced output {}", output.display()))?;
+            if !procurement_opened_path_matches(&output_file, output)? {
+                bail!(
+                    "internal procurement helper output changed while checking private-key alias: {}",
+                    output.display()
+                );
+            }
+            if procurement_file_handles_match(private_key, &output_file)? {
+                bail!(
+                    "procurement approval private key {} must not alias output {}",
+                    private_key_path.display(),
+                    output.display()
+                );
+            }
+            bail!(
+                "internal procurement helper output appeared before publication: {}",
+                output.display()
+            );
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspecting output {}", output.display()));
+        }
+    }
+    let canonical_key = fs::canonicalize(private_key_path).with_context(|| {
+        format!(
+            "resolving procurement approval private key {}",
+            private_key_path.display()
+        )
+    })?;
+    if destinations_alias(&canonical_key, &normalize_destination(output)?) {
+        bail!(
+            "procurement approval private key {} must not alias output {}",
+            private_key_path.display(),
+            output.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_procurement_private_key_unix_metadata(
+    metadata: &fs::Metadata,
+    path: &Path,
+) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+
+    // SAFETY: geteuid has no preconditions and does not dereference memory.
+    let effective_uid = unsafe { geteuid() };
+    if metadata.uid() != effective_uid {
+        bail!(
+            "procurement approval private key must be owned by effective user {effective_uid}: {}",
+            path.display()
+        );
+    }
+    let mode = metadata.mode() & 0o777;
+    if !matches!(mode, 0o400 | 0o600) {
+        bail!(
+            "procurement approval private key permissions must be 0400 or 0600, not {mode:04o}: {}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+use std::cell::RefCell;
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_PROCUREMENT_PRIVATE_KEY_FIRST_READ_HOOK: RefCell<Option<Box<dyn FnOnce()>>> =
+        RefCell::new(None);
+}
+
+#[cfg(test)]
+fn set_after_procurement_private_key_first_read_hook(hook: impl FnOnce() + 'static) {
+    AFTER_PROCUREMENT_PRIVATE_KEY_FIRST_READ_HOOK.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(hook)).is_none());
+    });
+}
+
+#[cfg(test)]
+fn invoke_after_procurement_private_key_first_read_hook() {
+    let hook = AFTER_PROCUREMENT_PRIVATE_KEY_FIRST_READ_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(not(test))]
+fn invoke_after_procurement_private_key_first_read_hook() {}
 
 fn decode_hex_key(value: &str, description: &str) -> Result<[u8; 32]> {
     if value.len() != 64
@@ -20955,6 +21705,275 @@ mod tests {
             .join()
             .unwrap();
         assert!(!help.contains("mcp-echo-report-summary"));
+    }
+
+    #[test]
+    fn parses_but_does_not_advertise_internal_procurement_helpers() {
+        let digest = "a".repeat(64);
+        let signed = parse_cli(&[
+            "pcbex",
+            "internal-sign-procurement-approval",
+            "request.json",
+            "--policy-pack",
+            "policy.json",
+            "--expected-policy-pack-canonical-sha256",
+            &digest,
+            "--private-key",
+            "private.key",
+            "--signer-id",
+            "procurement-a",
+            "--decision",
+            "approve",
+            "--reason",
+            "Approved.",
+            "--ticket",
+            "PROC-1",
+            "--output",
+            "approval.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *signed.command,
+            Command::InternalSignProcurementApproval {
+                decision: HumanDecisionArg::Approve,
+                ..
+            }
+        ));
+
+        let verified = parse_cli(&[
+            "pcbex",
+            "internal-verify-procurement-authorization",
+            "request.json",
+            "--policy-pack",
+            "policy.json",
+            "--expected-policy-pack-canonical-sha256",
+            &digest,
+            "--approval",
+            "approval-a.json",
+            "--approval",
+            "approval-b.json",
+            "--evaluated-at-unix",
+            "1200",
+            "--output",
+            "assessment.json",
+        ])
+        .unwrap();
+        assert!(matches!(
+            *verified.command,
+            Command::InternalVerifyProcurementAuthorization { approvals, .. }
+                if approvals.len() == 2
+        ));
+
+        let (help, hidden) = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                let mut command = Cli::command();
+                let hidden = [
+                    "internal-sign-procurement-approval",
+                    "internal-verify-procurement-authorization",
+                ]
+                .map(|name| command.find_subcommand_mut(name).unwrap().is_hide_set());
+                (command.render_long_help().to_string(), hidden)
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(hidden, [true, true]);
+        assert!(!help.contains("internal-sign-procurement-approval"));
+        assert!(!help.contains("internal-verify-procurement-authorization"));
+        let command_names = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(|| {
+                capabilities_report()
+                    .commands
+                    .into_iter()
+                    .map(|command| command.name)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(
+            !command_names
+                .iter()
+                .any(|name| name.starts_with("internal-"))
+        );
+    }
+
+    #[test]
+    fn procurement_private_key_reader_is_tightly_bounded_and_strict() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = directory.path().join("private.key");
+        let output = directory.path().join("approval.json");
+        std::fs::write(&key, format!("{}\n", "a".repeat(64))).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        assert_eq!(
+            read_procurement_private_key(&key, &[], &output).unwrap(),
+            [0xaa; 32]
+        );
+
+        std::fs::write(&key, format!("{}\r\n", "a".repeat(64))).unwrap();
+        assert!(read_procurement_private_key(&key, &[], &output).is_err());
+        std::fs::write(&key, format!(" {}", "a".repeat(64))).unwrap();
+        assert!(read_procurement_private_key(&key, &[], &output).is_err());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&key, "a".repeat(64)).unwrap();
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o640)).unwrap();
+            assert!(read_procurement_private_key(&key, &[], &output).is_err());
+        }
+    }
+
+    #[test]
+    fn procurement_private_key_reader_rejects_in_place_read_race() {
+        let directory = tempfile::tempdir().unwrap();
+        let key = directory.path().join("private.key");
+        let output = directory.path().join("approval.json");
+        std::fs::write(&key, "a".repeat(64)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let raced_key = key.clone();
+        set_after_procurement_private_key_first_read_hook(move || {
+            std::fs::write(raced_key, "b".repeat(64)).unwrap();
+        });
+        assert!(read_procurement_private_key(&key, &[], &output).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn procurement_private_key_reader_rejects_path_replacement_race() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let key = directory.path().join("private.key");
+        let moved = directory.path().join("moved-private.key");
+        let output = directory.path().join("approval.json");
+        std::fs::write(&key, "a".repeat(64)).unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let raced_key = key.clone();
+        set_after_procurement_private_key_first_read_hook(move || {
+            std::fs::rename(&raced_key, &moved).unwrap();
+            std::fs::write(&raced_key, "b".repeat(64)).unwrap();
+            std::fs::set_permissions(&raced_key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        });
+        assert!(read_procurement_private_key(&key, &[], &output).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn procurement_private_key_reader_rejects_output_hard_link_alias() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let key = directory.path().join("private.key");
+        let output = directory.path().join("approval.json");
+        std::fs::write(&key, "a".repeat(64)).unwrap();
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::hard_link(&key, &output).unwrap();
+        assert!(read_procurement_private_key(&key, &[], &output).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn procurement_private_key_reader_rejects_symlinked_parent_component() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let real_parent = directory.path().join("real");
+        let linked_parent = directory.path().join("linked");
+        std::fs::create_dir(&real_parent).unwrap();
+        std::os::unix::fs::symlink(&real_parent, &linked_parent).unwrap();
+        let real_key = real_parent.join("private.key");
+        std::fs::write(&real_key, "a".repeat(64)).unwrap();
+        std::fs::set_permissions(&real_key, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let key = linked_parent.join("private.key");
+        let output = directory.path().join("approval.json");
+        assert!(read_procurement_private_key(&key, &[], &output).is_err());
+    }
+
+    #[test]
+    fn procurement_input_preflight_accepts_distinct_equal_length_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let request = directory.path().join("request.json");
+        let policy = directory.path().join("policy.json");
+        std::fs::write(&request, b"same-size").unwrap();
+        std::fs::write(&policy, b"different").unwrap();
+        reject_procurement_input_aliases(&[
+            ("procurement signing request", &request),
+            ("organization policy pack", &policy),
+        ])
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn procurement_input_preflight_rejects_hard_link_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        let request = directory.path().join("request.json");
+        let private_key = directory.path().join("private.key");
+        std::fs::write(&request, b"request").unwrap();
+        std::fs::hard_link(&request, &private_key).unwrap();
+        assert!(
+            reject_procurement_input_aliases(&[
+                ("procurement signing request", &request),
+                ("procurement approval private key", &private_key),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn procurement_output_preflight_rejects_existing_and_input_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        let request = directory.path().join("request.json");
+        let output = directory.path().join("output.json");
+        std::fs::write(&request, b"request").unwrap();
+        std::fs::write(&output, b"existing").unwrap();
+        assert!(prepare_procurement_helper_output(&output, &[&request]).is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"existing");
+
+        #[cfg(unix)]
+        {
+            std::fs::remove_file(&output).unwrap();
+            std::fs::hard_link(&request, &output).unwrap();
+            assert!(prepare_procurement_helper_output(&output, &[&request]).is_err());
+            assert_eq!(std::fs::read(&request).unwrap(), b"request");
+        }
+    }
+
+    #[test]
+    fn procurement_output_publication_loses_race_without_clobbering() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("output.json");
+        let prepared = prepare_procurement_helper_output(&output, &[]).unwrap();
+        std::fs::write(&output, b"raced").unwrap();
+        assert!(persist_procurement_helper_output(prepared, &output, b"new\n").is_err());
+        assert_eq!(std::fs::read(&output).unwrap(), b"raced");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn procurement_output_publication_rejects_parent_replacement() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().join("output-parent");
+        let moved = directory.path().join("moved-parent");
+        std::fs::create_dir(&parent).unwrap();
+        let output = parent.join("output.json");
+        let prepared = prepare_procurement_helper_output(&output, &[]).unwrap();
+        std::fs::rename(&parent, &moved).unwrap();
+        std::fs::create_dir(&parent).unwrap();
+        assert!(persist_procurement_helper_output(prepared, &output, b"new\n").is_err());
+        assert!(!output.exists());
+        assert!(!moved.join("output.json").exists());
     }
 
     #[test]

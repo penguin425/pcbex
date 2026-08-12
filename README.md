@@ -842,6 +842,109 @@ quantities, not board/package/placement evidence. See [Exact assembly and
 acquired supplier-offer evidence
 composition](docs/ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md).
 
+### Dual-control exact procurement release authorization
+
+Version 1.471 adds a separate offline authorization boundary over one exact
+retained v1.470 result and its complete original source closure. A dedicated
+`procurement_authorization_policy` fixes the currency, component-lines-only
+subtotal ceiling, approval-window limit, receipt-observation-age limit, quorum,
+and two or more role-disjoint Ed25519 public keys. Signing and verification
+also require an externally expected canonical policy-pack SHA-256 pin, so the
+unsigned evidence cannot silently select its own trust root:
+
+```sh
+PYTHONPATH=agent/src python3 -m pcbex_agent sign-procurement-approval \
+  assembly-supplier-offer-evidence.json \
+  circuit-handoff.zip board.kicad_pcb manufacturing.zip \
+  --board-binding-report board-binding.json \
+  --procurement-intent procurement-intent.json \
+  --catalog-snapshot catalog-snapshot.json \
+  --final-cpl-report final-cpl.json \
+  --assembly-evidence assembly-evidence.json \
+  --supplier-offer supplier-offer.json \
+  --supplier-offer-fetch-receipt supplier-offer-fetch-receipt.json \
+  --supplier-offer-coverage supplier-offer-coverage.json \
+  --policy-pack organization-policy-pack.json \
+  --expected-policy-pack-canonical-sha256 "$EXPECTED_POLICY_SHA256" \
+  --requested-boards 100 --evaluated-at-unix "$FETCHED_AT_UNIX" \
+  --authorization-id release-2026-08-12-a \
+  --challenge "$PROCUREMENT_CHALLENGE" \
+  --maximum-component-subtotal-micros 2500000000 \
+  --valid-from-unix "$VALID_FROM_UNIX" \
+  --expires-at-unix "$EXPIRES_AT_UNIX" \
+  --signer-id procurement-a --decision approve \
+  --reason 'Approved these exact covered component lines.' --ticket HW-1471 \
+  --private-key .secrets/procurement-a.key \
+  --pcbex target/release/pcbex \
+  --authorization-pcbex /opt/pcbex-trusted/bin/pcbex \
+  --output procurement-a.approval.json
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  verify-procurement-authorization \
+  assembly-supplier-offer-evidence.json \
+  circuit-handoff.zip board.kicad_pcb manufacturing.zip \
+  --board-binding-report board-binding.json \
+  --procurement-intent procurement-intent.json \
+  --catalog-snapshot catalog-snapshot.json \
+  --final-cpl-report final-cpl.json \
+  --assembly-evidence assembly-evidence.json \
+  --supplier-offer supplier-offer.json \
+  --supplier-offer-fetch-receipt supplier-offer-fetch-receipt.json \
+  --supplier-offer-coverage supplier-offer-coverage.json \
+  --policy-pack organization-policy-pack.json \
+  --expected-policy-pack-canonical-sha256 "$EXPECTED_POLICY_SHA256" \
+  --requested-boards 100 --evaluated-at-unix "$FETCHED_AT_UNIX" \
+  --approval procurement-a.approval.json \
+  --approval procurement-b.approval.json \
+  --pcbex target/release/pcbex \
+  --authorization-pcbex /opt/pcbex-trusted/bin/pcbex \
+  --output procurement-authorization.json --require-authorized
+```
+
+Python freshly validates the exact retained v1.470 result from the entire
+closure both before and after a separate trusted Rust cryptographic child. The
+ordinary `--pcbex` replay executable stays distinct, caller-selected,
+unauthenticated, and unsandboxed. Python never opens or copies the private key;
+the `--authorization-pcbex` child validates every public request, policy, pin,
+output, and signer field before reading it. That trusted child can read the key
+and is part of the authorization TCB; this interface makes no key-isolation or
+binary-provenance claim. On Unix its private-key file must be owned by the
+effective UID with exact mode `0400` or `0600`; `approval-keygen` creates mode
+`0600`. Its hidden verification result is only a cryptographic
+policy assessment. Python alone emits the public authorization after the
+second fresh replay and final source checks.
+The authorization claim records that the policy was satisfied at the local
+assessment instant Python supplied to and the trusted child validated; the
+second replay is an unchanged-evidence guard and does not assert that the
+window is still active at publication.
+
+Here `--evaluated-at-unix` remains the original v1.470 replay selector, not a
+caller-selected authorization clock. Verification samples its separate local
+assessment instant internally.
+
+The signed scope binds the authorization ID, 64-hex challenge, exact requested
+boards and currency, component-line subtotal ceiling, and inclusive approval
+window. The window must fit wholly inside the offer's half-open declared
+interval, including `expires_at_unix < valid_until_unix`. A valid incomplete or
+uncovered composition, insufficient quorum, submitted signed rejection, local
+clock outside a window, future or over-age receipt observation, or subtotal or
+duration outside signed/policy bounds is retained as `not_authorized` before
+the optional gate. Malformed, mixed, unpinned, incorrectly signed, aliased, or
+observably mutated material produces no public report.
+
+Distinct signer IDs and keys do not prove distinct natural people or operators;
+deployments must enforce that separation through their own identity and key
+custody process.
+
+Only the outer `procurement_authorized` claim can become true. Network and
+current availability, supplier/offer/price/receipt-observation/policy
+authenticity, trusted time, inventory reservation, assembly/fabrication/order
+readiness, placement, payment, machine operation, and one-time challenge use
+remain false. The component subtotal is not landed cost, invoice, shipping,
+tax, MOQ, tier, order, payment, or spend evidence. A retained report is an
+audit snapshot, not reusable current authority; rerun the verifier at the
+actual handoff. See [Dual-control exact procurement release authorization](docs/PROCUREMENT_AUTHORIZATION.md).
+
 Submit the exact manufacturing archive to a deployment-owned JLCPCB, PCBWay,
 or generic quote/DFM adapter without putting credentials in argv:
 
@@ -3279,6 +3382,20 @@ dates, dimensions, rule settings, requirements, and keys are strictly
 validated; unknown fields, duplicates, and altered profiles that impersonate
 built-in DFM identities fail closed. Private keys are never part of a policy
 pack.
+
+Version 1.471 independently adds `procurement_authorization_policy`, fixing a
+three-uppercase-letter currency, component-lines-only subtotal ceiling,
+approval-duration and receipt-observation-age ceilings, and a 2–100-key quorum
+of at least two. Its signer IDs and public keys are disjoint from the AI,
+human-escalation, and fabrication roles, and weak Ed25519 verification keys
+are rejected for this procurement role. Omitting it preserves all prior uses
+but leaves the pack ineligible for procurement release authorization. The
+procurement commands additionally require an externally expected canonical
+pack digest; a matching caller-supplied pin prevents pack substitution but is
+not itself policy provenance or authenticity. The canonical value is the
+signed-policy envelope's `policy_pack_sha256` over compact validated Rust
+struct order, not a hash of raw, pretty, or generically sorted input JSON;
+authenticate the envelope and use its verified extracted pack.
 
 `--policy-pack` applies to KiCad analysis, routing, route-candidate generation,
 board DFM checking, schematic checking, AI-review preparation, approval

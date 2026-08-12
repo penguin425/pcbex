@@ -1848,6 +1848,13 @@ jobs:
           python -m unittest
           agent.tests.test_assembly_supplier_offer_evidence_v1470
           agent.tests.test_assembly_supplier_offer_evidence_cli_v1470 -v
+      - name: Run cross-platform v1.471 procurement-authorization boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_procurement_release_authorization_v1471
+          agent.tests.test_procurement_release_authorization_cli_v1471 -v
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

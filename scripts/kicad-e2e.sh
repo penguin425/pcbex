@@ -2969,3 +2969,719 @@ def reject_paths(value):
 reject_paths(complete)
 reject_paths(incomplete)
 PY
+
+# v1.471 adds dual-control authorization over the exact complete v1.470
+# closure. The ordinary replay child and trusted cryptographic child are named
+# separately even though this release-binary E2E intentionally supplies the
+# same built artifact for both roles. The policy pin comes from a genuinely
+# signed and verified policy envelope, not from hashing the input JSON.
+procurement_secret_directory="$(mktemp -d)"
+procurement_approval_private_a="$procurement_secret_directory/procurement-approval-a.key"
+procurement_approval_public_a="$output_directory/procurement-approval-a.pub"
+procurement_approval_private_b="$procurement_secret_directory/procurement-approval-b.key"
+procurement_approval_public_b="$output_directory/procurement-approval-b.pub"
+procurement_policy_signing_private="$procurement_secret_directory/procurement-policy-signing.key"
+procurement_policy_signing_public="$output_directory/procurement-policy-signing.pub"
+procurement_policy_unsigned="$output_directory/procurement-policy-pack.unsigned.json"
+procurement_policy_signed="$output_directory/procurement-policy-pack.signed.json"
+procurement_policy_verified="$output_directory/procurement-policy-pack.verified.json"
+procurement_approval_a="$output_directory/procurement-approval-a.json"
+procurement_approval_b="$output_directory/procurement-approval-b.json"
+procurement_approval_tampered="$output_directory/procurement-approval-a.tampered.json"
+procurement_authorization="$output_directory/procurement-authorization.json"
+procurement_authorization_single="$output_directory/procurement-authorization.single.json"
+procurement_authorization_single_error="$output_directory/procurement-authorization.single.stderr"
+procurement_authorization_tampered_output="$output_directory/procurement-authorization.tampered.json"
+procurement_authorization_tampered_error="$output_directory/procurement-authorization.tampered.stderr"
+procurement_evidence_tampered="$output_directory/assembly.supplier-offer-evidence.tampered.json"
+procurement_authorization_source_tampered_output="$output_directory/procurement-authorization.source-tampered.json"
+procurement_authorization_source_tampered_error="$output_directory/procurement-authorization.source-tampered.stderr"
+procurement_shortfall_approval="$output_directory/procurement-shortfall.approval.json"
+procurement_shortfall_approval_error="$output_directory/procurement-shortfall.approval.stderr"
+procurement_private_key_must_not_be_read="$output_directory/procurement-forbidden-missing.key"
+procurement_approval_schema="$output_directory/signed-procurement-approval.schema.json"
+procurement_authorization_schema="$output_directory/procurement-authorization-report.schema.json"
+trap 'rm -f -- "$procurement_approval_private_a" "$procurement_approval_private_b" "$procurement_policy_signing_private"; rmdir -- "$procurement_secret_directory" 2>/dev/null || true' EXIT
+
+"$pcbex_binary" approval-keygen \
+  --private-key "$procurement_approval_private_a" \
+  --public-key "$procurement_approval_public_a"
+"$pcbex_binary" approval-keygen \
+  --private-key "$procurement_approval_private_b" \
+  --public-key "$procurement_approval_public_b"
+"$pcbex_binary" policy-keygen \
+  --private-key "$procurement_policy_signing_private" \
+  --public-key "$procurement_policy_signing_public"
+
+procurement_component_ceiling="$(python3 - "$supplier_offer_coverage" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+coverage = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+subtotal = coverage["component_subtotal_micros"]
+assert coverage["covered"] is True
+assert isinstance(subtotal, int) and not isinstance(subtotal, bool) and subtotal > 0
+assert subtotal < 9_007_199_254_740_991
+print(subtotal + 1)
+PY
+)"
+python3 - \
+  examples/acme-policy-pack.json \
+  "$procurement_approval_public_a" \
+  "$procurement_approval_public_b" \
+  "$procurement_component_ceiling" \
+  "$procurement_policy_unsigned" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+source_path, public_a_path, public_b_path, ceiling, output_path = sys.argv[1:]
+pack = json.loads(Path(source_path).read_text(encoding="utf-8"))
+pack["procurement_authorization_policy"] = {
+    "minimum_approvals": 2,
+    "currency": "USD",
+    "maximum_validity_seconds": 86400,
+    "maximum_receipt_observation_age_seconds": 604800,
+    "maximum_component_subtotal_micros": int(ceiling),
+    "trusted_keys": [
+        {
+            "signer_id": "procurement-a",
+            "public_key": Path(public_a_path).read_text(encoding="ascii").strip(),
+        },
+        {
+            "signer_id": "procurement-b",
+            "public_key": Path(public_b_path).read_text(encoding="ascii").strip(),
+        },
+    ],
+}
+Path(output_path).write_bytes(
+    json.dumps(pack, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    + b"\n"
+)
+PY
+"$pcbex_binary" sign-policy-pack "$procurement_policy_unsigned" \
+  --private-key "$procurement_policy_signing_private" \
+  --signer-id procurement-policy-root \
+  --output "$procurement_policy_signed"
+rm -f -- "$procurement_policy_signing_private"
+"$pcbex_binary" verify-policy-pack "$procurement_policy_signed" \
+  --public-key "$procurement_policy_signing_public" \
+  --output "$procurement_policy_verified"
+procurement_policy_digest="$(python3 - \
+  "$procurement_policy_signed" \
+  "$procurement_policy_verified" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+signed_path, verified_path = map(Path, sys.argv[1:])
+signed = json.loads(signed_path.read_text(encoding="utf-8"))
+verified = json.loads(verified_path.read_text(encoding="utf-8"))
+assert signed["policy_pack"] == verified
+digest = signed["policy_pack_sha256"]
+assert isinstance(digest, str) and len(digest) == 64
+assert all(character in "0123456789abcdef" for character in digest)
+print(digest)
+PY
+)"
+
+procurement_authorization_now="$(date +%s)"
+procurement_valid_from="$((procurement_authorization_now - 60))"
+procurement_expires_at="$((procurement_authorization_now + 43200))"
+procurement_challenge="$(printf '%064x' 1471)"
+
+procurement_complete_arguments=(
+  "$supplier_offer_composition"
+  "$assembly_handoff_zip"
+  "$assembly_board"
+  "$assembly_manufacturing_zip"
+  --board-binding-report "$assembly_board_binding"
+  --procurement-intent "$assembly_procurement"
+  --catalog-snapshot "$assembly_snapshot"
+  --final-cpl-report "$assembly_final_cpl"
+  --assembly-evidence "$assembly_evidence"
+  --supplier-offer "$supplier_offer"
+  --supplier-offer-fetch-receipt "$supplier_offer_fetch_receipt"
+  --supplier-offer-coverage "$supplier_offer_coverage"
+  --policy-pack "$procurement_policy_verified"
+  --expected-policy-pack-canonical-sha256 "$procurement_policy_digest"
+  --requested-boards 25
+  --evaluated-at-unix "$supplier_offer_evaluated_at"
+  --pcbex "$pcbex_binary"
+  --authorization-pcbex "$pcbex_binary"
+  --manufacturing-kicad-cli "$kicad_cli_binary"
+  --timeout-seconds 600
+)
+
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  signed-procurement-approval-schema \
+  --output "$procurement_approval_schema"
+PYTHONPATH=agent/src python3 -m pcbex_agent \
+  procurement-authorization-report-schema \
+  --output "$procurement_authorization_schema"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent sign-procurement-approval \
+  "${procurement_complete_arguments[@]}" \
+  --private-key "$procurement_approval_private_a" \
+  --signer-id procurement-a \
+  --decision approve \
+  --authorization-id procurement-e2e-v1471 \
+  --challenge "$procurement_challenge" \
+  --maximum-component-subtotal-micros "$procurement_component_ceiling" \
+  --valid-from-unix "$procurement_valid_from" \
+  --expires-at-unix "$procurement_expires_at" \
+  --reason 'Independent approval of the exact covered component lines.' \
+  --ticket E2E-1471-A \
+  --output "$procurement_approval_a"
+PYTHONPATH=agent/src python3 -m pcbex_agent sign-procurement-approval \
+  "${procurement_complete_arguments[@]}" \
+  --private-key "$procurement_approval_private_b" \
+  --signer-id procurement-b \
+  --decision approve \
+  --authorization-id procurement-e2e-v1471 \
+  --challenge "$procurement_challenge" \
+  --maximum-component-subtotal-micros "$procurement_component_ceiling" \
+  --valid-from-unix "$procurement_valid_from" \
+  --expires-at-unix "$procurement_expires_at" \
+  --reason 'Independent approval of the exact covered component lines.' \
+  --ticket E2E-1471-B \
+  --output "$procurement_approval_b"
+rm -f -- \
+  "$procurement_approval_private_a" \
+  "$procurement_approval_private_b"
+rmdir -- "$procurement_secret_directory"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent verify-procurement-authorization \
+  "${procurement_complete_arguments[@]}" \
+  --approval "$procurement_approval_b" \
+  --approval "$procurement_approval_a" \
+  --output "$procurement_authorization" \
+  --require-authorized
+
+# One valid approval is well formed but below the two-key policy quorum. The
+# gated invocation must retain its canonical report before returning nonzero.
+# A later renderer check below validates those exact retained bytes; a second
+# verifier invocation would legitimately sample a different assessment time.
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  verify-procurement-authorization \
+  "${procurement_complete_arguments[@]}" \
+  --approval "$procurement_approval_a" \
+  --output "$procurement_authorization_single" \
+  --require-authorized \
+  2>"$procurement_authorization_single_error"; then
+  echo "expected one procurement approval to fail the final quorum gate" >&2
+  exit 1
+fi
+test -s "$procurement_authorization_single"
+python3 - "$procurement_authorization_single_error" <<'PY'
+from pathlib import Path
+import sys
+
+assert Path(sys.argv[1]).read_bytes() == (
+    b"procurement authorization report was retained but the exact release "
+    b"was not authorized\n"
+)
+PY
+
+PYTHONPATH=agent/src python3 - \
+  "$procurement_approval_a" \
+  "$procurement_approval_b" \
+  "$procurement_authorization" \
+  "$procurement_authorization_single" \
+  "$procurement_approval_schema" \
+  "$procurement_authorization_schema" \
+  "$supplier_offer_composition" \
+  "$supplier_offer_coverage" \
+  "$supplier_offer_fetch_receipt" \
+  "$procurement_policy_verified" \
+  "$procurement_policy_digest" \
+  "$procurement_challenge" \
+  "$procurement_component_ceiling" \
+  "$procurement_valid_from" \
+  "$procurement_expires_at" \
+  "$output_directory" <<'PY'
+import hashlib
+import json
+from pathlib import Path, PureWindowsPath
+import sys
+
+from pcbex_agent import (
+    procurement_authorization_report_json_schema,
+    render_procurement_authorization_report,
+    render_signed_procurement_approval,
+    signed_procurement_approval_json_schema,
+)
+
+(
+    approval_a_path,
+    approval_b_path,
+    authorization_path,
+    single_path,
+    approval_schema_path,
+    authorization_schema_path,
+    evidence_path,
+    coverage_path,
+    receipt_path,
+    policy_path,
+    policy_digest,
+    challenge,
+    component_ceiling,
+    valid_from,
+    expires_at,
+    output_directory,
+) = sys.argv[1:]
+paths = [
+    Path(value)
+    for value in (
+        approval_a_path,
+        approval_b_path,
+        authorization_path,
+        single_path,
+        approval_schema_path,
+        authorization_schema_path,
+        evidence_path,
+        coverage_path,
+        receipt_path,
+        policy_path,
+    )
+]
+(
+    approval_a_path,
+    approval_b_path,
+    authorization_path,
+    single_path,
+    approval_schema_path,
+    authorization_schema_path,
+    evidence_path,
+    coverage_path,
+    receipt_path,
+    policy_path,
+) = paths
+component_ceiling = int(component_ceiling)
+valid_from = int(valid_from)
+expires_at = int(expires_at)
+
+def load(path):
+    return json.loads(path.read_bytes())
+
+def identity(path):
+    raw = path.read_bytes()
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+def compact(value):
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+approval_a = load(approval_a_path)
+approval_b = load(approval_b_path)
+authorization = load(authorization_path)
+single = load(single_path)
+approval_schema = load(approval_schema_path)
+authorization_schema = load(authorization_schema_path)
+evidence = load(evidence_path)
+coverage = load(coverage_path)
+receipt = load(receipt_path)
+policy = load(policy_path)
+
+approval_keys = [
+    "schema_version",
+    "scope",
+    "evidence",
+    "authorization_scope",
+    "decision",
+    "reason",
+    "ticket",
+    "signer_id",
+    "algorithm",
+    "public_key",
+    "signature",
+]
+false_claims = [
+    "adapter_network_performed",
+    "current_availability_verified",
+    "supplier_authenticity_verified",
+    "offer_authenticity_verified",
+    "price_authenticity_verified",
+    "receipt_observation_authenticity_verified",
+    "policy_pack_authenticity_verified",
+    "trusted_time_verified",
+    "inventory_reserved",
+    "assembly_ready",
+    "assembly_authorized",
+    "fabrication_authorized",
+    "order_ready",
+    "order_placed",
+    "payment_performed",
+    "machine_operation_performed",
+    "challenge_one_time_use_enforced",
+]
+report_keys = [
+    "schema_version",
+    "scope",
+    "status",
+    "procurement_authorized",
+    *false_claims,
+    "evidence",
+    "authorization_scope",
+    "policy_pack",
+    "evaluated_at_unix",
+    "approvals",
+    "rejections",
+    "members",
+    "signed_approvals",
+    "gate_failures",
+    "validation",
+    "binding_sha256",
+]
+validation_keys = [
+    "assembly_supplier_offer_evidence_replayed",
+    "evidence_complete_checked",
+    "request_binding_validated",
+    "commercial_scope_cross_bound",
+    "policy_pack_validated",
+    "approval_signatures_verified",
+    "distinct_signers_verified",
+    "caller_inputs_unchanged",
+]
+
+for approval in (approval_a, approval_b):
+    assert list(approval) == approval_keys
+    assert approval["schema_version"] == 1
+    assert approval["scope"] == (
+        "offline-exact-procurement-release-approval-v1"
+    )
+    assert approval["decision"] == "approve"
+    assert approval["algorithm"] == "ed25519"
+    assert approval["evidence"] == authorization["evidence"]
+    assert approval["authorization_scope"] == authorization[
+        "authorization_scope"
+    ]
+assert approval_a["signer_id"] == "procurement-a"
+assert approval_b["signer_id"] == "procurement-b"
+assert approval_a["public_key"] != approval_b["public_key"]
+assert policy["procurement_authorization_policy"] == {
+    "minimum_approvals": 2,
+    "currency": "USD",
+    "maximum_validity_seconds": 86400,
+    "maximum_receipt_observation_age_seconds": 604800,
+    "maximum_component_subtotal_micros": component_ceiling,
+    "trusted_keys": [
+        {
+            "signer_id": "procurement-a",
+            "public_key": approval_a["public_key"],
+        },
+        {
+            "signer_id": "procurement-b",
+            "public_key": approval_b["public_key"],
+        },
+    ],
+}
+assert approval_a_path.read_bytes() == render_signed_procurement_approval(
+    approval_a
+)
+assert approval_b_path.read_bytes() == render_signed_procurement_approval(
+    approval_b
+)
+
+expected_scope = {
+    "authorization_id": "procurement-e2e-v1471",
+    "challenge": challenge,
+    "requested_boards": 25,
+    "currency": "USD",
+    "maximum_component_subtotal_micros": component_ceiling,
+    "valid_from_unix": valid_from,
+    "expires_at_unix": expires_at,
+}
+assert authorization["authorization_scope"] == expected_scope
+assert valid_from <= authorization["evaluated_at_unix"] <= expires_at
+
+offer = coverage["supplier_offer"]
+expected_commercial = {
+    "requested_boards": coverage["requested_boards"],
+    "supplier": offer["supplier"],
+    "offer_id": offer["offer_id"],
+    "currency": offer["currency"],
+    "covered": coverage["covered"],
+    "component_subtotal_micros": coverage[
+        "component_subtotal_micros"
+    ],
+    "offer_valid_from_unix": offer["valid_from_unix"],
+    "offer_valid_until_unix": offer["valid_until_unix"],
+    "receipt_fetched_at_unix": receipt["fetched_at_unix"],
+}
+expected_policy_projection = {
+    "source": identity(policy_path),
+    "canonical_sha256": policy_digest,
+    "id": policy["id"],
+    "revision": policy["revision"],
+}
+expected_evidence = {
+    "assembly_supplier_offer_evidence": {
+        "source": identity(evidence_path),
+        "binding_sha256": evidence["binding_sha256"],
+        "schema_version": evidence["schema_version"],
+        "scope": evidence["scope"],
+        "complete": evidence["complete"],
+    },
+    "commercial": expected_commercial,
+    "policy_pack": expected_policy_projection,
+}
+assert authorization["evidence"] == expected_evidence
+assert authorization["policy_pack"] == policy
+assert authorization["evaluated_at_unix"] >= receipt["fetched_at_unix"]
+
+def assert_report(report, *, authorized, approvals, failures, signed):
+    assert list(report) == report_keys
+    assert report["schema_version"] == 1
+    assert report["scope"] == (
+        "offline-exact-procurement-release-authorization-v1"
+    )
+    assert report["status"] == (
+        "procurement_authorized" if authorized else "not_authorized"
+    )
+    assert report["procurement_authorized"] is authorized
+    for key in false_claims:
+        assert report[key] is False, key
+    assert report["evidence"] == expected_evidence
+    assert report["authorization_scope"] == expected_scope
+    assert report["policy_pack"] == policy
+    assert report["approvals"] == approvals
+    assert report["rejections"] == 0
+    assert report["gate_failures"] == failures
+    assert list(report["validation"]) == validation_keys
+    assert all(report["validation"].values())
+    assert report["signed_approvals"] == signed
+    assert [member["signer_id"] for member in report["members"]] == [
+        value["signer_id"] for value in signed
+    ]
+    for member, approval in zip(report["members"], signed, strict=True):
+        assert member == {
+            "signer_id": approval["signer_id"],
+            "public_key": approval["public_key"],
+            "approval_sha256": hashlib.sha256(compact(approval)).hexdigest(),
+            "decision": approval["decision"],
+            "reason": approval["reason"],
+            "ticket": approval["ticket"],
+        }
+    binding_material = {
+        key: report[key] for key in report_keys if key != "binding_sha256"
+    }
+    assert report["binding_sha256"] == hashlib.sha256(
+        b"pcbex:offline-exact-procurement-release-authorization-v1\0"
+        + compact(binding_material)
+    ).hexdigest()
+
+assert_report(
+    authorization,
+    authorized=True,
+    approvals=2,
+    failures=[],
+    signed=[approval_a, approval_b],
+)
+assert authorization_path.read_bytes() == render_procurement_authorization_report(
+    authorization
+)
+assert_report(
+    single,
+    authorized=False,
+    approvals=1,
+    failures=["insufficient_procurement_approvals:required=2:actual=1"],
+    signed=[approval_a],
+)
+assert single_path.read_bytes() == render_procurement_authorization_report(single)
+
+expected_approval_schema = signed_procurement_approval_json_schema()
+expected_authorization_schema = procurement_authorization_report_json_schema()
+assert approval_schema == expected_approval_schema
+assert authorization_schema == expected_authorization_schema
+for path, schema in (
+    (approval_schema_path, approval_schema),
+    (authorization_schema_path, authorization_schema),
+):
+    assert path.read_bytes() == (
+        json.dumps(
+            schema, indent=2, sort_keys=True, ensure_ascii=False
+        ).encode("utf-8")
+        + b"\n"
+    )
+assert approval_schema["$id"] == (
+    "https://github.com/penguin425/pcbex/schemas/"
+    "signed-procurement-approval-v1.json"
+)
+assert authorization_schema["$id"] == (
+    "https://github.com/penguin425/pcbex/schemas/"
+    "procurement-authorization-report-v1.json"
+)
+assert approval_schema["additionalProperties"] is False
+assert authorization_schema["additionalProperties"] is False
+assert approval_schema["required"] == approval_keys
+assert authorization_schema["required"] == report_keys
+assert approval_schema["properties"]["scope"]["const"] == (
+    "offline-exact-procurement-release-approval-v1"
+)
+assert authorization_schema["properties"]["scope"]["const"] == (
+    "offline-exact-procurement-release-authorization-v1"
+)
+for key in false_claims:
+    assert authorization_schema["properties"][key]["const"] is False
+
+def assert_recursive_schema_bounds(value, location="$"):
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            assert value.get("additionalProperties") is False, location
+        if value.get("type") == "array":
+            maximum = value.get("maxItems")
+            assert isinstance(maximum, int) and not isinstance(
+                maximum, bool
+            ), location
+            assert maximum >= 0, location
+        for key, nested in value.items():
+            assert_recursive_schema_bounds(nested, f"{location}.{key}")
+    elif isinstance(value, list):
+        for index, nested in enumerate(value):
+            assert_recursive_schema_bounds(nested, f"{location}[{index}]")
+
+assert_recursive_schema_bounds(approval_schema)
+assert_recursive_schema_bounds(authorization_schema)
+
+def reject_paths(value):
+    if isinstance(value, dict):
+        for nested in value.values():
+            reject_paths(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            reject_paths(nested)
+    elif isinstance(value, str):
+        assert not Path(value).is_absolute(), value
+        assert not PureWindowsPath(value).is_absolute(), value
+        assert not PureWindowsPath(value).drive, value
+        assert str(Path(output_directory).resolve()) not in value, value
+
+for value in (approval_a, approval_b, authorization, single):
+    reject_paths(value)
+PY
+
+# Covered evidence is a precondition for approval. A deliberately absent key
+# proves an approve attempt against the retained shortfall is rejected before
+# the trusted signing child tries to open private key material.
+procurement_shortfall_arguments=(
+  "$supplier_offer_shortfall_composition"
+  "$assembly_handoff_zip"
+  "$assembly_board"
+  "$assembly_manufacturing_zip"
+  --board-binding-report "$assembly_board_binding"
+  --procurement-intent "$assembly_procurement"
+  --catalog-snapshot "$assembly_snapshot"
+  --final-cpl-report "$assembly_final_cpl"
+  --assembly-evidence "$assembly_evidence"
+  --supplier-offer "$supplier_offer_shortfall"
+  --supplier-offer-fetch-receipt "$supplier_offer_shortfall_fetch_receipt"
+  --supplier-offer-coverage "$supplier_offer_shortfall_coverage"
+  --policy-pack "$procurement_policy_verified"
+  --expected-policy-pack-canonical-sha256 "$procurement_policy_digest"
+  --requested-boards 25
+  --evaluated-at-unix "$supplier_offer_shortfall_evaluated_at"
+  --pcbex "$pcbex_binary"
+  --authorization-pcbex "$pcbex_binary"
+  --manufacturing-kicad-cli "$kicad_cli_binary"
+  --timeout-seconds 600
+)
+test ! -e "$procurement_private_key_must_not_be_read"
+if PYTHONPATH=agent/src python3 -m pcbex_agent sign-procurement-approval \
+  "${procurement_shortfall_arguments[@]}" \
+  --private-key "$procurement_private_key_must_not_be_read" \
+  --signer-id procurement-a \
+  --decision approve \
+  --authorization-id procurement-e2e-v1471 \
+  --challenge "$procurement_challenge" \
+  --maximum-component-subtotal-micros "$procurement_component_ceiling" \
+  --valid-from-unix "$procurement_valid_from" \
+  --expires-at-unix "$procurement_expires_at" \
+  --reason 'This approve operation must be refused before key access.' \
+  --ticket E2E-1471-SHORTFALL \
+  --output "$procurement_shortfall_approval" \
+  2>"$procurement_shortfall_approval_error"; then
+  echo "expected shortfall approval to fail before private-key access" >&2
+  exit 1
+fi
+test ! -e "$procurement_private_key_must_not_be_read"
+test ! -e "$procurement_shortfall_approval"
+python3 - \
+  "$procurement_shortfall_approval_error" \
+  "$procurement_private_key_must_not_be_read" <<'PY'
+from pathlib import Path
+import sys
+
+error_path, private_path = map(Path, sys.argv[1:])
+assert error_path.read_bytes() == (
+    b"procurement approval signing failed: cannot approve incomplete or "
+    b"uncovered procurement evidence\n"
+)
+assert str(private_path).encode("utf-8") not in error_path.read_bytes()
+PY
+
+# Preserve formatting and mutate only one signature nibble so the failure is
+# cryptographic rather than a JSON/canonicalization error.
+python3 - "$procurement_approval_a" "$procurement_approval_tampered" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source_path, output_path = map(Path, sys.argv[1:])
+raw = source_path.read_bytes()
+match = re.search(rb'("signature"\s*:\s*")([0-9a-f])', raw)
+assert match is not None
+replacement = b"1" if match.group(2) != b"1" else b"0"
+tampered = raw[: match.start(2)] + replacement + raw[match.end(2) :]
+assert len(tampered) == len(raw) and tampered != raw
+output_path.write_bytes(tampered)
+PY
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  verify-procurement-authorization \
+  "${procurement_complete_arguments[@]}" \
+  --approval "$procurement_approval_tampered" \
+  --approval "$procurement_approval_b" \
+  --output "$procurement_authorization_tampered_output" \
+  2>"$procurement_authorization_tampered_error"; then
+  echo "expected a tampered procurement signature to fail closed" >&2
+  exit 1
+fi
+test ! -e "$procurement_authorization_tampered_output"
+test -s "$procurement_authorization_tampered_error"
+
+# A retained-source mutation is rejected independently before any public
+# authorization report can be created.
+python3 - "$supplier_offer_composition" "$procurement_evidence_tampered" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source_path, output_path = map(Path, sys.argv[1:])
+raw = source_path.read_bytes()
+match = re.search(rb'("binding_sha256"\s*:\s*")([0-9a-f])', raw)
+assert match is not None
+replacement = b"1" if match.group(2) != b"1" else b"0"
+tampered = raw[: match.start(2)] + replacement + raw[match.end(2) :]
+assert len(tampered) == len(raw) and tampered != raw
+output_path.write_bytes(tampered)
+PY
+procurement_source_tampered_arguments=("${procurement_complete_arguments[@]}")
+procurement_source_tampered_arguments[0]="$procurement_evidence_tampered"
+if PYTHONPATH=agent/src python3 -m pcbex_agent \
+  verify-procurement-authorization \
+  "${procurement_source_tampered_arguments[@]}" \
+  --approval "$procurement_approval_a" \
+  --approval "$procurement_approval_b" \
+  --output "$procurement_authorization_source_tampered_output" \
+  2>"$procurement_authorization_source_tampered_error"; then
+  echo "expected tampered retained procurement evidence to fail closed" >&2
+  exit 1
+fi
+test ! -e "$procurement_authorization_source_tampered_output"
+test -s "$procurement_authorization_source_tampered_error"

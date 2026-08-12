@@ -264,6 +264,118 @@ replay or identity mismatch, unsafe/aliased/oversized source,
 deadline/cleanup failure, or observed mutation produces no outer result. See
 [`ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md`](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md).
 
+The v1.471 procurement-authorization boundary captures the complete v1.470
+validation union, including the retained v1.470 outer report under its 128 MiB
+ceiling, plus one organization policy pack up to 64 MiB. Verification accepts
+1–100 signed approvals at 1 MiB each and no more than 32 MiB in aggregate. The
+complete caller-source aggregate is capped at 1,013 MiB: the existing 917 MiB
+v1.470 retained-validation union, policy pack, and approval aggregate. The
+derived closed cryptographic request is capped at 1 MiB and is staged
+privately rather than accepted or counted as another caller source. The
+canonical public authorization report is capped at 128 MiB. Fresh validation
+of a retained authorization prepends that report, so its complete caller
+union is capped independently at 1,141 MiB. Signing has no submitted-approval
+aggregate and therefore accepts less than the shared 1,013 MiB direct ceiling.
+
+The CLI requires its original v1.470 artifacts, policy pack, submitted
+approvals, and output to satisfy their mutually distinct stable regular
+link/reparse-safe path contracts. At the API, the retained outer v1.470
+evidence, policy pack, individual approvals, and retained authorization also
+accept bounded copied bytes or one-pass Mapping snapshots; the three inherited
+v1.470 retained child roles preserve their existing bytes/Mapping parity, while
+the remaining original closure stays path-backed. Every path-backed public
+input remains mutually distinct. Signing also accepts one private-key path,
+but Python does not convert, freeze, or stat an arbitrary private-key PathLike
+until the first fresh replay and the complete-and-covered pre-key gate for an
+`approve` decision have succeeded. It then freezes that pathname exactly once
+for direct forwarding and rejects aliases with every data path and
+normalized replay, KiCad, or authorization command path candidate before
+starting the trusted child. Candidate syntax is a direct whole-token path, the
+path after `@`, the suffix after the first `=`, or a compact option substring
+beginning at its first path separator, covering forms such as `@file`,
+`--name=/path`, and `-I/path`. Python never opens, reads, parses, copies,
+hashes, or stages private-key bytes. Encoded paths and environment,
+configuration, or other indirect path access are not resolved by that
+best-effort syntax check. The authorization child validates
+the complete public request, policy raw/canonical identity, mandatory expected
+canonical digest pin, output, signer role, and decision material before it
+reads the key. An approval over incomplete or uncovered upstream evidence is
+rejected before private-key access; a deliberate signed rejection remains
+available.
+
+One byte/count/aggregate-bounded immutable baseline of caller sources is
+captured before the first injected monotonic-clock observation. The exact
+order is original and optional v1.470 paths, raw offer, retained v1.470
+path/bytes/Mapping values, v1.471 evidence and policy path/bytes/Mapping
+values, retained authorization outer value when present, then the approval
+iterator and items. The retained outer deliberately precedes approvals so the
+iterator cannot mutate it. Previously captured mutable buffers and Mappings
+cannot change the baseline; later observed path mutation is rejected.
+
+Arbitrary in-process PathLike, iterator, and Mapping hooks in that initial
+phase are not preemptively time-bounded. After the baseline, one finite 1–600
+second monotonic deadline, defaulting to 300, covers subsequent normalization
+and strict preparse, complete v1.470 validation, private staging,
+trusted-child execution and cleanup, its bounded artifact validation, a
+second complete v1.470 validation from the same captured closure, exact
+pre/post comparison, public report construction, and final staged and
+caller-visible union rereads. Every injected monotonic observation must be
+finite and nondecreasing. The existing 256-argument, 32,768-UTF-8-byte argv,
+1 MiB child stdout/stderr, and Windows 32,767-UTF-16-unit rendered-command
+ceilings apply independently to both child roles.
+
+`--pcbex` remains the unauthenticated and unsandboxed v1.470 replay child.
+`--authorization-pcbex` is a distinct deployment-trusted Rust binary used only
+for strict Ed25519 signing or cryptographic/policy assessment. The hidden
+verification output is not a public authorization report. Python requires its
+bounded assessment to bind the exact request and policy, repeats the entire
+v1.470 validation afterward, and alone emits the public decision. A direct
+hidden-helper invocation is therefore non-authoritative without Python's
+fresh pre/post replay and source checks. The trusted process can access the
+signing key, and neither process runner provides executable provenance, key
+isolation, or a CPU, memory, filesystem, network, syscall, credential, or
+privilege sandbox.
+
+In particular, the caller-selected unsandboxed replay executable and KiCad
+process may access arbitrary filesystem paths through argv, environment,
+configuration, or their own logic, so Python makes no claim that they are
+isolated from a known private-key path; deployments must provide that isolation
+externally. Alias rejection prevents accidental forwarding and path-role
+overlap only, not key disclosure.
+
+The Rust helper pins and revalidates its private no-clobber output parent,
+installs descriptor-relatively on Unix, and uses guarded path-based
+installation elsewhere. This is sequential race detection, not an atomic
+filesystem snapshot. A hostile same-principal parent rename after the final
+guard can leave a committed-but-uncertain, non-authoritative helper artifact
+in a moved or replacement private staging directory. Python turns any such
+child error into a hard failure and publishes no approval or public report,
+but does not promise that every private temporary artifact was rolled back or
+removed. Successful public publication remains a separate atomic no-clobber
+operation.
+
+After its first replay, Python stages and verifies the exact request, policy,
+and approval bytes, rereads the caller-source union, and samples one local
+`evaluated_at_unix`. A bounded post-hook path-stability reread follows before
+Python constructs and runs the trusted verification command. The child
+validates and retains that integer before the required second v1.470 replay.
+Retained-report validation reuses its historical T without resampling. The
+second replay proves unchanged exact evidence rather than reassessing the wall
+clock. A positive outer decision is therefore policy satisfaction at the
+retained assessment instant, never a claim that the interval remains active at
+final publication or later use.
+
+A valid incomplete/uncovered, quorum, submitted-rejection, local-window,
+offer-window, receipt-observation-age, or component-subtotal/policy-limit
+failure is retained before the optional `--require-authorized` gate. Malformed
+or mixed evidence, a missing/wrong digest pin, signature failure, unsafe alias,
+limit failure, child/cleanup failure, or observed mutation produces no public
+report. Local clock and receipt age are only untrusted correlation. The
+mandatory policy digest match prevents a different unsigned
+pack from being selected relative to that expected value, but authenticating
+the expected digest remains a deployment responsibility. See
+[`PROCUREMENT_AUTHORIZATION.md`](PROCUREMENT_AUTHORIZATION.md).
+
 The composed v1.457 handoff-to-manufacturing replay requires the complete v5
 board-binding inputs and one retained package. It keeps the existing 224 MiB
 handoff-archive ceiling, the 128 MiB board / 12 MiB canonical report plus one
@@ -381,6 +493,7 @@ limit before network access.
 | Fresh manufacturing-package replay (`replay-manufacturing-package`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; inner Rust deadline reserves up to 15 seconds or half of remaining time and must convert to a positive Rust `Duration` | closed | 1 MiB | 1 MiB |
 | Offline final-BOM/catalog intent (`build-procurement-intent`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; the child reserves up to 15 seconds or half of the remaining time for process cleanup and outer rereads | closed | 1 MiB | 1 MiB |
 | Exact per-board assembly composition (`build-assembly-evidence`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 120; every handoff/manufacturing, procurement, final-CPL, cleanup, cross-binding, and reread reserve remains nested inside it | closed | 1 MiB per child | 1 MiB per child |
+| Dual-control procurement signing/verification (`sign-procurement-approval`, `verify-procurement-authorization`) | one aggregate `--timeout-seconds`, finite `1 <= seconds <= 600`; default 300; both complete v1.470 replays, trusted authorization child, cleanup, comparison, rendering, and final rereads remain nested inside it | closed | 1 MiB per child | 1 MiB per child |
 | Fresh deterministic-pipeline report replay (`replay-deterministic-pipeline`) | one aggregate `--timeout-seconds`, finite `0 < seconds <= 600`; default 120; child execution reserves up to 30 seconds or half of the remaining time, split between bounded process cleanup and outer rereads/cleanup | closed | 64 KiB | 1 MiB |
 | Repair-loop `pcbex route-kicad` | 300 seconds | closed | 8 MiB | 1 MiB |
 | Repair-loop `kicad-cli pcb drc` | 300 seconds | closed | 8 MiB | 1 MiB |
@@ -586,6 +699,16 @@ commercial coverage and creates no batch/panel/assembly evidence. The outer
 result proves no current stock, supplier/offer/price authenticity, landed
 cost, reservation, readiness, authorization, ordering, payment, or spend and
 changes none of the v1.467–v1.469 schemas or bytes.
+The v1.471 procurement authorization boundary likewise performs no intended
+network request. Its local evaluation instant and receipt-observation-age gate
+do not authenticate time. Even when the exact complete
+and covered v1.470 projection and distinct trusted signature quorum authorize
+the component-line release scope, the result proves no current stock,
+supplier/offer/price/receipt/policy authenticity, landed or invoice total,
+shipping, tax, MOQ, tiers, reservation, assembly/fabrication/order readiness,
+order placement, payment, spend, machine execution, or challenge one-time use.
+The authorization report is a point-in-time audit snapshot; current authority
+requires rerunning the public verifier from the entire original closure.
 The v1.456 deterministic-pipeline replay likewise makes no producer or network
 call beyond its caller-selected local pcbex process. The child runs only the
 existing runner against the privately staged closure; the adapter does not run

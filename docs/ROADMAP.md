@@ -182,6 +182,7 @@ auditable release.
 | v1.468.0 | Exact offline supplier-offer coverage | Freshly replay one exact retained procurement intent from its board, manufacturing package, generation bundle, and historical catalog snapshot; bind one caller-normalized local offer to the exact intent bytes; multiply only explicit per-board quantities by an explicit requested board count; and retain covered or not-covered component-line evidence using fixed-scale integer subtotals, without claiming current availability, offer or supplier authenticity, landed cost, reservation, authorization, payment, or ordering |
 | v1.469.0 | Bounded supplier-offer HTTPS acquisition receipt | Explicitly fetch one already-normalized supplier offer through a bounded no-redirect HTTPS GET, preserve exact response-entity and canonical-offer identities in a closed local receipt, and publish the normalized offer for unchanged v1.468 offline coverage without claiming supplier, offer, price, transport, or time authenticity, current availability, reservation, authorization, ordering, or payment |
 | v1.470.0 | Exact assembly and acquired supplier-offer evidence composition | Capture one shared source union, validate the exact acquisition receipt and offer offline, freshly replay the complete v1.467 assembly and v1.468 coverage children from the same staged board/package/handoff-generation/snapshot/intent closure, and retain their full cross-bound results with truthful incomplete evidence before an optional gate, without claiming current supplier facts, trusted time, assembly readiness, authorization, ordering, or payment |
+| v1.471.0 | Dual-control exact procurement release authorization | Freshly validate one exact retained v1.470 result from its complete original closure before and after a separate trusted Rust cryptographic child, pin the expected canonical procurement policy digest, and require at least two distinct role-disjoint Ed25519 approvals over one exact offer-bound quantity/currency/component-subtotal/window/challenge scope before retaining truthful authorized or not-authorized evidence, without claiming policy authenticity, trusted time, current supplier facts, reservation, ordering, payment, or spend |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1300,7 +1301,7 @@ discounts, exchange rates, or landed cost. v1.468 remains offline and keeps
 its exact schemas, serialized bytes, and `adapter_network_performed: false`;
 the acquisition receipt's independent network-observation flag is true.
 
-The current v1.470.0 milestone closes both deliberately deferred correlation
+The released v1.470.0 milestone closes both deliberately deferred correlation
 gaps in one new offline Python-only boundary. It captures the complete caller
 source union once, validates the v1.469 receipt against the exact canonical
 offer without contacting the endpoint, freshly validates the full retained
@@ -1339,3 +1340,65 @@ polarity/panel/vendor-machine transforms, multiply technical evidence into a
 batch, authorize assembly/fabrication/procurement, order, pay, or spend. Its
 caller-selected tools remain unauthenticated and unsandboxed, and sequential
 rereads are not an atomic multi-input snapshot.
+
+The current v1.471.0 milestone adds a new Python-orchestrated procurement
+authorization boundary over one exact retained v1.470 result. The caller must
+provide that result's complete original board, manufacturing package, handoff,
+board-binding, historical catalog snapshot, procurement intent, final-CPL,
+assembly, normalized offer, acquisition receipt, and coverage closure. Python
+freshly validates the retained v1.470 bytes against that entire closure before
+and after a separate trusted Rust cryptographic child. The ordinary `--pcbex`
+replay child remains distinct, caller-selected, unauthenticated, and
+unsandboxed; the `--authorization-pcbex` child is part of the trusted computing
+base and emits only an internal cryptographic/policy assessment. Python alone
+constructs the public authorization report after the second replay and final
+source checks.
+After its first replay, Python stages and verifies the cryptographic inputs,
+rereads the caller sources, and samples one local evaluation instant. A
+bounded post-hook path-stability reread follows before the trusted assessment.
+The mandatory second replay is an unchanged-evidence guard, not a new time
+assessment: a positive public claim means the exact release satisfied the
+submitted policy at the retained assessment instant only.
+
+The optional closed organization-policy field
+`procurement_authorization_policy` fixes an exact three-uppercase-letter
+currency, a component-lines-only subtotal ceiling, maximum approval duration,
+maximum receipt-observation age, quorum of at least two, and 2–100 Ed25519
+keys whose identifiers and public keys are disjoint from AI-review,
+human-escalation, and fabrication roles. A mandatory externally expected
+canonical policy digest pin prevents the unsigned evidence from selecting a
+different trust root. The match does not authenticate who selected or
+distributed either pack or pin, so policy authenticity remains false unless a
+deployment establishes it independently.
+
+Every domain-separated approval binds the exact raw v1.470 identity and outer
+binding; complete and covered decisions; supplier/offer identity, currency,
+declared half-open window, requested boards, component subtotal, and receipt
+observation; policy raw/canonical/ID/revision identity; authorization ID;
+64-lowercase-hex challenge; component-subtotal ceiling; inclusive approval
+window; signer; decision; reason; and ticket. The complete signed interval must
+fit inside the offer interval, including an expiry strictly before the offer's
+exclusive end. Distinct trusted approvals must meet the policy quorum without
+a submitted valid rejection. Reason and ticket contain non-whitespace text
+after trimming, reject NUL, and are bounded at 4,096 and 256 UTF-8 bytes.
+Distinct trusted IDs and keys do not prove that different natural people or
+operators control them; that separation remains a deployment custody rule.
+
+Incomplete or uncovered upstream evidence, insufficient quorum, a valid
+submitted rejection, a local evaluation instant outside either interval, a
+future or over-age receipt observation, component subtotal above the signed or
+policy ceiling, a signed ceiling above policy, or an overlong signed interval
+is retained as a truthful `not_authorized` result before the optional final
+gate. Malformed, mixed, unpinned, incorrectly signed, aliased, oversized, or
+observably mutated evidence produces no public report. The local time and
+receipt-age comparisons are untrusted correlation rather than a trusted
+timestamp.
+
+Only the public outer `procurement_authorized` field may be true. Network and
+current availability, supplier/offer/price/receipt/policy authenticity,
+trusted time, reservation, assembly/fabrication/order readiness, order
+placement, payment, machine execution, and one-time challenge use remain
+false. The authorization does not establish current stock, landed or invoice
+cost, shipping, tax, MOQ, tiers, spend, order acceptance, or any external side
+effect. A retained report is an audit snapshot rather than reusable current
+authority; the complete verifier must run again at the actual handoff.
