@@ -55,8 +55,11 @@ class _HookMapping(_OnePassMapping):
         self.hook = hook
 
     def items(self):  # type: ignore[override]
+        self.calls += 1
+        if self.calls != 1:
+            raise AssertionError("mapping traversed more than once")
         self.hook()
-        return super().items()
+        return self.value.items()
 
 
 class _OneShotPath(os.PathLike[str]):
