@@ -879,6 +879,11 @@
     {
       "id": "exact-assembly-acquired-supplier-offer-evidence-composition",
       "release": "v1.470.0",
+      "status": "released"
+    },
+    {
+      "id": "dual-control-exact-procurement-release-authorization",
+      "release": "v1.471.0",
       "status": "current"
     }
   ]

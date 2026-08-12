@@ -614,6 +614,26 @@ class CiExecutionPolicyTests(unittest.TestCase):
             ),
             1,
         )
+        procurement_authorization_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_procurement_release_authorization_v1471\n"
+            "          agent.tests.test_procurement_release_authorization_cli_v1471 -v"
+        )
+        self.assertEqual(document.count(procurement_authorization_command), 1)
+        self.assertIn(procurement_authorization_command, boundaries)
+        self.assertNotIn(procurement_authorization_command, rust_windows)
+        self.assertEqual(
+            document.count(
+                "agent.tests.test_procurement_release_authorization_v1471"
+            ),
+            1,
+        )
+        self.assertEqual(
+            document.count(
+                "agent.tests.test_procurement_release_authorization_cli_v1471"
+            ),
+            1,
+        )
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
@@ -637,6 +657,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         assembly_supplier_offer_step = boundaries.index(
             "- name: Run cross-platform v1.470 assembly/supplier-offer boundaries"
+        )
+        procurement_authorization_step = boundaries.index(
+            "- name: Run cross-platform v1.471 procurement-authorization boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -666,13 +689,26 @@ class CiExecutionPolicyTests(unittest.TestCase):
             supplier_offer_acquisition_block,
         )
         assembly_supplier_offer_block = boundaries[
-            assembly_supplier_offer_step:toolchain_step
+            assembly_supplier_offer_step:procurement_authorization_step
         ]
         self.assertIn("PYTHONPATH: agent/src", assembly_supplier_offer_block)
         self.assertIn(
             assembly_supplier_offer_command,
             assembly_supplier_offer_block,
         )
+        procurement_authorization_block = boundaries[
+            procurement_authorization_step:toolchain_step
+        ]
+        self.assertIn("PYTHONPATH: agent/src", procurement_authorization_block)
+        self.assertIn(
+            procurement_authorization_command,
+            procurement_authorization_block,
+        )
+        self.assertLess(
+            assembly_supplier_offer_step,
+            procurement_authorization_step,
+        )
+        self.assertLess(procurement_authorization_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

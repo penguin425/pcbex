@@ -118,6 +118,17 @@ from .procurement_intent import (
     evaluate_procurement_intent,
     procurement_intent_json_schema,
 )
+from .procurement_release_authorization import (
+    MAXIMUM_PROCUREMENT_AUTHORIZATION_REPORT_BYTES,
+    MAXIMUM_SIGNED_PROCUREMENT_APPROVAL_BYTES,
+    ProcurementReleaseAuthorizationError,
+    procurement_authorization_report_json_schema,
+    render_procurement_authorization_report,
+    render_signed_procurement_approval,
+    sign_procurement_approval,
+    signed_procurement_approval_json_schema,
+    verify_procurement_authorization,
+)
 from .skidl import (
     CircuitSpecError,
     assign_catalog_parts,
@@ -232,6 +243,213 @@ def _preflight_assembly_supplier_offer_output(
                 "input path"
             )
     return frozen_output
+
+
+def _procurement_authorization_comparison_path(path: Path) -> str:
+    try:
+        rendered = os.path.realpath(os.path.abspath(path))
+        normalized = os.path.normcase(rendered)
+        return unicodedata.normalize("NFC", normalized).casefold()
+    except (OSError, TypeError, ValueError, UnicodeError):
+        raise BoundedIOError(
+            "procurement authorization path identity is invalid"
+        ) from None
+
+
+def _procurement_authorization_command_path(command: str) -> Path | None:
+    """Return commands that name paths instead of relying on PATH lookup."""
+
+    try:
+        path_looking = (
+            os.path.isabs(command)
+            or command.startswith((".", "~"))
+            or "/" in command
+            or "\\" in command
+            or (len(command) >= 2 and command[1] == ":")
+        )
+        return Path(command) if path_looking else None
+    except (OSError, TypeError, ValueError, UnicodeError):
+        raise BoundedIOError(
+            "procurement authorization command path identity is invalid"
+        ) from None
+
+
+def _preflight_procurement_authorization_output(
+    output: Path, inputs: tuple[Path | None, ...]
+) -> Path:
+    """Freeze one no-clobber destination and reject every input alias."""
+
+    try:
+        validate_no_clobber_path(output)
+        frozen_output = Path(os.path.abspath(output))
+        validate_no_clobber_path(frozen_output)
+    except (OSError, TypeError, ValueError, UnicodeError):
+        raise BoundedIOError(
+            "procurement authorization output path is unsafe or already exists"
+        ) from None
+    output_identity = _procurement_authorization_comparison_path(frozen_output)
+    for source in inputs:
+        if source is None:
+            continue
+        aliases = (
+            _procurement_authorization_comparison_path(source) == output_identity
+        )
+        if not aliases:
+            try:
+                same_parent = os.path.samefile(
+                    frozen_output.parent, Path(os.path.abspath(source)).parent
+                )
+            except FileNotFoundError:
+                same_parent = False
+            except (OSError, TypeError, ValueError, UnicodeError):
+                raise BoundedIOError(
+                    "procurement authorization path identity is invalid"
+                ) from None
+            if same_parent:
+                output_leaf = unicodedata.normalize(
+                    "NFC", os.path.normcase(frozen_output.name)
+                ).casefold()
+                source_leaf = unicodedata.normalize(
+                    "NFC", os.path.normcase(source.name)
+                ).casefold()
+                aliases = output_leaf == source_leaf
+        if aliases:
+            raise BoundedIOError(
+                "procurement authorization output must differ from every input path"
+            )
+    return frozen_output
+
+
+def _add_procurement_authorization_sources(
+    command: argparse.ArgumentParser,
+) -> None:
+    command.add_argument("evidence", type=Path, metavar="EVIDENCE")
+    command.add_argument("handoff", type=Path, metavar="HANDOFF")
+    command.add_argument("board", type=Path, metavar="BOARD")
+    command.add_argument(
+        "manufacturing_package", type=Path, metavar="MANUFACTURING_PACKAGE"
+    )
+    command.add_argument(
+        "--board-binding-report", type=Path, required=True, metavar="REPORT"
+    )
+    command.add_argument(
+        "--procurement-intent", type=Path, required=True, metavar="INTENT"
+    )
+    command.add_argument(
+        "--catalog-snapshot", type=Path, required=True, metavar="SNAPSHOT"
+    )
+    command.add_argument(
+        "--final-cpl-report", type=Path, required=True, metavar="REPORT"
+    )
+    command.add_argument(
+        "--assembly-evidence", type=Path, required=True, metavar="REPORT"
+    )
+    command.add_argument(
+        "--supplier-offer", type=Path, required=True, metavar="OFFER"
+    )
+    command.add_argument(
+        "--supplier-offer-fetch-receipt",
+        type=Path,
+        required=True,
+        metavar="RECEIPT",
+    )
+    command.add_argument(
+        "--supplier-offer-coverage",
+        type=Path,
+        required=True,
+        metavar="COVERAGE",
+    )
+    command.add_argument(
+        "--policy-pack", type=Path, required=True, metavar="POLICY_PACK"
+    )
+
+
+def _add_procurement_authorization_replay_options(
+    command: argparse.ArgumentParser,
+) -> None:
+    command.add_argument("--board-binding-policy", type=Path, metavar="POLICY")
+    command.add_argument(
+        "--manufacturing-kicad-cli", default="kicad-cli", metavar="CMD"
+    )
+    command.add_argument(
+        "--manufacturing-kicad-project", type=Path, metavar="PATH"
+    )
+    command.add_argument(
+        "--manufacturing-kicad-rules", type=Path, metavar="PATH"
+    )
+    profile = command.add_mutually_exclusive_group()
+    profile.add_argument("--manufacturing-fab", metavar="ID")
+    profile.add_argument("--manufacturing-fab-profile", type=Path, metavar="PATH")
+    profile.add_argument(
+        "--manufacturing-physical-profile", type=Path, metavar="PATH"
+    )
+    command.add_argument("--expected-handoff-archive-sha256", metavar="HEX")
+    command.add_argument("--expected-handoff-bundle-sha256", metavar="HEX")
+
+
+def _add_procurement_authorization_commands(
+    command: argparse.ArgumentParser, *, signing: bool
+) -> None:
+    command.add_argument(
+        "--pcbex",
+        default="pcbex",
+        metavar="CMD",
+        help="exact evidence replay command (default: pcbex)",
+    )
+    command.add_argument(
+        "--authorization-pcbex",
+        default="pcbex",
+        metavar="CMD",
+        help=(
+            "trusted crypto TCB command that can read the private key "
+            "(default: pcbex)"
+            if signing
+            else "trusted crypto TCB command used to verify signed approvals "
+            "(default: pcbex)"
+        ),
+    )
+
+
+def _add_procurement_authorization_selectors(
+    command: argparse.ArgumentParser,
+) -> None:
+    command.add_argument("--requested-boards", type=int, required=True, metavar="N")
+    command.add_argument(
+        "--evaluated-at-unix", type=int, required=True, metavar="N"
+    )
+
+
+def _procurement_authorization_input_paths(
+    args: argparse.Namespace,
+    *,
+    private_key: Path | None = None,
+    approvals: tuple[Path, ...] = (),
+) -> tuple[Path | None, ...]:
+    return (
+        args.evidence,
+        args.handoff,
+        args.board,
+        args.manufacturing_package,
+        args.board_binding_report,
+        args.procurement_intent,
+        args.catalog_snapshot,
+        args.final_cpl_report,
+        args.assembly_evidence,
+        args.supplier_offer,
+        args.supplier_offer_fetch_receipt,
+        args.supplier_offer_coverage,
+        args.policy_pack,
+        private_key,
+        *approvals,
+        args.board_binding_policy,
+        _procurement_authorization_command_path(args.manufacturing_kicad_cli),
+        args.manufacturing_kicad_project,
+        args.manufacturing_kicad_rules,
+        args.manufacturing_fab_profile,
+        args.manufacturing_physical_profile,
+        _procurement_authorization_command_path(args.pcbex),
+        _procurement_authorization_command_path(args.authorization_pcbex),
+    )
 
 
 def main() -> None:
@@ -991,6 +1209,116 @@ def main() -> None:
         help="write the closed assembly supplier-offer evidence JSON Schema",
     )
     assembly_supplier_offer_schema.add_argument(
+        "-o", "--output", type=Path, metavar="PATH"
+    )
+    procurement_approval_help = (
+        "sign one exact procurement approval against retained release evidence"
+    )
+    procurement_approval = sub.add_parser(
+        "sign-procurement-approval",
+        help=procurement_approval_help,
+        description=procurement_approval_help,
+    )
+    _add_procurement_authorization_sources(procurement_approval)
+    procurement_approval.add_argument(
+        "--private-key", type=Path, required=True, metavar="PRIVATE_KEY"
+    )
+    _add_procurement_authorization_selectors(procurement_approval)
+    _add_procurement_authorization_commands(procurement_approval, signing=True)
+    procurement_approval.add_argument(
+        "--expected-policy-pack-canonical-sha256",
+        required=True,
+        metavar="HEX",
+    )
+    procurement_approval.add_argument("--signer-id", required=True, metavar="ID")
+    procurement_approval.add_argument(
+        "--decision", choices=("approve", "reject"), required=True
+    )
+    procurement_approval.add_argument(
+        "--authorization-id", required=True, metavar="ID"
+    )
+    procurement_approval.add_argument(
+        "--challenge", required=True, metavar="CHALLENGE"
+    )
+    procurement_approval.add_argument(
+        "--maximum-component-subtotal-micros",
+        type=int,
+        required=True,
+        metavar="N",
+    )
+    procurement_approval.add_argument(
+        "--valid-from-unix", type=int, required=True, metavar="N"
+    )
+    procurement_approval.add_argument(
+        "--expires-at-unix", type=int, required=True, metavar="N"
+    )
+    procurement_approval.add_argument("--reason", required=True, metavar="TEXT")
+    procurement_approval.add_argument("--ticket", required=True, metavar="TICKET")
+    _add_procurement_authorization_replay_options(procurement_approval)
+    procurement_approval.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help="whole-operation timeout in seconds (default: 300.0)",
+    )
+    procurement_approval.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="APPROVAL"
+    )
+    procurement_authorization_help = (
+        "verify signed approvals for one exact retained procurement release"
+    )
+    procurement_authorization = sub.add_parser(
+        "verify-procurement-authorization",
+        help=procurement_authorization_help,
+        description=procurement_authorization_help,
+    )
+    _add_procurement_authorization_sources(procurement_authorization)
+    procurement_authorization.add_argument(
+        "--approval",
+        action="append",
+        type=Path,
+        required=True,
+        metavar="APPROVAL",
+        help="signed procurement approval; repeat once per approval",
+    )
+    _add_procurement_authorization_selectors(procurement_authorization)
+    _add_procurement_authorization_commands(
+        procurement_authorization, signing=False
+    )
+    procurement_authorization.add_argument(
+        "--expected-policy-pack-canonical-sha256",
+        required=True,
+        metavar="HEX",
+    )
+    _add_procurement_authorization_replay_options(procurement_authorization)
+    procurement_authorization.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help="whole-operation timeout in seconds (default: 300.0)",
+    )
+    procurement_authorization.add_argument(
+        "-o", "--output", type=Path, required=True, metavar="REPORT"
+    )
+    procurement_authorization.add_argument(
+        "--require-authorized",
+        action="store_true",
+        help="fail only after retaining an exact report that is not authorized",
+    )
+    signed_procurement_approval_schema = sub.add_parser(
+        "signed-procurement-approval-schema",
+        help="write the closed signed procurement approval JSON Schema",
+    )
+    signed_procurement_approval_schema.add_argument(
+        "-o", "--output", type=Path, metavar="PATH"
+    )
+    procurement_authorization_report_schema = sub.add_parser(
+        "procurement-authorization-report-schema",
+        help="write the closed procurement authorization report JSON Schema",
+    )
+    procurement_authorization_report_schema.add_argument(
         "-o", "--output", type=Path, metavar="PATH"
     )
     repair = sub.add_parser(
@@ -2078,6 +2406,205 @@ def main() -> None:
             raise SystemExit(
                 f"assembly supplier-offer evidence schema failed: {error}"
             ) from None
+    elif args.command == "sign-procurement-approval":
+        try:
+            frozen_output = _preflight_procurement_authorization_output(
+                args.output,
+                _procurement_authorization_input_paths(
+                    args, private_key=args.private_key
+                ),
+            )
+        except (OSError, TypeError, ValueError) as error:
+            raise SystemExit(
+                f"procurement approval signing failed: {error}"
+            ) from None
+        try:
+            result = sign_procurement_approval(
+                args.evidence,
+                args.handoff,
+                args.board,
+                args.manufacturing_package,
+                args.board_binding_report,
+                args.procurement_intent,
+                args.catalog_snapshot,
+                args.final_cpl_report,
+                args.assembly_evidence,
+                args.supplier_offer,
+                args.supplier_offer_fetch_receipt,
+                args.supplier_offer_coverage,
+                args.policy_pack,
+                args.private_key,
+                args.pcbex,
+                args.authorization_pcbex,
+                requested_boards=args.requested_boards,
+                evaluated_at_unix=args.evaluated_at_unix,
+                expected_policy_pack_canonical_sha256=(
+                    args.expected_policy_pack_canonical_sha256
+                ),
+                signer_id=args.signer_id,
+                decision=args.decision,
+                authorization_id=args.authorization_id,
+                challenge=args.challenge,
+                maximum_component_subtotal_micros=(
+                    args.maximum_component_subtotal_micros
+                ),
+                valid_from_unix=args.valid_from_unix,
+                expires_at_unix=args.expires_at_unix,
+                reason=args.reason,
+                ticket=args.ticket,
+                board_binding_policy=args.board_binding_policy,
+                kicad_cli=args.manufacturing_kicad_cli,
+                manufacturing_kicad_project=args.manufacturing_kicad_project,
+                manufacturing_kicad_rules=args.manufacturing_kicad_rules,
+                manufacturing_fab=args.manufacturing_fab,
+                manufacturing_fab_profile=args.manufacturing_fab_profile,
+                manufacturing_physical_profile=(
+                    args.manufacturing_physical_profile
+                ),
+                expected_archive_sha256=args.expected_handoff_archive_sha256,
+                expected_bundle_sha256=args.expected_handoff_bundle_sha256,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_signed_procurement_approval(result)
+        except ProcurementReleaseAuthorizationError as error:
+            raise SystemExit(
+                f"procurement approval signing failed: {error}"
+            ) from None
+        except OSError:
+            raise SystemExit(
+                "procurement approval signing failed: local operation failed"
+            ) from None
+        try:
+            atomic_write_no_clobber(
+                frozen_output,
+                rendered,
+                max_bytes=MAXIMUM_SIGNED_PROCUREMENT_APPROVAL_BYTES,
+            )
+        except OSError:
+            raise SystemExit(
+                "procurement approval signing failed: output publication failed"
+            ) from None
+    elif args.command == "verify-procurement-authorization":
+        try:
+            frozen_output = _preflight_procurement_authorization_output(
+                args.output,
+                _procurement_authorization_input_paths(
+                    args, approvals=tuple(args.approval)
+                ),
+            )
+        except (OSError, TypeError, ValueError) as error:
+            raise SystemExit(
+                f"procurement authorization verification failed: {error}"
+            ) from None
+        try:
+            result = verify_procurement_authorization(
+                args.evidence,
+                args.handoff,
+                args.board,
+                args.manufacturing_package,
+                args.board_binding_report,
+                args.procurement_intent,
+                args.catalog_snapshot,
+                args.final_cpl_report,
+                args.assembly_evidence,
+                args.supplier_offer,
+                args.supplier_offer_fetch_receipt,
+                args.supplier_offer_coverage,
+                args.policy_pack,
+                args.approval,
+                args.pcbex,
+                args.authorization_pcbex,
+                requested_boards=args.requested_boards,
+                evaluated_at_unix=args.evaluated_at_unix,
+                expected_policy_pack_canonical_sha256=(
+                    args.expected_policy_pack_canonical_sha256
+                ),
+                board_binding_policy=args.board_binding_policy,
+                kicad_cli=args.manufacturing_kicad_cli,
+                manufacturing_kicad_project=args.manufacturing_kicad_project,
+                manufacturing_kicad_rules=args.manufacturing_kicad_rules,
+                manufacturing_fab=args.manufacturing_fab,
+                manufacturing_fab_profile=args.manufacturing_fab_profile,
+                manufacturing_physical_profile=(
+                    args.manufacturing_physical_profile
+                ),
+                expected_archive_sha256=args.expected_handoff_archive_sha256,
+                expected_bundle_sha256=args.expected_handoff_bundle_sha256,
+                timeout_seconds=args.timeout_seconds,
+            )
+            rendered = render_procurement_authorization_report(result)
+        except ProcurementReleaseAuthorizationError as error:
+            raise SystemExit(
+                f"procurement authorization verification failed: {error}"
+            ) from None
+        except OSError:
+            raise SystemExit(
+                "procurement authorization verification failed: local operation failed"
+            ) from None
+        try:
+            atomic_write_no_clobber(
+                frozen_output,
+                rendered,
+                max_bytes=MAXIMUM_PROCUREMENT_AUTHORIZATION_REPORT_BYTES,
+            )
+        except OSError:
+            raise SystemExit(
+                "procurement authorization verification failed: "
+                "output publication failed"
+            ) from None
+        if args.require_authorized and not result["procurement_authorized"]:
+            raise SystemExit(
+                "procurement authorization report was retained but the exact "
+                "release was not authorized"
+            )
+    elif args.command in {
+        "signed-procurement-approval-schema",
+        "procurement-authorization-report-schema",
+    }:
+        prefix = (
+            "signed procurement approval schema failed"
+            if args.command == "signed-procurement-approval-schema"
+            else "procurement authorization report schema failed"
+        )
+        frozen_output = None
+        if args.output:
+            try:
+                frozen_output = _preflight_procurement_authorization_output(
+                    args.output, ()
+                )
+            except (OSError, TypeError, ValueError) as error:
+                raise SystemExit(f"{prefix}: {error}") from None
+        try:
+            schema = (
+                signed_procurement_approval_json_schema()
+                if args.command == "signed-procurement-approval-schema"
+                else procurement_authorization_report_json_schema()
+            )
+            rendered = (
+                json.dumps(
+                    schema,
+                    indent=2,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+        except ProcurementReleaseAuthorizationError as error:
+            raise SystemExit(f"{prefix}: {error}") from None
+        if frozen_output is None:
+            try:
+                print(rendered, end="")
+            except OSError:
+                raise SystemExit(f"{prefix}: output publication failed") from None
+        else:
+            try:
+                atomic_write_text_no_clobber(
+                    frozen_output,
+                    rendered,
+                    max_bytes=MAXIMUM_AGENT_FILE_BYTES,
+                )
+            except OSError:
+                raise SystemExit(f"{prefix}: output publication failed") from None
     else:
         if _paths_are_same(args.output, args.report):
             raise SystemExit("repair board output and report paths must differ")

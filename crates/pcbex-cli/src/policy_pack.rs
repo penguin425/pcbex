@@ -29,6 +29,17 @@ pub struct FabricationAuthorizationPolicy {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ProcurementAuthorizationPolicy {
+    pub minimum_approvals: u32,
+    pub currency: String,
+    pub maximum_validity_seconds: u64,
+    pub maximum_receipt_observation_age_seconds: u64,
+    pub maximum_component_subtotal_micros: u64,
+    pub trusted_keys: Vec<TrustedApprovalKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrganizationPolicyPack {
     pub schema_version: u32,
     pub id: String,
@@ -44,6 +55,8 @@ pub struct OrganizationPolicyPack {
     pub trusted_human_escalation_keys: Vec<TrustedApprovalKey>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fabrication_authorization_policy: Option<FabricationAuthorizationPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub procurement_authorization_policy: Option<ProcurementAuthorizationPolicy>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -171,6 +184,8 @@ pub fn validate_policy_pack(pack: &OrganizationPolicyPack) -> Result<(), String>
             return Err("a public key cannot hold both AI and human escalation trust roles".into());
         }
     }
+    let mut assigned_signers: HashSet<&String> = signers.union(&human_signers).copied().collect();
+    let mut assigned_keys = keys;
     if let Some(policy) = &pack.fabrication_authorization_policy {
         if !(2..=100).contains(&policy.minimum_approvals) {
             return Err(
@@ -204,7 +219,7 @@ pub fn validate_policy_pack(pack: &OrganizationPolicyPack) -> Result<(), String>
                     trusted.signer_id
                 ));
             }
-            if signers.contains(&trusted.signer_id) || human_signers.contains(&trusted.signer_id) {
+            if assigned_signers.contains(&trusted.signer_id) {
                 return Err(format!(
                     "signer {:?} cannot hold both fabrication authorization and another trust role",
                     trusted.signer_id
@@ -213,9 +228,100 @@ pub fn validate_policy_pack(pack: &OrganizationPolicyPack) -> Result<(), String>
             if !fabrication_keys.insert(&trusted.public_key) {
                 return Err("duplicate trusted fabrication authorization public key".into());
             }
-            if keys.contains(&trusted.public_key) {
+            if assigned_keys.contains(&trusted.public_key) {
                 return Err(
                     "a public key cannot hold fabrication authorization and another trust role"
+                        .into(),
+                );
+            }
+            assigned_signers.insert(&trusted.signer_id);
+            assigned_keys.insert(&trusted.public_key);
+        }
+    }
+    if let Some(policy) = &pack.procurement_authorization_policy {
+        if !(2..=100).contains(&policy.minimum_approvals) {
+            return Err(
+                "procurement authorization minimum_approvals must be between 2 and 100".into(),
+            );
+        }
+        if policy.currency.len() != 3
+            || !policy
+                .currency
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase())
+        {
+            return Err(
+                "procurement authorization currency must contain exactly three uppercase ASCII letters"
+                    .into(),
+            );
+        }
+        if !(1..=604_800).contains(&policy.maximum_validity_seconds) {
+            return Err(
+                "procurement authorization maximum_validity_seconds must be between 1 and 604800"
+                    .into(),
+            );
+        }
+        if !(1..=604_800).contains(&policy.maximum_receipt_observation_age_seconds) {
+            return Err(
+                "procurement authorization maximum_receipt_observation_age_seconds must be between 1 and 604800"
+                    .into(),
+            );
+        }
+        if !(1..=9_007_199_254_740_991).contains(&policy.maximum_component_subtotal_micros) {
+            return Err(
+                "procurement authorization maximum_component_subtotal_micros must be between 1 and 9007199254740991"
+                    .into(),
+            );
+        }
+        if !(2..=100).contains(&policy.trusted_keys.len()) {
+            return Err(
+                "procurement authorization trusted_keys must contain 2 to 100 entries".into(),
+            );
+        }
+        if policy.minimum_approvals as usize > policy.trusted_keys.len() {
+            return Err(
+                "procurement authorization minimum_approvals cannot exceed trusted_keys".into(),
+            );
+        }
+        let mut procurement_signers = HashSet::new();
+        let mut procurement_keys = HashSet::new();
+        for trusted in &policy.trusted_keys {
+            validate_slug("trusted procurement signer id", &trusted.signer_id)?;
+            validate_public_key(&trusted.public_key)?;
+            let public_key = hex_decode_array::<32>(
+                &trusted.public_key,
+                "trusted procurement approval public key",
+            )?;
+            let verifying_key = VerifyingKey::from_bytes(&public_key).map_err(|error| {
+                format!(
+                    "invalid trusted procurement approval public key for signer {:?}: {error}",
+                    trusted.signer_id
+                )
+            })?;
+            if verifying_key.is_weak() {
+                return Err(format!(
+                    "weak trusted procurement approval public key for signer {:?}",
+                    trusted.signer_id
+                ));
+            }
+            if !procurement_signers.insert(&trusted.signer_id) {
+                return Err(format!(
+                    "duplicate trusted procurement signer id {:?}",
+                    trusted.signer_id
+                ));
+            }
+            if assigned_signers.contains(&trusted.signer_id) {
+                return Err(format!(
+                    "signer {:?} cannot hold both procurement authorization and another trust role",
+                    trusted.signer_id
+                ));
+            }
+            if !procurement_keys.insert(&trusted.public_key) {
+                return Err("duplicate trusted procurement authorization public key".into());
+            }
+            if assigned_keys.contains(&trusted.public_key) {
+                return Err(
+                    "a public key cannot hold procurement authorization and another trust role"
                         .into(),
                 );
             }
@@ -486,6 +592,40 @@ pub fn policy_pack_json_schema() -> Value {
                         }
                     }
                 }
+            },
+            "procurement_authorization_policy": {
+                "type": "object", "additionalProperties": false,
+                "required": [
+                    "minimum_approvals", "currency", "maximum_validity_seconds",
+                    "maximum_receipt_observation_age_seconds",
+                    "maximum_component_subtotal_micros", "trusted_keys"
+                ],
+                "properties": {
+                    "minimum_approvals": {
+                        "type": "integer", "minimum": 2, "maximum": 100
+                    },
+                    "currency": {"type": "string", "pattern": "^[A-Z]{3}$"},
+                    "maximum_validity_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 604800
+                    },
+                    "maximum_receipt_observation_age_seconds": {
+                        "type": "integer", "minimum": 1, "maximum": 604800
+                    },
+                    "maximum_component_subtotal_micros": {
+                        "type": "integer", "minimum": 1, "maximum": 9007199254740991_u64
+                    },
+                    "trusted_keys": {
+                        "type": "array", "minItems": 2, "maxItems": 100,
+                        "items": {
+                            "type": "object", "additionalProperties": false,
+                            "required": ["signer_id", "public_key"],
+                            "properties": {
+                                "signer_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,127}$"},
+                                "public_key": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                            }
+                        }
+                    }
+                }
             }
         }
     })
@@ -627,10 +767,16 @@ mod tests {
         assert_eq!(pack.ai_requirements.len(), 2);
         assert!(pack.require_simulation_evidence);
         assert!(pack.fabrication_authorization_policy.is_none());
+        assert!(pack.procurement_authorization_policy.is_none());
         assert!(
             !serde_json::to_string(&pack)
                 .unwrap()
                 .contains("fabrication_authorization_policy")
+        );
+        assert!(
+            !serde_json::to_string(&pack)
+                .unwrap()
+                .contains("procurement_authorization_policy")
         );
     }
 
@@ -681,12 +827,128 @@ mod tests {
                 ["items"]["additionalProperties"],
             false
         );
+        assert_eq!(
+            schema["properties"]["procurement_authorization_policy"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schema["properties"]["procurement_authorization_policy"]["properties"]["trusted_keys"]
+                ["items"]["additionalProperties"],
+            false
+        );
         assert!(
             !schema["required"]
                 .as_array()
                 .unwrap()
                 .iter()
                 .any(|field| field == "fabrication_authorization_policy")
+        );
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|field| field == "procurement_authorization_policy")
+        );
+    }
+
+    #[test]
+    fn validates_closed_dedicated_procurement_policy_and_role_separation() {
+        let mut pack = sample();
+        pack.procurement_authorization_policy = Some(ProcurementAuthorizationPolicy {
+            minimum_approvals: 2,
+            currency: "USD".into(),
+            maximum_validity_seconds: 3_600,
+            maximum_receipt_observation_age_seconds: 300,
+            maximum_component_subtotal_micros: 5_000_000,
+            trusted_keys: vec![
+                TrustedApprovalKey {
+                    signer_id: "procurement-a".into(),
+                    public_key: hex::encode(
+                        SigningKey::from_bytes(&[51; 32]).verifying_key().to_bytes(),
+                    ),
+                },
+                TrustedApprovalKey {
+                    signer_id: "procurement-b".into(),
+                    public_key: hex::encode(
+                        SigningKey::from_bytes(&[52; 32]).verifying_key().to_bytes(),
+                    ),
+                },
+            ],
+        });
+        validate_policy_pack(&pack).unwrap();
+        assert_eq!(
+            parse_policy_pack(&serde_json::to_string(&pack).unwrap()).unwrap(),
+            pack
+        );
+
+        let ai_signer = pack.trusted_approval_keys[0].signer_id.clone();
+        pack.procurement_authorization_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .signer_id = ai_signer;
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("another trust role")
+        );
+
+        pack.procurement_authorization_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .signer_id = "procurement-a".into();
+        pack.procurement_authorization_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .public_key = format!("02{}", "00".repeat(31));
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("invalid trusted procurement approval public key")
+        );
+
+        pack.procurement_authorization_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0]
+            .public_key = format!("01{}", "00".repeat(31));
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("weak trusted procurement approval public key")
+        );
+
+        let shared_key = hex::encode(SigningKey::from_bytes(&[61; 32]).verifying_key().to_bytes());
+        pack.procurement_authorization_policy
+            .as_mut()
+            .unwrap()
+            .trusted_keys[0] = TrustedApprovalKey {
+            signer_id: "shared-authorization".into(),
+            public_key: shared_key.clone(),
+        };
+        pack.fabrication_authorization_policy = Some(FabricationAuthorizationPolicy {
+            minimum_approvals: 2,
+            maximum_validity_seconds: 3_600,
+            trusted_keys: vec![
+                TrustedApprovalKey {
+                    signer_id: "shared-authorization".into(),
+                    public_key: shared_key,
+                },
+                TrustedApprovalKey {
+                    signer_id: "fabrication-only".into(),
+                    public_key: hex::encode(
+                        SigningKey::from_bytes(&[62; 32]).verifying_key().to_bytes(),
+                    ),
+                },
+            ],
+        });
+        assert!(
+            validate_policy_pack(&pack)
+                .unwrap_err()
+                .contains("another trust role")
         );
     }
 

@@ -237,6 +237,91 @@ produces no report. Schema output is canonical one-LF JSON to stdout or a new
 no-clobber path. See
 [`ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md`](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md).
 
+Procurement authorization uses a separate Python orchestration boundary around
+the full v1.470 replay and a dedicated trusted Rust cryptographic helper. The
+policy pack is limited to 64 MiB; the private derived request and each signed
+approval to 1 MiB; verification accepts 1–100 approvals under a 32 MiB
+aggregate; the helper's cryptographic assessment and the final public report
+remain under the generic 128 MiB ceiling. The complete Python caller-source
+aggregate, including the retained v1.470 result, policy, and approvals, is
+1,013 MiB for the public sign/verify CLI boundary (signing has no approval
+aggregate and accepts less). The Python API that freshly validates a retained
+authorization additionally accepts that outer report under its 128 MiB
+ceiling, for a separate 1,141 MiB union. See
+[`PYTHON_AGENT_LIMITS.md`](PYTHON_AGENT_LIMITS.md) for the complete
+original-closure accounting.
+
+Python invokes `--pcbex` only for the existing unauthenticated v1.470 replay
+and invokes the distinct `--authorization-pcbex` as a deployment-trusted
+component for strict request/policy/signature operations. The private request
+is closed and path-free. Both internal Rust commands require the expected
+canonical policy digest and independently validate the typed policy, request,
+output, signer material, and role disjointness. The signing helper performs
+all public preflight before opening the private-key path. Python itself never
+opens or copies that key. On Unix the helper requires that file to be owned by
+the effective UID with exact mode `0400` or `0600`; `approval-keygen` creates
+the compatible `0600` mode.
+
+The CLI's early lexical preflight rejects only output aliases with its built-in
+path inputs (including the private-key path) and whole command tokens already
+recognized as paths. It does not yet compare the private key with sources or
+with `@path`, a path suffix after `=`, or a compact option's path substring. At
+the underlying API boundary, Python deliberately does not convert or stat an
+arbitrary private-key PathLike until the first fresh replay and the
+complete-and-covered `approve` gate succeed; it then freezes the pathname once
+and checks it against all public paths plus direct whole-token, `@`, `=`, and
+compact command path candidates before the trusted child. Neither boundary
+isolates the key from the caller-selected unsandboxed replay executable or
+KiCad process, which can access arbitrary filesystem paths including a known
+key path. Thus `@file`, `--name=/path`, and `-I/path` are checked, but encoded
+paths, environment, configuration, and other indirect access remain outside
+this best-effort syntax check. It prevents accidental forwarding and path-role
+overlap only, not key disclosure.
+
+The core first makes one byte/count/aggregate-bounded immutable baseline of
+all public caller sources, before consulting its injected monotonic clock or
+normalizing command hooks. Arbitrary in-process capture hooks are not
+preemptively timed. A single finite, non-rollback 1–600 second deadline then
+covers the remaining normalization, replay, helper, cleanup, finalization, and
+reread work.
+
+The Rust verification helper emits only a closed internal cryptographic/policy
+assessment. It does not validate the original v1.470 closure and does not emit
+the public `procurement_authorized` claim. Python freshly validates the exact
+retained v1.470 result before and after that child and alone publishes the
+public report following final rereads. Direct hidden-helper use is
+non-authoritative without that surrounding fresh replay. The trusted helper
+can read the key and is part of the authorization TCB; this separation is not
+key isolation, executable provenance, or a CPU/memory/filesystem/network/
+syscall/credential/privilege sandbox.
+
+For its private output, the Rust helper pins and revalidates the no-clobber
+parent, installs relative to its directory descriptor on Unix, and uses a
+guarded path-based installation on non-Unix systems. A hostile same-principal
+rename after the final guard can still leave a committed-but-uncertain helper
+artifact in a moved or replacement private staging directory. Python treats
+the child error as hard and publishes no public approval or report; complete
+private cleanup, rollback, and an atomic filesystem snapshot are not claimed.
+The later public atomic no-clobber publication is a distinct boundary.
+
+After the first replay, Python stages and verifies the exact request, policy,
+and approval bytes, rereads the caller-source union, and samples one local
+assessment instant. A bounded post-hook path-stability reread follows before
+Python constructs and runs the trusted verifier command. That child validates
+and evaluates at the supplied integer. Retained validation reuses the report's
+historical instant without resampling.
+The required second v1.470 replay is an unchanged-evidence guard, not a second
+time decision. The public report can therefore claim policy satisfaction only
+at its retained assessment instant, not at publication or later consumption.
+
+A valid policy-level negative is retained before the public final gate;
+malformed/mixed/unpinned/invalidly signed input, an unsafe output, child or
+cleanup failure, or observed mutation produces no public report. The mandatory
+digest pin prevents a different unsigned pack from being self-selected
+relative to the supplied expected value but does not authenticate the pack or
+pin. A deployment must establish that trust separately. See
+[`PROCUREMENT_AUTHORIZATION.md`](PROCUREMENT_AUTHORIZATION.md).
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each
@@ -340,6 +425,7 @@ has a hard deadline.
 | KiCad DRC and manufacturing export | 600 seconds | 8 MiB | 1 MiB |
 | KiCad build identity | 600 seconds | 128 KiB | 1 MiB |
 | MCP child `pcbex` command | 600 seconds | 16 MiB | 1 MiB |
+| Python procurement replay or trusted authorization child | one aggregate 1–600 second Python deadline; default 300 | 1 MiB | 1 MiB |
 | Firmware compiler, smoke test, or Python check | configurable 1–3600 seconds; default 120 | 1 MiB | 1 MiB |
 | Factory repair wrapper | remaining portion of its 600-second repair limit | 1 MiB | 1 MiB |
 
