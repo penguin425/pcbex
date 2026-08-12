@@ -287,7 +287,7 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
                 )
                 Path(option("--output")).write_bytes(
                     # Public, path-free approval fixture; it contains no private-key bytes.
-                    module.render_signed_procurement_approval(approval)  # lgtm[py/clear-text-storage-sensitive-data]
+                    module.render_signed_procurement_approval(approval)
                 )
                 return BoundedProcessResult(tuple(argv), 0, b"", b"")
 
@@ -544,7 +544,7 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
             )
             retained_path = root / "authorization.json"
             # Public, path-free report fixture; it contains no private-key bytes.
-            retained_path.write_bytes(module.render_procurement_authorization_report(report))  # lgtm[py/clear-text-storage-sensitive-data]
+            retained_path.write_bytes(module.render_procurement_authorization_report(report))
 
             class MutatingApprovals:
                 def __iter__(self_nonlocal):
@@ -967,7 +967,7 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
             report_raw = module.render_procurement_authorization_report(report)
             report_path = root / "authorization.json"
             # Public, path-free report fixture; it contains no private-key bytes.
-            report_path.write_bytes(report_raw)  # lgtm[py/clear-text-storage-sensitive-data]
+            report_path.write_bytes(report_raw)
             approval_raw = [
                 module.render_signed_procurement_approval(value) for value in approvals
             ]
@@ -975,7 +975,7 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
             for index, raw in enumerate(approval_raw):
                 path = root / f"approval-{index}.json"
                 # Public, path-free approval fixture; it contains no private-key bytes.
-                path.write_bytes(raw)  # lgtm[py/clear-text-storage-sensitive-data]
+                path.write_bytes(raw)
                 approval_paths.append(path)
             retained_mapping = _OnePassMapping(report)
             approval_mappings = [_OnePassMapping(value) for value in approvals]
@@ -1274,7 +1274,7 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
                 approval["reason"] = "Helper substituted a different reason."
                 output = Path(argv[argv.index("--output") + 1])
                 # Public, path-free forged fixture; it contains no private-key bytes.
-                output.write_bytes(module.render_signed_procurement_approval(approval))  # lgtm[py/clear-text-storage-sensitive-data]
+                output.write_bytes(module.render_signed_procurement_approval(approval))
                 return BoundedProcessResult(tuple(argv), 0, b"", b"")
 
             with (
