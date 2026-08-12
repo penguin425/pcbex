@@ -286,6 +286,8 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
                     request["evidence"], request["authorization_scope"]
                 )
                 Path(option("--output")).write_bytes(
+                    # Public, path-free approval fixture; it contains no private-key bytes.
+                    # codeql[py/clear-text-storage-sensitive-data]
                     module.render_signed_procurement_approval(approval)
                 )
                 return BoundedProcessResult(tuple(argv), 0, b"", b"")
@@ -542,6 +544,8 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
                 )
             )
             retained_path = root / "authorization.json"
+            # Public, path-free report fixture; it contains no private-key bytes.
+            # codeql[py/clear-text-storage-sensitive-data]
             retained_path.write_bytes(module.render_procurement_authorization_report(report))
 
             class MutatingApprovals:
@@ -964,6 +968,8 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
             )
             report_raw = module.render_procurement_authorization_report(report)
             report_path = root / "authorization.json"
+            # Public, path-free report fixture; it contains no private-key bytes.
+            # codeql[py/clear-text-storage-sensitive-data]
             report_path.write_bytes(report_raw)
             approval_raw = [
                 module.render_signed_procurement_approval(value) for value in approvals
@@ -971,6 +977,8 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
             approval_paths = []
             for index, raw in enumerate(approval_raw):
                 path = root / f"approval-{index}.json"
+                # Public, path-free approval fixture; it contains no private-key bytes.
+                # codeql[py/clear-text-storage-sensitive-data]
                 path.write_bytes(raw)
                 approval_paths.append(path)
             retained_mapping = _OnePassMapping(report)
@@ -1269,6 +1277,8 @@ class ProcurementReleaseAuthorizationV1471Tests(unittest.TestCase):
                 )
                 approval["reason"] = "Helper substituted a different reason."
                 output = Path(argv[argv.index("--output") + 1])
+                # Public, path-free forged fixture; it contains no private-key bytes.
+                # codeql[py/clear-text-storage-sensitive-data]
                 output.write_bytes(module.render_signed_procurement_approval(approval))
                 return BoundedProcessResult(tuple(argv), 0, b"", b"")
 
