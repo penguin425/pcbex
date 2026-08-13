@@ -4,7 +4,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::fs::symlink;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -144,6 +144,13 @@ fn run(marker: &Path, ledger: &Path, protected: &Path) -> Output {
 }
 
 #[cfg(unix)]
+fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().canonicalize().unwrap();
+    (workspace, root)
+}
+
+#[cfg(unix)]
 fn create_ledger(root: &Path) -> std::path::PathBuf {
     let ledger = root.join("ledger");
     fs::create_dir(&ledger).unwrap();
@@ -159,13 +166,13 @@ fn create_ledger(root: &Path) -> std::path::PathBuf {
 #[test]
 #[cfg(unix)]
 fn helper_commits_once_and_existing_corrupt_marker_burns_challenge() {
-    let workspace = tempfile::tempdir().unwrap();
-    let marker_path = workspace.path().join("marker.json");
+    let (_workspace, root) = canonical_tempdir();
+    let marker_path = root.join("marker.json");
     let marker_raw = marker(now());
     fs::write(&marker_path, &marker_raw).unwrap();
-    let protected = workspace.path().join("source.json");
+    let protected = root.join("source.json");
     fs::write(&protected, "source").unwrap();
-    let ledger = create_ledger(workspace.path());
+    let ledger = create_ledger(&root);
     let final_path = ledger.join(format!(
         "procurement-authorization-reservation-v1-{DIGEST}.json"
     ));
@@ -189,12 +196,12 @@ fn helper_commits_once_and_existing_corrupt_marker_burns_challenge() {
     assert!(String::from_utf8_lossy(&second.stderr).contains("challenge is already reserved"));
     assert_eq!(fs::read(&final_path).unwrap(), marker_raw);
 
-    let second_workspace = tempfile::tempdir().unwrap();
-    let second_marker = second_workspace.path().join("marker.json");
+    let (_second_workspace, second_root) = canonical_tempdir();
+    let second_marker = second_root.join("marker.json");
     fs::write(&second_marker, marker(now())).unwrap();
-    let second_protected = second_workspace.path().join("source.json");
+    let second_protected = second_root.join("source.json");
     fs::write(&second_protected, "source").unwrap();
-    let second_ledger = create_ledger(second_workspace.path());
+    let second_ledger = create_ledger(&second_root);
     let corrupt = second_ledger.join(format!(
         "procurement-authorization-reservation-v1-{DIGEST}.json"
     ));
@@ -208,12 +215,12 @@ fn helper_commits_once_and_existing_corrupt_marker_burns_challenge() {
 #[test]
 #[cfg(unix)]
 fn helper_rejects_insecure_ledger_and_input_overlap() {
-    let workspace = tempfile::tempdir().unwrap();
-    let marker_path = workspace.path().join("marker.json");
+    let (_workspace, root) = canonical_tempdir();
+    let marker_path = root.join("marker.json");
     fs::write(&marker_path, marker(now())).unwrap();
-    let protected = workspace.path().join("source.json");
+    let protected = root.join("source.json");
     fs::write(&protected, "source").unwrap();
-    let ledger = create_ledger(workspace.path());
+    let ledger = create_ledger(&root);
     fs::set_permissions(&ledger, fs::Permissions::from_mode(0o755)).unwrap();
     let insecure = run(&marker_path, &ledger, &protected);
     assert!(!insecure.status.success());
@@ -226,7 +233,7 @@ fn helper_rejects_insecure_ledger_and_input_overlap() {
     assert!(!overlap.status.success());
     assert!(String::from_utf8_lossy(&overlap.stderr).contains("must not contain or alias input"));
 
-    let outside = workspace.path().join("outside.json");
+    let outside = root.join("outside.json");
     fs::write(&outside, "outside").unwrap();
     let outward_link = ledger.join("outward-source.json");
     symlink(&outside, &outward_link).unwrap();
