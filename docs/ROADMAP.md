@@ -183,6 +183,7 @@ auditable release.
 | v1.469.0 | Bounded supplier-offer HTTPS acquisition receipt | Explicitly fetch one already-normalized supplier offer through a bounded no-redirect HTTPS GET, preserve exact response-entity and canonical-offer identities in a closed local receipt, and publish the normalized offer for unchanged v1.468 offline coverage without claiming supplier, offer, price, transport, or time authenticity, current availability, reservation, authorization, ordering, or payment |
 | v1.470.0 | Exact assembly and acquired supplier-offer evidence composition | Capture one shared source union, validate the exact acquisition receipt and offer offline, freshly replay the complete v1.467 assembly and v1.468 coverage children from the same staged board/package/handoff-generation/snapshot/intent closure, and retain their full cross-bound results with truthful incomplete evidence before an optional gate, without claiming current supplier facts, trusted time, assembly readiness, authorization, ordering, or payment |
 | v1.471.0 | Dual-control exact procurement release authorization | Freshly validate one exact retained v1.470 result from its complete original closure before and after a separate trusted Rust cryptographic child, pin the expected canonical procurement policy digest, and require at least two distinct role-disjoint Ed25519 approvals over one exact offer-bound quantity/currency/component-subtotal/window/challenge scope before retaining truthful authorized or not-authorized evidence, without claiming policy authenticity, trusted time, current supplier facts, reservation, ordering, payment, or spend |
+| v1.471.1 | Task-oriented documentation architecture | Replace the release-history-sized root README with a compact project entry point, add task-oriented getting-started, workflow, architecture, integration, and trust guides, and index every focused contract without weakening any implementation or evidence boundary |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1341,7 +1342,7 @@ batch, authorize assembly/fabrication/procurement, order, pay, or spend. Its
 caller-selected tools remain unauthenticated and unsandboxed, and sequential
 rereads are not an atomic multi-input snapshot.
 
-The current v1.471.0 milestone adds a new Python-orchestrated procurement
+The released v1.471.0 milestone adds a new Python-orchestrated procurement
 authorization boundary over one exact retained v1.470 result. The caller must
 provide that result's complete original board, manufacturing package, handoff,
 board-binding, historical catalog snapshot, procurement intent, final-CPL,
@@ -1402,3 +1403,14 @@ false. The authorization does not establish current stock, landed or invoice
 cost, shipping, tax, MOQ, tiers, spend, order acceptance, or any external side
 effect. A retained report is an audit snapshot rather than reusable current
 authority; the complete verifier must run again at the actual handoff.
+
+The current v1.471.1 maintenance milestone turns the root README back into a
+project entry point. It keeps quick-start commands, representative workflows,
+configuration, architecture, integration, security, and development guidance
+scannable while moving contract discovery into a complete categorized index.
+Five task-oriented guides explain installation, workflow selection, component
+ownership, integration setup, and trust boundaries without copying the exact
+schemas, limits, replay rules, or nonclaims from their authoritative focused
+documents. A documentation regression suite bounds README growth, requires the
+navigation set, checks every repository-relative Markdown target, and requires
+the index to cover every focused Markdown document.
