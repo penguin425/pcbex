@@ -884,6 +884,11 @@
     {
       "id": "dual-control-exact-procurement-release-authorization",
       "release": "v1.471.0",
+      "status": "released"
+    },
+    {
+      "id": "task-oriented-documentation-architecture",
+      "release": "v1.471.1",
       "status": "current"
     }
   ]
