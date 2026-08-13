@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -47,6 +48,7 @@ class ProcurementAuthorizationReservationCliV1472Tests(unittest.TestCase):
             "--timeout-seconds", "90",
         ]
 
+    @unittest.skipUnless(os.name == "posix", "local ledger commits require Unix")
     def test_cli_freshly_validates_then_commits_without_writing_report(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -80,6 +82,7 @@ class ProcurementAuthorizationReservationCliV1472Tests(unittest.TestCase):
                 "procurement authorization reserved durably in trusted local ledger\n",
             )
 
+    @unittest.skipUnless(os.name == "posix", "local ledger commits require Unix")
     def test_cli_rejects_negative_before_ledger_helper(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

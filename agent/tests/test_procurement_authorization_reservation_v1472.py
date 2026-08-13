@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -127,6 +128,7 @@ class ProcurementAuthorizationReservationV1472Tests(unittest.TestCase):
             ):
                 module.build_procurement_authorization_reservation(report, _DIGEST)
 
+    @unittest.skipUnless(os.name == "posix", "local ledger commits require Unix")
     def test_commit_stages_exact_marker_and_invokes_hidden_helper(self):
         marker, _ = self._marker()
         with tempfile.TemporaryDirectory() as directory:
@@ -161,6 +163,7 @@ class ProcurementAuthorizationReservationV1472Tests(unittest.TestCase):
             self.assertEqual(argv[argv.index("--reservation-ledger") + 1], str(ledger))
             self.assertEqual(argv[argv.index("--protected-input") + 1], str(source))
 
+    @unittest.skipUnless(os.name == "posix", "local ledger commits require Unix")
     def test_commit_detects_workspace_mutation_and_burned_challenge(self):
         marker, _ = self._marker()
         with tempfile.TemporaryDirectory() as directory:
