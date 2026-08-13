@@ -565,3 +565,10 @@ authority or an outer-signed trusted timestamp. A release consumer must rerun
 pin, and submitted approvals at its actual handoff boundary. Parsing, editing,
 schema-validating, or replaying the retained report alone cannot confer
 authority.
+
+For ledger-scoped replay prevention, use
+[`reserve-procurement-authorization`](PROCUREMENT_AUTHORIZATION_RESERVATION.md).
+That separate v1.472 boundary freshly revalidates this report before it admits
+the challenge to one pinned local ledger. It does not change this report's
+`challenge_one_time_use_enforced:false` value or establish global one-time use,
+inventory reservation, ordering, or payment.

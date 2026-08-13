@@ -709,6 +709,35 @@ shipping, tax, MOQ, tiers, reservation, assembly/fabrication/order readiness,
 order placement, payment, spend, machine execution, or challenge one-time use.
 The authorization report is a point-in-time audit snapshot; current authority
 requires rerunning the public verifier from the entire original closure.
+
+The v1.472 `reserve-procurement-authorization` command takes the same retained
+v1.471 report and complete original validation union. It uses one 3–600 second
+whole-operation deadline: the fresh retained-report audit receives the main
+budget while a final slice remains for the durable ledger helper. A negative,
+malformed, changed, or mismatched retained report stops before the ledger
+helper and creates no marker.
+
+After successful replay, Python renders the exact canonical v1.471 report,
+builds a closed path-free marker no larger than 16 KiB, and stages it under the
+trusted temporary root. It stable-reads the staged marker before and after the
+shell-free hidden Rust child. Child stdout and stderr are each capped at 64
+KiB; only fixed already-reserved and committed-uncertainty outcomes are mapped
+to public path-free errors. Other child diagnostics, filesystem paths, and
+provider text are not relayed.
+
+The helper receives at most 128 absolute protected paths derived from the CLI
+closure, approvals, retained report, optional profiles, and path-looking
+commands. Those paths prevent ledger/input containment and aliasing; they are
+not a filesystem sandbox. The caller-selected replay and KiCad executables can
+still access arbitrary known paths, and a same-UID concurrent writer remains
+outside Python's sequential mutation checks.
+
+Windows fails before fresh replay. On supported Unix hosts the Rust helper
+owns ledger pinning, exact `0700`/effective-UID enforcement, local-filesystem
+classification, fixed-manifest validation, descriptor-relative no-replace
+installation, time rechecks, and file/directory synchronization. Python does
+not implement or emulate those durability rules. See
+[`PROCUREMENT_AUTHORIZATION_RESERVATION.md`](PROCUREMENT_AUTHORIZATION_RESERVATION.md).
 The v1.456 deterministic-pipeline replay likewise makes no producer or network
 call beyond its caller-selected local pcbex process. The child runs only the
 existing runner against the privately staged closure; the adapter does not run

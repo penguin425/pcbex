@@ -125,6 +125,9 @@ boundary document for the artifact you plan to produce or trust.
 - [Procurement Authorization](PROCUREMENT_AUTHORIZATION.md) — require a
   policy-pinned, dual-control decision over one exact retained release.
 
+- [Procurement Authorization Reservation](PROCUREMENT_AUTHORIZATION_RESERVATION.md)
+  — admit one freshly replayed challenge to one trusted local ledger.
+
 ## Review, authorization, and CI
 
 - [AI Schematic Approval Action](AI_SCHEMATIC_APPROVAL_ACTION.md) — run focused

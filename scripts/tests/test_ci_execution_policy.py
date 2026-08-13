@@ -634,6 +634,33 @@ class CiExecutionPolicyTests(unittest.TestCase):
             ),
             1,
         )
+        procurement_reservation_command = (
+            "python -m unittest\n"
+            "          agent.tests.test_procurement_authorization_reservation_v1472\n"
+            "          agent.tests.test_procurement_authorization_reservation_cli_v1472 -v"
+        )
+        procurement_reservation_rust_command = (
+            "cargo +stable test --package pcbex\n"
+            "          --test procurement_authorization_reservation --release --locked"
+        )
+        self.assertEqual(document.count(procurement_reservation_command), 1)
+        self.assertEqual(document.count(procurement_reservation_rust_command), 1)
+        self.assertIn(procurement_reservation_command, boundaries)
+        self.assertIn(procurement_reservation_rust_command, boundaries)
+        self.assertNotIn(procurement_reservation_command, rust_windows)
+        self.assertNotIn(procurement_reservation_rust_command, rust_windows)
+        self.assertEqual(
+            document.count(
+                "agent.tests.test_procurement_authorization_reservation_v1472"
+            ),
+            1,
+        )
+        self.assertEqual(
+            document.count(
+                "agent.tests.test_procurement_authorization_reservation_cli_v1472"
+            ),
+            1,
+        )
         self.assertIn(
             "cargo +stable test --package pcbex --bin pcbex --release --locked windows_",
             rust_windows,
@@ -660,6 +687,12 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         procurement_authorization_step = boundaries.index(
             "- name: Run cross-platform v1.471 procurement-authorization boundaries"
+        )
+        procurement_reservation_step = boundaries.index(
+            "- name: Run cross-platform v1.472 procurement-reservation boundaries"
+        )
+        procurement_reservation_rust_step = boundaries.index(
+            "- name: Run cross-platform v1.472 local-ledger helper boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -697,18 +730,35 @@ class CiExecutionPolicyTests(unittest.TestCase):
             assembly_supplier_offer_block,
         )
         procurement_authorization_block = boundaries[
-            procurement_authorization_step:toolchain_step
+            procurement_authorization_step:procurement_reservation_step
         ]
         self.assertIn("PYTHONPATH: agent/src", procurement_authorization_block)
         self.assertIn(
             procurement_authorization_command,
             procurement_authorization_block,
         )
+        procurement_reservation_block = boundaries[
+            procurement_reservation_step:procurement_reservation_rust_step
+        ]
+        self.assertIn("PYTHONPATH: agent/src", procurement_reservation_block)
+        self.assertIn(
+            procurement_reservation_command,
+            procurement_reservation_block,
+        )
+        procurement_reservation_rust_block = boundaries[
+            procurement_reservation_rust_step:toolchain_step
+        ]
+        self.assertIn(
+            procurement_reservation_rust_command,
+            procurement_reservation_rust_block,
+        )
         self.assertLess(
             assembly_supplier_offer_step,
             procurement_authorization_step,
         )
-        self.assertLess(procurement_authorization_step, toolchain_step)
+        self.assertLess(procurement_authorization_step, procurement_reservation_step)
+        self.assertLess(procurement_reservation_step, procurement_reservation_rust_step)
+        self.assertLess(procurement_reservation_rust_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(

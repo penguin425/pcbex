@@ -322,6 +322,34 @@ relative to the supplied expected value but does not authenticate the pack or
 pin. A deployment must establish that trust separately. See
 [`PROCUREMENT_AUTHORIZATION.md`](PROCUREMENT_AUTHORIZATION.md).
 
+The v1.472 procurement reservation helper accepts one canonical marker up to
+16 KiB, one absolute pre-existing ledger, one expected 64-hex ledger ID, and
+at most 128 protected input paths. The ledger manifest is limited to 4 KiB.
+The public Python command freshly validates the retained v1.471 report and its
+complete original closure before this hidden Rust helper is invoked.
+
+On Linux and macOS the helper pins the ledger directory, requires effective-UID
+ownership and exact mode `0700`, and rejects unknown, network, clustered, or
+FUSE filesystems. Linux admits only reviewed local filesystem
+types through the pinned descriptor;
+macOS additionally requires the kernel `MNT_LOCAL` flag. Windows and other
+unreviewed Unix targets fail closed.
+
+The marker is installed through the pinned descriptor without replacement,
+with file and directory synchronization. The helper revalidates the manifest,
+protected-path separation, staged marker identity, approval window, half-open
+offer window, and receipt-observation age before and after installation. Any
+existing final leaf burns the challenge without parsing that leaf. After a
+successful install, a later validation, cleanup, clock, or durability error
+never removes the marker and reports committed uncertainty.
+
+This internal helper cannot validate the original v1.470 closure and is not a
+standalone authorization boundary. The marker proves admission only inside one
+selected ledger; same-UID mutation, another host or ledger, trusted time,
+supplier inventory, order execution, payment, and global one-time use remain
+outside the contract. See
+[`PROCUREMENT_AUTHORIZATION_RESERVATION.md`](PROCUREMENT_AUTHORIZATION_RESERVATION.md).
+
 Fabrication authorization uses the same no-clobber boundary. The deterministic
 plan is limited to 4 MiB, the retained report and manufacturing ZIP to 128 MiB,
 the factory receipt and organization policy pack to 64 MiB each, and each

@@ -1855,6 +1855,17 @@ jobs:
           python -m unittest
           agent.tests.test_procurement_release_authorization_v1471
           agent.tests.test_procurement_release_authorization_cli_v1471 -v
+      - name: Run cross-platform v1.472 procurement-reservation boundaries
+        env:
+          PYTHONPATH: agent/src
+        run: >-
+          python -m unittest
+          agent.tests.test_procurement_authorization_reservation_v1472
+          agent.tests.test_procurement_authorization_reservation_cli_v1472 -v
+      - name: Run cross-platform v1.472 local-ledger helper boundaries
+        run: >-
+          cargo +stable test --package pcbex
+          --test procurement_authorization_reservation --release --locked
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

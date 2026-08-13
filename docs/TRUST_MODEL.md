@@ -27,6 +27,7 @@ consumer must not promote one result into another kind of claim.
 | Signed approval | A policy-mapped key signed one exact payload | Signer presence, independent natural persons, key custody, or absence of withheld rejection |
 | Fabrication authorization | Exact evidence met a retained human release policy | Machine execution, inventory, payment, or one-time challenge consumption |
 | Procurement authorization | Exact covered component lines met policy at one retained local instant | Supplier authenticity, current stock, reservation, landed cost, order, or payment |
+| Procurement reservation marker | One selected local ledger admitted one freshly replayed challenge without replacement | Global one-time use, immutable same-UID custody, supplier inventory, order, payment, or exactly-once execution |
 
 > [!WARNING]
 > A cryptographically valid artifact can still be operationally inappropriate.
@@ -104,7 +105,8 @@ timestamp service and a remote observation time is not authenticated.
 
 A retained authorization is an audit snapshot. Freshly replay the complete
 verifier at the actual release handoff when current policy, inputs, or windows
-matter.
+matter. A local reservation marker adds ledger-scoped admission, not current
+supplier state or an external execution result.
 
 Random challenges bind approvals to an exact scope. A stateless verifier does
 not enforce one-time use; use a trusted reservation ledger or execution system
@@ -153,6 +155,7 @@ Your deployment must decide and enforce:
 | Supplier observation | [Supplier Offer Acquisition](SUPPLIER_OFFER_ACQUISITION.md) |
 | Supplier correlation | [Supplier Offer Coverage](SUPPLIER_OFFER_COVERAGE.md) |
 | Procurement decision | [Procurement Authorization](PROCUREMENT_AUTHORIZATION.md) |
+| Procurement local admission | [Procurement Authorization Reservation](PROCUREMENT_AUTHORIZATION_RESERVATION.md) |
 
 Report security issues through the private process in the repository
 [Security Policy](../SECURITY.md).
