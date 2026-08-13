@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -105,7 +106,7 @@ class ProcurementAuthorizationReservationCliV1472Tests(unittest.TestCase):
             root = Path(directory).resolve()
             with (
                 mock.patch("sys.argv", self._argv(root)),
-                mock.patch.object(cli.os, "name", "nt"),
+                mock.patch.object(cli, "os", SimpleNamespace(name="nt")),
                 mock.patch.object(
                     cli, "validate_procurement_release_authorization"
                 ) as validate,
