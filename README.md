@@ -38,7 +38,8 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
   deterministic schematic, board-binding, firmware, and pipeline evidence.
 
 - **Govern release decisions:** Bind AI review, fabrication, and procurement
-  approvals to exact evidence with explicit policy and signature boundaries.
+  approvals to exact evidence, then reserve approved challenges in pinned local
+  ledgers without claiming an order or payment.
 
 - **Integrate everywhere:** Run from the CLI, Python agent, GitHub Actions, or a
   newline-delimited MCP server.

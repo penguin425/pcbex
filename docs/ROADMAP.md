@@ -184,6 +184,7 @@ auditable release.
 | v1.470.0 | Exact assembly and acquired supplier-offer evidence composition | Capture one shared source union, validate the exact acquisition receipt and offer offline, freshly replay the complete v1.467 assembly and v1.468 coverage children from the same staged board/package/handoff-generation/snapshot/intent closure, and retain their full cross-bound results with truthful incomplete evidence before an optional gate, without claiming current supplier facts, trusted time, assembly readiness, authorization, ordering, or payment |
 | v1.471.0 | Dual-control exact procurement release authorization | Freshly validate one exact retained v1.470 result from its complete original closure before and after a separate trusted Rust cryptographic child, pin the expected canonical procurement policy digest, and require at least two distinct role-disjoint Ed25519 approvals over one exact offer-bound quantity/currency/component-subtotal/window/challenge scope before retaining truthful authorized or not-authorized evidence, without claiming policy authenticity, trusted time, current supplier facts, reservation, ordering, payment, or spend |
 | v1.471.1 | Task-oriented documentation architecture | Replace the release-history-sized root README with a compact project entry point, add task-oriented getting-started, workflow, architecture, integration, and trust guides, and index every focused contract without weakening any implementation or evidence boundary |
+| v1.472.0 | Local procurement authorization challenge reservation | Freshly replay one exact retained v1.471 authorization from its complete original closure, then admit its verified challenge to one externally identified Unix 0700 local ledger through descriptor-pinned durable no-replace publication and commit-time window checks, while leaving the v1.471 one-time-use claim false and making no global, supplier-inventory, order, payment, or exactly-once claim |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1404,7 +1405,7 @@ cost, shipping, tax, MOQ, tiers, spend, order acceptance, or any external side
 effect. A retained report is an audit snapshot rather than reusable current
 authority; the complete verifier must run again at the actual handoff.
 
-The current v1.471.1 maintenance milestone turns the root README back into a
+The released v1.471.1 maintenance milestone turns the root README back into a
 project entry point. It keeps quick-start commands, representative workflows,
 configuration, architecture, integration, security, and development guidance
 scannable while moving contract discovery into a complete categorized index.
@@ -1414,3 +1415,39 @@ schemas, limits, replay rules, or nonclaims from their authoritative focused
 documents. A documentation regression suite bounds README growth, requires the
 navigation set, checks every repository-relative Markdown target, and requires
 the index to cover every focused Markdown document.
+
+The current v1.472.0 milestone adds local at-most-once admission for one exact
+procurement authorization challenge. The public `pcbex-agent` command accepts
+the retained v1.471 report, its complete original v1.470 closure, the selected
+policy and canonical digest pin, and every approval. It freshly replays that
+historical authorization before it builds any reservation marker.
+
+The command requires a pre-created absolute Unix ledger owned by the effective
+UID with exact mode `0700`. A fixed closed manifest binds a deployment-supplied
+64-lowercase-hex expected ledger ID. The Rust helper pins that directory,
+rejects unknown, network, clustered, and FUSE filesystems, rejects overlap with
+the replay closure, and installs
+`procurement-authorization-reservation-v1-<challenge>.json` without
+replacement through the retained directory descriptor.
+
+The compact marker retains authorization ID, challenge, supplier and offer,
+requested boards, currency, actual component-line subtotal, signed ceiling,
+offer/receipt/authorization timing, approval count, and the exact retained
+report byte count, SHA-256, and binding. It copies the report's false
+authenticity, currentness, trusted-time, and one-time-use claims. The outer
+marker asserts only `local_challenge_reserved:true`; global one-time use,
+inventory reservation, order placement, and payment remain false.
+
+Every existing deterministic marker leaf burns the challenge even if its
+contents are malformed. Before installation, immediately around installation,
+and after file/directory durability, the helper revalidates ledger identity,
+source stability, the inclusive authorization interval, the half-open offer
+interval, and the receipt-observation age. A post-install error never removes
+the marker and reports that the challenge remains reserved. Windows and
+unreviewed Unix targets fail closed.
+
+This local ledger is not a supplier idempotency service. A same-UID principal
+can still alter ledger state, another ledger or host can admit the same
+challenge, and sequential source checks are not an atomic world snapshot. No
+network request, inventory hold, landed-cost calculation, cart, order,
+payment, or global exactly-once execution is introduced.

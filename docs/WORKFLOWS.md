@@ -170,6 +170,8 @@ The procurement chain advances through deliberately separate artifacts:
    offer evidence into one exact closure.
 6. **Authorization:** Require policy-pinned Ed25519 approvals over the same
    bounded commercial scope.
+7. **Local admission:** Freshly replay the retained authorization and reserve
+   its challenge in one pinned local ledger before an external handoff.
 
 Read these contracts in order:
 
@@ -179,11 +181,13 @@ Read these contracts in order:
 - [Assembly Evidence](ASSEMBLY_EVIDENCE.md)
 - [Assembly and Supplier Offer Evidence](ASSEMBLY_SUPPLIER_OFFER_EVIDENCE.md)
 - [Procurement Authorization](PROCUREMENT_AUTHORIZATION.md)
+- [Procurement Authorization Reservation](PROCUREMENT_AUTHORIZATION_RESERVATION.md)
 
 > [!WARNING]
-> Authorization is a point-in-time signed handoff decision. It does not
-> authenticate supplier facts, establish current stock, reserve inventory,
-> place an order, authorize payment, or enforce one-time execution.
+> Authorization is a point-in-time signed handoff decision. Local reservation
+> prevents reuse only inside one selected ledger; neither artifact authenticates
+> supplier facts, reserves stock, places an order, approves payment, or proves
+> global one-time execution.
 
 ## CI and agent integration
 

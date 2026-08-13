@@ -16,6 +16,8 @@ use crate::bounded_io::opened_path_matches;
 #[cfg(unix)]
 use crate::bounded_io::same_file;
 use crate::bounded_io::symlink_metadata;
+#[cfg(target_os = "macos")]
+use std::ffi::CStr;
 use std::ffi::OsString;
 use std::fs::{File, Metadata};
 use std::io::{self, Write};
@@ -316,6 +318,60 @@ impl PinnedDirectory {
             ));
         }
         self.ensure_pinned()
+    }
+
+    /// Admit only reviewed local kernel filesystems. Durable authorization
+    /// ledgers intentionally fail closed for unknown, remote, clustered, and
+    /// userspace-backed filesystems instead of relying on
+    /// unreviewed link/fsync semantics.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn require_local_filesystem(&self) -> io::Result<()> {
+        self.ensure_pinned()?;
+        let filesystem = rustix::fs::fstatfs(&self.directory)?;
+        if !is_linux_reviewed_local_filesystem_magic(filesystem.f_type as u64) {
+            return Err(security_error(
+                "pinned directory must use a local non-FUSE filesystem",
+            ));
+        }
+        self.ensure_pinned()
+    }
+
+    /// macOS exposes an explicit `MNT_LOCAL` bit.  Require it and also reject
+    /// the common remote/userspace filesystem names for defense in depth.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn require_local_filesystem(&self) -> io::Result<()> {
+        self.ensure_pinned()?;
+        let filesystem = rustix::fs::fstatfs(&self.directory)?;
+        const MNT_LOCAL: u32 = 0x0000_1000;
+        let flags = filesystem.f_flags as u32;
+        // SAFETY: `f_fstypename` is a fixed NUL-terminated kernel field in
+        // `statfs`; `fstatfs` initialized the complete structure above.
+        let kind = unsafe { CStr::from_ptr(filesystem.f_fstypename.as_ptr()) }
+            .to_string_lossy()
+            .to_ascii_lowercase();
+        let explicitly_remote = matches!(
+            kind.as_str(),
+            "nfs" | "smbfs" | "afpfs" | "webdav" | "fusefs" | "osxfuse"
+        );
+        if flags & MNT_LOCAL == 0 || explicitly_remote {
+            return Err(security_error(
+                "pinned directory must use a local non-FUSE filesystem",
+            ));
+        }
+        self.ensure_pinned()
+    }
+
+    /// Other Unix targets do not currently expose a reviewed local-filesystem
+    /// classifier through this module, so the ledger boundary fails closed.
+    #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+    pub(crate) fn require_local_filesystem(&self) -> io::Result<()> {
+        Err(unsupported_error())
+    }
+
+    /// The local durable-ledger contract is unavailable on non-Unix targets.
+    #[cfg(not(unix))]
+    pub(crate) fn require_local_filesystem(&self) -> io::Result<()> {
+        Err(unsupported_error())
     }
 
     /// The secure-ledger trust gate is Unix-only.  Other platforms must not
@@ -909,6 +965,24 @@ impl PinnedDirectory {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn is_linux_reviewed_local_filesystem_magic(kind: u64) -> bool {
+    matches!(
+        kind,
+        0x0000_ef53 // ext2/ext3/ext4
+            | 0x5846_5342 // XFS
+            | 0x9123_683e // Btrfs
+            | 0x794c_7630 // overlayfs
+            | 0x2fc1_2fc1 // ZFS
+            | 0xf2f5_2010 // F2FS
+            | 0x3153_464a // JFS
+            | 0x5265_4973 // ReiserFS
+            | 0x0000_3434 // NILFS
+            | 0x2405_1905 // UBIFS
+            | 0xca45_1a4e // bcachefs
+    )
+}
+
 fn inspect_directory(path: &Path) -> io::Result<Metadata> {
     if path.as_os_str().is_empty() {
         return Err(invalid_path("directory path must not be empty"));
@@ -1154,6 +1228,36 @@ mod tests {
         let mut temporary = directory.create_temp(".pcbex-noreplace-test-")?;
         temporary.write_all(bytes)?;
         Ok(temporary)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_local_filesystem_classifier_fails_closed() {
+        for kind in [
+            0x0000_ef53,
+            0x5846_5342,
+            0x9123_683e,
+            0x794c_7630,
+            0x2fc1_2fc1,
+            0xf2f5_2010,
+            0x3153_464a,
+            0x5265_4973,
+            0x0000_3434,
+            0x2405_1905,
+            0xca45_1a4e,
+        ] {
+            assert!(is_linux_reviewed_local_filesystem_magic(kind));
+        }
+        for kind in [
+            0x0000_6969, // NFS
+            0xff53_4d42, // CIFS
+            0x6573_5546, // FUSE
+            0x0102_1994, // tmpfs
+            0x0bd0_0bd0, // Lustre
+            0,           // unknown
+        ] {
+            assert!(!is_linux_reviewed_local_filesystem_magic(kind));
+        }
     }
 
     fn persist_no_replace(
@@ -1566,6 +1670,13 @@ mod non_unix_tests {
             pinned
                 .require_secure_directory()
                 .expect_err("non-Unix secure ledger gate must fail closed")
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
+        assert_eq!(
+            pinned
+                .require_local_filesystem()
+                .expect_err("non-Unix local-filesystem gate must fail closed")
                 .kind(),
             io::ErrorKind::Unsupported
         );

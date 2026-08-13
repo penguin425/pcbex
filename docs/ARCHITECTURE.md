@@ -30,8 +30,8 @@ claim.
 | --- | --- | --- |
 | `pcbex-core` | Board model, integer geometry, checking, placement, routing, migration, and quality metrics | KiCad syntax, network I/O, subprocesses, signatures, or release policy |
 | `pcbex-kicad` | KiCad parsing/writing, schematic IR, electrical checks, board binding, native-report normalization | General CLI publication, provider orchestration, or supplier access |
-| `pcbex` | CLI parsing, bounded Rust I/O, policies, evidence rendering, manufacturing, cryptography, and child-process adapters | Natural-language provider loops or Python-owned multi-stage composition |
-| `pcbex-agent` | Bounded Python orchestration, correction loops, replay composition, supplier correlation, and public procurement authorization | Rust routing rules, cryptographic primitives, or OS sandboxing |
+| `pcbex` | CLI parsing, bounded Rust I/O, policies, evidence rendering, manufacturing, cryptography, pinned local-ledger commits, and child-process adapters | Natural-language provider loops or Python-owned multi-stage composition |
+| `pcbex-agent` | Bounded Python orchestration, correction loops, replay composition, supplier correlation, public procurement authorization, and fresh reservation orchestration | Rust routing rules, cryptographic primitives, filesystem durability, or OS sandboxing |
 | Composite Actions | CI setup, artifact retention, SARIF, summaries, and final job gates | New verification semantics beyond the invoked pcbex contracts |
 | MCP server | Versioned stdio discovery and bounded tool execution | Network transport, extra authorization, or hidden command semantics |
 
@@ -88,6 +88,7 @@ writer.
 | External observation | Provider receipt, factory receipt, supplier-offer receipt | CLI or agent adapters |
 | Composition | Handoff replay, assembly evidence, supplier coverage | Python agent |
 | Authorization | Signed review, fabrication release, procurement release | Rust cryptography plus owning orchestrator |
+| Local admission | Fabrication and procurement challenge reservation markers | Owning verifier plus Rust pinned-ledger boundary |
 
 Later layers should retain or bind earlier identities instead of copying a
 boolean result. Fresh replay is required wherever the focused contract says a

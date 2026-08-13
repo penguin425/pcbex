@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from pathlib import Path
+import time
 import unicodedata
 
 from .assembly_evidence import (
@@ -127,7 +129,13 @@ from .procurement_release_authorization import (
     render_signed_procurement_approval,
     sign_procurement_approval,
     signed_procurement_approval_json_schema,
+    validate_procurement_release_authorization,
     verify_procurement_authorization,
+)
+from .procurement_authorization_reservation import (
+    ProcurementAuthorizationReservationError,
+    build_procurement_authorization_reservation,
+    commit_procurement_authorization_reservation,
 )
 from .skidl import (
     CircuitSpecError,
@@ -1306,6 +1314,52 @@ def main() -> None:
         "--require-authorized",
         action="store_true",
         help="fail only after retaining an exact report that is not authorized",
+    )
+    procurement_reservation_help = (
+        "freshly replay and durably admit one procurement challenge to a local ledger"
+    )
+    procurement_reservation = sub.add_parser(
+        "reserve-procurement-authorization",
+        help=procurement_reservation_help,
+        description=procurement_reservation_help,
+    )
+    _add_procurement_authorization_sources(procurement_reservation)
+    procurement_reservation.add_argument(
+        "--report", type=Path, required=True, metavar="AUTHORIZATION_REPORT"
+    )
+    procurement_reservation.add_argument(
+        "--approval",
+        action="append",
+        type=Path,
+        required=True,
+        metavar="APPROVAL",
+        help="signed procurement approval; repeat once per approval",
+    )
+    _add_procurement_authorization_selectors(procurement_reservation)
+    _add_procurement_authorization_commands(
+        procurement_reservation, signing=False
+    )
+    procurement_reservation.add_argument(
+        "--expected-policy-pack-canonical-sha256",
+        required=True,
+        metavar="HEX",
+    )
+    _add_procurement_authorization_replay_options(procurement_reservation)
+    procurement_reservation.add_argument(
+        "--reservation-ledger",
+        type=Path,
+        required=True,
+        metavar="ABSOLUTE_DIRECTORY",
+    )
+    procurement_reservation.add_argument(
+        "--expected-ledger-id", required=True, metavar="HEX"
+    )
+    procurement_reservation.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=300.0,
+        metavar="SECONDS",
+        help="whole-operation timeout in seconds (default: 300.0)",
     )
     signed_procurement_approval_schema = sub.add_parser(
         "signed-procurement-approval-schema",
@@ -2557,6 +2611,105 @@ def main() -> None:
                 "procurement authorization report was retained but the exact "
                 "release was not authorized"
             )
+    elif args.command == "reserve-procurement-authorization":
+        if os.name != "posix":
+            raise SystemExit(
+                "procurement authorization reservation failed: local reservation "
+                "is supported only on Unix"
+            )
+        timeout = args.timeout_seconds
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(float(timeout))
+            or not 3.0 <= float(timeout) <= 600.0
+        ):
+            raise SystemExit(
+                "procurement authorization reservation failed: timeout must be "
+                "between 3 and 600 seconds"
+            )
+        deadline = time.monotonic() + float(timeout)
+        replay_reserve = min(15.0, float(timeout) / 3.0)
+        replay_budget = float(timeout) - replay_reserve
+        try:
+            result = validate_procurement_release_authorization(
+                args.report,
+                args.evidence,
+                args.handoff,
+                args.board,
+                args.manufacturing_package,
+                args.board_binding_report,
+                args.procurement_intent,
+                args.catalog_snapshot,
+                args.final_cpl_report,
+                args.assembly_evidence,
+                args.supplier_offer,
+                args.supplier_offer_fetch_receipt,
+                args.supplier_offer_coverage,
+                args.policy_pack,
+                args.approval,
+                args.pcbex,
+                args.authorization_pcbex,
+                requested_boards=args.requested_boards,
+                evaluated_at_unix=args.evaluated_at_unix,
+                expected_policy_pack_canonical_sha256=(
+                    args.expected_policy_pack_canonical_sha256
+                ),
+                board_binding_policy=args.board_binding_policy,
+                kicad_cli=args.manufacturing_kicad_cli,
+                manufacturing_kicad_project=args.manufacturing_kicad_project,
+                manufacturing_kicad_rules=args.manufacturing_kicad_rules,
+                manufacturing_fab=args.manufacturing_fab,
+                manufacturing_fab_profile=args.manufacturing_fab_profile,
+                manufacturing_physical_profile=(
+                    args.manufacturing_physical_profile
+                ),
+                expected_archive_sha256=args.expected_handoff_archive_sha256,
+                expected_bundle_sha256=args.expected_handoff_bundle_sha256,
+                timeout_seconds=replay_budget,
+            )
+            if not result["procurement_authorized"]:
+                raise ProcurementAuthorizationReservationError(
+                    "fresh authorization did not authorize the exact release"
+                )
+            marker = build_procurement_authorization_reservation(
+                result, args.expected_ledger_id
+            )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ProcurementAuthorizationReservationError(
+                    "whole-operation deadline expired before ledger commit"
+                )
+            protected = tuple(
+                path
+                for path in (
+                    *_procurement_authorization_input_paths(
+                        args, approvals=tuple(args.approval)
+                    ),
+                    args.report,
+                )
+                if path is not None
+            )
+            commit_procurement_authorization_reservation(
+                marker,
+                args.reservation_ledger,
+                args.expected_ledger_id,
+                args.authorization_pcbex,
+                protected,
+                timeout_seconds=remaining,
+            )
+        except (
+            ProcurementReleaseAuthorizationError,
+            ProcurementAuthorizationReservationError,
+        ) as error:
+            raise SystemExit(
+                f"procurement authorization reservation failed: {error}"
+            ) from None
+        except OSError:
+            raise SystemExit(
+                "procurement authorization reservation failed: local operation failed"
+            ) from None
+        print("procurement authorization reserved durably in trusted local ledger")
     elif args.command in {
         "signed-procurement-approval-schema",
         "procurement-authorization-report-schema",

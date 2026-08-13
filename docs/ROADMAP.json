@@ -889,6 +889,11 @@
     {
       "id": "task-oriented-documentation-architecture",
       "release": "v1.471.1",
+      "status": "released"
+    },
+    {
+      "id": "local-procurement-authorization-challenge-reservation",
+      "release": "v1.472.0",
       "status": "current"
     }
   ]

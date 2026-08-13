@@ -3685,3 +3685,183 @@ if PYTHONPATH=agent/src python3 -m pcbex_agent \
 fi
 test ! -e "$procurement_authorization_source_tampered_output"
 test -s "$procurement_authorization_source_tampered_error"
+
+# v1.472 replays the complete retained v1.471 authorization and admits its
+# challenge exactly once to one caller-pinned local ledger. The new marker is
+# local admission evidence only; the underlying v1.471 report remains
+# stateless and keeps challenge_one_time_use_enforced=false.
+procurement_reservation_ledger="$(realpath -m "$output_directory/procurement-reservation-ledger")"
+procurement_reservation_corrupt_ledger="$(realpath -m "$output_directory/procurement-reservation-corrupt-ledger")"
+procurement_reservation_negative_ledger="$(realpath -m "$output_directory/procurement-reservation-negative-ledger")"
+procurement_reservation_ledger_id="$(printf '%064x' 1472)"
+procurement_reservation_manifest_name=".pcbex-procurement-authorization-reservation-ledger-v1.json"
+procurement_reservation_marker_name="procurement-authorization-reservation-v1-${procurement_challenge}.json"
+procurement_reservation_schema="$output_directory/procurement-authorization-reservation.schema.json"
+procurement_reservation_ledger_schema="$output_directory/procurement-authorization-reservation-ledger.schema.json"
+procurement_reservation_repeat_error="$output_directory/procurement-authorization-reservation.repeat.stderr"
+procurement_reservation_corrupt_error="$output_directory/procurement-authorization-reservation.corrupt.stderr"
+procurement_reservation_negative_error="$output_directory/procurement-authorization-reservation.negative.stderr"
+
+for ledger in \
+  "$procurement_reservation_ledger" \
+  "$procurement_reservation_corrupt_ledger" \
+  "$procurement_reservation_negative_ledger"; do
+  mkdir -m 0700 -- "$ledger"
+  python3 - "$ledger/$procurement_reservation_manifest_name" \
+    "$procurement_reservation_ledger_id" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path, ledger_id = sys.argv[1:]
+Path(path).write_bytes(
+    json.dumps(
+        {
+            "schema_version": 1,
+            "ledger_scope": (
+                "pinned-local-procurement-authorization-ledger-at-most-once-v1"
+            ),
+            "ledger_id": ledger_id,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    + b"\n"
+)
+PY
+done
+
+"$pcbex_binary" procurement-authorization-reservation-schema \
+  --output "$procurement_reservation_schema"
+"$pcbex_binary" procurement-authorization-reservation-ledger-schema \
+  --output "$procurement_reservation_ledger_schema"
+
+PYTHONPATH=agent/src python3 -m pcbex_agent reserve-procurement-authorization \
+  "${procurement_complete_arguments[@]}" \
+  --report "$procurement_authorization" \
+  --approval "$procurement_approval_b" \
+  --approval "$procurement_approval_a" \
+  --reservation-ledger "$procurement_reservation_ledger" \
+  --expected-ledger-id "$procurement_reservation_ledger_id"
+
+procurement_reservation_marker="$procurement_reservation_ledger/$procurement_reservation_marker_name"
+test -s "$procurement_reservation_marker"
+test "$(stat -c '%a' "$procurement_reservation_ledger")" = 700
+test "$(stat -c '%a' "$procurement_reservation_marker")" = 600
+
+python3 - \
+  "$procurement_reservation_marker" \
+  "$procurement_authorization" \
+  "$procurement_reservation_schema" \
+  "$procurement_reservation_ledger_schema" \
+  "$procurement_reservation_ledger_id" \
+  "$procurement_challenge" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+marker_path, report_path, marker_schema_path, ledger_schema_path = map(
+    Path, sys.argv[1:5]
+)
+ledger_id, challenge = sys.argv[5:]
+marker = json.loads(marker_path.read_bytes())
+report_raw = report_path.read_bytes()
+report = json.loads(report_raw)
+summary = marker["authorization_report_summary"]
+
+assert marker["schema_version"] == 1
+assert marker["reservation_scope"] == (
+    "pinned-local-procurement-authorization-ledger-at-most-once-v1"
+)
+assert marker["status"] == "local_reservation_committed"
+assert marker["local_challenge_reserved"] is True
+assert marker["adapter_network_performed"] is False
+assert marker["global_challenge_one_time_use_enforced"] is False
+assert marker["inventory_reserved"] is False
+assert marker["order_placed"] is False
+assert marker["payment_performed"] is False
+assert marker["ledger_id"] == ledger_id
+assert summary["authorization_id"] == report["authorization_scope"]["authorization_id"]
+assert summary["challenge"] == challenge
+assert summary["supplier"] == report["evidence"]["commercial"]["supplier"]
+assert summary["offer_id"] == report["evidence"]["commercial"]["offer_id"]
+assert summary["requested_boards"] == 25
+assert summary["currency"] == "USD"
+assert summary["component_subtotal_micros"] == report["evidence"]["commercial"]["component_subtotal_micros"]
+assert summary["maximum_component_subtotal_micros"] == report["authorization_scope"]["maximum_component_subtotal_micros"]
+assert summary["approvals"] == 2
+assert summary["rejections"] == 0
+assert summary["gate_failure_count"] == 0
+assert summary["report_bytes"] == len(report_raw)
+assert summary["report_sha256"] == hashlib.sha256(report_raw).hexdigest()
+assert summary["report_binding_sha256"] == report["binding_sha256"]
+assert summary["challenge_one_time_use_enforced"] is False
+assert report["challenge_one_time_use_enforced"] is False
+
+for schema_path in (marker_schema_path, ledger_schema_path):
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            if value.get("type") == "array":
+                assert "maxItems" in value
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
+
+marker_before="$(sha256sum "$procurement_reservation_marker" | cut -d' ' -f1)"
+if PYTHONPATH=agent/src python3 -m pcbex_agent reserve-procurement-authorization \
+  "${procurement_complete_arguments[@]}" \
+  --report "$procurement_authorization" \
+  --approval "$procurement_approval_a" \
+  --approval "$procurement_approval_b" \
+  --reservation-ledger "$procurement_reservation_ledger" \
+  --expected-ledger-id "$procurement_reservation_ledger_id" \
+  2>"$procurement_reservation_repeat_error"; then
+  echo "expected repeated procurement challenge reservation to fail" >&2
+  exit 1
+fi
+test "$marker_before" = "$(sha256sum "$procurement_reservation_marker" | cut -d' ' -f1)"
+python3 - "$procurement_reservation_repeat_error" <<'PY'
+from pathlib import Path
+import sys
+
+assert Path(sys.argv[1]).read_bytes() == (
+    b"procurement authorization reservation failed: procurement authorization "
+    b"challenge is already reserved\n"
+)
+PY
+
+procurement_reservation_corrupt_marker="$procurement_reservation_corrupt_ledger/$procurement_reservation_marker_name"
+printf 'corrupt-but-burned\n' >"$procurement_reservation_corrupt_marker"
+if PYTHONPATH=agent/src python3 -m pcbex_agent reserve-procurement-authorization \
+  "${procurement_complete_arguments[@]}" \
+  --report "$procurement_authorization" \
+  --approval "$procurement_approval_a" \
+  --approval "$procurement_approval_b" \
+  --reservation-ledger "$procurement_reservation_corrupt_ledger" \
+  --expected-ledger-id "$procurement_reservation_ledger_id" \
+  2>"$procurement_reservation_corrupt_error"; then
+  echo "expected corrupt existing reservation marker to burn the challenge" >&2
+  exit 1
+fi
+test "$(cat "$procurement_reservation_corrupt_marker")" = 'corrupt-but-burned'
+grep -Fq 'challenge is already reserved' "$procurement_reservation_corrupt_error"
+
+if PYTHONPATH=agent/src python3 -m pcbex_agent reserve-procurement-authorization \
+  "${procurement_complete_arguments[@]}" \
+  --report "$procurement_authorization_single" \
+  --approval "$procurement_approval_a" \
+  --reservation-ledger "$procurement_reservation_negative_ledger" \
+  --expected-ledger-id "$procurement_reservation_ledger_id" \
+  2>"$procurement_reservation_negative_error"; then
+  echo "expected non-authorized procurement report to remain unreserved" >&2
+  exit 1
+fi
+test ! -e "$procurement_reservation_negative_ledger/$procurement_reservation_marker_name"
+grep -Fq 'fresh authorization did not authorize the exact release' \
+  "$procurement_reservation_negative_error"
