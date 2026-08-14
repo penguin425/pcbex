@@ -209,11 +209,20 @@ fn cli_schema_commands_publish_v3_contracts_without_clobbering() {
         let schema: Value = serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
         assert_eq!(schema["$id"], expected_id);
         let before = fs::read(&output).unwrap();
-        let repeated = Command::new(binary())
+        let collision = Command::new(binary())
             .args([command, "--output", output.to_str().unwrap()])
             .output()
             .unwrap();
-        assert_success(repeated);
+        assert!(!collision.status.success());
         assert_eq!(fs::read(&output).unwrap(), before);
+
+        let repeated_output = root.join(format!("repeated-{name}"));
+        assert_success(
+            Command::new(binary())
+                .args([command, "--output", repeated_output.to_str().unwrap()])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(fs::read(repeated_output).unwrap(), before);
     }
 }

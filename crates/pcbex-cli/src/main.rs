@@ -6727,13 +6727,21 @@ fn run_cli() -> Result<()> {
             write_or_print_json(&circuit_spec_v2_json_schema(), output.as_ref())?;
         }
         Command::CircuitSpecV3Schema { output } => {
-            write_or_print_json(&circuit_spec_v3_json_schema(), output.as_ref())?;
+            write_closed_schema(
+                &circuit_spec_v3_json_schema(),
+                output.as_deref(),
+                "circuit-spec v3 schema output",
+            )?;
         }
         Command::CircuitSpecCheckSchema { output } => {
             write_or_print_json(&circuit_spec_check_json_schema(), output.as_ref())?;
         }
         Command::CircuitSpecV3CheckSchema { output } => {
-            write_or_print_json(&circuit_spec_v3_check_json_schema(), output.as_ref())?;
+            write_closed_schema(
+                &circuit_spec_v3_check_json_schema(),
+                output.as_deref(),
+                "circuit-spec v3 check schema output",
+            )?;
         }
         Command::CircuitKicadHandoffSchema { output } => {
             let rendered = serde_json::to_string_pretty(&circuit_kicad_handoff_report_json_schema())?;

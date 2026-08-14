@@ -40,6 +40,9 @@ pcbex circuit-spec-v3-schema --output build/circuit-spec-v3.schema.json
 pcbex circuit-spec-v3-check-schema --output build/circuit-spec-v3-check.schema.json
 ```
 
+Schema files use atomic no-clobber publication. Choose a new output path for
+each write.
+
 ## Wire model
 
 The outer shape stays familiar. Only parts and connections become unit-aware.
