@@ -9,6 +9,12 @@ fn binary() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_pcbex"))
 }
 
+fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
+    let directory = tempfile::tempdir().unwrap();
+    let canonical = fs::canonicalize(directory.path()).unwrap();
+    (directory, canonical)
+}
+
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -64,10 +70,10 @@ fn v3_schemas_are_closed_unique_and_bounded() {
 
 #[test]
 fn cli_checks_writes_and_verifies_multi_unit_handoff() {
-    let directory = tempfile::tempdir().unwrap();
-    let check_path = directory.path().join("check.json");
-    let schematic_path = directory.path().join("multi.kicad_sch");
-    let handoff_path = directory.path().join("handoff.json");
+    let (_directory, root) = canonical_tempdir();
+    let check_path = root.join("check.json");
+    let schematic_path = root.join("multi.kicad_sch");
+    let handoff_path = root.join("handoff.json");
     assert_success(
         Command::new(binary())
             .args([
@@ -169,7 +175,7 @@ fn v3_rejects_ambiguous_physical_pins_and_missing_nullable_keys() {
 
 #[test]
 fn cli_schema_commands_publish_v3_contracts_without_clobbering() {
-    let directory = tempfile::tempdir().unwrap();
+    let (_directory, root) = canonical_tempdir();
     for (command, name, expected_id) in [
         (
             "circuit-spec-v3-schema",
@@ -182,7 +188,7 @@ fn cli_schema_commands_publish_v3_contracts_without_clobbering() {
             "https://github.com/penguin425/pcbex/schemas/circuit-spec-v3-check-v2.json",
         ),
     ] {
-        let output = directory.path().join(name);
+        let output = root.join(name);
         assert_success(
             Command::new(binary())
                 .args([command, "--output", output.to_str().unwrap()])
