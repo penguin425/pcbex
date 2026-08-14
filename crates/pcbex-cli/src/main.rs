@@ -89,18 +89,20 @@ use pcbex_kicad::{
     check_schematic, circuit_kicad_board_binding_report_json_schema,
     circuit_kicad_board_binding_report_summary, circuit_kicad_board_manifest_v1_json_schema,
     circuit_kicad_handoff_report_json_schema, circuit_spec_check_json_schema,
-    circuit_spec_v2_json_schema, circuit_spec_v2_to_kicad_sch, compare_electrical_reviews,
-    compare_schematics, create_approval_log_anchor_proof, create_approval_log_consistency_proof,
-    electrical_explanation_json_schema, electrical_policy_json_schema,
-    electrical_review_comparison_json_schema, electrical_review_json_schema,
-    electrical_review_to_junit, electrical_review_to_sarif, electrical_waiver_report_json_schema,
-    electrical_waiver_set_json_schema, explain_electrical_review, footprint_closure_v1_json_schema,
+    circuit_spec_source_schema_version, circuit_spec_source_to_kicad_sch,
+    circuit_spec_v2_json_schema, circuit_spec_v3_check_json_schema, circuit_spec_v3_json_schema,
+    compare_electrical_reviews, compare_schematics, create_approval_log_anchor_proof,
+    create_approval_log_consistency_proof, electrical_explanation_json_schema,
+    electrical_policy_json_schema, electrical_review_comparison_json_schema,
+    electrical_review_json_schema, electrical_review_to_junit, electrical_review_to_sarif,
+    electrical_waiver_report_json_schema, electrical_waiver_set_json_schema,
+    explain_electrical_review, footprint_closure_v1_json_schema,
     human_escalation_report_json_schema, import as import_kicad, import_schematic,
     manufacturing_gerber_layers, manufacturing_parts, new_approval_log_gossip_observer_trust_state,
     new_approval_log_gossip_organization_registry,
     new_approval_log_gossip_organization_registry_history_checkpoint_witness_trust_state,
     new_approval_log_witness_trust_state, new_approval_transparency_log, parse_ai_review_response,
-    parse_and_check_circuit_spec_v2, parse_circuit_spec_v2, parse_electrical_policy,
+    parse_and_check_circuit_spec_v2, parse_and_check_circuit_spec_v3, parse_electrical_policy,
     parse_schematic_reviewer_routing_policy, parse_simulation_declaration,
     record_simulation_evidence, render_ai_approval_quorum_summary,
     render_circuit_kicad_board_binding_report, render_human_escalation_summary,
@@ -907,8 +909,18 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Print the closed explicit multi-unit circuit specification v3 JSON Schema.
+    CircuitSpecV3Schema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     /// Print the closed circuit-spec immutable ERC check JSON Schema.
     CircuitSpecCheckSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Print the closed circuit-spec v3 immutable ERC check JSON Schema.
+    CircuitSpecV3CheckSchema {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -1507,7 +1519,7 @@ enum Command {
         #[arg(long)]
         require_approved: bool,
     },
-    /// Normalize a circuit-spec v2 and run the immutable electrical ERC floor.
+    /// Normalize a circuit-spec v2 or v3 and run the immutable electrical ERC floor.
     CheckCircuitSpec {
         input: PathBuf,
         #[arg(short, long)]
@@ -1516,9 +1528,9 @@ enum Command {
         #[arg(long)]
         require_approved: bool,
     },
-    /// Write an immutable-ERC-approved circuit-spec v2 as a deterministic flat KiCad schematic.
+    /// Write an approved circuit-spec v2 or v3 as a deterministic KiCad schematic.
     WriteCircuitSpecKicadSchematic {
-        /// Circuit-spec v2 JSON source generated upstream.
+        /// Closed circuit-spec v2 or explicit multi-unit v3 JSON source.
         input: PathBuf,
         /// New `.kicad_sch` destination; existing, aliased, or symlinked paths are refused.
         #[arg(short, long)]
@@ -1526,7 +1538,7 @@ enum Command {
     },
     /// Generate a deterministic KiCad board and its exact electrical binding evidence.
     GenerateCircuitKicadBoard {
-        /// Circuit-spec v2 JSON source generated upstream.
+        /// Closed circuit-spec v2 or explicit multi-unit v3 JSON source.
         circuit_spec: PathBuf,
         /// Exact KiCad schematic source bound to the circuit specification.
         schematic: PathBuf,
@@ -1545,7 +1557,7 @@ enum Command {
     },
     /// Verify that a circuit specification and KiCad schematic are an exact electrical handoff.
     VerifyCircuitKicadHandoff {
-        /// Circuit-spec v2 JSON source generated upstream.
+        /// Closed circuit-spec v2 or explicit multi-unit v3 JSON source.
         circuit_spec: PathBuf,
         /// KiCad schematic source generated or edited downstream.
         schematic: PathBuf,
@@ -1564,7 +1576,7 @@ enum Command {
     },
     /// Verify that a circuit specification, KiCad schematic, and KiCad board are an exact binding.
     VerifyCircuitKicadBoardBinding {
-        /// Circuit-spec v2 JSON source generated upstream.
+        /// Closed circuit-spec v2 or explicit multi-unit v3 JSON source.
         circuit_spec: PathBuf,
         /// KiCad schematic source generated or edited downstream.
         schematic: PathBuf,
@@ -6714,8 +6726,22 @@ fn run_cli() -> Result<()> {
         Command::CircuitSpecV2Schema { output } => {
             write_or_print_json(&circuit_spec_v2_json_schema(), output.as_ref())?;
         }
+        Command::CircuitSpecV3Schema { output } => {
+            write_closed_schema(
+                &circuit_spec_v3_json_schema(),
+                output.as_deref(),
+                "circuit-spec v3 schema output",
+            )?;
+        }
         Command::CircuitSpecCheckSchema { output } => {
             write_or_print_json(&circuit_spec_check_json_schema(), output.as_ref())?;
+        }
+        Command::CircuitSpecV3CheckSchema { output } => {
+            write_closed_schema(
+                &circuit_spec_v3_check_json_schema(),
+                output.as_deref(),
+                "circuit-spec v3 check schema output",
+            )?;
         }
         Command::CircuitKicadHandoffSchema { output } => {
             let rendered = serde_json::to_string_pretty(&circuit_kicad_handoff_report_json_schema())?;
@@ -8164,8 +8190,36 @@ fn run_cli() -> Result<()> {
             let source = String::from_utf8(source_bytes)
                 .map_err(anyhow::Error::msg)
                 .with_context(|| format!("decoding circuit spec {} as UTF-8", input.display()))?;
-            let check = parse_and_check_circuit_spec_v2(&source).map_err(anyhow::Error::msg)?;
-            let rendered = serde_json::to_string_pretty(&check)?;
+            let (rendered, approved, errors, warnings, info) =
+                match circuit_spec_source_schema_version(&source).map_err(anyhow::Error::msg)? {
+                    pcbex_kicad::CIRCUIT_SPEC_V2_SCHEMA_VERSION => {
+                        let check = parse_and_check_circuit_spec_v2(&source)
+                            .map_err(anyhow::Error::msg)?;
+                        (
+                            serde_json::to_string_pretty(&check)?,
+                            check.electrical_review.approved,
+                            check.electrical_review.counts.errors,
+                            check.electrical_review.counts.warnings,
+                            check.electrical_review.counts.info,
+                        )
+                    }
+                    pcbex_kicad::CIRCUIT_SPEC_V3_SCHEMA_VERSION => {
+                        let check = parse_and_check_circuit_spec_v3(&source)
+                            .map_err(anyhow::Error::msg)?;
+                        (
+                            serde_json::to_string_pretty(&check)?,
+                            check.electrical_review.approved,
+                            check.electrical_review.counts.errors,
+                            check.electrical_review.counts.warnings,
+                            check.electrical_review.counts.info,
+                        )
+                    }
+                    version => bail!(
+                        "unsupported circuit-spec schema version {version} (expected {} or {})",
+                        pcbex_kicad::CIRCUIT_SPEC_V2_SCHEMA_VERSION,
+                        pcbex_kicad::CIRCUIT_SPEC_V3_SCHEMA_VERSION
+                    ),
+                };
             if let Some(path) = output {
                 write_new_file(&path, &format!("{rendered}\n"), false)
                     .with_context(|| format!("writing circuit-spec check {}", path.display()))?;
@@ -8174,19 +8228,17 @@ fn run_cli() -> Result<()> {
             }
             eprintln!(
                 "circuit-spec electrical review: {}; {} error(s), {} warning(s), {} info finding(s)",
-                if check.electrical_review.approved {
+                if approved {
                     "approved"
                 } else {
                     "rejected"
                 },
-                check.electrical_review.counts.errors,
-                check.electrical_review.counts.warnings,
-                check.electrical_review.counts.info
+                errors, warnings, info
             );
-            if require_approved && !check.electrical_review.approved {
+            if require_approved && !approved {
                 bail!(
                     "circuit-spec electrical approval rejected with {} error(s)",
-                    check.electrical_review.counts.errors
+                    errors
                 );
             }
         }
@@ -8207,9 +8259,7 @@ fn run_cli() -> Result<()> {
                 "circuit specification",
                 pcbex_kicad::CIRCUIT_SPEC_V2_MAX_BYTES,
             )?;
-            let spec = parse_circuit_spec_v2(&source).map_err(anyhow::Error::msg)?;
-            let rendered =
-                circuit_spec_v2_to_kicad_sch(&spec).map_err(anyhow::Error::msg)?;
+            let rendered = circuit_spec_source_to_kicad_sch(&source).map_err(anyhow::Error::msg)?;
             persist_atomic_new_file_bytes_with_privacy(
                 prepared_output,
                 &output,

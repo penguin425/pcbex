@@ -1,4 +1,4 @@
-# Deterministic circuit-spec v2 to KiCad board writer
+# Deterministic circuit-spec to KiCad board writer
 
 `pcbex generate-circuit-kicad-board` closes the previously missing producer
 between the deterministic circuit/schematic handoff and the existing KiCad
@@ -30,6 +30,11 @@ exactly these three regular files:
 
 The complete directory is built privately and published without replacing an
 existing destination. A failure before publication leaves no output directory.
+
+Circuit-spec v3 uses the same command. The v3 validator proves that physical
+package pin numbers are unique across all symbol units, then collapses those
+units to one footprint per reference; the manifest retains the original v3
+canonical digest. See [Multi-unit circuit-spec v3](MULTI_UNIT_CIRCUIT_SPEC.md).
 
 ## Footprint closure
 
@@ -154,7 +159,7 @@ This release does not resolve system footprint libraries, fetch supplier or
 datasheet data, choose alternates, merge an existing board, preserve hand
 layout, add routed tracks, vias, or copper zones, run KiCad DRC, prove signal
 integrity, create manufacturing files, authenticate a toolchain, authorize
-fabrication or procurement, or place an order. Hierarchical/bus/multi-unit
-designs and arbitrary KiCad project
-sidecars remain outside the flat circuit-spec-v2 writer boundary. MCP and
-Action parity are also deferred; v1.463 is a CLI-only producer.
+fabrication or procurement, or place an order. Hierarchical sheets, buses,
+automatic unit discovery or reassignment, hidden shared pins, and arbitrary
+KiCad project sidecars remain outside the closed v2/v3 writer boundary. MCP
+and Action parity are also deferred; v1.463 is a CLI-only producer.

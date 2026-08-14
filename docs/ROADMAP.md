@@ -185,6 +185,7 @@ auditable release.
 | v1.471.0 | Dual-control exact procurement release authorization | Freshly validate one exact retained v1.470 result from its complete original closure before and after a separate trusted Rust cryptographic child, pin the expected canonical procurement policy digest, and require at least two distinct role-disjoint Ed25519 approvals over one exact offer-bound quantity/currency/component-subtotal/window/challenge scope before retaining truthful authorized or not-authorized evidence, without claiming policy authenticity, trusted time, current supplier facts, reservation, ordering, payment, or spend |
 | v1.471.1 | Task-oriented documentation architecture | Replace the release-history-sized root README with a compact project entry point, add task-oriented getting-started, workflow, architecture, integration, and trust guides, and index every focused contract without weakening any implementation or evidence boundary |
 | v1.472.0 | Local procurement authorization challenge reservation | Freshly replay one exact retained v1.471 authorization from its complete original closure, then admit its verified challenge to one externally identified Unix 0700 local ledger through descriptor-pinned durable no-replace publication and commit-time window checks, while leaving the v1.471 one-time-use claim false and making no global, supplier-inventory, order, payment, or exactly-once claim |
+| v1.473.0 | Deterministic multi-unit KiCad handoff | Add an opt-in closed circuit-spec v3 whose physical parts contain explicit symbol units and whose connections bind reference, unit, and package pin; generate and freshly verify real KiCad multi-unit schematics, then collapse only globally unique physical pins into the unchanged board/BOM/manufacturing model while keeping existing circuit-spec v2 documents and workflows migration-free |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1451,3 +1452,23 @@ can still alter ledger state, another ledger or host can admit the same
 challenge, and sequential source checks are not an atomic world snapshot. No
 network request, inventory hold, landed-cost calculation, cart, order,
 payment, or global exactly-once execution is introduced.
+
+The current v1.473.0 milestone removes the flat-symbol restriction without
+changing circuit-spec v2. A new opt-in circuit-spec v3 keeps one physical part
+per reference and nests one or more explicit symbol units beneath it. Every
+logical connection names the reference, unit number, and physical package pin.
+The normalizer bounds and sorts that graph, rejects duplicate units and
+cross-unit package-pin reuse, and runs the same immutable electrical floor.
+
+The deterministic schematic writer emits unit-specific embedded KiCad symbol
+definitions and one instance per `(reference, unit)`. The handoff verifier now
+compares exact unit-aware symbol, pin, metadata, label, and net membership.
+Real KiCad independently imports the result and exports a native netlist in
+which the units merge into one physical component.
+
+Board, BOM, CPL, and manufacturing consumers retain their existing physical
+model. They accept v3 only after its validator proves that package pin numbers
+are globally unique within each part; the graph can then collapse losslessly
+to one footprint per reference. Hierarchical sheets, interchangeable/gated
+unit assignment, hidden common pins, alternate De Morgan conversions, and
+automatic library-symbol discovery remain outside this closed v3 contract.

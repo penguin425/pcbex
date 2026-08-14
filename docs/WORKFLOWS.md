@@ -78,7 +78,7 @@ and KiCad files. Rust validates the closed specification before either writer
 publishes an artifact.
 
 1. **Check the specification.** Run `pcbex check-circuit-spec` against
-   circuit-spec v2.
+   circuit-spec v2, or opt into v3 for explicit multi-unit parts.
 2. **Write the schematic.** Use `write-circuit-spec-kicad-schematic` only after
    the immutable ERC floor approves the input.
 3. **Verify the handoff.** Bind the specification and schematic with
@@ -91,6 +91,7 @@ publishes an artifact.
 The focused contracts document each boundary:
 
 - [KiCad Schematic Writer](CIRCUIT_KICAD_SCHEMATIC_WRITER.md)
+- [Multi-unit Circuit Spec](MULTI_UNIT_CIRCUIT_SPEC.md)
 - [Circuit-to-KiCad Handoff](CIRCUIT_KICAD_HANDOFF.md)
 - [KiCad Board Writer](CIRCUIT_KICAD_BOARD_WRITER.md)
 - [Circuit-to-Board Binding](CIRCUIT_KICAD_BOARD_BINDING.md)

@@ -61,6 +61,84 @@ PY
 jq -e '.approved == true and .counts.errors == 0' \
   "$generated_handoff" >/dev/null
 
+# v1.473 adds an opt-in circuit-spec v3 for explicit multi-unit symbols. KiCad
+# must merge the two U1 symbol units into one physical component while keeping
+# each package pin on its exact declared net; pcbex then collapses those units
+# to one board footprint under the same handoff and board-binding gates.
+multi_unit_check="$output_directory/circuit-spec-v3.check.json"
+multi_unit_schema="$output_directory/circuit-spec-v3.schema.json"
+multi_unit_check_schema="$output_directory/circuit-spec-v3-check.schema.json"
+multi_unit_schematic="$output_directory/circuit-spec-v3.generated.kicad_sch"
+multi_unit_netlist="$output_directory/circuit-spec-v3.generated.xml"
+multi_unit_handoff="$output_directory/circuit-spec-v3.generated.handoff.json"
+multi_unit_board="$output_directory/circuit-spec-v3.board"
+"$pcbex_binary" circuit-spec-v3-schema --output "$multi_unit_schema"
+"$pcbex_binary" circuit-spec-v3-check-schema --output "$multi_unit_check_schema"
+"$pcbex_binary" check-circuit-spec examples/circuit-board-spec-v3.json \
+  --output "$multi_unit_check" --require-approved
+"$pcbex_binary" write-circuit-spec-kicad-schematic \
+  examples/circuit-board-spec-v3.json --output "$multi_unit_schematic"
+kicad-cli sch export netlist --format kicadxml "$multi_unit_schematic" \
+  --output "$multi_unit_netlist"
+"$pcbex_binary" verify-circuit-kicad-handoff \
+  examples/circuit-board-spec-v3.json "$multi_unit_schematic" \
+  --output "$multi_unit_handoff" --require-approved
+"$pcbex_binary" generate-circuit-kicad-board \
+  examples/circuit-board-spec-v3.json "$multi_unit_schematic" \
+  --footprint-closure examples/circuit-board-footprint-closure-v1.json \
+  --construction-profile examples/circuit-board-construction-profile-v1.json \
+  --physical-profile examples/circuit-board-physical-profile-v1.json \
+  --output-dir "$multi_unit_board"
+python3 - \
+  "$multi_unit_netlist" "$multi_unit_check" "$multi_unit_handoff" \
+  "$multi_unit_board/board.kicad_pcb" "$multi_unit_board/board-binding.json" \
+  "$multi_unit_schema" "$multi_unit_check_schema" <<'PY'
+from pathlib import Path
+import json
+import sys
+import xml.etree.ElementTree as ET
+
+netlist_path, check_path, handoff_path, board_path, binding_path, *schema_paths = map(
+    Path, sys.argv[1:]
+)
+root = ET.parse(netlist_path).getroot()
+components = [component.attrib["ref"] for component in root.findall("./components/comp")]
+assert components.count("U1") == 1, components
+assert components.count("R1") == 1, components
+actual = {
+    frozenset((node.attrib["ref"], node.attrib["pin"]) for node in net.findall("node"))
+    for net in root.findall("./nets/net")
+}
+assert actual == {
+    frozenset({("U1", "1"), ("R1", "1")}),
+    frozenset({("U1", "2"), ("R1", "2")}),
+}, actual
+
+check = json.loads(check_path.read_bytes())
+handoff = json.loads(handoff_path.read_bytes())
+binding = json.loads(binding_path.read_bytes())
+board = board_path.read_text(encoding="utf-8")
+assert check["schema_version"] == 2
+assert check["normalized_spec"]["schema_version"] == 3
+assert check["electrical_review"]["approved"] is True
+assert handoff["approved"] is True and handoff["findings"] == []
+assert binding["approved"] is True and binding["findings"] == []
+assert board.count('(footprint "Package:QFN"') == 1
+assert board.count('(fp_text reference "U1"') == 1
+
+for schema_path in schema_paths:
+    schema = json.loads(schema_path.read_bytes())
+    pending = [schema]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            if value.get("type") == "object":
+                assert value.get("additionalProperties") is False
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+PY
+
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
 # then requires the writer and explicit semantic handoff before inspecting the

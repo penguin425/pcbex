@@ -1,6 +1,6 @@
-# Deterministic circuit-spec v2 to KiCad schematic writer
+# Deterministic circuit-spec to KiCad schematic writer
 
-`pcbex write-circuit-spec-kicad-schematic` turns the closed circuit-spec v2
+`pcbex write-circuit-spec-kicad-schematic` turns a closed circuit-spec v2 or v3
 contract into a self-contained KiCad `.kicad_sch` file without a GUI, network
 request, supplier lookup, or external symbol-library lookup.
 
@@ -13,6 +13,10 @@ pcbex verify-circuit-kicad-handoff \
   --output build/circuit-kicad-handoff.json \
   --require-approved
 ```
+
+For explicit multi-unit parts, replace the input with
+`examples/circuit-board-spec-v3.json`. The command auto-detects the closed wire
+version; see [Multi-unit circuit-spec v3](MULTI_UNIT_CIRCUIT_SPEC.md).
 
 Version 1.423 exposes the same writer through MCP and the root composite
 Action. An MCP call is synchronous by default and supports optional Tasks:
@@ -65,12 +69,14 @@ importer.
 
 ## Deterministic mapping
 
-The v1 writer supports the same deliberately small boundary as the handoff
-verifier: a flat schematic with one unit per symbol. It emits synthetic
-embedded symbol definitions, fixed-grid symbol and pin positions,
-domain-separated stable UUIDs, explicit net labels, voltage labels, and
-no-connect markers. Reference, value, footprint, MPN, and `pcbex:*` power
-metadata survive the write/import round trip.
+The v2 path remains flat, with unit 1 for every physical part. The opt-in v3
+path emits one unit-specific embedded definition and symbol instance for every
+declared `(reference, unit)` while preserving one shared physical reference.
+
+Both paths use synthetic embedded symbol definitions, fixed-grid symbol and
+pin positions, domain-separated stable UUIDs, explicit net labels, voltage
+labels, and no-connect markers. Reference, value, footprint, MPN, and
+`pcbex:*` power metadata survive the write/import round trip.
 
 When a circuit net has `voltage_uv`, the writer intentionally emits both the
 declared net name and its canonical voltage label. That is how the existing
@@ -146,8 +152,9 @@ anchored publication is already used by manufacturing workspaces, but is not
 yet the cross-platform contract of this command.
 
 This writer creates a logical handoff artifact, not a production layout. It
-does not support hierarchy, buses, multi-unit symbols, external library
-resolution, graphical symbol fidelity, editing or merging an existing
+does not support hierarchy, buses, automatic unit reassignment, hidden shared
+pins, alternate symbol conversions, external library resolution, graphical
+symbol fidelity, editing or merging an existing
 schematic, PCB placement/routing, DRC/DFM, manufacturing export, MCP/Action
 implicit pipeline orchestration, or pipeline approval. The explicit v1.463
 [KiCad board writer](CIRCUIT_KICAD_BOARD_WRITER.md) can consume this schematic

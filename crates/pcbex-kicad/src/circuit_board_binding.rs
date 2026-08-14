@@ -1,4 +1,4 @@
-//! Digest-bound verification of a circuit-spec v2, a real KiCad schematic,
+//! Digest-bound verification of a circuit-spec v2 or v3, a real KiCad schematic,
 //! and the KiCad board intended to implement that schematic.
 //!
 //! The existing circuit-to-schematic handoff remains authoritative for the
@@ -13,9 +13,9 @@ use super::{
     CIRCUIT_SPEC_V2_MAX_NET_NAME_BYTES, CIRCUIT_SPEC_V2_MAX_PIN_NUMBER_BYTES,
     CIRCUIT_SPEC_V2_MAX_REFERENCE_BYTES, CIRCUIT_SPEC_V2_MAX_VALUE_BYTES,
     CircuitKicadHandoffReport, CircuitPartV2, ElectricalPolicy, Layer, Point, SchematicDocument,
-    SchematicSymbol, Sexp, atom, board_copper_layers, check_circuit_spec, checked_mm_to_nm,
-    circuit_kicad_handoff_report_json_schema, custom_pad_polygon, import_schematic,
-    optional_offset_pair, pad_layers, parse, parse_circuit_spec_v2, quoted_atom,
+    SchematicSymbol, Sexp, atom, board_copper_layers, checked_mm_to_nm,
+    circuit_kicad_handoff_report_json_schema, circuit_spec_source_to_physical_v2,
+    custom_pad_polygon, import_schematic, optional_offset_pair, pad_layers, parse, quoted_atom,
     required_dimension_pair, scalar_f64, verify_circuit_kicad_handoff,
 };
 use crate::manufacturing::{ManufacturingPart, parse_footprint};
@@ -211,7 +211,7 @@ struct BindingIdentity<'a> {
     approved: bool,
 }
 
-/// Verify raw circuit-spec v2, KiCad schematic, and KiCad board sources.
+/// Verify raw circuit-spec v2 or v3, KiCad schematic, and KiCad board sources.
 ///
 /// Parsing and resource-contract failures return `Err`.  Once the three raw
 /// documents are imported, ERC and semantic differences are retained as a
@@ -231,12 +231,11 @@ pub fn verify_circuit_kicad_board_binding(
     // Never accept a producer-supplied handoff report.  Recompute it from the
     // same raw inputs used for this three-way gate.
     let handoff = verify_circuit_kicad_handoff(circuit_source, schematic_source, policy)?;
-    let checked_spec = check_circuit_spec(&parse_circuit_spec_v2(circuit_source)?)?;
+    let physical_spec = circuit_spec_source_to_physical_v2(circuit_source)?;
     let schematic = import_schematic(schematic_source)?;
     let board = parse_board_binding_document(board_source)?;
 
-    let mut findings =
-        compare_board_binding(&checked_spec.normalized_spec.parts, &schematic, &board)?;
+    let mut findings = compare_board_binding(&physical_spec.parts, &schematic, &board)?;
     sort_findings(&mut findings);
 
     let board_projection = board_electrical_projection(&board);

@@ -128,14 +128,22 @@ pub fn parse_circuit_spec_v2(source: &str) -> Result<CircuitSpecV2, String> {
 }
 
 fn parse_json_without_duplicate_keys(source: &str) -> Result<CircuitSpecV2, String> {
+    let value = parse_json_value_without_duplicate_keys(source, "circuit-spec v2")?;
+    serde_json::from_value(value).map_err(|error| format!("invalid circuit-spec v2 JSON: {error}"))
+}
+
+pub(crate) fn parse_json_value_without_duplicate_keys(
+    source: &str,
+    label: &str,
+) -> Result<Value, String> {
     let mut deserializer = serde_json::Deserializer::from_str(source);
     let value = deserializer
         .deserialize_any(DuplicateValue)
-        .map_err(|error| format!("invalid circuit-spec v2 JSON: {error}"))?;
+        .map_err(|error| format!("invalid {label} JSON: {error}"))?;
     deserializer
         .end()
-        .map_err(|error| format!("invalid circuit-spec v2 JSON: {error}"))?;
-    serde_json::from_value(value).map_err(|error| format!("invalid circuit-spec v2 JSON: {error}"))
+        .map_err(|error| format!("invalid {label} JSON: {error}"))?;
+    Ok(value)
 }
 
 /// Deserialize a nullable value while requiring the containing JSON key to
@@ -143,7 +151,7 @@ fn parse_json_without_duplicate_keys(source: &str) -> Result<CircuitSpecV2, Stri
 /// but the v2 wire contract distinguishes an explicit `null` from an omitted
 /// key, so nullable fields opt into this helper and intentionally do not use
 /// `#[serde(default)]`.
-fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn deserialize_required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
@@ -990,7 +998,7 @@ pub fn circuit_spec_v2_json_schema() -> Value {
     })
 }
 
-fn validate_power(power: &CircuitPowerV2, reference: &str) -> Result<(), String> {
+pub(crate) fn validate_power(power: &CircuitPowerV2, reference: &str) -> Result<(), String> {
     validate_voltage(power.rail_voltage_uv, &format!("{reference} rail voltage"))?;
     validate_voltage(
         power.max_voltage_uv,
@@ -998,7 +1006,7 @@ fn validate_power(power: &CircuitPowerV2, reference: &str) -> Result<(), String>
     )
 }
 
-fn validate_voltage(value: Option<i64>, label: &str) -> Result<(), String> {
+pub(crate) fn validate_voltage(value: Option<i64>, label: &str) -> Result<(), String> {
     if let Some(value) = value
         && !(0..=1_000_000_000).contains(&value)
     {
@@ -1009,7 +1017,7 @@ fn validate_voltage(value: Option<i64>, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn text(value: &str, label: &str, max_bytes: usize) -> Result<String, String> {
+pub(crate) fn text(value: &str, label: &str, max_bytes: usize) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(format!("{label} must be non-empty"));
@@ -1023,7 +1031,7 @@ fn text(value: &str, label: &str, max_bytes: usize) -> Result<String, String> {
     Ok(trimmed.to_string())
 }
 
-fn identifier(
+pub(crate) fn identifier(
     value: &str,
     label: &str,
     max_bytes: usize,
@@ -1049,7 +1057,7 @@ fn identifier(
     Ok(value)
 }
 
-fn lib_id(value: &str) -> Result<String, String> {
+pub(crate) fn lib_id(value: &str) -> Result<String, String> {
     let value = text(value, "part lib_id", CIRCUIT_SPEC_V2_MAX_LIB_ID_BYTES)?;
     if value.matches(':').count() != 1 {
         return Err("part lib_id must contain exactly one ':'".into());
@@ -1061,11 +1069,11 @@ fn lib_id(value: &str) -> Result<String, String> {
     Ok(value)
 }
 
-fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+pub(crate) fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
     serde_json::to_vec(value).map_err(|error| format!("serializing canonical JSON: {error}"))
 }
 
-fn prefix_refs(value: Value, prefix: &str) -> Value {
+pub(crate) fn prefix_refs(value: Value, prefix: &str) -> Value {
     match value {
         Value::String(text) if text.starts_with("#/$defs/") => {
             Value::String(format!("#/$defs/{prefix}{}", &text[8..]))
@@ -1086,11 +1094,11 @@ fn prefix_refs(value: Value, prefix: &str) -> Value {
     }
 }
 
-fn digest_hex(bytes: &[u8]) -> String {
+pub(crate) fn digest_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-fn stable_id(domain: &[u8], bytes: &[u8]) -> String {
+pub(crate) fn stable_id(domain: &[u8], bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(domain);
     hasher.update(bytes);

@@ -13,11 +13,11 @@ use super::{
     CircuitKicadBoardBindingReport, CircuitPartV2, CircuitSpecV2, ElectricalPolicy,
     FOOTPRINT_CLOSURE_V1_MAX_SOURCE_BYTES, FootprintClosureEntryV1, FootprintClosureV1,
     ImportedBoard, Sexp, board_construction_copper_layers, board_construction_profile_v1_sha256,
-    board_construction_routing_rules, check_circuit_spec, circuit_spec_v2_sha256,
+    board_construction_routing_rules, circuit_spec_source_to_physical_v2,
     footprint_closure::FOOTPRINT_CLOSURE_V1_MAX_KICAD_VERSION, footprint_closure::digest_hex,
     footprint_closure::parse_footprint_root, footprint_closure::scalar,
     footprint_closure::validate_footprint_closure_layers, footprint_closure_v1_sha256, import,
-    parse_board_construction_profile_v1, parse_circuit_spec_v2, parse_footprint_closure_v1,
+    parse_board_construction_profile_v1, parse_footprint_closure_v1,
     render_circuit_kicad_board_binding_report, validate_footprint_closure_v1,
     verify_circuit_kicad_board_binding, verify_circuit_kicad_handoff,
 };
@@ -116,8 +116,7 @@ pub fn write_circuit_spec_kicad_board(
     physical_profile_source: &str,
     policy: &ElectricalPolicy,
 ) -> Result<CircuitKicadBoardProduction, String> {
-    let spec = parse_circuit_spec_v2(circuit_source)?;
-    let checked_spec = check_circuit_spec(&spec)?;
+    let physical_spec = circuit_spec_source_to_physical_v2(circuit_source)?;
     let handoff = verify_circuit_kicad_handoff(circuit_source, schematic_source, policy)?;
     if !handoff.approved {
         return Err(format!(
@@ -127,7 +126,7 @@ pub fn write_circuit_spec_kicad_board(
     }
 
     let closure = parse_footprint_closure_v1(footprint_closure_source)?;
-    validate_footprint_closure_v1(&closure, &checked_spec.normalized_spec)?;
+    validate_footprint_closure_v1(&closure, &physical_spec)?;
     let construction = parse_board_construction_profile_v1(construction_profile_source)?;
     let copper_layers = board_construction_copper_layers(&construction)?;
     validate_footprint_closure_layers(&closure, &copper_layers)?;
@@ -135,13 +134,7 @@ pub fn write_circuit_spec_kicad_board(
     validate_profiles_for_production(&construction, &physical)?;
 
     let rules = board_construction_routing_rules(&construction)?;
-    let initial_board = render_board(
-        &checked_spec.normalized_spec,
-        &closure,
-        &construction,
-        &physical,
-        None,
-    )?;
+    let initial_board = render_board(&physical_spec, &closure, &construction, &physical, None)?;
     let imported = import(&initial_board, rules.clone())?;
     validate_imported_construction(&imported, &construction, &rules)?;
 
@@ -186,7 +179,7 @@ pub fn write_circuit_spec_kicad_board(
         .collect::<BTreeMap<_, _>>();
 
     let board_source = render_board(
-        &checked_spec.normalized_spec,
+        &physical_spec,
         &closure,
         &construction,
         &physical,
@@ -240,7 +233,7 @@ pub fn write_circuit_spec_kicad_board(
         engine_version: CIRCUIT_KICAD_BOARD_PRODUCER_ENGINE_VERSION.to_string(),
         circuit_source_bytes: circuit_source.len() as u64,
         circuit_source_sha256: digest_hex(circuit_source.as_bytes()),
-        circuit_spec_sha256: circuit_spec_v2_sha256(&checked_spec.normalized_spec)?,
+        circuit_spec_sha256: handoff.circuit_spec_sha256.clone(),
         circuit_check_sha256: handoff.circuit_check_sha256.clone(),
         schematic_source_bytes: schematic_source.len() as u64,
         schematic_source_sha256: digest_hex(schematic_source.as_bytes()),

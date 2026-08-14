@@ -58,6 +58,9 @@ boundary document for the artifact you plan to produce or trust.
 - [KiCad Schematic Writer](CIRCUIT_KICAD_SCHEMATIC_WRITER.md) — materialize an
   approved circuit specification as a deterministic schematic.
 
+- [Multi-unit Circuit Spec](MULTI_UNIT_CIRCUIT_SPEC.md) — model explicit KiCad
+  units while preserving one physical component identity.
+
 - [Circuit-to-KiCad Handoff](CIRCUIT_KICAD_HANDOFF.md) — verify exact electrical
   equivalence between specification and schematic.
 
