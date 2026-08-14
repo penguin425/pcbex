@@ -1,4 +1,4 @@
-//! Deterministic, flat KiCad schematic writer for circuit-spec v2.
+//! Deterministic KiCad schematic writers for circuit-spec v2 and v3.
 //!
 //! The writer intentionally emits a small, self-contained KiCad document.  It
 //! does not resolve a project/library path: every referenced symbol is
@@ -8,8 +8,10 @@
 
 use super::circuit_spec::format_voltage_uv;
 use super::{
-    CircuitSpecV2, ElectricalPinType, ElectricalPolicy, import_schematic,
-    normalize_circuit_spec_v2, verify_circuit_kicad_handoff,
+    CIRCUIT_SPEC_V2_SCHEMA_VERSION, CIRCUIT_SPEC_V3_SCHEMA_VERSION, CircuitSpecV2, CircuitSpecV3,
+    ElectricalPinType, ElectricalPolicy, circuit_spec_source_schema_version, import_schematic,
+    normalize_circuit_spec_v2, normalize_circuit_spec_v3, parse_circuit_spec_v2,
+    parse_circuit_spec_v3, verify_circuit_kicad_handoff,
 };
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -25,6 +27,11 @@ const UUID_SYMBOL_DOMAIN: &[u8] = b"pcbex:circuit-spec-v2:kicad-sch:symbol\0";
 const UUID_PIN_DOMAIN: &[u8] = b"pcbex:circuit-spec-v2:kicad-sch:pin\0";
 const UUID_LABEL_DOMAIN: &[u8] = b"pcbex:circuit-spec-v2:kicad-sch:label\0";
 const UUID_NO_CONNECT_DOMAIN: &[u8] = b"pcbex:circuit-spec-v2:kicad-sch:no-connect\0";
+const UUID_V3_DOCUMENT_DOMAIN: &[u8] = b"pcbex:circuit-spec-v3:kicad-sch:document\0";
+const UUID_V3_SYMBOL_DOMAIN: &[u8] = b"pcbex:circuit-spec-v3:kicad-sch:symbol\0";
+const UUID_V3_PIN_DOMAIN: &[u8] = b"pcbex:circuit-spec-v3:kicad-sch:pin\0";
+const UUID_V3_LABEL_DOMAIN: &[u8] = b"pcbex:circuit-spec-v3:kicad-sch:label\0";
+const UUID_V3_NO_CONNECT_DOMAIN: &[u8] = b"pcbex:circuit-spec-v3:kicad-sch:no-connect\0";
 
 /// Generate a deterministic flat/single-unit KiCad schematic from a
 /// normalized circuit-spec v2 document.
@@ -69,6 +76,61 @@ pub fn circuit_spec_v2_to_kicad_sch(spec: &CircuitSpecV2) -> Result<String, Stri
         ));
     }
     Ok(output)
+}
+
+/// Generate a deterministic multi-unit KiCad schematic from circuit-spec v3.
+/// Each `(reference, unit)` becomes one KiCad symbol instance, while all
+/// instances retain the same physical reference and footprint identity.
+pub fn circuit_spec_v3_to_kicad_sch(spec: &CircuitSpecV3) -> Result<String, String> {
+    let normalized = normalize_circuit_spec_v3(spec)?;
+    let check = super::check_circuit_spec_v3(&normalized)?;
+    if !check.electrical_review.approved {
+        return Err(format!(
+            "circuit-spec electrical review is not approved ({} errors, {} warnings)",
+            check.electrical_review.counts.errors, check.electrical_review.counts.warnings
+        ));
+    }
+
+    let source_spec = serde_json::to_string(&normalized)
+        .map_err(|error| format!("serializing normalized circuit spec: {error}"))?;
+    let mut writer = LimitedWriter::new(CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES);
+    write_document_v3(&mut writer, &normalized).map_err(|error| error.to_string())?;
+    let output = writer.into_string();
+
+    let imported = import_schematic(&output)
+        .map_err(|error| format!("generated KiCad schematic failed re-import: {error}"))?;
+    if !imported.coverage.complete {
+        return Err("generated KiCad schematic has incomplete parser coverage".into());
+    }
+    let handoff =
+        verify_circuit_kicad_handoff(&source_spec, &output, &ElectricalPolicy::default())?;
+    if !handoff.approved {
+        let codes = handoff
+            .findings
+            .iter()
+            .map(|finding| finding.code.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "generated KiCad schematic failed handoff self-check: {codes}"
+        ));
+    }
+    Ok(output)
+}
+
+/// Auto-select the deterministic writer for a closed v2 or v3 source.
+pub fn circuit_spec_source_to_kicad_sch(source: &str) -> Result<String, String> {
+    match circuit_spec_source_schema_version(source)? {
+        CIRCUIT_SPEC_V2_SCHEMA_VERSION => {
+            circuit_spec_v2_to_kicad_sch(&parse_circuit_spec_v2(source)?)
+        }
+        CIRCUIT_SPEC_V3_SCHEMA_VERSION => {
+            circuit_spec_v3_to_kicad_sch(&parse_circuit_spec_v3(source)?)
+        }
+        version => Err(format!(
+            "unsupported circuit-spec schema version {version} (expected {CIRCUIT_SPEC_V2_SCHEMA_VERSION} or {CIRCUIT_SPEC_V3_SCHEMA_VERSION})"
+        )),
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -297,6 +359,355 @@ fn write_document(writer: &mut LimitedWriter, spec: &CircuitSpecV2) -> Result<()
     }
     writeln!(writer, "  (sheet_instances (path \"/\" (page \"1\")))")?;
     writeln!(writer, ")")?;
+    Ok(())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MultiUnitSymbolSignature {
+    units: BTreeMap<u32, SymbolSignature>,
+}
+
+fn write_document_v3(writer: &mut LimitedWriter, spec: &CircuitSpecV3) -> Result<(), WriterError> {
+    let mut uuids = BTreeSet::new();
+    let document_key = serde_json::to_vec(spec)
+        .map_err(|error| format!("serializing normalized circuit spec: {error}"))?;
+    let document_uuid = unique_uuid(
+        &mut uuids,
+        UUID_V3_DOCUMENT_DOMAIN,
+        &document_key,
+        "document",
+    )?;
+    let signatures = collect_v3_symbol_signatures(spec)?;
+    let labels_by_net = collect_v3_label_names(spec)?;
+    let max_pins = spec
+        .parts
+        .iter()
+        .flat_map(|part| part.units.iter())
+        .map(|unit| unit.pins.len())
+        .max()
+        .unwrap_or(1) as i64;
+    let stride = max_pins + 2;
+    let mut placements = BTreeMap::<(String, u32), (usize, usize)>::new();
+    let mut locations = BTreeMap::<(String, u32, String), PinLocation>::new();
+    let mut symbol_index = 0usize;
+    for (part_index, part) in spec.parts.iter().enumerate() {
+        for unit in &part.units {
+            placements.insert(
+                (part.reference.clone(), unit.unit),
+                (part_index, symbol_index),
+            );
+            let origin_x = part_origin_x(part_index);
+            let origin_y = part_origin_y(symbol_index, stride);
+            for (pin_index, pin) in unit.pins.iter().enumerate() {
+                locations.insert(
+                    (part.reference.clone(), unit.unit, pin.number.clone()),
+                    PinLocation {
+                        x: origin_x + pin_index as i64,
+                        y: origin_y,
+                    },
+                );
+            }
+            symbol_index = symbol_index
+                .checked_add(1)
+                .ok_or_else(|| "multi-unit symbol index overflow".to_string())?;
+        }
+    }
+
+    writeln!(writer, "(kicad_sch")?;
+    writeln!(writer, "  (version {CIRCUIT_KICAD_SCHEMATIC_VERSION})")?;
+    writeln!(writer, "  (generator pcbex)")?;
+    writeln!(
+        writer,
+        "  (generator_version {})",
+        quote(env!("CARGO_PKG_VERSION"))
+    )?;
+    writeln!(writer, "  (uuid {document_uuid})")?;
+    writeln!(writer, "  (paper \"A4\")")?;
+    write_v3_library_symbols(writer, &signatures)?;
+
+    for net in &spec.nets {
+        let labels = labels_by_net
+            .get(net.name.as_str())
+            .ok_or_else(|| format!("missing generated labels for net {}", net.name))?;
+        for (connection_index, connection) in net.connections.iter().enumerate() {
+            let key = (
+                connection.reference.clone(),
+                connection.unit,
+                connection.pin.clone(),
+            );
+            let location = locations.get(&key).ok_or_else(|| {
+                format!(
+                    "missing normalized connection {}.unit{}.{}",
+                    connection.reference, connection.unit, connection.pin
+                )
+            })?;
+            for label in labels {
+                if label != &net.name && connection_index != 0 {
+                    continue;
+                }
+                let label_key = format!(
+                    "{}\0{}\0{}\0{}\0{label}",
+                    net.name, connection.reference, connection.unit, connection.pin
+                );
+                let label_uuid = unique_uuid(
+                    &mut uuids,
+                    UUID_V3_LABEL_DOMAIN,
+                    label_key.as_bytes(),
+                    "label",
+                )?;
+                writeln!(
+                    writer,
+                    "  (label {} (at {} {} 0) (effects (font (size 1.27 1.27)) (justify left bottom)) (uuid {label_uuid}))",
+                    quote(label),
+                    coord(location.x),
+                    coord(location.y)
+                )?;
+            }
+        }
+    }
+
+    for part in &spec.parts {
+        for unit in &part.units {
+            for pin in &unit.pins {
+                if pin.electrical_type != ElectricalPinType::NoConnect {
+                    continue;
+                }
+                let location = locations
+                    .get(&(part.reference.clone(), unit.unit, pin.number.clone()))
+                    .ok_or_else(|| {
+                        format!(
+                            "missing pin location for {}.unit{}.{}",
+                            part.reference, unit.unit, pin.number
+                        )
+                    })?;
+                let marker_key = format!("{}\0{}\0{}", part.reference, unit.unit, pin.number);
+                let marker_uuid = unique_uuid(
+                    &mut uuids,
+                    UUID_V3_NO_CONNECT_DOMAIN,
+                    marker_key.as_bytes(),
+                    "no-connect marker",
+                )?;
+                writeln!(
+                    writer,
+                    "  (no_connect (at {} {}) (uuid {marker_uuid}))",
+                    coord(location.x),
+                    coord(location.y)
+                )?;
+            }
+        }
+    }
+
+    for part in &spec.parts {
+        for unit in &part.units {
+            let (part_index, symbol_index) = placements
+                .get(&(part.reference.clone(), unit.unit))
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "missing symbol placement for {} unit {}",
+                        part.reference, unit.unit
+                    )
+                })?;
+            let origin_x = part_origin_x(part_index);
+            let origin_y = part_origin_y(symbol_index, stride);
+            let symbol_key = format!("{}\0{}", part.reference, unit.unit);
+            let symbol_uuid = unique_uuid(
+                &mut uuids,
+                UUID_V3_SYMBOL_DOMAIN,
+                symbol_key.as_bytes(),
+                "symbol",
+            )?;
+            writeln!(
+                writer,
+                "  (symbol (lib_id {}) (at {} {} 0) (unit {}) (exclude_from_sim no) (in_bom yes) (on_board yes) (dnp no) (uuid {symbol_uuid})",
+                quote(&part.lib_id),
+                coord(origin_x),
+                coord(origin_y),
+                unit.unit
+            )?;
+            write_property(
+                writer,
+                "Reference",
+                &part.reference,
+                origin_x,
+                origin_y - 2,
+                false,
+            )?;
+            write_property(writer, "Value", &part.value, origin_x, origin_y - 1, false)?;
+            write_property(
+                writer,
+                "Footprint",
+                &part.footprint,
+                origin_x,
+                origin_y,
+                true,
+            )?;
+            if let Some(mpn) = &part.mpn {
+                write_property(writer, "pcbex:mpn", mpn, origin_x, origin_y, true)?;
+            }
+            if let Some(voltage) = part.power.rail_voltage_uv {
+                write_property(
+                    writer,
+                    "pcbex:rail_voltage",
+                    &format_voltage_uv(voltage),
+                    origin_x,
+                    origin_y,
+                    true,
+                )?;
+            }
+            if let Some(voltage) = part.power.max_voltage_uv {
+                write_property(
+                    writer,
+                    "pcbex:max_voltage",
+                    &format_voltage_uv(voltage),
+                    origin_x,
+                    origin_y,
+                    true,
+                )?;
+            }
+            write_property(
+                writer,
+                "pcbex:requires_decoupling",
+                if part.power.requires_decoupling {
+                    "true"
+                } else {
+                    "false"
+                },
+                origin_x,
+                origin_y,
+                true,
+            )?;
+            write_property(
+                writer,
+                "pcbex:decoupling",
+                if part.power.decoupling {
+                    "true"
+                } else {
+                    "false"
+                },
+                origin_x,
+                origin_y,
+                true,
+            )?;
+            for pin in &unit.pins {
+                let pin_key = format!("{}\0{}\0{}", part.reference, unit.unit, pin.number);
+                let pin_uuid =
+                    unique_uuid(&mut uuids, UUID_V3_PIN_DOMAIN, pin_key.as_bytes(), "pin")?;
+                writeln!(writer, "    (pin {} (uuid {pin_uuid}))", quote(&pin.number))?;
+            }
+            writeln!(writer, "    (instances")?;
+            writeln!(writer, "      (project \"pcbex-generated\"")?;
+            writeln!(
+                writer,
+                "        (path {} (reference {}) (unit {}))",
+                quote(&format!("/{document_uuid}")),
+                quote(&part.reference),
+                unit.unit
+            )?;
+            writeln!(writer, "      )")?;
+            writeln!(writer, "    )")?;
+            writeln!(writer, "  )")?;
+        }
+    }
+    writeln!(writer, "  (sheet_instances (path \"/\" (page \"1\")))")?;
+    writeln!(writer, ")")?;
+    Ok(())
+}
+
+fn collect_v3_symbol_signatures(
+    spec: &CircuitSpecV3,
+) -> Result<BTreeMap<String, MultiUnitSymbolSignature>, String> {
+    let mut signatures = BTreeMap::<String, MultiUnitSymbolSignature>::new();
+    for part in &spec.parts {
+        validate_embedded_library_id(&part.lib_id)?;
+        let entry =
+            signatures
+                .entry(part.lib_id.clone())
+                .or_insert_with(|| MultiUnitSymbolSignature {
+                    units: BTreeMap::new(),
+                });
+        for unit in &part.units {
+            let signature = SymbolSignature {
+                pins: unit
+                    .pins
+                    .iter()
+                    .map(|pin| (pin.number.clone(), pin.name.clone(), pin.electrical_type))
+                    .collect(),
+            };
+            if let Some(existing) = entry.units.get(&unit.unit)
+                && existing != &signature
+            {
+                return Err(format!(
+                    "incompatible embedded symbol signature for library id {} unit {}",
+                    part.lib_id, unit.unit
+                ));
+            }
+            entry.units.entry(unit.unit).or_insert(signature);
+        }
+    }
+    Ok(signatures)
+}
+
+fn collect_v3_label_names(spec: &CircuitSpecV3) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let mut owners = BTreeMap::<String, String>::new();
+    let mut labels_by_net = BTreeMap::new();
+    for net in &spec.nets {
+        let mut labels = BTreeSet::new();
+        labels.insert(net.name.clone());
+        if let Some(voltage) = net.voltage_uv {
+            labels.insert(format_voltage_uv(voltage));
+        }
+        for label in &labels {
+            if let Some(existing) = owners.insert(label.clone(), net.name.clone())
+                && existing != net.name
+            {
+                return Err(format!(
+                    "label collision: {label} would merge nets {existing} and {}",
+                    net.name
+                ));
+            }
+        }
+        labels_by_net.insert(net.name.clone(), labels.into_iter().collect());
+    }
+    Ok(labels_by_net)
+}
+
+fn write_v3_library_symbols(
+    writer: &mut LimitedWriter,
+    signatures: &BTreeMap<String, MultiUnitSymbolSignature>,
+) -> Result<(), WriterError> {
+    writeln!(writer, "  (lib_symbols")?;
+    for (lib_id, signature) in signatures {
+        let base_name = lib_id
+            .rsplit_once(':')
+            .map_or(lib_id.as_str(), |(_, name)| name);
+        writeln!(writer, "    (symbol {}", quote(lib_id))?;
+        writeln!(writer, "      (pin_names (offset 0))")?;
+        writeln!(writer, "      (in_bom yes)")?;
+        writeln!(writer, "      (on_board yes)")?;
+        for (unit, unit_signature) in &signature.units {
+            writeln!(
+                writer,
+                "      (symbol {}",
+                quote(&format!("{base_name}_{unit}_1"))
+            )?;
+            for (pin_index, (number, name, electrical_type)) in
+                unit_signature.pins.iter().enumerate()
+            {
+                writeln!(
+                    writer,
+                    "        (pin {} line (at {} 0 0) (length 2.54) (name {} (effects (font (size 1.27 1.27)))) (number {} (effects (font (size 1.27 1.27)))))",
+                    electrical_type_token(*electrical_type),
+                    coord(pin_index as i64),
+                    quote(name),
+                    quote(number)
+                )?;
+            }
+            writeln!(writer, "      )")?;
+        }
+        writeln!(writer, "    )")?;
+    }
+    writeln!(writer, "  )")?;
     Ok(())
 }
 
@@ -816,5 +1227,47 @@ mod tests {
             8 | 13 | 18 | 23
         )
             || character.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn writes_and_reimports_explicit_multi_unit_symbols() {
+        let source = r#"{
+          "schema_version":3,
+          "parts":[
+            {"reference":"U1","lib_id":"Amplifier_Operational:DUAL","value":"DUAL","footprint":"Package_SO:SOIC-8","mpn":null,
+             "power":{"rail_voltage_uv":null,"max_voltage_uv":null,"requires_decoupling":false,"decoupling":false},
+             "units":[
+               {"unit":1,"pins":[
+                 {"number":"1","name":"OUTA","net":"A","electrical_type":"passive"},
+                 {"number":"2","name":"INA","net":null,"electrical_type":"no_connect"}]},
+               {"unit":2,"pins":[
+                 {"number":"3","name":"OUTB","net":"B","electrical_type":"passive"},
+                 {"number":"4","name":"INB","net":null,"electrical_type":"no_connect"}]}
+             ]},
+            {"reference":"R1","lib_id":"Device:R","value":"10k","footprint":"Resistor_SMD:R_0603","mpn":null,
+             "power":{"rail_voltage_uv":null,"max_voltage_uv":null,"requires_decoupling":false,"decoupling":false},
+             "units":[{"unit":1,"pins":[
+               {"number":"1","name":"A","net":"A","electrical_type":"passive"},
+               {"number":"2","name":"B","net":"B","electrical_type":"passive"}]}]}
+          ],
+          "nets":[
+            {"name":"A","voltage_uv":null,"connections":[{"reference":"U1","unit":1,"pin":"1"},{"reference":"R1","unit":1,"pin":"1"}]},
+            {"name":"B","voltage_uv":null,"connections":[{"reference":"U1","unit":2,"pin":"3"},{"reference":"R1","unit":1,"pin":"2"}]}
+          ]
+        }"#;
+        let spec = parse_circuit_spec_v3(source).unwrap();
+        let first = circuit_spec_v3_to_kicad_sch(&spec).unwrap();
+        assert_eq!(first, circuit_spec_source_to_kicad_sch(source).unwrap());
+        let imported = import_schematic(&first).unwrap();
+        assert!(imported.coverage.complete);
+        assert!(imported.symbols.iter().any(|symbol| {
+            symbol.reference == "U1" && symbol.unit == 1 && symbol.pins[0].number == "1"
+        }));
+        assert!(imported.symbols.iter().any(|symbol| {
+            symbol.reference == "U1" && symbol.unit == 2 && symbol.pins[0].number == "3"
+        }));
+        let report =
+            verify_circuit_kicad_handoff(source, &first, &ElectricalPolicy::default()).unwrap();
+        assert!(report.approved, "{:?}", report.findings);
     }
 }

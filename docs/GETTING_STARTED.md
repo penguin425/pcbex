@@ -115,6 +115,11 @@ Use command-specific help for the exact installed options:
 ./target/release/pcbex fabricate --help
 ```
 
+Circuit authors can also inspect the flat v2 and explicit multi-unit v3
+contracts with `circuit-spec-v2-schema` and `circuit-spec-v3-schema`. Start
+with the [multi-unit circuit guide](MULTI_UNIT_CIRCUIT_SPEC.md) before choosing
+v3.
+
 Shell completions are available for Bash, Zsh, Fish, Elvish, and PowerShell:
 
 ```sh

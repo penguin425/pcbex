@@ -1,4 +1,4 @@
-//! Digest-bound verification of a circuit-spec v2 document against a real
+//! Digest-bound verification of a circuit-spec v2 or v3 document against a real
 //! KiCad schematic.
 //!
 //! This module deliberately verifies a handoff; it does not generate or
@@ -7,10 +7,11 @@
 //! reviews remain in the report so a caller can retain an auditable binding.
 
 use super::{
-    CircuitSpecV2, ElectricalPolicy, ElectricalReview, SchematicDocument, SchematicPin,
-    SchematicSymbol, check_circuit_spec, check_schematic, circuit_spec::format_voltage_uv,
-    circuit_spec_v2_to_schematic, electrical_review_json_schema, import_schematic,
-    parse_circuit_spec_v2,
+    CIRCUIT_SPEC_V2_SCHEMA_VERSION, CIRCUIT_SPEC_V3_SCHEMA_VERSION, ElectricalPolicy,
+    ElectricalReview, SchematicDocument, SchematicPin, SchematicSymbol, check_circuit_spec,
+    check_circuit_spec_v3, check_schematic, circuit_spec_source_schema_version,
+    circuit_spec_v2_to_schematic, circuit_spec_v3_to_schematic, electrical_review_json_schema,
+    import_schematic, parse_circuit_spec_v2, parse_circuit_spec_v3,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -95,7 +96,7 @@ pub struct CircuitKicadHandoffReport {
     pub approved: bool,
 }
 
-/// Verify a JSON circuit-spec v2 against an actual KiCad `.kicad_sch` source.
+/// Verify a JSON circuit-spec v2 or v3 against an actual KiCad `.kicad_sch` source.
 ///
 /// Input parsing/contract errors are returned as `Err`.  Once both documents
 /// have been imported, ERC and logical mapping failures are represented in a
@@ -117,12 +118,41 @@ pub fn verify_circuit_kicad_handoff(
             "KiCad schematic exceeds the {CIRCUIT_KICAD_HANDOFF_MAX_SCHEMATIC_BYTES}-byte handoff limit"
         ));
     }
-    let spec = parse_circuit_spec_v2(circuit_source)?;
-    let circuit_check = check_circuit_spec(&spec)?;
+    let (circuit_spec_sha256, circuit_review, circuit_check_bytes, expected) =
+        match circuit_spec_source_schema_version(circuit_source)? {
+            CIRCUIT_SPEC_V2_SCHEMA_VERSION => {
+                let spec = parse_circuit_spec_v2(circuit_source)?;
+                let check = check_circuit_spec(&spec)?;
+                let expected = circuit_spec_v2_to_schematic(&check.normalized_spec)?;
+                let bytes = canonical_json(&check)?;
+                (
+                    check.circuit_spec_sha256,
+                    check.electrical_review,
+                    bytes,
+                    expected,
+                )
+            }
+            CIRCUIT_SPEC_V3_SCHEMA_VERSION => {
+                let spec = parse_circuit_spec_v3(circuit_source)?;
+                let check = check_circuit_spec_v3(&spec)?;
+                let expected = circuit_spec_v3_to_schematic(&check.normalized_spec)?;
+                let bytes = canonical_json(&check)?;
+                (
+                    check.circuit_spec_sha256,
+                    check.electrical_review,
+                    bytes,
+                    expected,
+                )
+            }
+            version => {
+                return Err(format!(
+                    "unsupported circuit-spec schema version {version} (expected {CIRCUIT_SPEC_V2_SCHEMA_VERSION} or {CIRCUIT_SPEC_V3_SCHEMA_VERSION})"
+                ));
+            }
+        };
     let schematic = import_schematic(schematic_source)?;
     let schematic_review = check_schematic(&schematic, policy)?;
-    let expected = circuit_spec_v2_to_schematic(&circuit_check.normalized_spec)?;
-    let mut findings = compare_semantics(&circuit_check.normalized_spec, &expected, &schematic);
+    let mut findings = compare_semantics(&expected, &schematic);
 
     // Coverage is safety-critical for a handoff even when an electrical policy
     // has no corresponding configurable rule.  Keep the finding deterministic
@@ -149,26 +179,20 @@ pub fn verify_circuit_kicad_handoff(
     let counts = CircuitKicadHandoffFindingCounts {
         errors: findings
             .len()
-            .saturating_add(circuit_check.electrical_review.counts.errors)
+            .saturating_add(circuit_review.counts.errors)
             .saturating_add(schematic_review.counts.errors),
-        warnings: circuit_check
-            .electrical_review
+        warnings: circuit_review
             .counts
             .warnings
             .saturating_add(schematic_review.counts.warnings),
-        info: circuit_check
-            .electrical_review
+        info: circuit_review
             .counts
             .info
             .saturating_add(schematic_review.counts.info),
     };
-    let circuit_check_bytes = canonical_json(&circuit_check)?;
-    let circuit_spec_sha256 = circuit_check.circuit_spec_sha256.clone();
     let schematic_sha256 = schematic_review.schematic_sha256.clone();
     let policy_sha256 = schematic_review.policy_sha256.clone();
-    let approved = circuit_check.electrical_review.approved
-        && schematic_review.approved
-        && findings.is_empty();
+    let approved = circuit_review.approved && schematic_review.approved && findings.is_empty();
     Ok(CircuitKicadHandoffReport {
         schema_version: CIRCUIT_KICAD_HANDOFF_SCHEMA_VERSION,
         engine_version: CIRCUIT_KICAD_HANDOFF_ENGINE_VERSION.to_string(),
@@ -178,7 +202,7 @@ pub fn verify_circuit_kicad_handoff(
         schematic_source_sha256: digest_hex(schematic_source.as_bytes()),
         circuit_spec_sha256,
         circuit_check_sha256: digest_hex(&circuit_check_bytes),
-        circuit_review: circuit_check.electrical_review,
+        circuit_review,
         schematic_sha256,
         schematic_review,
         policy_sha256,
@@ -274,29 +298,32 @@ pub fn circuit_kicad_handoff_report_json_schema() -> Value {
 }
 
 fn compare_semantics(
-    spec: &CircuitSpecV2,
     expected: &SchematicDocument,
     actual: &SchematicDocument,
 ) -> Vec<CircuitKicadHandoffFinding> {
     let mut findings = Vec::new();
-    let expected_by_ref = expected
+    let expected_by_key = expected
         .symbols
         .iter()
-        .map(|symbol| (symbol.reference.as_str(), symbol))
+        .map(|symbol| ((symbol.reference.as_str(), symbol.unit), symbol))
         .collect::<BTreeMap<_, _>>();
-    let mut actual_by_ref = BTreeMap::<&str, Vec<&SchematicSymbol>>::new();
+    let mut actual_by_key = BTreeMap::<(&str, u32), Vec<&SchematicSymbol>>::new();
     for symbol in &actual.symbols {
-        actual_by_ref
-            .entry(symbol.reference.as_str())
+        actual_by_key
+            .entry((symbol.reference.as_str(), symbol.unit))
             .or_default()
             .push(symbol);
     }
-    for (&reference, expected_symbol) in &expected_by_ref {
-        let Some(actual_symbols) = actual_by_ref.get(reference) else {
+    for (&(reference, unit), expected_symbol) in &expected_by_key {
+        let Some(actual_symbols) = actual_by_key.get(&(reference, unit)) else {
             push_finding(
                 &mut findings,
                 "missing_symbol",
-                format!("KiCad schematic is missing symbol {reference}"),
+                if unit == 1 {
+                    format!("KiCad schematic is missing symbol {reference}")
+                } else {
+                    format!("KiCad schematic is missing symbol {reference} unit {unit}")
+                },
                 Some(reference.to_string()),
                 None,
                 None,
@@ -307,7 +334,13 @@ fn compare_semantics(
             push_finding(
                 &mut findings,
                 "duplicate_symbol_reference",
-                format!("KiCad schematic has multiple symbols with reference {reference}"),
+                if unit == 1 {
+                    format!("KiCad schematic has multiple symbols with reference {reference}")
+                } else {
+                    format!(
+                        "KiCad schematic has multiple symbols with reference {reference} unit {unit}"
+                    )
+                },
                 Some(reference.to_string()),
                 None,
                 None,
@@ -315,8 +348,8 @@ fn compare_semantics(
         }
         compare_symbol(&mut findings, expected_symbol, actual_symbols[0]);
     }
-    for (&reference, symbols) in &actual_by_ref {
-        if !expected_by_ref.contains_key(reference) {
+    for (&(reference, unit), symbols) in &actual_by_key {
+        if !expected_by_key.contains_key(&(reference, unit)) {
             for symbol in symbols {
                 let power = symbol.lib_id.starts_with("power:") || reference.starts_with("#PWR");
                 push_finding(
@@ -327,8 +360,13 @@ fn compare_semantics(
                         "extra_symbol"
                     },
                     format!(
-                        "KiCad schematic contains an unexpected {} symbol {reference}",
-                        if power { "power" } else { "normal" }
+                        "KiCad schematic contains an unexpected {} symbol {reference}{}",
+                        if power { "power" } else { "normal" },
+                        if unit == 1 {
+                            String::new()
+                        } else {
+                            format!(" unit {unit}")
+                        }
                     ),
                     Some(reference.to_string()),
                     None,
@@ -374,15 +412,33 @@ fn compare_semantics(
                 })
         })
         .collect::<Vec<_>>();
+    let mut expected_pin_no_connect = BTreeMap::<(&str, &str), bool>::new();
+    for symbol in &expected.symbols {
+        for pin in &symbol.pins {
+            expected_pin_no_connect
+                .insert((symbol.uuid.as_str(), pin.number.as_str()), pin.no_connect);
+        }
+    }
+    let meaningful_expected_nets = expected
+        .nets
+        .iter()
+        .filter(|net| {
+            !net.labels.is_empty()
+                || net.pins.iter().any(|pin| {
+                    !expected_pin_no_connect
+                        .get(&(pin.symbol_uuid.as_str(), pin.number.as_str()))
+                        .copied()
+                        .unwrap_or(false)
+                })
+        })
+        .collect::<Vec<_>>();
     let mut matched_actual_net_ids = BTreeSet::new();
     let mut actual_net_to_expected = BTreeMap::<u32, &str>::new();
     let mut ambiguous_actual_net_ids = BTreeSet::new();
-    for expected_net in &spec.nets {
-        let voltage_label = expected_net.voltage_uv.map(format_voltage_uv);
-        let mut expected_labels = BTreeSet::from([expected_net.name.clone()]);
-        if let Some(label) = &voltage_label {
-            expected_labels.insert(label.clone());
-        }
+    for expected_net in meaningful_expected_nets {
+        let expected_labels = std::iter::once(expected_net.name.clone())
+            .chain(expected_net.labels.iter().cloned())
+            .collect::<BTreeSet<_>>();
         let named_candidates = meaningful_actual_nets
             .iter()
             .copied()
@@ -460,8 +516,10 @@ fn compare_semantics(
         }
 
         let actual_labels = actual_net.labels.iter().cloned().collect::<BTreeSet<_>>();
-        if let Some(voltage_label) = voltage_label
-            && !actual_labels.contains(&voltage_label)
+        for voltage_label in expected_net
+            .labels
+            .iter()
+            .filter(|label| !actual_labels.contains(*label))
         {
             push_finding(
                 &mut findings,
@@ -509,21 +567,30 @@ fn compare_semantics(
     // Compare every reference/pin connection, not just the set of net names.
     // This prevents two pins from being swapped while preserving the same
     // collection of declared nets.
-    let expected_pin_nets = spec
-        .parts
+    let expected_net_names = expected
+        .nets
         .iter()
-        .flat_map(|part| {
-            part.pins.iter().map(|pin| {
+        .map(|net| (net.id, net.name.as_str()))
+        .collect::<BTreeMap<_, _>>();
+    let expected_pin_nets = expected
+        .symbols
+        .iter()
+        .flat_map(|symbol| {
+            symbol.pins.iter().map(|pin| {
                 (
-                    (part.reference.as_str(), pin.number.as_str()),
-                    pin.net.as_deref(),
+                    (symbol.reference.as_str(), symbol.unit, pin.number.as_str()),
+                    if pin.no_connect {
+                        None
+                    } else {
+                        expected_net_names.get(&pin.net_id).copied()
+                    },
                 )
             })
         })
         .collect::<BTreeMap<_, _>>();
-    for ((reference, pin), expected_net) in expected_pin_nets {
-        let Some(actual_symbol) = actual_by_ref
-            .get(reference)
+    for ((reference, unit, pin), expected_net) in expected_pin_nets {
+        let Some(actual_symbol) = actual_by_key
+            .get(&(reference, unit))
             .and_then(|symbols| symbols.first())
         else {
             continue;
@@ -545,8 +612,14 @@ fn compare_semantics(
                 &mut findings,
                 "net_mismatch",
                 format!(
-                    "symbol {reference} pin {pin} net mismatch: expected {:?}, got {:?}",
-                    expected_net, actual_net
+                    "symbol {reference}{} pin {pin} net mismatch: expected {:?}, got {:?}",
+                    if unit == 1 {
+                        String::new()
+                    } else {
+                        format!(" unit {unit}")
+                    },
+                    expected_net,
+                    actual_net
                 ),
                 Some(reference.to_string()),
                 Some(pin.to_string()),
@@ -587,14 +660,25 @@ fn compare_symbol(
     actual: &SchematicSymbol,
 ) {
     let reference = Some(expected.reference.clone());
-    if actual.unit != 1 || actual.convert != 1 {
+    if actual.unit != expected.unit || actual.convert != expected.convert {
         push_finding(
             findings,
             "multi_unit_symbol",
-            format!(
-                "symbol {} must be flat unit 1/convert 1 (got {}/{})",
-                expected.reference, actual.unit, actual.convert
-            ),
+            if expected.unit == 1 && expected.convert == 1 {
+                format!(
+                    "symbol {} must be flat unit 1/convert 1 (got {}/{})",
+                    expected.reference, actual.unit, actual.convert
+                )
+            } else {
+                format!(
+                    "symbol {} must be unit {}/convert {} (got {}/{})",
+                    expected.reference,
+                    expected.unit,
+                    expected.convert,
+                    actual.unit,
+                    actual.convert
+                )
+            },
             reference.clone(),
             None,
             None,
@@ -1038,7 +1122,7 @@ mod tests {
                 };
             }
         }
-        let findings = compare_semantics(&spec, &expected, &actual);
+        let findings = compare_semantics(&expected, &actual);
         assert!(findings.iter().any(|finding| {
             finding.code == "net_mismatch"
                 && finding.reference.as_deref() == Some("R1")
@@ -1053,7 +1137,7 @@ mod tests {
         let mut duplicate_pin = actual.clone();
         let duplicate = duplicate_pin.symbols[0].pins[0].clone();
         duplicate_pin.symbols[0].pins.push(duplicate);
-        let findings = compare_semantics(&spec, &expected, &duplicate_pin);
+        let findings = compare_semantics(&expected, &duplicate_pin);
         assert!(
             findings
                 .iter()

@@ -37,6 +37,9 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 - **Automate circuit handoff:** Convert constrained circuit specifications into
   deterministic schematic, board-binding, firmware, and pipeline evidence.
 
+- **Model multi-unit parts:** Keep one physical component identity while
+  binding every KiCad symbol unit and package pin explicitly.
+
 - **Govern release decisions:** Bind AI review, fabrication, and procurement
   approvals to exact evidence, then reserve approved challenges in pinned local
   ledgers without claiming an order or payment.
@@ -114,6 +117,30 @@ organization or fabricator constraints. Read the
 [manufacturing package contract](docs/MANUFACTURING_PACKAGE.md) before treating
 the archive as release evidence.
 
+### Generate a multi-unit KiCad handoff
+
+Use circuit-spec v3 when one physical package appears as multiple schematic
+units. Existing v2 documents continue to work without migration.
+
+```sh
+./target/release/pcbex check-circuit-spec \
+  examples/circuit-board-spec-v3.json --require-approved
+
+./target/release/pcbex write-circuit-spec-kicad-schematic \
+  examples/circuit-board-spec-v3.json \
+  --output target/pcbex-demo/multi-unit.kicad_sch
+
+./target/release/pcbex verify-circuit-kicad-handoff \
+  examples/circuit-board-spec-v3.json \
+  target/pcbex-demo/multi-unit.kicad_sch \
+  --require-approved
+```
+
+Discover the closed wire contracts with `circuit-spec-v3-schema` and
+`circuit-spec-v3-check-schema`. See the
+[multi-unit circuit guide](docs/MULTI_UNIT_CIRCUIT_SPEC.md) for invariants and
+physical-board collapse rules.
+
 ### Inspect machine-readable contracts
 
 Discover the installed feature surface instead of parsing help text:
@@ -156,6 +183,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Contract | Purpose | Discovery command |
 | --- | --- | --- |
 | Board JSON v2 | Geometry, nets, layers, rules, and routed copper | `pcbex schema` |
+| Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |
 | Organization policy pack | Electrical, physical, review, and signer policy | `pcbex policy-pack-schema` |

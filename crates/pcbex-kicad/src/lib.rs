@@ -222,6 +222,20 @@ pub use circuit_spec::{
     circuit_spec_v2_sha256, circuit_spec_v2_to_schematic, normalize_circuit_spec_v2,
     parse_and_check_circuit_spec_v2, parse_circuit_spec_v2,
 };
+mod circuit_spec_v3;
+pub use circuit_spec_v3::{
+    CIRCUIT_SPEC_V3_CHECK_SCHEMA_VERSION, CIRCUIT_SPEC_V3_MAX_BYTES,
+    CIRCUIT_SPEC_V3_MAX_CONNECTIONS_PER_NET, CIRCUIT_SPEC_V3_MAX_PARTS,
+    CIRCUIT_SPEC_V3_MAX_PHYSICAL_PINS_PER_PART, CIRCUIT_SPEC_V3_MAX_PINS_PER_UNIT,
+    CIRCUIT_SPEC_V3_MAX_TOTAL_CONNECTIONS, CIRCUIT_SPEC_V3_MAX_TOTAL_PINS,
+    CIRCUIT_SPEC_V3_MAX_TOTAL_UNITS, CIRCUIT_SPEC_V3_MAX_UNIT_NUMBER,
+    CIRCUIT_SPEC_V3_MAX_UNITS_PER_PART, CIRCUIT_SPEC_V3_SCHEMA_VERSION, CircuitConnectionV3,
+    CircuitNetV3, CircuitPartV3, CircuitSpecCheckV3, CircuitSpecV3, CircuitUnitV3,
+    check_circuit_spec_v3, circuit_spec_source_schema_version, circuit_spec_source_to_physical_v2,
+    circuit_spec_v3_check_json_schema, circuit_spec_v3_json_schema, circuit_spec_v3_sha256,
+    circuit_spec_v3_to_physical_v2, circuit_spec_v3_to_schematic, normalize_circuit_spec_v3,
+    parse_and_check_circuit_spec_v3, parse_circuit_spec_v3,
+};
 mod footprint_closure;
 pub use footprint_closure::{
     FOOTPRINT_CLOSURE_V1_MAX_AGGREGATE_FOOTPRINT_BYTES, FOOTPRINT_CLOSURE_V1_MAX_FOOTPRINT_BYTES,
@@ -298,7 +312,7 @@ pub use schematic::{
 mod schematic_writer;
 pub use schematic_writer::{
     CIRCUIT_KICAD_SCHEMATIC_MAX_OUTPUT_BYTES, CIRCUIT_KICAD_SCHEMATIC_VERSION,
-    circuit_spec_v2_to_kicad_sch,
+    circuit_spec_source_to_kicad_sch, circuit_spec_v2_to_kicad_sch, circuit_spec_v3_to_kicad_sch,
 };
 mod schematic_diff;
 pub use schematic_diff::{

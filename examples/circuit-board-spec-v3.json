@@ -1,0 +1,72 @@
+{
+  "schema_version": 3,
+  "parts": [
+    {
+      "reference": "U1",
+      "lib_id": "MCU:Chip",
+      "value": "Chip",
+      "footprint": "Package:QFN",
+      "mpn": null,
+      "power": {
+        "rail_voltage_uv": null,
+        "max_voltage_uv": null,
+        "requires_decoupling": false,
+        "decoupling": false
+      },
+      "units": [
+        {
+          "unit": 1,
+          "pins": [
+            {"number": "1", "name": "OUT", "net": "SIGNAL", "electrical_type": "output"}
+          ]
+        },
+        {
+          "unit": 2,
+          "pins": [
+            {"number": "2", "name": "VCC", "net": "VCC", "electrical_type": "passive"}
+          ]
+        }
+      ]
+    },
+    {
+      "reference": "R1",
+      "lib_id": "Device:R",
+      "value": "10k",
+      "footprint": "Resistor_SMD:R_0603",
+      "mpn": null,
+      "power": {
+        "rail_voltage_uv": null,
+        "max_voltage_uv": null,
+        "requires_decoupling": false,
+        "decoupling": false
+      },
+      "units": [
+        {
+          "unit": 1,
+          "pins": [
+            {"number": "1", "name": "~", "net": "SIGNAL", "electrical_type": "passive"},
+            {"number": "2", "name": "~", "net": "VCC", "electrical_type": "passive"}
+          ]
+        }
+      ]
+    }
+  ],
+  "nets": [
+    {
+      "name": "SIGNAL",
+      "voltage_uv": null,
+      "connections": [
+        {"reference": "U1", "unit": 1, "pin": "1"},
+        {"reference": "R1", "unit": 1, "pin": "1"}
+      ]
+    },
+    {
+      "name": "VCC",
+      "voltage_uv": null,
+      "connections": [
+        {"reference": "U1", "unit": 2, "pin": "2"},
+        {"reference": "R1", "unit": 1, "pin": "2"}
+      ]
+    }
+  ]
+}

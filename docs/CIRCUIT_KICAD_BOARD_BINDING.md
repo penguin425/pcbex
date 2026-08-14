@@ -1,6 +1,6 @@
-# Circuit-spec v2 to KiCad schematic and board binding
+# Circuit-spec to KiCad schematic and board binding
 
-The v1.416 gate verifies one closed `circuit-spec-v2` document against the
+The gate verifies one closed circuit-spec v2 or v3 document against the
 actual KiCad schematic and the actual `.kicad_pcb` board that are intended to
 implement it.  It is a standalone Rust API/CLI/MCP boundary.  It recalculates
 the v1.415 schematic handoff from the raw circuit and schematic inputs, then
@@ -21,7 +21,7 @@ Verify a circuit specification, schematic, and board together:
 
 ```sh
 pcbex verify-circuit-kicad-board-binding \
-  circuit-spec-v2.json \
+  circuit-spec.json \
   hardware/controller.kicad_sch \
   hardware/controller.kicad_pcb \
   --policy electrical-policy.json \
@@ -73,7 +73,8 @@ signatures or fabrication authorization.
 
 The strict comparison binds the following semantic data:
 
-- each circuit reference to exactly one schematic symbol and board footprint;
+- each v2 reference, or each v3 `(reference, unit)`, to its exact schematic
+  symbol while retaining exactly one physical board footprint per reference;
 - exact reference, schematic-declared footprint identifier, value, MPN,
   BOM/DNP state, and board presence, with missing, extra, or duplicate records
   rejected;
@@ -122,10 +123,11 @@ board binding; all three raw inputs and their canonical identities must agree.
 
 ## Closed subset and rejection behavior
 
-Only the strict flat/single-unit subset is accepted.  Hierarchical or nested
-schematics, buses, multi-unit symbols, unsupported library constructs, and
-other incomplete handoff coverage are rejected rather than flattened or
-silently ignored.  Extra or missing symbols, footprints, pads, nets, pin/pad
+The gate accepts the strict flat v2 subset and explicitly declared v3 symbol
+units. Hierarchical or nested schematics, buses, automatic unit expansion or
+reassignment, unsupported library constructs, and other incomplete handoff
+coverage are rejected rather than flattened or silently ignored. Extra or
+missing symbols, footprints, pads, nets, pin/pad
 connections, no-connect states, or metadata fail closed.  Geometry-only
 differences do not establish a board binding, but this gate intentionally does
 not evaluate geometry.
@@ -211,7 +213,7 @@ is a sidecar and never becomes a seventh archive entry or a new pipeline phase.
 This is an electrical/identity binding gate, not a board-quality or production
 gate.  It does not perform placement or footprint geometry checks, routing
 verification, DRC, DFM, Gerber/BOM/CPL generation, supplier lookup, hierarchy
-flattening, bus analysis, or multi-unit expansion. It does not establish
+flattening, bus analysis, or automatic multi-unit expansion. It does not establish
 manufacturing or fabrication approval, procurement authority, or toolchain
 provenance. Existing `pipeline-verify`
 v1 and v2 reports and phases are unchanged and do not consume this report.

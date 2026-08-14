@@ -1,7 +1,7 @@
-# Circuit-spec v2 to KiCad schematic handoff verification
+# Circuit-spec to KiCad schematic handoff verification
 
 The handoff gate verifies an already-authored KiCad schematic against a
-closed `circuit-spec-v2` contract. It is a semantic verification boundary,
+closed circuit-spec v2 or v3 contract. It is a semantic verification boundary,
 not a circuit or schematic generator: neither input is rewritten and no
 library, supplier, or placement decision is made by this command.
 
@@ -24,7 +24,7 @@ Verify a circuit specification and its KiCad schematic together:
 
 ```sh
 pcbex verify-circuit-kicad-handoff \
-  circuit-spec-v2.json \
+  circuit-spec.json \
   hardware/controller.kicad_sch \
   --policy electrical-policy.json \
   --output build/circuit-kicad-handoff.json \
@@ -61,7 +61,7 @@ handoff-specific mismatch details, while the two review objects contain their
 own electrical findings. The
 normalized comparison is closed and intentionally small:
 
-- a flat schematic with one unit per symbol;
+- exact `(reference, unit)` symbol membership (v2 fixes every unit to 1);
 - exact symbol identity and reference/value metadata;
 - exact pin identities, pin numbers, electrical types, and net membership;
 - exact explicit net-label sets, canonical voltage labels, and complete pin
@@ -95,19 +95,20 @@ rejection retains the report before `--require-approved` returns failure.
 
 ## Deliberate boundary
 
-The v1 handoff contract rejects or leaves unresolved anything outside the
+The handoff contract rejects or leaves unresolved anything outside the
 closed subset. It does not currently support:
 
-- hierarchical sheets, buses, power-symbol extras, or multi-unit symbols;
+- hierarchical sheets, buses, power-symbol extras, interchangeable unit
+  reassignment, hidden shared pins, or alternate symbol conversions;
 - unresolved library links or live supplier/datasheet lookup;
 - automatic symbol/footprint generation or circuit-to-KiCad conversion;
 - component placement, board geometry, routing, DRC, fabrication, Gerber,
   BOM/CPL, or factory submission.
 
-Those are separate gates. A passing handoff only proves that the supplied
-flat, single-unit KiCad schematic expresses the supplied circuit-spec v2
-intent. The schematic must still pass the complete PCB, manufacturing, and
-approval pipeline before production.
+Those are separate gates. For v3, a passing handoff proves the exact declared
+unit and package-pin membership in addition to the existing circuit intent; it
+does not authenticate a library or datasheet. The schematic must still pass
+the complete PCB, manufacturing, and approval pipeline before production.
 
 The v1.416 board-binding gate is intentionally not folded into this command,
 the v1/v2 `pipeline-verify` reports, or the existing pipeline phases. Invoke it
