@@ -11,7 +11,10 @@ fn binary() -> PathBuf {
 
 fn canonical_tempdir() -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir().unwrap();
+    #[cfg(not(windows))]
     let canonical = fs::canonicalize(directory.path()).unwrap();
+    #[cfg(windows)]
+    let canonical = directory.path().to_path_buf();
     (directory, canonical)
 }
 
@@ -149,10 +152,18 @@ fn v3_rejects_ambiguous_physical_pins_and_missing_nullable_keys() {
             .unwrap_err()
             .contains("reuses physical package pin")
     );
-    let missing_mpn = source.replacen("      \"mpn\": null,\n", "", 1);
-    assert!(parse_circuit_spec_v3(&missing_mpn).is_err());
-    let missing_voltage = source.replacen("      \"voltage_uv\": null,\n", "", 1);
-    assert!(parse_circuit_spec_v3(&missing_voltage).is_err());
+    let mut missing_mpn: Value = serde_json::from_str(&source).unwrap();
+    missing_mpn["parts"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("mpn");
+    assert!(parse_circuit_spec_v3(&serde_json::to_string(&missing_mpn).unwrap()).is_err());
+    let mut missing_voltage: Value = serde_json::from_str(&source).unwrap();
+    missing_voltage["nets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("voltage_uv");
+    assert!(parse_circuit_spec_v3(&serde_json::to_string(&missing_voltage).unwrap()).is_err());
 
     let mut too_many_physical_pins: Value = serde_json::from_str(&source).unwrap();
     let pins = too_many_physical_pins["parts"][0]["units"][0]["pins"]
