@@ -899,6 +899,11 @@
     {
       "id": "deterministic-multi-unit-kicad-handoff",
       "release": "v1.473.0",
+      "status": "released"
+    },
+    {
+      "id": "bounded-deterministic-routing-convergence",
+      "release": "v1.474.0",
       "status": "current"
     }
   ]

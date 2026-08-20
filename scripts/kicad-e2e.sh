@@ -139,6 +139,109 @@ for schema_path in schema_paths:
             pending.extend(value)
 PY
 
+# v1.474 keeps single-pass routing as the default and adds one explicit,
+# aggregate-budgeted convergence report. The real KiCad path must produce
+# byte-identical boards/reports, retain a bounded negative before its gate, and
+# expose a recursively closed schema.
+convergence_first_board="$output_directory/routing-convergence.first.kicad_pcb"
+convergence_second_board="$output_directory/routing-convergence.second.kicad_pcb"
+convergence_first_report="$output_directory/routing-convergence.first.json"
+convergence_second_report="$output_directory/routing-convergence.second.json"
+convergence_schema="$output_directory/routing-convergence.schema.json"
+convergence_partial_board="$output_directory/routing-convergence.partial.kicad_pcb"
+convergence_partial_report="$output_directory/routing-convergence.partial.json"
+convergence_partial_error="$output_directory/routing-convergence.partial.stderr"
+
+"$pcbex_binary" routing-convergence-report-schema \
+  --output "$convergence_schema"
+for pair in \
+  "$convergence_first_board:$convergence_first_report" \
+  "$convergence_second_board:$convergence_second_report"; do
+  board=${pair%%:*}
+  report=${pair#*:}
+  "$pcbex_binary" route-kicad examples/simple.kicad_pcb \
+    --output "$board" \
+    --convergence-report "$report" \
+    --convergence-rounds 2 \
+    --convergence-candidates 3 \
+    --convergence-workers 2 \
+    --convergence-router-workers 1 \
+    --drc
+done
+cmp "$convergence_first_board" "$convergence_second_board"
+cmp "$convergence_first_report" "$convergence_second_report"
+
+if "$pcbex_binary" route-kicad examples/simple.kicad_pcb \
+  --output "$convergence_partial_board" \
+  --convergence-report "$convergence_partial_report" \
+  --convergence-rounds 1 \
+  --convergence-candidates 1 \
+  --convergence-workers 1 \
+  --convergence-router-workers 1 \
+  --convergence-work-budget 1 \
+  2>"$convergence_partial_error"; then
+  echo "expected one-work-unit convergence to retain an unrouted result" >&2
+  exit 1
+fi
+test -s "$convergence_partial_board"
+test -s "$convergence_partial_report"
+grep -Fq 'routing convergence retained 1 unrouted net(s)' \
+  "$convergence_partial_error"
+
+python3 - \
+  "$convergence_first_report" "$convergence_partial_report" \
+  "$convergence_schema" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+positive_path, partial_path, schema_path = map(Path, sys.argv[1:])
+positive = json.loads(positive_path.read_bytes())
+partial = json.loads(partial_path.read_bytes())
+schema = json.loads(schema_path.read_bytes())
+
+assert positive["schema_version"] == 1
+assert positive["scope"] == "bounded_deterministic_routing_convergence"
+assert positive["status"] == "converged"
+assert positive["converged"] is True
+assert positive["design_rules_unchanged"] is True
+assert positive["final_metrics"]["unrouted_nets"] == 0
+assert positive["final_drc_violation_count"] == 0
+assert positive["allocated_work_units"] <= positive["options"]["maximum_work_units"]
+for identity in (
+    positive["input_board_canonical"],
+    positive["final_board_canonical"],
+):
+    assert identity["bytes"] > 0
+    assert len(identity["sha256"]) == 64
+    assert set(identity["sha256"]) <= set("0123456789abcdef")
+for round_report in positive["rounds"]:
+    for candidate in round_report["candidates"]:
+        if candidate["selected_as_round_best"]:
+            assert candidate["status"] == "admissible"
+            assert candidate["drc_violation_count"] == 0
+
+assert partial["status"] == "no_admissible_candidate"
+assert partial["converged"] is False
+assert partial["final_metrics"]["unrouted_nets"] == 1
+assert partial["final_drc_violation_count"] == 0
+assert partial["rounds"][0]["candidates"][0]["status"] == "routing_failed"
+assert partial["rounds"][0]["candidates"][0]["metrics"] is None
+assert partial["rounds"][0]["candidates"][0]["drc_violation_count"] is None
+
+pending = [schema]
+while pending:
+    value = pending.pop()
+    if isinstance(value, dict):
+        if value.get("type") == "object":
+            assert value.get("additionalProperties") is False
+        if value.get("type") == "array":
+            assert "maxItems" in value
+        pending.extend(value.values())
+    elif isinstance(value, list):
+        pending.extend(value)
+PY
+
 # Reuse the same real Rust binary through the Python saved-generation
 # orchestrator. The focused test first obtains a genuine immutable-ERC check,
 # then requires the writer and explicit semantic handoff before inspecting the

@@ -1870,6 +1870,10 @@ jobs:
         run: >-
           cargo +stable test --package pcbex
           --test circuit_spec_v3 --release --locked
+      - name: Run cross-platform v1.474 routing-convergence boundaries
+        run: >-
+          cargo +stable test --package pcbex
+          --test routing_convergence --release --locked
       - name: Configure Windows GNU firmware toolchain
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh

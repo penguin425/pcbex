@@ -25,6 +25,9 @@ decisions blur into one opaque pipeline. `pcbex` keeps those boundaries explicit
 - **Route deterministically:** Use integer-nanometre geometry and bounded
   multilayer A* search for reproducible results.
 
+- **Converge safely:** Explore bounded deterministic routing portfolios while
+  excluding every DRC-invalid candidate from final selection.
+
 - **Validate continuously:** Check connectivity, copper clearance, board
   boundaries, keepouts, dimensions, zones, and fabrication constraints.
 
@@ -100,6 +103,22 @@ Route a placed board, write an SVG preview, then ask KiCad to run native DRC:
 
 `--drc` requires `kicad-cli`. Omit it when you only need pcbex routing and
 internal checks.
+
+### Converge difficult routes
+
+Opt into a bounded strategy portfolio and retain the complete selection record:
+
+```sh
+./target/release/pcbex route-kicad examples/simple.kicad_pcb \
+  --output target/pcbex-demo/simple.converged.kicad_pcb \
+  --convergence-report target/pcbex-demo/simple.convergence.json
+```
+
+The normal single-pass route stays the default. Convergence shares one A* work
+ceiling across all declared rounds and candidates, rejects DRC-invalid winners,
+and publishes a closed no-clobber report. See
+[Routing Convergence](docs/ROUTING_CONVERGENCE.md) for selection order and
+failure semantics.
 
 ### Build a manufacturing package
 
@@ -183,6 +202,7 @@ it enters a routing, manufacturing, or authorization flow.
 | Contract | Purpose | Discovery command |
 | --- | --- | --- |
 | Board JSON v2 | Geometry, nets, layers, rules, and routed copper | `pcbex schema` |
+| Routing convergence report v1 | Bounded candidate rounds and validity-first selection | `pcbex routing-convergence-report-schema` |
 | Circuit spec v2/v3 | Flat or explicit multi-unit circuit intent | `pcbex circuit-spec-v2-schema` / `pcbex circuit-spec-v3-schema` |
 | Physical profile | Board construction and placement constraints | `pcbex physical-profile-schema` |
 | DFM profile | Fabricator-specific manufacturing limits | `pcbex dfm-profile-schema` |

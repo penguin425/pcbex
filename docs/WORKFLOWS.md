@@ -36,6 +36,21 @@ pcbex check board.routed.json
 Existing routes remain reserved. Missing nets are routed, then the complete
 board passes through the checker before the output is accepted.
 
+For difficult boards, opt into bounded convergence and retain every strategy
+decision:
+
+```sh
+pcbex route board.json \
+  --output board.routed.json \
+  --convergence-report board.routing-convergence.json
+```
+
+The single-pass route remains the default. The convergence boundary shares one
+A* allocation across all rounds, excludes non-`unrouted` checker violations
+from selection, and retains a valid partial report before the unrouted gate.
+Read [Routing Convergence](ROUTING_CONVERGENCE.md) before consuming partial
+results.
+
 Use `repair` to reroute only checker-selected or explicitly named nets:
 
 ```sh

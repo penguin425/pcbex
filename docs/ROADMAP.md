@@ -186,6 +186,7 @@ auditable release.
 | v1.471.1 | Task-oriented documentation architecture | Replace the release-history-sized root README with a compact project entry point, add task-oriented getting-started, workflow, architecture, integration, and trust guides, and index every focused contract without weakening any implementation or evidence boundary |
 | v1.472.0 | Local procurement authorization challenge reservation | Freshly replay one exact retained v1.471 authorization from its complete original closure, then admit its verified challenge to one externally identified Unix 0700 local ledger through descriptor-pinned durable no-replace publication and commit-time window checks, while leaving the v1.471 one-time-use claim false and making no global, supplier-inventory, order, payment, or exactly-once claim |
 | v1.473.0 | Deterministic multi-unit KiCad handoff | Add an opt-in closed circuit-spec v3 whose physical parts contain explicit symbol units and whose connections bind reference, unit, and package pin; generate and freshly verify real KiCad multi-unit schematics, then collapse only globally unique physical pins into the unchanged board/BOM/manufacturing model while keeping existing circuit-spec v2 documents and workflows migration-free |
+| v1.474.0 | Bounded deterministic routing convergence | Opt into validity-first multi-round JSON/KiCad routing under one deterministic aggregate A* allocation, accept only strict improvements with no checker finding beyond explicit unrouted nets, retain every bounded strategy and decision in a closed Board-bound report, and preserve unchanged single-pass behavior and design rules |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1417,7 +1418,7 @@ documents. A documentation regression suite bounds README growth, requires the
 navigation set, checks every repository-relative Markdown target, and requires
 the index to cover every focused Markdown document.
 
-The current v1.472.0 milestone adds local at-most-once admission for one exact
+The released v1.472.0 milestone adds local at-most-once admission for one exact
 procurement authorization challenge. The public `pcbex-agent` command accepts
 the retained v1.471 report, its complete original v1.470 closure, the selected
 policy and canonical digest pin, and every approval. It freshly replays that
@@ -1453,7 +1454,7 @@ challenge, and sequential source checks are not an atomic world snapshot. No
 network request, inventory hold, landed-cost calculation, cart, order,
 payment, or global exactly-once execution is introduced.
 
-The current v1.473.0 milestone removes the flat-symbol restriction without
+The released v1.473.0 milestone removes the flat-symbol restriction without
 changing circuit-spec v2. A new opt-in circuit-spec v3 keeps one physical part
 per reference and nests one or more explicit symbol units beneath it. Every
 logical connection names the reference, unit number, and physical package pin.
@@ -1472,3 +1473,33 @@ are globally unique within each part; the graph can then collapse losslessly
 to one footprint per reference. Hierarchical sheets, interchangeable/gated
 unit assignment, hidden common pins, alternate De Morgan conversions, and
 automatic library-symbol discovery remain outside this closed v3 contract.
+
+The current v1.474.0 milestone adds an opt-in convergence boundary to `route`
+and `route-kicad`. It schedules balanced, shortest, via-minimized,
+bend-minimized, and alternate-order candidates under stable round/candidate
+IDs. Every declared slot receives a deterministic share of one aggregate A*
+work ceiling; unused shares are not reassigned, so parallel scheduling cannot
+change later opportunity or exceed the declared portfolio budget.
+
+Each completed candidate restores the exact input `Rules` value and passes the
+authoritative checker. Only explicit `unrouted` findings are compatible with a
+partial candidate. Any other violation remains visible in the report but makes
+the candidate ineligible, so a fully routed invalid Board can never outrank a
+clean partial Board. Admissible candidates use a fixed unrouted, selection-cost,
+length, via, bend, and stable-ID ordering. Only a strict improvement becomes the
+next round input; complete routing, stagnation, no admissible candidate, or the
+round ceiling stops the loop.
+
+The closed path-free schema-v1 report retains the producing version, options,
+canonical byte/SHA-256 identities for the effective input and selected internal
+Board models, aggregate allocation, every candidate strategy/status/metric,
+duplicate and selection decisions, and the terminal outcome. The CLI requires
+an explicit new report path, rejects overlap with routing inputs/outputs, and
+publishes the synchronized report without replacement. A valid partial report
+and Board are retained before the existing unrouted gate fails.
+
+This milestone does not loosen clearance, width, via, drill, layer, DFM,
+keepout, or electrical rules; switch via policy; claim global optimality; bind
+raw-source authenticity; run native KiCad DRC; establish manufacturability; or
+grant release authority. Omitting `--convergence-report` preserves the existing
+single-pass APIs and CLI behavior.

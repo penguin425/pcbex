@@ -10,12 +10,14 @@ use pcbex_core::placement::{
 };
 use pcbex_core::{
     AnalysisDelta, Board, CURRENT_SCHEMA_VERSION, DfmProfile, MAX_DFM_PROFILE_TEXT_BYTES,
-    PhysicalConstraintProfile, RoutingCandidateObjective, RoutingCandidateOptions,
-    RoutingCandidateSet, RoutingQuality, Rules, analysis_delta_to_sarif, apply_dfm_profile,
-    apply_physical_profile, apply_physical_profile_to_placement, board_json_schema, dfm_profile,
-    dfm_profile_json_schema, dfm_profiles, impedance_report, migrate_board_json, parse_board_json,
-    parse_external_dfm_profile, physical_profile_json_schema, render_svg, repair_routes,
-    repairable_net_ids, route_board, route_candidates, routing_quality,
+    PhysicalConstraintProfile, RouteReport, RoutingCandidateObjective, RoutingCandidateOptions,
+    RoutingCandidateSet, RoutingConvergenceOptions, RoutingConvergenceReport, RoutingQuality,
+    Rules, analysis_delta_to_sarif, apply_dfm_profile, apply_physical_profile,
+    apply_physical_profile_to_placement, board_json_schema, dfm_profile, dfm_profile_json_schema,
+    dfm_profiles, impedance_report, migrate_board_json, parse_board_json,
+    parse_external_dfm_profile, physical_profile_json_schema, render_routing_convergence_report,
+    render_svg, repair_routes, repairable_net_ids, route_board, route_board_with_convergence,
+    route_candidates, routing_convergence_report_json_schema, routing_quality,
     solve_stackup_differential_width_nm, solve_stackup_width_nm,
 };
 use pcbex_kicad::{
@@ -5040,6 +5042,11 @@ enum Command {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Write the closed JSON Schema for bounded routing-convergence reports.
+    RoutingConvergenceReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
     Route {
         input: PathBuf,
         #[arg(short, long)]
@@ -5049,6 +5056,19 @@ enum Command {
         physical_profile: Option<PathBuf>,
         #[arg(long)]
         svg: Option<PathBuf>,
+        /// Opt into bounded multi-round routing and retain its closed report.
+        #[arg(long, value_name = "PATH")]
+        convergence_report: Option<PathBuf>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_rounds: Option<usize>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_candidates: Option<usize>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_workers: Option<usize>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_router_workers: Option<usize>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_work_budget: Option<usize>,
         #[arg(long)]
         allow_unrouted: bool,
     },
@@ -5193,6 +5213,19 @@ enum Command {
         /// Run `kicad-cli pcb drc` after writing the board.
         #[arg(long)]
         drc: bool,
+        /// Opt into bounded multi-round routing and retain its closed report.
+        #[arg(long, value_name = "PATH")]
+        convergence_report: Option<PathBuf>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_rounds: Option<usize>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_candidates: Option<usize>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_workers: Option<usize>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_router_workers: Option<usize>,
+        #[arg(long, requires = "convergence_report")]
+        convergence_work_budget: Option<usize>,
         #[arg(long)]
         allow_unrouted: bool,
     },
@@ -17054,47 +17087,94 @@ fn run_cli() -> Result<()> {
             parse_board_json(&serde_json::to_string(&migrated)?).map_err(anyhow::Error::msg)?;
             fs::write(output, serde_json::to_string_pretty(&migrated)?)?;
         }
+        Command::RoutingConvergenceReportSchema { output } => {
+            write_closed_schema(
+                &routing_convergence_report_json_schema(),
+                output.as_deref(),
+                "routing convergence report schema",
+            )?;
+        }
         Command::Route {
             input,
             output,
             physical_profile,
             svg,
+            convergence_report,
+            convergence_rounds,
+            convergence_candidates,
+            convergence_workers,
+            convergence_router_workers,
+            convergence_work_budget,
             allow_unrouted,
         } => {
             let mut input_board = read(&input)?;
-            if let Some(path) = physical_profile {
-                let loaded = load_physical_profile(&path)?;
+            if let Some(path) = physical_profile.as_ref() {
+                let loaded = load_physical_profile(path)?;
                 apply_physical_profile(&mut input_board, &loaded.profile)
                     .map_err(anyhow::Error::msg)
                     .with_context(|| format!("applying physical profile {}", path.display()))?;
             }
-            let (board, report) = route_board(&input_board).map_err(anyhow::Error::msg)?;
+            let prepared_convergence_report = convergence_report
+                .as_deref()
+                .map(|report| {
+                    let mut aliases = vec![input.as_path(), output.as_path()];
+                    aliases.extend(physical_profile.as_deref());
+                    aliases.extend(svg.as_deref());
+                    prepare_routing_convergence_report_output(report, &aliases)
+                })
+                .transpose()?;
+            let (board, route_report, convergence_evidence) =
+                if convergence_report.is_some() {
+                    let result = route_board_with_convergence(
+                        &input_board,
+                        &routing_convergence_options(
+                            convergence_rounds,
+                            convergence_candidates,
+                            convergence_workers,
+                            convergence_router_workers,
+                            convergence_work_budget,
+                        ),
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    (
+                        result.board,
+                        result.selected_route_report,
+                        Some(result.report),
+                    )
+                } else {
+                    let (board, report) =
+                        route_board(&input_board).map_err(anyhow::Error::msg)?;
+                    (board, Some(report), None)
+                };
             fs::write(&output, serde_json::to_string_pretty(&board)?)?;
-            if let Some(path) = svg {
+            if let Some(path) = svg.as_ref() {
                 fs::write(path, render_svg(&board))?;
             }
-            eprintln!(
-                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; shoves: {}; escaped nets: {}; return vias: {}; optimized segments: {}; rounded corners: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
-                report.preserved.len(),
-                report.routed.len(),
-                report.rerouted.len(),
-                report.unrouted.len(),
-                report.ripup_events,
-                report.shove_events,
-                report.escaped_nets,
-                report.generated_return_vias,
-                report.optimized_segments,
-                report.rounded_corners,
-                report.parallel_candidates,
-                report.parallel_workers,
-                report.parallel_fallbacks,
-                report.expanded_states,
-                report.reroute_passes
-            );
-            if !allow_unrouted && !report.unrouted.is_empty() {
-                bail!("unrouted nets: {}", report.unrouted.join(", "))
+            if let (Some(path), Some(prepared), Some(report)) = (
+                convergence_report.as_deref(),
+                prepared_convergence_report,
+                convergence_evidence.as_ref(),
+            ) {
+                let rendered =
+                    render_routing_convergence_report(report).map_err(anyhow::Error::msg)?;
+                persist_atomic_new_file(prepared, path, &rendered)?;
             }
-            ensure_clean(&board)?;
+            if let Some(report) = convergence_evidence.as_ref() {
+                print_routing_convergence_summary(report);
+                if !allow_unrouted && report.final_metrics.unrouted_nets != 0 {
+                    bail!(
+                        "routing convergence retained {} unrouted net(s)",
+                        report.final_metrics.unrouted_nets
+                    )
+                }
+                ensure_convergence_clean(&board)?;
+            } else if let Some(report) = route_report.as_ref() {
+                print_route_summary(report);
+                if !allow_unrouted && !report.unrouted.is_empty() {
+                    bail!("unrouted nets: {}", report.unrouted.join(", "))
+                }
+                ensure_clean(&board)?;
+            }
         }
         Command::RouteCandidates {
             input,
@@ -17513,6 +17593,12 @@ fn run_cli() -> Result<()> {
             svg,
             json_output,
             drc,
+            convergence_report,
+            convergence_rounds,
+            convergence_candidates,
+            convergence_workers,
+            convergence_router_workers,
+            convergence_work_budget,
             allow_unrouted,
         } => {
             let source = fs::read_to_string(&input)
@@ -17534,8 +17620,8 @@ fn run_cli() -> Result<()> {
                 let candidate = input.with_extension("kicad_pro");
                 candidate.exists().then_some(candidate)
             });
-            if let Some(path) = project {
-                let project_source = fs::read_to_string(&path)
+            if let Some(path) = project.as_ref() {
+                let project_source = fs::read_to_string(path)
                     .with_context(|| format!("reading {}", path.display()))?;
                 apply_project_net_settings(&mut imported.board, &project_source)
                     .map_err(anyhow::Error::msg)
@@ -17545,8 +17631,8 @@ fn run_cli() -> Result<()> {
                 let candidate = input.with_extension("kicad_dru");
                 candidate.exists().then_some(candidate)
             });
-            if let Some(path) = rules_file {
-                let rules_source = fs::read_to_string(&path)
+            if let Some(path) = rules_file.as_ref() {
+                let rules_source = fs::read_to_string(path)
                     .with_context(|| format!("reading {}", path.display()))?;
                 let applied = apply_custom_design_rules(&mut imported.board, &rules_source)
                     .map_err(anyhow::Error::msg)
@@ -17556,8 +17642,8 @@ fn run_cli() -> Result<()> {
                     path.display()
                 );
             }
-            let profile = if let Some(path) = policy_pack {
-                Some(load_policy_pack(&path)?.0.dfm_profile)
+            let profile = if let Some(path) = policy_pack.as_ref() {
+                Some(load_policy_pack(path)?.0.dfm_profile)
             } else {
                 resolve_dfm_profile(fab.as_deref(), fab_profile.as_deref())?.0
             };
@@ -17565,8 +17651,8 @@ fn run_cli() -> Result<()> {
                 apply_dfm_profile(&mut imported.board, &profile);
                 eprintln!("applied fabrication profile {}", profile.id);
             }
-            if let Some(path) = physical_profile {
-                let loaded = load_physical_profile(&path)?;
+            if let Some(path) = physical_profile.as_ref() {
+                let loaded = load_physical_profile(path)?;
                 apply_physical_profile(&mut imported.board, &loaded.profile)
                     .map_err(anyhow::Error::msg)
                     .with_context(|| format!("applying physical profile {}", path.display()))?;
@@ -17577,7 +17663,50 @@ fn run_cli() -> Result<()> {
                     loaded.binding.canonical_sha256
                 );
             }
-            let (board, report) = route_board(&imported.board).map_err(anyhow::Error::msg)?;
+            let prepared_convergence_report = convergence_report
+                .as_deref()
+                .map(|report| {
+                    let mut aliases = vec![input.as_path(), output.as_path()];
+                    for path in [
+                        project.as_deref(),
+                        rules_file.as_deref(),
+                        fab_profile.as_deref(),
+                        policy_pack.as_deref(),
+                        physical_profile.as_deref(),
+                        svg.as_deref(),
+                        json_output.as_deref(),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    {
+                        aliases.push(path);
+                    }
+                    prepare_routing_convergence_report_output(report, &aliases)
+                })
+                .transpose()?;
+            let (board, route_report, convergence_evidence) =
+                if convergence_report.is_some() {
+                    let result = route_board_with_convergence(
+                        &imported.board,
+                        &routing_convergence_options(
+                            convergence_rounds,
+                            convergence_candidates,
+                            convergence_workers,
+                            convergence_router_workers,
+                            convergence_work_budget,
+                        ),
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                    (
+                        result.board,
+                        result.selected_route_report,
+                        Some(result.report),
+                    )
+                } else {
+                    let (board, report) =
+                        route_board(&imported.board).map_err(anyhow::Error::msg)?;
+                    (board, Some(report), None)
+                };
             fs::write(
                 &output,
                 imported
@@ -17585,10 +17714,10 @@ fn run_cli() -> Result<()> {
                     .map_err(anyhow::Error::msg)?,
             )
             .with_context(|| format!("writing {}", output.display()))?;
-            if let Some(path) = svg {
+            if let Some(path) = svg.as_ref() {
                 fs::write(path, render_svg(&board))?;
             }
-            if let Some(path) = json_output {
+            if let Some(path) = json_output.as_ref() {
                 fs::write(
                     path,
                     serde_json::to_string_pretty(&serde_json::json!({
@@ -17601,28 +17730,31 @@ fn run_cli() -> Result<()> {
                     }))?,
                 )?;
             }
-            eprintln!(
-                "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; shoves: {}; escaped nets: {}; return vias: {}; optimized segments: {}; rounded corners: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
-                report.preserved.len(),
-                report.routed.len(),
-                report.rerouted.len(),
-                report.unrouted.len(),
-                report.ripup_events,
-                report.shove_events,
-                report.escaped_nets,
-                report.generated_return_vias,
-                report.optimized_segments,
-                report.rounded_corners,
-                report.parallel_candidates,
-                report.parallel_workers,
-                report.parallel_fallbacks,
-                report.expanded_states,
-                report.reroute_passes
-            );
-            if !allow_unrouted && !report.unrouted.is_empty() {
-                bail!("unrouted nets: {}", report.unrouted.join(", "))
+            if let (Some(path), Some(prepared), Some(report)) = (
+                convergence_report.as_deref(),
+                prepared_convergence_report,
+                convergence_evidence.as_ref(),
+            ) {
+                let rendered =
+                    render_routing_convergence_report(report).map_err(anyhow::Error::msg)?;
+                persist_atomic_new_file(prepared, path, &rendered)?;
             }
-            ensure_clean(&board)?;
+            if let Some(report) = convergence_evidence.as_ref() {
+                print_routing_convergence_summary(report);
+                if !allow_unrouted && report.final_metrics.unrouted_nets != 0 {
+                    bail!(
+                        "routing convergence retained {} unrouted net(s)",
+                        report.final_metrics.unrouted_nets
+                    )
+                }
+                ensure_convergence_clean(&board)?;
+            } else if let Some(report) = route_report.as_ref() {
+                print_route_summary(report);
+                if !allow_unrouted && !report.unrouted.is_empty() {
+                    bail!("unrouted nets: {}", report.unrouted.join(", "))
+                }
+                ensure_clean(&board)?;
+            }
             if drc {
                 run_kicad_drc(&output)?;
             }
@@ -18652,6 +18784,75 @@ fn placement_candidate_options(
         workers,
         placement,
     }
+}
+
+fn routing_convergence_options(
+    max_rounds: Option<usize>,
+    candidates_per_round: Option<usize>,
+    candidate_workers: Option<usize>,
+    router_workers: Option<usize>,
+    maximum_work_units: Option<usize>,
+) -> RoutingConvergenceOptions {
+    let mut options = RoutingConvergenceOptions::default();
+    if let Some(value) = max_rounds {
+        options.max_rounds = value;
+    }
+    if let Some(value) = candidates_per_round {
+        options.candidates_per_round = value;
+    }
+    if let Some(value) = candidate_workers {
+        options.candidate_workers = value;
+    }
+    if let Some(value) = router_workers {
+        options.router_workers = value;
+    }
+    if let Some(value) = maximum_work_units {
+        options.maximum_work_units = value;
+    }
+    options
+}
+
+fn prepare_routing_convergence_report_output(
+    output: &Path,
+    inputs: &[&Path],
+) -> Result<tempfile::NamedTempFile> {
+    reject_output_symlink_components(output, "routing convergence report output")?;
+    reject_pipeline_output_aliases(output, inputs, "routing convergence report output")?;
+    prepare_atomic_new_file(output)
+}
+
+fn print_route_summary(report: &RouteReport) {
+    eprintln!(
+        "preserved: {}; routed: {}; rerouted: {}; unrouted: {}; rip-ups: {}; shoves: {}; escaped nets: {}; return vias: {}; optimized segments: {}; rounded corners: {}; parallel candidates: {}; workers: {}; fallbacks: {}; expanded states: {}; passes: {}",
+        report.preserved.len(),
+        report.routed.len(),
+        report.rerouted.len(),
+        report.unrouted.len(),
+        report.ripup_events,
+        report.shove_events,
+        report.escaped_nets,
+        report.generated_return_vias,
+        report.optimized_segments,
+        report.rounded_corners,
+        report.parallel_candidates,
+        report.parallel_workers,
+        report.parallel_fallbacks,
+        report.expanded_states,
+        report.reroute_passes
+    );
+}
+
+fn print_routing_convergence_summary(report: &RoutingConvergenceReport) {
+    eprintln!(
+        "routing convergence: status={:?}; rounds={}; candidates={}; unrouted={}; violations={}; allocated work={}/{}",
+        report.status,
+        report.rounds.len(),
+        report.total_candidates_evaluated,
+        report.final_metrics.unrouted_nets,
+        report.final_drc_violation_count,
+        report.allocated_work_units,
+        report.options.maximum_work_units
+    );
 }
 
 fn write_routing_candidate_reports(output_dir: &Path, results: &RoutingCandidateSet) -> Result<()> {
@@ -21793,6 +21994,29 @@ fn ensure_clean(board: &Board) -> Result<()> {
     bail!(
         "internal rule check found {} violation(s): {}",
         report.violations.len(),
+        summary
+    )
+}
+
+fn ensure_convergence_clean(board: &Board) -> Result<()> {
+    let report = check_board(board);
+    let blocking = report
+        .violations
+        .iter()
+        .filter(|violation| violation.rule != "unrouted")
+        .collect::<Vec<_>>();
+    if blocking.is_empty() {
+        return Ok(());
+    }
+    let summary = blocking
+        .iter()
+        .take(8)
+        .map(|violation| format!("[{}] {}", violation.rule, violation.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    bail!(
+        "routing convergence internal rule check found {} violation(s): {}",
+        blocking.len(),
         summary
     )
 }
