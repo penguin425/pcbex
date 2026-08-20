@@ -29,11 +29,12 @@ fn audit_closed_schema(value: &Value) {
 #[test]
 fn route_convergence_is_deterministic_and_schema_is_closed() {
     let temporary = tempfile::tempdir().unwrap();
+    let temporary_root = fs::canonicalize(temporary.path()).unwrap();
     let input = root().join("examples/simple.json");
-    let first_board = temporary.path().join("first.board.json");
-    let first_report = temporary.path().join("first.report.json");
-    let second_board = temporary.path().join("second.board.json");
-    let second_report = temporary.path().join("second.report.json");
+    let first_board = temporary_root.join("first.board.json");
+    let first_report = temporary_root.join("first.report.json");
+    let second_board = temporary_root.join("second.board.json");
+    let second_report = temporary_root.join("second.report.json");
 
     for (board, report) in [
         (&first_board, &first_report),
@@ -100,7 +101,7 @@ fn route_convergence_is_deterministic_and_schema_is_closed() {
             })
     }));
 
-    let schema_path = temporary.path().join("schema.json");
+    let schema_path = temporary_root.join("schema.json");
     let output = pcbex(&[
         "routing-convergence-report-schema",
         "--output",
@@ -116,9 +117,10 @@ fn route_convergence_is_deterministic_and_schema_is_closed() {
 #[test]
 fn negative_report_is_retained_before_unrouted_gate() {
     let temporary = tempfile::tempdir().unwrap();
+    let temporary_root = fs::canonicalize(temporary.path()).unwrap();
     let input = root().join("examples/simple.json");
-    let board = temporary.path().join("partial.board.json");
-    let report = temporary.path().join("partial.report.json");
+    let board = temporary_root.join("partial.board.json");
+    let report = temporary_root.join("partial.report.json");
     let output = pcbex(&[
         "route",
         input.to_str().unwrap(),
@@ -150,8 +152,8 @@ fn negative_report_is_retained_before_unrouted_gate() {
     assert_eq!(retained["final_drc_violation_count"], 0);
     assert_eq!(retained["final_metrics"]["unrouted_nets"], 1);
 
-    let allowed_board = temporary.path().join("allowed.board.json");
-    let allowed_report = temporary.path().join("allowed.report.json");
+    let allowed_board = temporary_root.join("allowed.board.json");
+    let allowed_report = temporary_root.join("allowed.report.json");
     let output = pcbex(&[
         "route",
         input.to_str().unwrap(),
@@ -181,9 +183,10 @@ fn negative_report_is_retained_before_unrouted_gate() {
 #[test]
 fn report_preflight_rejects_overwrite_alias_and_unbound_options() {
     let temporary = tempfile::tempdir().unwrap();
+    let temporary_root = fs::canonicalize(temporary.path()).unwrap();
     let input = root().join("examples/simple.json");
-    let board = temporary.path().join("board.json");
-    let report = temporary.path().join("report.json");
+    let board = temporary_root.join("board.json");
+    let report = temporary_root.join("report.json");
     fs::write(&report, b"retained\n").unwrap();
     let output = pcbex(&[
         "route",
@@ -197,7 +200,7 @@ fn report_preflight_rejects_overwrite_alias_and_unbound_options() {
     assert_eq!(fs::read(&report).unwrap(), b"retained\n");
     assert!(!board.exists());
 
-    let alias = temporary.path().join("alias.json");
+    let alias = temporary_root.join("alias.json");
     let output = pcbex(&[
         "route",
         input.to_str().unwrap(),
@@ -224,9 +227,10 @@ fn report_preflight_rejects_overwrite_alias_and_unbound_options() {
 #[test]
 fn route_kicad_supports_the_same_convergence_boundary() {
     let temporary = tempfile::tempdir().unwrap();
+    let temporary_root = fs::canonicalize(temporary.path()).unwrap();
     let input = root().join("examples/simple.kicad_pcb");
-    let board = temporary.path().join("routed.kicad_pcb");
-    let report = temporary.path().join("routing.report.json");
+    let board = temporary_root.join("routed.kicad_pcb");
+    let report = temporary_root.join("routing.report.json");
     let output = pcbex(&[
         "route-kicad",
         input.to_str().unwrap(),
