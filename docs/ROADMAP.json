@@ -904,6 +904,11 @@
     {
       "id": "bounded-deterministic-routing-convergence",
       "release": "v1.474.0",
+      "status": "released"
+    },
+    {
+      "id": "fresh-exact-routing-convergence-verification",
+      "release": "v1.475.0",
       "status": "current"
     }
   ]

@@ -651,18 +651,27 @@ class CiExecutionPolicyTests(unittest.TestCase):
             "cargo +stable test --package pcbex\n"
             "          --test routing_convergence --release --locked"
         )
+        routing_convergence_verification_command = (
+            "cargo +stable test --package pcbex\n"
+            "          --test routing_convergence_verification --release --locked"
+        )
         self.assertEqual(document.count(procurement_reservation_command), 1)
         self.assertEqual(document.count(procurement_reservation_rust_command), 1)
         self.assertEqual(document.count(multi_unit_kicad_command), 1)
         self.assertEqual(document.count(routing_convergence_command), 1)
+        self.assertEqual(
+            document.count(routing_convergence_verification_command), 1
+        )
         self.assertIn(procurement_reservation_command, boundaries)
         self.assertIn(procurement_reservation_rust_command, boundaries)
         self.assertIn(multi_unit_kicad_command, boundaries)
         self.assertIn(routing_convergence_command, boundaries)
+        self.assertIn(routing_convergence_verification_command, boundaries)
         self.assertNotIn(procurement_reservation_command, rust_windows)
         self.assertNotIn(procurement_reservation_rust_command, rust_windows)
         self.assertNotIn(multi_unit_kicad_command, rust_windows)
         self.assertNotIn(routing_convergence_command, rust_windows)
+        self.assertNotIn(routing_convergence_verification_command, rust_windows)
         self.assertEqual(
             document.count(
                 "agent.tests.test_procurement_authorization_reservation_v1472"
@@ -713,6 +722,9 @@ class CiExecutionPolicyTests(unittest.TestCase):
         )
         routing_convergence_step = boundaries.index(
             "- name: Run cross-platform v1.474 routing-convergence boundaries"
+        )
+        routing_convergence_verification_step = boundaries.index(
+            "- name: Run cross-platform v1.475 fresh routing-convergence verification boundaries"
         )
         board_regressions_step = boundaries.index(
             "- name: Run cross-platform deterministic board producer regressions"
@@ -777,9 +789,16 @@ class CiExecutionPolicyTests(unittest.TestCase):
         ]
         self.assertIn(multi_unit_kicad_command, multi_unit_kicad_block)
         routing_convergence_block = boundaries[
-            routing_convergence_step:toolchain_step
+            routing_convergence_step:routing_convergence_verification_step
         ]
         self.assertIn(routing_convergence_command, routing_convergence_block)
+        routing_convergence_verification_block = boundaries[
+            routing_convergence_verification_step:toolchain_step
+        ]
+        self.assertIn(
+            routing_convergence_verification_command,
+            routing_convergence_verification_block,
+        )
         self.assertLess(
             assembly_supplier_offer_step,
             procurement_authorization_step,
@@ -788,7 +807,10 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertLess(procurement_reservation_step, procurement_reservation_rust_step)
         self.assertLess(procurement_reservation_rust_step, multi_unit_kicad_step)
         self.assertLess(multi_unit_kicad_step, routing_convergence_step)
-        self.assertLess(routing_convergence_step, toolchain_step)
+        self.assertLess(
+            routing_convergence_step, routing_convergence_verification_step
+        )
+        self.assertLess(routing_convergence_verification_step, toolchain_step)
         self.assertIn("python scripts/deterministic_pipeline_ci.py", boundaries)
         self.assertIn("--pcbex ${{ matrix.pcbex }}", boundaries)
         self.assertIn(
@@ -824,6 +846,7 @@ class CiExecutionPolicyTests(unittest.TestCase):
         self.assertLess(assembly_supplier_offer_step, toolchain_step)
         self.assertLess(multi_unit_kicad_step, toolchain_step)
         self.assertLess(routing_convergence_step, toolchain_step)
+        self.assertLess(routing_convergence_verification_step, toolchain_step)
         self.assertLess(toolchain_step, firmware_build_step)
         self.assertLess(firmware_build_step, fixture_step)
         self.assertLess(fixture_step, diagnostic_step)

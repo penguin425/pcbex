@@ -137,6 +137,11 @@ The canonical Board identities bind the internal model after profile, KiCad
 project, custom-rule, and DFM application. They do not authenticate raw JSON,
 raw KiCad text, companion files, or the origin of those policies.
 
+Use [Fresh Routing Convergence Verification](ROUTING_CONVERGENCE_VERIFICATION.md)
+when a later consumer must capture those raw sources, reproduce this complete
+report, and require the routed JSON or KiCad artifact byte for byte. The Rust
+API exposes the inner replay as `verify_routing_convergence_report`.
+
 `design_rules_unchanged: true` means the selected Board retains the exact input
 `Rules` value. `final_drc_violation_count` excludes only the explicit
 `unrouted` finding and must be zero for every returned result.

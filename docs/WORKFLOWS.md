@@ -43,13 +43,21 @@ decision:
 pcbex route board.json \
   --output board.routed.json \
   --convergence-report board.routing-convergence.json
+
+pcbex verify-routing-convergence board.json \
+  --routed board.routed.json \
+  --report board.routing-convergence.json \
+  --output board.routing-verification.json \
+  --require-complete
 ```
 
 The single-pass route remains the default. The convergence boundary shares one
 A* allocation across all rounds, excludes non-`unrouted` checker violations
 from selection, and retains a valid partial report before the unrouted gate.
 Read [Routing Convergence](ROUTING_CONVERGENCE.md) before consuming partial
-results.
+results. Use [Fresh Routing Convergence Verification](ROUTING_CONVERGENCE_VERIFICATION.md)
+when a later handoff must reproduce the decision from raw sources and match the
+routed artifact exactly.
 
 Use `repair` to reroute only checker-selected or explicitly named nets:
 

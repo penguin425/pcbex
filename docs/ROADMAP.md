@@ -187,6 +187,7 @@ auditable release.
 | v1.472.0 | Local procurement authorization challenge reservation | Freshly replay one exact retained v1.471 authorization from its complete original closure, then admit its verified challenge to one externally identified Unix 0700 local ledger through descriptor-pinned durable no-replace publication and commit-time window checks, while leaving the v1.471 one-time-use claim false and making no global, supplier-inventory, order, payment, or exactly-once claim |
 | v1.473.0 | Deterministic multi-unit KiCad handoff | Add an opt-in closed circuit-spec v3 whose physical parts contain explicit symbol units and whose connections bind reference, unit, and package pin; generate and freshly verify real KiCad multi-unit schematics, then collapse only globally unique physical pins into the unchanged board/BOM/manufacturing model while keeping existing circuit-spec v2 documents and workflows migration-free |
 | v1.474.0 | Bounded deterministic routing convergence | Opt into validity-first multi-round JSON/KiCad routing under one deterministic aggregate A* allocation, accept only strict improvements with no checker finding beyond explicit unrouted nets, retain every bounded strategy and decision in a closed Board-bound report, and preserve unchanged single-pass behavior and design rules |
+| v1.475.0 | Fresh exact routing convergence verification | Capture the raw JSON or KiCad routing source closure, freshly reproduce one canonical retained v1.474 convergence decision with its producer version, regenerate the selected routed artifact byte for byte, and retain a closed hash-bound complete/partial verification before an optional complete gate without claiming source authenticity, native KiCad DRC, manufacturability, or release authority |
 
 `ROADMAP.json` is the canonical machine-readable milestone ledger. The release
 audit rejects duplicate or unordered milestones, a version mismatch, missing
@@ -1474,7 +1475,7 @@ to one footprint per reference. Hierarchical sheets, interchangeable/gated
 unit assignment, hidden common pins, alternate De Morgan conversions, and
 automatic library-symbol discovery remain outside this closed v3 contract.
 
-The current v1.474.0 milestone adds an opt-in convergence boundary to `route`
+The released v1.474.0 milestone adds an opt-in convergence boundary to `route`
 and `route-kicad`. It schedules balanced, shortest, via-minimized,
 bend-minimized, and alternate-order candidates under stable round/candidate
 IDs. Every declared slot receives a deterministic share of one aggregate A*
@@ -1503,3 +1504,30 @@ keepout, or electrical rules; switch via policy; claim global optimality; bind
 raw-source authenticity; run native KiCad DRC; establish manufacturability; or
 grant release authority. Omitting `--convergence-report` preserves the existing
 single-pass APIs and CLI behavior.
+
+The current v1.475.0 milestone adds a separate fresh consumer for that retained
+evidence. `verify-routing-convergence` captures Board JSON, the exact routed
+Board, the canonical v1.474 report, and an optional physical profile.
+`verify-kicad-routing-convergence` captures the equivalent KiCad board pair,
+same-stem or explicit project/custom rules, and exactly one selected DFM,
+policy-pack DFM, or physical profile source.
+
+The verifier reconstructs the effective internal Board, reruns the retained
+schema-v1 options under the current deterministic implementation, preserves
+the retained producer version in the nested report, and requires every typed
+field to match. It then regenerates the selected Board JSON or KiCad text and
+requires exact routed bytes. The outer closed report binds each raw source by
+byte count and SHA-256, retains the full reproduced convergence report, and
+domain-separates one binding over the complete result.
+
+Inputs cross regular non-link bounded reads, role-alias rejection, strict
+duplicate-key parsing, canonical retained-report comparison, and final exact
+rereads. The no-clobber output is reserved before source contents are read. A
+freshly reproduced partial or no-candidate outcome remains valid evidence and
+is retained before `--require-complete` returns nonzero; malformed, substituted,
+or changed evidence produces no report.
+
+This verification snapshot is not an atomic filesystem transaction. It does
+not authenticate sources or policy origins, rerun native KiCad DRC, establish
+manufacturability or global routing optimality, approve fabrication, or grant
+release authority. Those remain focused downstream boundaries.

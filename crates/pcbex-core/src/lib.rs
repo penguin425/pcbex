@@ -41,13 +41,15 @@ pub use routing_candidates::{
     route_candidates,
 };
 pub use routing_convergence::{
-    MAX_ROUTING_CONVERGENCE_CANDIDATES_PER_ROUND, MAX_ROUTING_CONVERGENCE_ROUNDS,
-    ROUTING_CONVERGENCE_REPORT_SCHEMA_VERSION, RoutingConvergenceArtifactIdentity,
-    RoutingConvergenceCandidate, RoutingConvergenceCandidateStatus, RoutingConvergenceMetrics,
-    RoutingConvergenceOptions, RoutingConvergenceReport, RoutingConvergenceResult,
-    RoutingConvergenceRound, RoutingConvergenceSelectionReason, RoutingConvergenceStatus,
+    MAX_ROUTING_CONVERGENCE_CANDIDATES_PER_ROUND, MAX_ROUTING_CONVERGENCE_REPORT_BYTES,
+    MAX_ROUTING_CONVERGENCE_ROUNDS, ROUTING_CONVERGENCE_REPORT_SCHEMA_VERSION,
+    RoutingConvergenceArtifactIdentity, RoutingConvergenceCandidate,
+    RoutingConvergenceCandidateStatus, RoutingConvergenceMetrics, RoutingConvergenceOptions,
+    RoutingConvergenceReport, RoutingConvergenceResult, RoutingConvergenceRound,
+    RoutingConvergenceSelectionReason, RoutingConvergenceStatus,
     RoutingConvergenceTerminationReason, render_routing_convergence_report,
     route_board_with_convergence, routing_convergence_report_json_schema,
+    verify_routing_convergence_report,
 };
 pub use schema::{board_json_schema, migrate_board_json, parse_board_json};
 

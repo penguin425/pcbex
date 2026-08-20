@@ -21,6 +21,7 @@ consumer must not promote one result into another kind of claim.
 | Artifact or boundary | Establishes | Does not establish |
 | --- | --- | --- |
 | Internal board check | Deterministic findings for one validated board model | KiCad parity, manufacturability at a selected factory, or electrical correctness |
+| Routing convergence verification | Fresh reproduction of one retained bounded decision plus exact routed JSON/KiCad bytes and captured source identities | Source authenticity, native KiCad DRC, manufacturability, global optimality, or release authority |
 | Native KiCad ERC/DRC report | Normalized output from the selected staged KiCad invocation | Authenticity or safety of the KiCad executable, plugins, or host |
 | Manufacturing package | Canonical staged outputs and source/profile identity after the package gates pass | Factory acceptance, assembly success, or order placement |
 | Provider or factory receipt | Bounded response bytes plus declared transport observations | Truth, currentness, endpoint identity beyond the adapter contract, or future availability |

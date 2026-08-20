@@ -228,9 +228,16 @@ mod remote_policy_lifecycle_gossip;
 mod remote_policy_lifecycle_gossip_registry_checkpoint_witness;
 mod remote_policy_lifecycle_witness;
 mod remote_witness;
+mod routing_convergence_verification;
 
 use bounded_io as fs;
 use physical_profile::{MAX_PHYSICAL_PROFILE_BYTES, PhysicalProfileBinding, load_physical_profile};
+use routing_convergence_verification::{
+    KicadRoutingVerificationSources, MAX_ROUTING_POLICY_PACK_BYTES, MAX_ROUTING_PROFILE_BYTES,
+    MAX_ROUTING_SOURCE_BYTES, render_routing_convergence_verification_report,
+    routing_convergence_verification_report_json_schema, verify_board_json_routing_convergence,
+    verify_kicad_routing_convergence,
+};
 
 use canary_completion::{
     CanaryCompletionDecision, canary_completion_json_schema, parse_canary_completion_report,
@@ -5047,6 +5054,29 @@ enum Command {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+    /// Write the closed fresh routing-convergence verification report Schema.
+    RoutingConvergenceVerificationReportSchema {
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Freshly replay and verify retained Board JSON routing convergence.
+    VerifyRoutingConvergence {
+        input: PathBuf,
+        /// Exact routed Board JSON emitted with the retained report.
+        #[arg(long, value_name = "PATH")]
+        routed: PathBuf,
+        /// Canonical retained routing-convergence report.
+        #[arg(long, value_name = "PATH")]
+        report: PathBuf,
+        /// Exact physical profile applied before the original routing run.
+        #[arg(long, value_name = "PATH")]
+        physical_profile: Option<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        /// Retain the verification report, then fail unless routing is complete.
+        #[arg(long)]
+        require_complete: bool,
+    },
     Route {
         input: PathBuf,
         #[arg(short, long)]
@@ -5228,6 +5258,53 @@ enum Command {
         convergence_work_budget: Option<usize>,
         #[arg(long)]
         allow_unrouted: bool,
+    },
+    /// Freshly replay and verify retained KiCad routing convergence.
+    VerifyKicadRoutingConvergence {
+        input: PathBuf,
+        /// Exact routed KiCad board emitted with the retained report.
+        #[arg(long, value_name = "PATH")]
+        routed: PathBuf,
+        /// Canonical retained routing-convergence report.
+        #[arg(long, value_name = "PATH")]
+        report: PathBuf,
+        /// KiCad project settings. Defaults to the input's sibling `.kicad_pro` when present.
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// KiCad custom design rules. Defaults to the input's sibling `.kicad_dru` when present.
+        #[arg(long)]
+        rules_file: Option<PathBuf>,
+        #[arg(short, long)]
+        output: PathBuf,
+        #[arg(long, default_value_t = 0.25)]
+        grid_mm: f64,
+        #[arg(long, default_value_t = 0.25)]
+        width_mm: f64,
+        #[arg(long, default_value_t = 0.20)]
+        clearance_mm: f64,
+        #[arg(long, default_value_t = 0.60)]
+        via_diameter_mm: f64,
+        #[arg(long, default_value_t = 0.30)]
+        via_drill_mm: f64,
+        #[arg(long, default_value_t = 5)]
+        bend_cost: u32,
+        #[arg(long, default_value_t = 20)]
+        via_cost: u32,
+        /// Built-in fabrication profile ID or stable alias used by the original run.
+        #[arg(long, conflicts_with_all = ["fab_profile", "policy_pack", "physical_profile"])]
+        fab: Option<String>,
+        /// Exact external DFM profile used by the original run.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "policy_pack", "physical_profile"])]
+        fab_profile: Option<PathBuf>,
+        /// Exact organization policy pack used by the original run.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "physical_profile"])]
+        policy_pack: Option<PathBuf>,
+        /// Exact physical constraint profile used by the original run.
+        #[arg(long, value_name = "PATH", conflicts_with_all = ["fab", "fab_profile", "policy_pack"])]
+        physical_profile: Option<PathBuf>,
+        /// Retain the verification report, then fail unless routing is complete.
+        #[arg(long)]
+        require_complete: bool,
     },
     /// Generate Pareto-ranked N-best routes directly from a placed KiCad board.
     RouteKicadCandidates {
@@ -17094,6 +17171,110 @@ fn run_cli() -> Result<()> {
                 "routing convergence report schema",
             )?;
         }
+        Command::RoutingConvergenceVerificationReportSchema { output } => {
+            write_closed_schema(
+                &routing_convergence_verification_report_json_schema(),
+                output.as_deref(),
+                "routing convergence verification report schema",
+            )?;
+        }
+        Command::VerifyRoutingConvergence {
+            input,
+            routed,
+            report,
+            physical_profile,
+            output,
+            require_complete,
+        } => {
+            let mut input_paths = vec![input.as_path(), routed.as_path(), report.as_path()];
+            input_paths.extend(physical_profile.as_deref());
+            let prepared = prepare_pipeline_output(&output, &input_paths)?;
+
+            let mut named_inputs = vec![
+                ("routing input", input.as_path()),
+                ("routed output", routed.as_path()),
+                ("retained convergence report", report.as_path()),
+            ];
+            if let Some(path) = physical_profile.as_deref() {
+                named_inputs.push(("physical profile", path));
+            }
+            reject_procurement_input_aliases(&named_inputs)?;
+
+            let input_source = capture_routing_verification_source(
+                &input,
+                MAX_ROUTING_SOURCE_BYTES,
+                "routing input",
+            )?;
+            let routed_source = capture_routing_verification_source(
+                &routed,
+                MAX_ROUTING_SOURCE_BYTES,
+                "routed output",
+            )?;
+            let report_source = capture_routing_verification_source(
+                &report,
+                pcbex_core::MAX_ROUTING_CONVERGENCE_REPORT_BYTES,
+                "retained convergence report",
+            )?;
+            let physical_profile_source = physical_profile
+                .as_deref()
+                .map(|path| {
+                    capture_routing_verification_source(
+                        path,
+                        MAX_ROUTING_PROFILE_BYTES,
+                        "physical profile",
+                    )
+                })
+                .transpose()?;
+
+            let verification = verify_board_json_routing_convergence(
+                &input_source,
+                &routed_source,
+                &report_source,
+                physical_profile_source.as_deref(),
+            )?;
+            let rendered = render_routing_convergence_verification_report(&verification)?;
+
+            require_routing_verification_source_unchanged(
+                &input,
+                MAX_ROUTING_SOURCE_BYTES,
+                &input_source,
+                "routing input",
+            )?;
+            require_routing_verification_source_unchanged(
+                &routed,
+                MAX_ROUTING_SOURCE_BYTES,
+                &routed_source,
+                "routed output",
+            )?;
+            require_routing_verification_source_unchanged(
+                &report,
+                pcbex_core::MAX_ROUTING_CONVERGENCE_REPORT_BYTES,
+                &report_source,
+                "retained convergence report",
+            )?;
+            if let (Some(path), Some(source)) =
+                (physical_profile.as_deref(), physical_profile_source.as_deref())
+            {
+                require_routing_verification_source_unchanged(
+                    path,
+                    MAX_ROUTING_PROFILE_BYTES,
+                    source,
+                    "physical profile",
+                )?;
+            }
+
+            let routing_complete = verification.routing_complete;
+            let status = verification.status;
+            persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
+            eprintln!(
+                "fresh routing convergence verification retained: status={status:?}; complete={routing_complete}"
+            );
+            if require_complete && !routing_complete {
+                bail!(
+                    "fresh routing convergence verification retained an incomplete routing result"
+                );
+            }
+        }
         Command::Route {
             input,
             output,
@@ -17757,6 +17938,209 @@ fn run_cli() -> Result<()> {
             }
             if drc {
                 run_kicad_drc(&output)?;
+            }
+        }
+        Command::VerifyKicadRoutingConvergence {
+            input,
+            routed,
+            report,
+            project,
+            rules_file,
+            output,
+            grid_mm,
+            width_mm,
+            clearance_mm,
+            via_diameter_mm,
+            via_drill_mm,
+            bend_cost,
+            via_cost,
+            fab,
+            fab_profile,
+            policy_pack,
+            physical_profile,
+            require_complete,
+        } => {
+            let project = project.or_else(|| {
+                let candidate = input.with_extension("kicad_pro");
+                candidate.exists().then_some(candidate)
+            });
+            let rules_file = rules_file.or_else(|| {
+                let candidate = input.with_extension("kicad_dru");
+                candidate.exists().then_some(candidate)
+            });
+
+            let mut input_paths = vec![input.as_path(), routed.as_path(), report.as_path()];
+            for path in [
+                project.as_deref(),
+                rules_file.as_deref(),
+                fab_profile.as_deref(),
+                policy_pack.as_deref(),
+                physical_profile.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                input_paths.push(path);
+            }
+            let prepared = prepare_pipeline_output(&output, &input_paths)?;
+
+            let mut named_inputs = vec![
+                ("KiCad routing input", input.as_path()),
+                ("routed KiCad output", routed.as_path()),
+                ("retained convergence report", report.as_path()),
+            ];
+            for (label, path) in [
+                ("KiCad project", project.as_deref()),
+                ("KiCad custom rules", rules_file.as_deref()),
+                ("external DFM profile", fab_profile.as_deref()),
+                ("organization policy pack", policy_pack.as_deref()),
+                ("physical profile", physical_profile.as_deref()),
+            ] {
+                if let Some(path) = path {
+                    named_inputs.push((label, path));
+                }
+            }
+            reject_procurement_input_aliases(&named_inputs)?;
+
+            let input_source = capture_routing_verification_source(
+                &input,
+                MAX_ROUTING_SOURCE_BYTES,
+                "KiCad routing input",
+            )?;
+            let routed_source = capture_routing_verification_source(
+                &routed,
+                MAX_ROUTING_SOURCE_BYTES,
+                "routed KiCad output",
+            )?;
+            let report_source = capture_routing_verification_source(
+                &report,
+                pcbex_core::MAX_ROUTING_CONVERGENCE_REPORT_BYTES,
+                "retained convergence report",
+            )?;
+            let project_source = capture_optional_routing_verification_source(
+                project.as_deref(),
+                MAX_ROUTING_SOURCE_BYTES,
+                "KiCad project",
+            )?;
+            let rules_source = capture_optional_routing_verification_source(
+                rules_file.as_deref(),
+                MAX_ROUTING_SOURCE_BYTES,
+                "KiCad custom rules",
+            )?;
+            let fab_profile_source = capture_optional_routing_verification_source(
+                fab_profile.as_deref(),
+                MAX_DFM_PROFILE_TEXT_BYTES as u64,
+                "external DFM profile",
+            )?;
+            let policy_pack_source = capture_optional_routing_verification_source(
+                policy_pack.as_deref(),
+                MAX_ROUTING_POLICY_PACK_BYTES,
+                "organization policy pack",
+            )?;
+            let physical_profile_source = capture_optional_routing_verification_source(
+                physical_profile.as_deref(),
+                MAX_ROUTING_PROFILE_BYTES,
+                "physical profile",
+            )?;
+
+            let rules = Rules {
+                grid_nm: to_nm(grid_mm, "grid")?,
+                track_width_nm: to_nm(width_mm, "track width")?,
+                clearance_nm: to_nm(clearance_mm, "clearance")?,
+                via_diameter_nm: to_nm(via_diameter_mm, "via diameter")?,
+                via_drill_nm: to_nm(via_drill_mm, "via drill")?,
+                bend_cost,
+                via_cost,
+            };
+            let verification = verify_kicad_routing_convergence(
+                KicadRoutingVerificationSources {
+                    input: &input_source,
+                    routed_output: &routed_source,
+                    retained_report: &report_source,
+                    project: project_source.as_deref(),
+                    rules_file: rules_source.as_deref(),
+                    fab_profile: fab_profile_source.as_deref(),
+                    policy_pack: policy_pack_source.as_deref(),
+                    physical_profile: physical_profile_source.as_deref(),
+                },
+                rules,
+                fab.as_deref(),
+            )?;
+            let rendered = render_routing_convergence_verification_report(&verification)?;
+
+            for (path, maximum, source, label) in [
+                (
+                    input.as_path(),
+                    MAX_ROUTING_SOURCE_BYTES,
+                    input_source.as_slice(),
+                    "KiCad routing input",
+                ),
+                (
+                    routed.as_path(),
+                    MAX_ROUTING_SOURCE_BYTES,
+                    routed_source.as_slice(),
+                    "routed KiCad output",
+                ),
+                (
+                    report.as_path(),
+                    pcbex_core::MAX_ROUTING_CONVERGENCE_REPORT_BYTES,
+                    report_source.as_slice(),
+                    "retained convergence report",
+                ),
+            ] {
+                require_routing_verification_source_unchanged(
+                    path, maximum, source, label,
+                )?;
+            }
+            for (path, maximum, source, label) in [
+                (
+                    project.as_deref(),
+                    MAX_ROUTING_SOURCE_BYTES,
+                    project_source.as_deref(),
+                    "KiCad project",
+                ),
+                (
+                    rules_file.as_deref(),
+                    MAX_ROUTING_SOURCE_BYTES,
+                    rules_source.as_deref(),
+                    "KiCad custom rules",
+                ),
+                (
+                    fab_profile.as_deref(),
+                    MAX_DFM_PROFILE_TEXT_BYTES as u64,
+                    fab_profile_source.as_deref(),
+                    "external DFM profile",
+                ),
+                (
+                    policy_pack.as_deref(),
+                    MAX_ROUTING_POLICY_PACK_BYTES,
+                    policy_pack_source.as_deref(),
+                    "organization policy pack",
+                ),
+                (
+                    physical_profile.as_deref(),
+                    MAX_ROUTING_PROFILE_BYTES,
+                    physical_profile_source.as_deref(),
+                    "physical profile",
+                ),
+            ] {
+                if let (Some(path), Some(source)) = (path, source) {
+                    require_routing_verification_source_unchanged(
+                        path, maximum, source, label,
+                    )?;
+                }
+            }
+
+            let routing_complete = verification.routing_complete;
+            let status = verification.status;
+            persist_atomic_new_file_bytes(prepared, &output, &rendered)?;
+            eprintln!(
+                "fresh KiCad routing convergence verification retained: status={status:?}; complete={routing_complete}"
+            );
+            if require_complete && !routing_complete {
+                bail!(
+                    "fresh routing convergence verification retained an incomplete routing result"
+                );
             }
         }
         Command::RouteKicadCandidates {
@@ -18810,6 +19194,42 @@ fn routing_convergence_options(
         options.maximum_work_units = value;
     }
     options
+}
+
+fn capture_routing_verification_source(
+    path: &Path,
+    maximum_bytes: u64,
+    label: &str,
+) -> Result<Vec<u8>> {
+    let source = fs::read_with_limit(path, maximum_bytes)
+        .with_context(|| format!("capturing {label} {}", path.display()))?;
+    if source.is_empty() {
+        bail!("{label} must not be empty");
+    }
+    Ok(source)
+}
+
+fn capture_optional_routing_verification_source(
+    path: Option<&Path>,
+    maximum_bytes: u64,
+    label: &str,
+) -> Result<Option<Vec<u8>>> {
+    path.map(|path| capture_routing_verification_source(path, maximum_bytes, label))
+        .transpose()
+}
+
+fn require_routing_verification_source_unchanged(
+    path: &Path,
+    maximum_bytes: u64,
+    expected: &[u8],
+    label: &str,
+) -> Result<()> {
+    let current = fs::read_with_limit(path, maximum_bytes)
+        .with_context(|| format!("re-reading {label} {}", path.display()))?;
+    if current != expected {
+        bail!("{label} changed during fresh routing convergence verification");
+    }
+    Ok(())
 }
 
 fn prepare_routing_convergence_report_output(

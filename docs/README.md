@@ -39,6 +39,9 @@ boundary document for the artifact you plan to produce or trust.
 - [Routing Convergence](ROUTING_CONVERGENCE.md) — bounded strategy portfolios,
   validity-first selection, and closed convergence evidence.
 
+- [Fresh Routing Convergence Verification](ROUTING_CONVERGENCE_VERIFICATION.md)
+  — replay retained decisions from raw sources and require exact routed bytes.
+
 - [Zone-fill Work Budget](ZONE_FILL_WORK_BUDGET.md) — deterministic fill limits
   across all zones.
 
